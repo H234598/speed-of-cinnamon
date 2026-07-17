@@ -532,6 +532,14 @@ def _write_atomically_without_following_symlinks(
                     except BaseException as cleanup_error:
                         _note_cleanup_failure(exc, cleanup_error)
                     raise OSError(f"{field_name} temporary file identity is unavailable") from exc
+                except BaseException as exc:
+                    try:
+                        os.close(fd)
+                    except OSError as cleanup_error:
+                        _note_cleanup_failure(exc, cleanup_error)
+                    except BaseException as cleanup_error:
+                        _note_cleanup_failure(exc, cleanup_error)
+                    raise
                 break
             except FileExistsError:
                 continue

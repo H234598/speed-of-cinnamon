@@ -387,6 +387,39 @@ class PathSafetyTest(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_atomic_write_closes_temp_fd_when_identity_check_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            real_open = os.open
+            real_close = os.close
+            events: list[tuple[str, int, str]] = []
+
+            def capture_open(*args, **kwargs):
+                fd = real_open(*args, **kwargs)
+                name = args[0] if args and isinstance(args[0], str) else ""
+                events.append(("open", fd, name))
+                return fd
+
+            def capture_close(fd: int) -> None:
+                events.append(("close", fd, ""))
+                real_close(fd)
+
+            with (
+                mock.patch.object(path_safety.os, "open", side_effect=capture_open),
+                mock.patch.object(path_safety.os, "close", side_effect=capture_close),
+                mock.patch.object(path_safety.os, "fstat", side_effect=KeyboardInterrupt),
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "{}")
+
+            temp_open_index = next(
+                index
+                for index, (event, _fd, name) in enumerate(events)
+                if event == "open" and name.endswith(".tmp")
+            )
+            temp_fd = events[temp_open_index][1]
+            self.assertIn(("close", temp_fd, ""), events[temp_open_index + 1 :])
+
     def test_atomic_write_removes_temp_file_when_file_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
