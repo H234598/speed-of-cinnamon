@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import os
 import stat
@@ -808,6 +809,17 @@ class OutputTest(unittest.TestCase):
             output_file.seek(0)
             self.assertEqual(output_file.read(), b"abc")
             self.assertTrue(capture.overflowed)
+
+    def test_bounded_output_capture_closes_pipe_when_thread_start_fails(self) -> None:
+        with (
+            mock.patch.object(output_module.os, "pipe", return_value=(41, 42)),
+            mock.patch.object(output_module.threading.Thread, "start", side_effect=RuntimeError("thread failed")),
+            mock.patch.object(output_module.os, "close") as mocked_close,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "thread failed"):
+                output_module._BoundedOutputCapture(io.BytesIO(), 3)
+
+        self.assertEqual(mocked_close.call_args_list, [mock.call(41), mock.call(42)])
 
     def test_bounded_output_capture_keeps_draining_after_sink_failure(self) -> None:
         class FailingOutput:

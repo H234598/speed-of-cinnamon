@@ -1000,9 +1000,23 @@ class _BoundedOutputCapture:
         self._captured_bytes = 0
         self.overflowed = False
         self._error: BaseException | None = None
-        self._read_fd, self._write_fd = os.pipe()
-        self._thread = threading.Thread(target=self._drain, name="soc-output-capture", daemon=True)
-        self._thread.start()
+        self._read_fd: int | None = None
+        self._write_fd: int | None = None
+        try:
+            self._read_fd, self._write_fd = os.pipe()
+            self._thread = threading.Thread(target=self._drain, name="soc-output-capture", daemon=True)
+            self._thread.start()
+        except BaseException:
+            for fd in (self._read_fd, self._write_fd):
+                if fd is None:
+                    continue
+                try:
+                    os.close(fd)
+                except BaseException:
+                    pass
+            self._read_fd = None
+            self._write_fd = None
+            raise
 
     def fileno(self) -> int:
         if self._write_fd is None:
