@@ -5,6 +5,7 @@ import json
 import math
 import signal
 import shutil
+import secrets
 import stat
 import subprocess  # nosec B404
 import tempfile
@@ -16,6 +17,7 @@ from typing import BinaryIO
 
 from .app_logging import log_event
 from .path_safety import (
+    _rename_without_replacing,
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
     read_text_without_following_symlinks,
@@ -544,6 +546,24 @@ def _same_clipboard_lock_snapshot(first: os.stat_result, second: os.stat_result)
     )
 
 
+def _same_clipboard_lock_claim(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        first.st_dev,
+        first.st_ino,
+        first.st_nlink,
+        first.st_mode,
+        first.st_size,
+        first.st_mtime_ns,
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        second.st_nlink,
+        second.st_mode,
+        second.st_size,
+        second.st_mtime_ns,
+    )
+
+
 def _unlink_clipboard_lock_at(
     parent_fd: int,
     path: Path,
@@ -560,9 +580,45 @@ def _unlink_clipboard_lock_at(
         return False
     if expected_stat is not None and not _same_clipboard_lock_snapshot(current, expected_stat):
         return False
-    os.unlink(path.name, dir_fd=parent_fd)
-    os.fsync(parent_fd)
-    return True
+    for _ in range(100):
+        cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
+        try:
+            _rename_without_replacing(
+                path.name,
+                cleanup_name,
+                directory_fd=parent_fd,
+                field_name="clipboard dedupe lock cleanup",
+            )
+        except FileExistsError:
+            continue
+        changed = False
+        try:
+            claimed = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(claimed.st_mode)
+                or getattr(claimed, "st_nlink", 1) != 1
+                or (expected_stat is not None and not _same_clipboard_lock_claim(claimed, expected_stat))
+            ):
+                changed = True
+                raise OSError("clipboard dedupe lock changed before cleanup")
+            os.unlink(cleanup_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except BaseException as exc:
+            try:
+                _rename_without_replacing(
+                    cleanup_name,
+                    path.name,
+                    directory_fd=parent_fd,
+                    field_name="clipboard dedupe lock cleanup restore",
+                )
+                os.fsync(parent_fd)
+            except BaseException as restore_error:
+                exc.add_note(f"clipboard dedupe lock cleanup restore failed: {restore_error}")
+            if changed:
+                return False
+            raise
+        return True
+    return False
 
 
 def _acquire_clipboard_dedup_lock() -> Path | None:
