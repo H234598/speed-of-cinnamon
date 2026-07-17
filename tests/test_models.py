@@ -1419,9 +1419,15 @@ class ModelsTest(unittest.TestCase):
         cleanup_calls: list[tuple[Path, Path, str]] = []
         original_unlink = models._unlink_model_file_leaf
 
-        def record_unlink(path: Path, root: Path, *, field_name: str = "model file") -> bool:
+        def record_unlink(
+            path: Path,
+            root: Path,
+            *,
+            field_name: str = "model file",
+            expected_stat: os.stat_result | None = None,
+        ) -> bool:
             cleanup_calls.append((path, root, field_name))
-            return original_unlink(path, root, field_name=field_name)
+            return original_unlink(path, root, field_name=field_name, expected_stat=expected_stat)
 
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -1437,6 +1443,59 @@ class ModelsTest(unittest.TestCase):
             self.assertFalse(path.exists())
             self.assertTrue(any(field_name == "temporary model file" for _, _, field_name in cleanup_calls))
             self.assertEqual(list(path.parent.glob(f".{spec.filename}.*")), [])
+
+    def test_download_model_checksum_cleanup_preserves_replaced_temp_file(self) -> None:
+        data = b"tampered"
+        replacement = b"replacement"
+        spec = models.ModelSpec(
+            name="test-checksum-cleanup-race",
+            filename="ggml-test-checksum-cleanup-race.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(b"expected").hexdigest(),
+            description="test checksum cleanup race",
+        )
+        real_download = models._download_url_to_file_with_fd
+
+        def download_then_replace(
+            url: str,
+            tmp_dir: Path,
+            tmp_dir_fd: int | None,
+            size_limit: int,
+            model_name: str,
+            *,
+            prefix: str,
+            include_stat: bool = False,
+        ) -> tuple[Path, int, os.stat_result]:
+            result = real_download(
+                url,
+                tmp_dir,
+                tmp_dir_fd,
+                size_limit,
+                model_name,
+                prefix=prefix,
+                include_stat=True,
+            )
+            tmp_path, downloaded, expected_stat = result
+            tmp_path.unlink()
+            tmp_path.write_bytes(replacement)
+            return tmp_path, downloaded, expected_stat
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+            mock.patch.object(models, "_download_url_to_file_with_fd", side_effect=download_then_replace),
+        ):
+            path = models.model_path(spec)
+            with self.assertRaisesRegex(models.ModelError, "downloaded checksum mismatch") as caught:
+                models.download_model(spec.name)
+
+            temporary_paths = list(path.parent.glob(f".{spec.filename}.*"))
+            self.assertEqual(len(temporary_paths), 1)
+            self.assertEqual(temporary_paths[0].read_bytes(), replacement)
+
+        self.assertIn("model artifact cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_download_model_preserves_checksum_error_when_temp_cleanup_fails(self) -> None:
         data = b"tampered"
@@ -3991,7 +4050,9 @@ class ModelsTest(unittest.TestCase):
                     models.download_model(spec.name)
 
             self.assertFalse(models.model_path(spec).exists())
-            self.assertFalse(list(models.model_path(spec).parent.glob(f".{spec.filename}.*.tmp")))
+            temporary_paths = list(models.model_path(spec).parent.glob(f".{spec.filename}.*.tmp"))
+            self.assertEqual(len(temporary_paths), 1)
+            self.assertEqual(temporary_paths[0].read_bytes(), b"tampered model")
 
     def test_download_model_preserves_backup_when_target_becomes_dangling_symlink(self) -> None:
         old_data = b"old model"

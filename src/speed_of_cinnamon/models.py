@@ -1848,7 +1848,8 @@ def _download_url_to_file_with_fd(
     model_name: str,
     *,
     prefix: str,
-) -> tuple[Path, int]:
+    include_stat: bool = False,
+) -> tuple[Path, int] | tuple[Path, int, os.stat_result]:
     close_tmp_dir_fd = False
     if tmp_dir_fd is None:
         try:
@@ -1938,6 +1939,14 @@ def _download_url_to_file_with_fd(
                     raise ModelError(f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}")
                 output.flush()
                 os.fsync(output.fileno())
+                try:
+                    temporary_stat = os.fstat(output.fileno())
+                except (OSError, ValueError) as exc:
+                    raise OSError("failed to inspect temporary model file") from exc
+        if tmp_path is None or temporary_stat is None:
+            raise OSError("temporary model file identity is unavailable")
+        if include_stat:
+            return tmp_path, downloaded, temporary_stat
         return tmp_path, downloaded
     except BaseException as exc:
         primary_error = exc
@@ -2338,16 +2347,18 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
     backup_path_stat: os.stat_result | None = None
     previous_cache_entry: dict[str, int | str] | None = None
     previous_cache_entry_exists = False
+    tmp_stat: os.stat_result | None = None
     try:
         parent_fd = _open_model_parent_directory(path, root, field_name="model path")
         try:
-            tmp_path, _ = _download_url_to_file_with_fd(
+            tmp_path, _, tmp_stat = _download_url_to_file_with_fd(
                 model.url,
                 path.parent,
                 parent_fd,
                 size_limit,
                 model.name,
                 prefix=f".{path.name}.",
+                include_stat=True,
             )
         finally:
             try:
@@ -2357,7 +2368,6 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
         checksum = sha1_file(tmp_path)
         if checksum != model.sha1:
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
-        tmp_stat = tmp_path.stat(follow_symlinks=False)
         try:
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
             if path.exists():
@@ -2417,7 +2427,12 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
             except BaseException as cleanup_error:
                 _note_cleanup_failure(primary_error, cleanup_error)
             try:
-                _unlink_model_file_leaf(tmp_path, root, field_name="temporary model file")
+                _unlink_model_file_leaf(
+                    tmp_path,
+                    root,
+                    field_name="temporary model file",
+                    expected_stat=tmp_stat,
+                )
             except FileNotFoundError:
                 pass
             except (OSError, ModelError) as cleanup_error:
