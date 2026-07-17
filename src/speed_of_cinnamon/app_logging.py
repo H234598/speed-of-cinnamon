@@ -1132,7 +1132,12 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     continue
                 try:
                     _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
-                    os.unlink(path.name, dir_fd=parent_fd)
+                    if not _unlink_log_file_with_parent_fsync(
+                        path,
+                        original_stat,
+                        field_name="monthly log source",
+                    ):
+                        raise RuntimeError("monthly log source disappeared before cleanup")
                     archive_rollback_safe = False
                 except BaseException as delete_error:
                     cleanup_name = f"{path.name}.{secrets.token_hex(8)}.merged"
@@ -1160,7 +1165,12 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             raise RuntimeError("monthly log source changed before cleanup")
                     except OSError:
                         try:
-                            _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
+                            current_source_stat = _assert_regular_unlinked_file(
+                                path,
+                                field_name="monthly log source",
+                            )
+                            if not _same_log_claim_identity(current_source_stat, original_stat):
+                                raise RuntimeError("monthly log source changed before cleanup")
                         except BaseException:
                             archive_rollback_safe = False
                         if isinstance(delete_error, OSError):

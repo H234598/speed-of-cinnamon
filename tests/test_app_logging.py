@@ -1513,7 +1513,7 @@ class AppLoggingTest(unittest.TestCase):
         unlink_calls = [
             (args, kwargs)
             for args, kwargs in mocked_unlink.call_args_list
-            if args and args[0] == may_daily.name
+            if args and isinstance(args[0], str) and args[0].endswith(".cleanup")
         ]
         self.assertEqual(len(unlink_calls), 1)
         self.assertIsInstance(unlink_calls[0][1].get("dir_fd"), int)
@@ -1533,7 +1533,12 @@ class AppLoggingTest(unittest.TestCase):
 
             def unlink_once(name: object, *args: object, **kwargs: object) -> None:
                 nonlocal failed
-                if name == second.name and kwargs.get("dir_fd") is not None and not failed:
+                if (
+                    isinstance(name, str)
+                    and name.endswith(".cleanup")
+                    and kwargs.get("dir_fd") is not None
+                    and not failed
+                ):
                     failed = True
                     raise PermissionError("cleanup denied")
                 real_unlink(name, *args, **kwargs)
@@ -1564,7 +1569,12 @@ class AppLoggingTest(unittest.TestCase):
 
             def unlink_once(name: object, *args: object, **kwargs: object) -> None:
                 nonlocal interrupted
-                if name == second.name and kwargs.get("dir_fd") is not None and not interrupted:
+                if (
+                    isinstance(name, str)
+                    and name.endswith(".cleanup")
+                    and kwargs.get("dir_fd") is not None
+                    and not interrupted
+                ):
                     interrupted = True
                     raise KeyboardInterrupt
                 real_unlink(name, *args, **kwargs)
@@ -1592,12 +1602,12 @@ class AppLoggingTest(unittest.TestCase):
             real_rename = app_logging._rename_without_replacing
 
             def fail_source_unlink(name: object, *args: object, **kwargs: object) -> None:
-                if name == source.name and kwargs.get("dir_fd") is not None:
+                if isinstance(name, str) and name.endswith(".cleanup") and kwargs.get("dir_fd") is not None:
                     raise PermissionError("source unlink failed")
                 real_unlink(name, *args, **kwargs)
 
             def fail_source_quarantine(src: object, dst: object, *args: object, **kwargs: object) -> None:
-                if src == source.name:
+                if src == source.name and str(dst).endswith(".merged"):
                     raise OSError("source quarantine move failed")
                 real_rename(src, dst, *args, **kwargs)
 
@@ -1661,6 +1671,30 @@ class AppLoggingTest(unittest.TestCase):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
             self.assertEqual(source_checks, 2)
+            merged_sources = list(log_dir.glob("*.merged"))
+            self.assertEqual(len(merged_sources), 1)
+            self.assertEqual(merged_sources[0].read_text(encoding="utf-8"), "must survive\n")
+
+    def test_maintain_logs_monthly_merge_preserves_source_replacement_after_cleanup_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            source = log_dir / "speed-of-cinnamon-2026-05-30.log"
+            replacement = log_dir / "replacement.log"
+            source.write_text("source\n", encoding="utf-8")
+            source.chmod(0o600)
+            replacement.write_text("must survive\n", encoding="utf-8")
+            real_rename = app_logging._rename_without_replacing
+
+            def rename_then_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+                if src == source.name and str(dst).endswith(".cleanup"):
+                    source.unlink()
+                    replacement.replace(source)
+                real_rename(src, dst, *args, **kwargs)
+
+            with mock.patch.object(app_logging, "_rename_without_replacing", side_effect=rename_then_swap):
+                with self.assertRaisesRegex(RuntimeError, "monthly log source changed before cleanup"):
+                    app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
+
             merged_sources = list(log_dir.glob("*.merged"))
             self.assertEqual(len(merged_sources), 1)
             self.assertEqual(merged_sources[0].read_text(encoding="utf-8"), "must survive\n")
@@ -1927,7 +1961,7 @@ class AppLoggingTest(unittest.TestCase):
             with mock.patch.object(
                 app_logging.secrets,
                 "token_hex",
-                side_effect=["temp", "fixed", "free", "target-cleanup", "cleanup"],
+                side_effect=["temp", "fixed", "free", "target-cleanup", "source-cleanup", "cleanup"],
             ):
                 app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
