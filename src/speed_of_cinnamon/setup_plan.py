@@ -143,9 +143,10 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
             value in {"whisper-cpp", "faster-whisper", "auto"}
             and ("model not found" in detail_lower or "model path" in detail_lower)
         ):
+            resolved_backend = normalize_backend(str(transcriber.get("resolved") or value))
             model_download_command = (
                 "speed-of-cinnamon download-model base --json"
-                if value == "whisper-cpp"
+                if resolved_backend == "whisper-cpp"
                 else "speed-of-cinnamon download-model ct2-base-int8 --json"
             )
             _add_step(

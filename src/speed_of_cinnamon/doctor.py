@@ -384,28 +384,28 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     local_model_language_ok = bool(not local_model or model_supports_language(local_model, language))
 
     def _model_problem(value: str, *, explicit_backend: str = "") -> dict[str, object] | None:
+        def _problem(detail: str) -> dict[str, object]:
+            result: dict[str, object] = {"ok": False, "value": value, "detail": detail}
+            if model_backend in {"whisper-cpp", "faster-whisper"}:
+                result["resolved"] = model_backend
+            return result
+
         if local_model_is_invalid:
-            return {"ok": False, "value": value, "detail": "voice model path is invalid"}
+            return _problem("voice model path is invalid")
         if local_model and not local_model_exists:
-            return {"ok": False, "value": value, "detail": "voice model not found"}
+            return _problem("voice model not found")
         if local_model and not model_ok:
             if model_backend == "whisper-cpp":
-                return {"ok": False, "value": value, "detail": "whisper.cpp voice model path must be a file"}
+                return _problem("whisper.cpp voice model path must be a file")
             if model_backend == "faster-whisper":
-                return {"ok": False, "value": value, "detail": "faster-whisper voice model path must be a directory"}
-            return {"ok": False, "value": value, "detail": "voice model path is invalid"}
+                return _problem("faster-whisper voice model path must be a directory")
+            return _problem("voice model path is invalid")
         if local_model and not local_model_language_ok:
             if explicit_backend == "whisper-cpp":
-                return {
-                    "ok": False,
-                    "value": value,
-                    "detail": f"English-only whisper.cpp model does not support language {language}; use a multilingual model",
-                }
-            return {
-                "ok": False,
-                "value": value,
-                "detail": f"voice model does not support language {language}; use a compatible model",
-            }
+                return _problem(
+                    f"English-only whisper.cpp model does not support language {language}; use a multilingual model"
+                )
+            return _problem(f"voice model does not support language {language}; use a compatible model")
         return None
 
     def _model_backend_status(value: str, expected_backend: str = "") -> dict[str, object]:

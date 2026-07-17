@@ -481,6 +481,17 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
         self.assertIn("voice model not found", payload["configured"]["transcriber"]["detail"])
 
+    def test_auto_asr_reports_resolved_backend_for_missing_catalog_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            model = Path(tmp) / "ggml-base.bin"
+            status = doctor._transcriber_status(
+                {"transcriber": "auto", "whisper-model": str(model)},
+                {},
+            )
+
+        self.assertFalse(status["ok"])
+        self.assertEqual(status["resolved"], "whisper-cpp")
+
     def test_auto_asr_reports_missing_faster_whisper_for_directory_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             model = Path(tmp) / "ct2-missing-module"

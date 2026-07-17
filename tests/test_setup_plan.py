@@ -202,6 +202,29 @@ class SetupPlanTest(unittest.TestCase):
         plan = build_setup_plan(payload)
         self.assertEqual(plan["steps"][0]["id"], "voice-model")
 
+    def test_missing_auto_whisper_cpp_model_uses_whisper_cpp_download(self) -> None:
+        payload = {
+            "ok": False,
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {
+                    "ok": False,
+                    "value": "auto",
+                    "resolved": "whisper-cpp",
+                    "detail": "voice model not found",
+                },
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+
+        plan = build_setup_plan(payload)
+
+        self.assertIn("speed-of-cinnamon download-model base --json", plan["commands"])
+        self.assertNotIn("speed-of-cinnamon download-model ct2-base-int8 --json", plan["commands"])
+
     def test_incompatible_voice_model_gets_voice_model_step(self) -> None:
         payload = {
             "ok": False,
