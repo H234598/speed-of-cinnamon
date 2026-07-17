@@ -17,6 +17,7 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
+from .output import _BoundedOutputCapture, _finish_bounded_output_captures
 from .paths import recordings_dir
 from .path_safety import (
     _rename_without_replacing,
@@ -437,19 +438,47 @@ def _run_ffmpeg_bounded(
     pass_fds: tuple[int, ...],
 ) -> subprocess.CompletedProcess[bytes]:
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-        proc = subprocess.Popen(  # nosec B603
-            command,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            env=_filtered_environment(),
-            pass_fds=pass_fds,
-            shell=False,
-            start_new_session=True,
-        )
-        _communicate_recorder_process_bounded(proc, timeout=timeout, process_name="ffmpeg")
-        stdout = _read_ffmpeg_output(stdout_file, completed_output=getattr(proc, "stdout", None), field_name="stdout")
-        stderr = _read_ffmpeg_output(stderr_file, completed_output=getattr(proc, "stderr", None), field_name="stderr")
-        return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+        stdout_capture = _BoundedOutputCapture(stdout_file, MAX_FFMPEG_OUTPUT_BYTES)
+        stderr_capture = _BoundedOutputCapture(stderr_file, MAX_FFMPEG_OUTPUT_BYTES)
+        primary_error: BaseException | None = None
+        try:
+            proc = subprocess.Popen(  # nosec B603
+                command,
+                stdout=stdout_capture,
+                stderr=stderr_capture,
+                env=_filtered_environment(),
+                pass_fds=pass_fds,
+                shell=False,
+                start_new_session=True,
+            )
+            _communicate_recorder_process_bounded(proc, timeout=timeout, process_name="ffmpeg")
+            _finish_bounded_output_captures(stdout_capture, stderr_capture)
+            if stdout_capture.overflowed:
+                raise RecorderError("ffmpeg command stdout exceeded safe output limit")
+            if stderr_capture.overflowed:
+                raise RecorderError("ffmpeg command stderr exceeded safe output limit")
+            stdout = _read_ffmpeg_output(
+                stdout_file,
+                completed_output=getattr(proc, "stdout", None),
+                field_name="stdout",
+            )
+            stderr = _read_ffmpeg_output(
+                stderr_file,
+                completed_output=getattr(proc, "stderr", None),
+                field_name="stderr",
+            )
+            return subprocess.CompletedProcess(command, proc.returncode, stdout, stderr)
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            try:
+                _finish_bounded_output_captures(stdout_capture, stderr_capture)
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    primary_error.add_note(f"ffmpeg output capture cleanup failed: {cleanup_error}")
+                else:
+                    raise
 
 
 def _command_path(command: str) -> str:

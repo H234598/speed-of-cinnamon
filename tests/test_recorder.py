@@ -318,6 +318,15 @@ class RecorderTest(unittest.TestCase):
         self.assertFalse(result.silent)
         self.assertIn("exceeded safe output limit", result.detail)
 
+    def test_run_ffmpeg_bounds_live_diagnostic_output(self) -> None:
+        with mock.patch.object(recorder_module, "MAX_FFMPEG_OUTPUT_BYTES", 64):
+            with self.assertRaisesRegex(RecorderError, "stdout exceeded safe output limit"):
+                recorder_module._run_ffmpeg_bounded(
+                    ["/bin/sh", "-c", "printf '%0100000d' 0"],
+                    timeout=2,
+                    pass_fds=(),
+                )
+
     def test_detect_silent_recording_rejects_nonfinite_ffmpeg_duration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "malformed-duration.wav"
