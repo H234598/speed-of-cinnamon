@@ -3266,7 +3266,7 @@ class AppletStaticTest(unittest.TestCase):
         )
         self.assertIn("this._scheduleStatusPoll();", block[finally_index:])
 
-    def test_status_refresh_errors_preserve_active_recording_state(self) -> None:
+    def test_status_refresh_transport_errors_preserve_active_recording_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         apply_index = source.index("_applyPayload: function(payload, statusRefreshToken) {")
@@ -3275,9 +3275,11 @@ class AppletStaticTest(unittest.TestCase):
         error_block = source[error_index:error_end]
 
         self.assertIn('let preserveRecordingOnError = arguments.length > 2 && arguments[2] === true;', error_block)
-        self.assertIn('let preserveActiveRecordingState = (preserveRecordingOnError && (', error_block)
-        self.assertIn('payload.transport_error === true ||', error_block)
-        self.assertIn('(typeof statusRefreshToken === "number" && this._hasActiveRecordingState());', error_block)
+        self.assertIn('let activeBackendStatus = status === "recording" || status === "recorded" || status === "processing";', error_block)
+        self.assertIn('payload.transport_error === true &&', error_block)
+        self.assertIn('(preserveRecordingOnError || (typeof statusRefreshToken === "number" && this._hasActiveRecordingState()))', error_block)
+        self.assertIn('(preserveRecordingOnError && activeBackendStatus);', error_block)
+        self.assertIn('(typeof statusRefreshToken === "number" && this._hasActiveRecordingState())', error_block)
         self.assertIn('this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);', error_block)
         self.assertIn("this._scheduleStatusPoll();", error_block)
         self.assertIn('this._setStatus("error", errorMessage, this.lastTranscript);', error_block)

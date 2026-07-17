@@ -11249,13 +11249,11 @@ MyApplet.prototype = {
     if (payload.error || status === "error") {
       let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));
       let preserveRecordingOnError = arguments.length > 2 && arguments[2] === true;
-      let preserveActiveRecordingState = (preserveRecordingOnError && (
-        payload.transport_error === true ||
-        status === "recording" ||
-        status === "recorded" ||
-        status === "processing"
-      )) ||
-        (typeof statusRefreshToken === "number" && this._hasActiveRecordingState());
+      let activeBackendStatus = status === "recording" || status === "recorded" || status === "processing";
+      let preserveActiveRecordingState = (
+        payload.transport_error === true &&
+        (preserveRecordingOnError || (typeof statusRefreshToken === "number" && this._hasActiveRecordingState()))
+      ) || (preserveRecordingOnError && activeBackendStatus);
       if (preserveActiveRecordingState) {
         this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
         this._scheduleStatusPoll();
