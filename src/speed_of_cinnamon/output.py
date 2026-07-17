@@ -1029,9 +1029,12 @@ class _BoundedOutputCapture:
         offset = 0
         while offset < len(payload):
             try:
-                offset += os.write(self.fileno(), payload[offset:])
+                written = os.write(self.fileno(), payload[offset:])
             except InterruptedError:
                 continue
+            if written <= 0:
+                raise OSError("bounded output capture write made no progress")
+            offset += written
         return len(payload)
 
     def flush(self) -> None:

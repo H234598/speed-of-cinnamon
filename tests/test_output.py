@@ -833,6 +833,16 @@ class OutputTest(unittest.TestCase):
             self.assertEqual(output_file.read(), b"abc")
             self.assertTrue(capture.overflowed)
 
+    def test_bounded_output_capture_rejects_zero_length_pipe_write(self) -> None:
+        with tempfile.TemporaryFile() as output_file:
+            capture = output_module._BoundedOutputCapture(output_file, 3)
+            try:
+                with mock.patch("speed_of_cinnamon.output.os.write", return_value=0):
+                    with self.assertRaisesRegex(OSError, "made no progress"):
+                        capture.write(b"x")
+            finally:
+                capture.finish()
+
     def test_bounded_output_capture_closes_pipe_when_thread_start_fails(self) -> None:
         with (
             mock.patch.object(output_module.os, "pipe", return_value=(41, 42)),
