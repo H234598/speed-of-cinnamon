@@ -1119,7 +1119,7 @@ def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
             raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
         except FileNotFoundError:
             continue
-        except OSError:
+        except (OSError, UnicodeDecodeError):
             scan_incomplete = True
             continue
         try:
