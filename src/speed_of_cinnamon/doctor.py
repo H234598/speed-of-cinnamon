@@ -316,18 +316,25 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     )
     if command_detail:
         return {"ok": False, "value": transcriber or "auto", "detail": command_detail}
-    if transcriber == "auto" and command_template:
-        local_model = ""
-    elif whisper_model and transcriber in {"auto", "whisper-cpp", "faster-whisper"}:
-        local_model = whisper_model
-    elif transcriber == "whisper-cpp":
-        local_model = default_whisper_cpp_model_path(language)
-    elif transcriber == "faster-whisper":
-        local_model = default_ctranslate2_model_path(language)
-    elif transcriber == "auto" and not command_template:
-        local_model = default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
-    else:
-        local_model = ""
+    try:
+        if transcriber == "auto" and command_template:
+            local_model = ""
+        elif whisper_model and transcriber in {"auto", "whisper-cpp", "faster-whisper"}:
+            local_model = whisper_model
+        elif transcriber == "whisper-cpp":
+            local_model = default_whisper_cpp_model_path(language)
+        elif transcriber == "faster-whisper":
+            local_model = default_ctranslate2_model_path(language)
+        elif transcriber == "auto" and not command_template:
+            local_model = default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
+        else:
+            local_model = ""
+    except (OSError, ValueError, RuntimeError):
+        return {
+            "ok": False,
+            "value": transcriber or "auto",
+            "detail": "voice model path is invalid",
+        }
 
     model_backend = ""
     local_model_exists = False

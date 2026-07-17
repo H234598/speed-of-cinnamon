@@ -31,6 +31,16 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
         self.assertIn("install whisper", payload["configured"]["transcriber"]["detail"])
 
+    def test_report_converts_default_model_resolution_error_to_status(self) -> None:
+        with (
+            mock.patch.object(doctor, "default_ctranslate2_model_path", side_effect=RuntimeError("unsafe model path")),
+            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})),
+        ):
+            payload = doctor.report({"recorder": "auto", "transcriber": "auto", "insert-method": "none"})
+
+        self.assertFalse(payload["configured"]["transcriber"]["ok"])
+        self.assertEqual(payload["configured"]["transcriber"]["detail"], "voice model path is invalid")
+
     def test_desktop_environment_values_are_field_limited(self) -> None:
         with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "X" * (doctor.MAX_DOCTOR_FIELD_CHARS + 100)}, clear=True):
             value = doctor._coerce_desktop_env("XDG_CURRENT_DESKTOP")
