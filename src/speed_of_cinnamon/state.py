@@ -196,8 +196,8 @@ class StateStore:
                 cleanup_errors.append(cleanup_error)
             if cleanup_errors:
                 if primary_error is not None:
-                    for cleanup_error in cleanup_errors:
-                        _note_lock_cleanup_failure(primary_error, cleanup_error)
+                    for additional_error in cleanup_errors:
+                        _note_lock_cleanup_failure(primary_error, additional_error)
                 else:
                     raise cleanup_errors[0]
 
