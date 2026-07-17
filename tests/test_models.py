@@ -4207,7 +4207,7 @@ class ModelsTest(unittest.TestCase):
             sha1=hashlib.sha1(data).hexdigest(),
             description="temp change after checksum",
         )
-        real_replace = models._replace_model_sibling_path
+        real_sha1_file = models.sha1_file
 
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -4215,32 +4215,21 @@ class ModelsTest(unittest.TestCase):
             mock.patch.object(models, "CATALOG", (spec,)),
             mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
         ):
-            def replace_after_temp_mutation(
-                source: Path,
-                target: Path,
-                root: Path,
-                *,
-                field_name: str = "model path",
-                expected_source_stat: os.stat_result | None = None,
-            ) -> None:
-                if target == models.model_path(spec) and source.name.startswith(f".{spec.filename}."):
-                    source.write_bytes(b"tampered model")
-                real_replace(
-                    source,
-                    target,
-                    root,
-                    field_name=field_name,
-                    expected_source_stat=expected_source_stat,
-                )
+            def sha1_then_mutate(source: Path) -> str:
+                result = real_sha1_file(source)
+                if source.name.startswith(f".{spec.filename}."):
+                    original_stat = source.stat(follow_symlinks=False)
+                    source.write_bytes(b"tampered data")
+                    os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+                return result
 
-            with mock.patch.object(models, "_replace_model_sibling_path", side_effect=replace_after_temp_mutation):
-                with self.assertRaisesRegex(models.ModelError, "source changed before activation"):
+            with mock.patch.object(models, "sha1_file", side_effect=sha1_then_mutate):
+                with self.assertRaisesRegex(models.ModelError, "downloaded checksum changed during activation"):
                     models.download_model(spec.name)
 
             self.assertFalse(models.model_path(spec).exists())
             temporary_paths = list(models.model_path(spec).parent.glob(f".{spec.filename}.*.tmp"))
-            self.assertEqual(len(temporary_paths), 1)
-            self.assertEqual(temporary_paths[0].read_bytes(), b"tampered model")
+            self.assertEqual(temporary_paths, [])
 
     def test_download_model_preserves_backup_when_target_becomes_dangling_symlink(self) -> None:
         old_data = b"old model"

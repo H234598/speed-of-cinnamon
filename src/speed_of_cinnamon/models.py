@@ -2068,6 +2068,10 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             expected_checksum = expected_hashes[filename_key]
             if _sha1_file_without_cache(tmp_path) != expected_checksum:
                 raise ModelError(f"downloaded model file checksum mismatch for {model.name}: {filename_key}")
+            if _sha1_file_without_cache(tmp_path) != expected_checksum:
+                raise ModelError(
+                    f"downloaded model file checksum changed during activation for {model.name}: {filename_key}"
+                )
             try:
                 tmp_file_stat = tmp_path.stat(follow_symlinks=False)
             except OSError as exc:
@@ -2394,6 +2398,8 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
         checksum = sha1_file(tmp_path)
         if checksum != model.sha1.lower():
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
+        if _sha1_file_without_cache(tmp_path) != model.sha1.lower():
+            raise ModelError(f"downloaded checksum changed during activation for {model.name}")
         try:
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
             if path.exists():
