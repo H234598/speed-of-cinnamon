@@ -107,6 +107,18 @@ class SafeLocalFsTest(unittest.TestCase):
             self.assertEqual(len(temporary_files), 1)
             self.assertEqual(temporary_files[0].read_bytes(), b"replacement\n")
 
+    def test_atomic_write_cleans_temp_on_interrupt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = SAFE_LOCAL_FS
+            root = Path(tmp)
+            target = root / "target.txt"
+
+            with mock.patch.object(module.os, "replace", side_effect=KeyboardInterrupt):
+                with self.assertRaises(KeyboardInterrupt):
+                    module._write_bytes_atomic(target, b"new\n", 0o600, action="test")
+
+            self.assertEqual(list(root.glob(".target.txt.*.tmp")), [])
+
     def test_atomic_copy_preserves_replaced_temp_during_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = SAFE_LOCAL_FS

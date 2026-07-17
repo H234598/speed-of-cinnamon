@@ -74,7 +74,7 @@ def _open_dir_chain(path: Path, *, action: str, create: bool = False, missing_ok
             os.close(fd)
             fd = next_fd
         return fd
-    except Exception:
+    except BaseException:
         with context_suppress():
             os.close(fd)
         raise
@@ -332,7 +332,7 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
             fail(f"destination changed during {action}: {dst}")
         _check_leaf(parent_fd, leaf, dst, action=action, kind="file", must_exist=True)
         _fsync_directory_fd(parent_fd, action=action)
-    except Exception:
+    except BaseException:
         with context_suppress():
             if fd is not None:
                 os.close(fd)
@@ -427,7 +427,7 @@ def _copy_file_atomically_from_checked_source(
             fail(f"destination changed during {action}: {dst}")
         _check_leaf(parent_fd, leaf, dst, action=action, kind="file", must_exist=True)
         _fsync_directory_fd(parent_fd, action=action)
-    except Exception:
+    except BaseException:
         with context_suppress():
             if fd is not None:
                 os.close(fd)
@@ -635,7 +635,7 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
             _rmtree_safe(backup_name, dir_fd=parent_fd, action=args.action)
             _fsync_directory_fd(parent_fd, action=args.action)
             backup_created = False
-    except Exception:
+    except BaseException:
         if backup_created and activated and _lstat_at(parent_fd, backup_name) is not None:
             with context_suppress():
                 current = _lstat_at(parent_fd, leaf)
