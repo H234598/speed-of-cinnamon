@@ -3071,6 +3071,15 @@ def _recording_process_verified_active(state: RecordingState) -> bool:
     return process_group_has_live_processes(state.pid) is not False
 
 
+def _recorder_process_is_gone(process: subprocess.Popen[bytes]) -> bool:
+    try:
+        if process.poll() is None:
+            return False
+        return process_group_has_live_processes(process.pid) is False
+    except BaseException:
+        return False
+
+
 def _raise_if_state_unreadable(state: RecordingState) -> None:
     if state.error.startswith("state file "):
         raise RuntimeError(state.error)
@@ -4046,7 +4055,7 @@ def _command_start_locked(
                         artifacts_safe_to_remove = True
                     else:
                         try:
-                            process_gone = process.poll() is not None
+                            process_gone = _recorder_process_is_gone(process)
                         except BaseException:
                             process_gone = False
                             artifacts_safe_to_remove = False
@@ -4154,12 +4163,6 @@ def _command_start_locked(
         detail = "; ".join(startup_errors) if startup_errors else "no supported recorder found"
         raise RuntimeError(f"no recorder backend started successfully: {detail}")
 
-    def recorder_process_is_gone() -> bool:
-        try:
-            return proc.poll() is not None
-        except Exception:
-            return False
-
     process_identity = candidate_process_identity or _recording_process_identity_for_pid(proc.pid)
     if process_identity is None:
         identity_error = RuntimeError(
@@ -4193,7 +4196,7 @@ def _command_start_locked(
             ):
                 cleanup_error.add_note("recorder lifecycle lock could not be retained")
             raise RuntimeError(f"{state_error}; recorder process cleanup failed") from cleanup_error
-        if not stopped and not recorder_process_is_gone():
+        if not stopped and not _recorder_process_is_gone(proc):
             error = RuntimeError(f"{state_error}; recorder process could not be stopped safely")
             if not _retain_finalization_lock_for_process(
                 finalization_lock_path,

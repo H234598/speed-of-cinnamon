@@ -11343,6 +11343,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
                 mock.patch("speed_of_cinnamon.cli.time.sleep"),
                 mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
+                mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=False),
                 mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False) as mocked_stop,
                 mock.patch("speed_of_cinnamon.cli.StateStore.write", side_effect=KeyboardInterrupt("state interrupted")),
             ):
@@ -11384,7 +11385,7 @@ class CliTest(unittest.TestCase):
     def test_start_retains_lifecycle_lock_when_state_write_cleanup_cannot_stop_recorder(self) -> None:
         proc = mock.Mock()
         proc.pid = 23456
-        proc.poll.return_value = None
+        proc.poll.side_effect = [None, 1]
 
         def fake_lock_identity(pid: int) -> str | None:
             return "proc-identity" if pid == proc.pid else "cli-identity"
@@ -11400,6 +11401,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
                 mock.patch("speed_of_cinnamon.cli._finalization_lock_identity_for_pid", side_effect=fake_lock_identity),
                 mock.patch("speed_of_cinnamon.cli._process_is_running", side_effect=lambda pid: pid == proc.pid),
+                mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
                 mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False),
                 mock.patch("speed_of_cinnamon.cli.time.sleep"),
                 mock.patch("speed_of_cinnamon.cli.StateStore.write", side_effect=RuntimeError("state write failed")),
