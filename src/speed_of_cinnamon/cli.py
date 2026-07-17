@@ -1804,6 +1804,17 @@ def _same_leaf_identity(current: os.stat_result, expected: os.stat_result) -> bo
     )
 
 
+def _same_leaf_claim_identity(current: os.stat_result, expected: os.stat_result) -> bool:
+    return (
+        current.st_dev == expected.st_dev
+        and current.st_ino == expected.st_ino
+        and current.st_mode == expected.st_mode
+        and current.st_size == expected.st_size
+        and getattr(current, "st_nlink", 1) == getattr(expected, "st_nlink", 1)
+        and current.st_mtime_ns == expected.st_mtime_ns
+    )
+
+
 def _unlink_regular_leaf_with_parent_fsync(
     path: Path,
     *,
@@ -1822,9 +1833,39 @@ def _unlink_regular_leaf_with_parent_fsync(
             raise RuntimeError(f"{field_name} must not be hardlinked: {path}")
         if expected_stat is not None and not _same_leaf_identity(current, expected_stat):
             raise RuntimeError(f"{field_name} changed before deletion: {path}")
-        os.unlink(path.name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-        return True
+        for _ in range(100):
+            cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    path.name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name=f"{field_name} cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not stat_module.S_ISREG(claimed.st_mode) or getattr(claimed, "st_nlink", 1) != 1:
+                    raise RuntimeError(f"{field_name} changed before deletion: {path}")
+                if not _same_leaf_claim_identity(claimed, current):
+                    raise RuntimeError(f"{field_name} changed before deletion: {path}")
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        path.name,
+                        directory_fd=parent_fd,
+                        field_name=f"{field_name} cleanup restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    exc.add_note(f"{field_name} cleanup restore failed: {restore_error}")
+                raise
+            return True
+        raise RuntimeError(f"failed to claim {field_name} cleanup path: {path}")
     except OSError as exc:
         raise RuntimeError(f"failed to delete {field_name}: {path}") from exc
     finally:

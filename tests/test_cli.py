@@ -7673,6 +7673,41 @@ class CliTest(unittest.TestCase):
             self.assertEqual(lock_path.read_bytes(), b"foreign lock")
             self.assertFalse(list(Path(tmp).glob(f"{lock_path.name}.*.cleanup")))
 
+    def test_regular_leaf_cleanup_preserves_replacement_after_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "transcript.txt"
+            replacement = Path(tmp) / "replacement.txt"
+            path.write_bytes(b"owned transcript")
+            replacement.write_bytes(b"foreign transcript")
+            expected_stat = path.stat(follow_symlinks=False)
+            real_stat = cli.os.stat
+            path_stat_calls = 0
+
+            def stat_then_replace(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal path_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == path.name and kwargs.get("dir_fd") is not None:
+                    path_stat_calls += 1
+                    if path_stat_calls == 1:
+                        path.unlink()
+                        replacement.replace(path)
+                return result
+
+            with mock.patch.object(cli.os, "stat", side_effect=stat_then_replace):
+                with self.assertRaisesRegex(RuntimeError, "transient transcript changed before deletion"):
+                    cli._unlink_regular_leaf_with_parent_fsync(
+                        path,
+                        field_name="transient transcript",
+                        expected_stat=expected_stat,
+                    )
+
+            self.assertEqual(path.read_bytes(), b"foreign transcript")
+            self.assertFalse(list(Path(tmp).glob("transcript.txt.*.cleanup")))
+
     def test_finalization_lock_rejects_hardlinked_existing_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
