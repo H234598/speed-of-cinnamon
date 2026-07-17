@@ -576,6 +576,29 @@ class ArtifactCryptoTest(unittest.TestCase):
         flags = mocked_open.call_args.args[1]
         self.assertTrue(flags & getattr(os, "O_NONBLOCK", 0))
 
+    def test_scrub_temp_passphrase_retries_interrupted_writes(self) -> None:
+        with (
+            mock.patch.object(artifact_crypto.os, "open", return_value=123),
+            mock.patch.object(
+                artifact_crypto.os,
+                "fstat",
+                return_value=mock.Mock(st_mode=stat.S_IFREG, st_size=3, st_dev=1, st_ino=2, st_nlink=1),
+            ),
+            mock.patch.object(artifact_crypto.os, "lseek"),
+            mock.patch.object(artifact_crypto.os, "write", side_effect=[InterruptedError(), 3]) as mocked_write,
+            mock.patch.object(artifact_crypto.os, "ftruncate"),
+            mock.patch.object(artifact_crypto.os, "close"),
+        ):
+            artifact_crypto._scrub_temp_passphrase_file(456, ".artifact.key.tmp")
+
+        self.assertEqual(mocked_write.call_count, 2)
+
+    def test_write_all_retries_interrupted_writes(self) -> None:
+        with mock.patch.object(artifact_crypto.os, "write", side_effect=[InterruptedError(), 3]) as mocked_write:
+            artifact_crypto._write_all(123, b"abc")
+
+        self.assertEqual(mocked_write.call_count, 2)
+
     def test_scrub_temp_passphrase_rejects_hardlink_race(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

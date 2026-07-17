@@ -272,7 +272,10 @@ def _write_all(fd: int, payload: bytes) -> None:
     view = memoryview(payload)
     offset = 0
     while offset < len(payload):
-        written = os.write(fd, view[offset:])
+        try:
+            written = os.write(fd, view[offset:])
+        except InterruptedError:
+            continue
         if written <= 0:
             raise OSError("short write")
         offset += written
@@ -358,7 +361,10 @@ def _scrub_temp_passphrase_file(
             os.lseek(fd, 0, os.SEEK_SET)
             chunk = b"\x00" * min(remaining, 65536)
             while remaining > 0:
-                written = os.write(fd, chunk[: min(remaining, len(chunk))])
+                try:
+                    written = os.write(fd, chunk[: min(remaining, len(chunk))])
+                except InterruptedError:
+                    continue
                 if written <= 0:
                     break
                 remaining -= written
