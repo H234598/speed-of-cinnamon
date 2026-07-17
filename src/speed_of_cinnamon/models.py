@@ -1953,7 +1953,17 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             if _sha1_file_without_cache(tmp_path) != expected_checksum:
                 raise ModelError(f"downloaded model file checksum mismatch for {model.name}: {filename_key}")
             try:
-                _replace_model_sibling_path(tmp_path, target, root, field_name="model file path")
+                tmp_file_stat = tmp_path.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise ModelError(f"failed to inspect downloaded model file: {tmp_path}") from exc
+            try:
+                _replace_model_sibling_path(
+                    tmp_path,
+                    target,
+                    root,
+                    field_name="model file path",
+                    expected_source_stat=tmp_file_stat,
+                )
             except (OSError, ModelError) as exc:
                 raise ModelError(f"failed to persist downloaded model file: {target}") from exc
         if downloaded_total > size_limit:

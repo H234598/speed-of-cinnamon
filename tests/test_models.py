@@ -2586,6 +2586,54 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file"):
                 models.download_model("ct2-replace-fails")
 
+    def test_download_model_rejects_multifile_temp_change_after_checksum(self) -> None:
+        data = b"trusted model file"
+        spec = models.ModelSpec(
+            name="ct2-temp-change-after-checksum",
+            filename="ct2-temp-change-after-checksum",
+            size="2 KiB",
+            sha1="",
+            description="ct2 temp change after checksum",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-temp-change-after-checksum",
+            files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
+        )
+        real_replace = models._replace_model_sibling_path
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            def replace_after_temp_mutation(
+                source: Path,
+                target: Path,
+                root: Path,
+                *,
+                field_name: str = "model path",
+                expected_source_stat: os.stat_result | None = None,
+            ) -> None:
+                if target.name == "config.json" and source.name.startswith(".config.json."):
+                    source.write_bytes(b"tampered model file")
+                real_replace(
+                    source,
+                    target,
+                    root,
+                    field_name=field_name,
+                    expected_source_stat=expected_source_stat,
+                )
+
+            with mock.patch.object(models, "_replace_model_sibling_path", side_effect=replace_after_temp_mutation):
+                with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model file") as caught:
+                    models.download_model(spec.name)
+
+            self.assertIn("source changed before activation", str(caught.exception.__cause__))
+            self.assertFalse(models.model_path(spec).exists())
+            self.assertFalse(list(models.model_path(spec).parent.glob(f".{spec.filename}.*")))
+
     def test_download_model_removes_new_multifile_directory_after_activation_fsync_failure(self) -> None:
         data = b"small model file"
         spec = models.ModelSpec(
