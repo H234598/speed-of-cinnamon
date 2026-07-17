@@ -1155,7 +1155,7 @@ def _safe_log_event(level: str, event: str, **fields: object) -> None:
     try:
         log_event(level, event, **fields)
     except Exception:
-        pass
+        return
 
 
 def append_space_if_needed(text: str, append_space: bool) -> str:
