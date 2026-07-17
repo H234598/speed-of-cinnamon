@@ -11,6 +11,7 @@ import subprocess  # nosec B404
 import tempfile
 import io
 import os
+import threading
 import time
 from pathlib import Path
 from typing import BinaryIO
@@ -992,6 +993,94 @@ def _validate_text_input(text: str) -> bytes:
     return encoded
 
 
+class _BoundedOutputCapture:
+    def __init__(self, output_file: BinaryIO, max_bytes: int) -> None:
+        self._output_file = output_file
+        self._max_bytes = max_bytes
+        self._captured_bytes = 0
+        self.overflowed = False
+        self._error: BaseException | None = None
+        self._read_fd, self._write_fd = os.pipe()
+        self._thread = threading.Thread(target=self._drain, name="soc-output-capture", daemon=True)
+        self._thread.start()
+
+    def fileno(self) -> int:
+        if self._write_fd is None:
+            raise ValueError("output capture writer is closed")
+        return self._write_fd
+
+    def write(self, payload: bytes) -> int:
+        if not isinstance(payload, bytes):
+            raise TypeError("output capture payload must be bytes")
+        offset = 0
+        while offset < len(payload):
+            try:
+                offset += os.write(self.fileno(), payload[offset:])
+            except InterruptedError:
+                continue
+        return len(payload)
+
+    def flush(self) -> None:
+        return None
+
+    def close_writer(self) -> None:
+        write_fd = self._write_fd
+        self._write_fd = None
+        if write_fd is not None:
+            os.close(write_fd)
+
+    def finish(self) -> None:
+        errors: list[BaseException] = []
+        try:
+            self.close_writer()
+        except BaseException as exc:
+            errors.append(exc)
+        self._thread.join(timeout=1.0)
+        if self._thread.is_alive():
+            errors.append(OSError("bounded output capture did not finish"))
+        if self._error is not None:
+            errors.append(self._error)
+        if errors:
+            raise OSError("bounded output capture failed") from errors[0]
+
+    def _drain(self) -> None:
+        try:
+            while True:
+                chunk = os.read(self._read_fd, 64 * 1024)
+                if not chunk:
+                    break
+                remaining = self._max_bytes - self._captured_bytes
+                if remaining > 0:
+                    captured = chunk[:remaining]
+                    self._output_file.write(captured)
+                    self._captured_bytes += len(captured)
+                if len(chunk) > max(remaining, 0):
+                    self.overflowed = True
+            self._output_file.flush()
+        except BaseException as exc:
+            self._error = exc
+        finally:
+            try:
+                os.close(self._read_fd)
+            except OSError:
+                pass
+
+
+def _finish_bounded_output_captures(
+    *captures: _BoundedOutputCapture | None,
+) -> None:
+    errors: list[BaseException] = []
+    for capture in captures:
+        if capture is None:
+            continue
+        try:
+            capture.finish()
+        except BaseException as exc:
+            errors.append(exc)
+    if errors:
+        raise OSError("bounded output capture failed") from errors[0]
+
+
 def _run_with_input(
     argv: list[str] | tuple[str, ...],
     text: str,
@@ -1034,19 +1123,27 @@ def _run_with_input(
 
     stdout_file = None
     stderr_file = None
+    stdout_capture: _BoundedOutputCapture | None = None
+    stderr_capture: _BoundedOutputCapture | None = None
     primary_error: BaseException | None = None
     try:
         try:
             stdout_file = tempfile.TemporaryFile()
             stderr_file = tempfile.TemporaryFile()
+            stdout_capture = _BoundedOutputCapture(stdout_file, max_output_chars)
+            stderr_capture = _BoundedOutputCapture(stderr_file, max_output_chars)
         except (OSError, ValueError) as exc:
+            try:
+                _finish_bounded_output_captures(stdout_capture, stderr_capture)
+            except BaseException as cleanup_error:
+                exc.add_note(f"{command} output capture cleanup failed: {cleanup_error}")
             raise OutputError(f"{command} failed to prepare output capture: {exc}") from exc
         try:
             proc = subprocess.Popen(  # nosec B603
                 [runtime_command, *argv[1:]],
                 stdin=subprocess.PIPE,
-                stdout=stdout_file,
-                stderr=stderr_file,
+                stdout=stdout_capture,
+                stderr=stderr_capture,
                 shell=False,
                 env=_filtered_environment(),
                 start_new_session=True,
@@ -1085,6 +1182,14 @@ def _run_with_input(
             raise
 
         try:
+            _finish_bounded_output_captures(stdout_capture, stderr_capture)
+        except (OSError, ValueError) as exc:
+            raise OutputError(f"{command} output capture failed") from exc
+        if stdout_capture is not None and stdout_capture.overflowed:
+            raise OutputError(f"{command} produced too much output")
+        if stderr_capture is not None and stderr_capture.overflowed:
+            raise OutputError(f"{command} produced too much error output")
+        try:
             stdout_size = _filesize(stdout_file)
             stderr_size = _filesize(stderr_file)
         except (OSError, ValueError) as exc:
@@ -1101,6 +1206,13 @@ def _run_with_input(
         raise
     finally:
         cleanup_errors: list[BaseException] = []
+        try:
+            _finish_bounded_output_captures(stdout_capture, stderr_capture)
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                primary_error.add_note(f"{command} output capture cleanup failed: {cleanup_error}")
+            else:
+                cleanup_errors.append(cleanup_error)
         for capture_file in (stderr_file, stdout_file):
             if capture_file is None:
                 continue
@@ -1244,18 +1356,22 @@ def _run_bounded_stdout_command(
 ) -> tuple[int, bytes, bytes] | None:
     stdout_file = None
     stderr_file = None
+    stdout_capture: _BoundedOutputCapture | None = None
+    stderr_capture: _BoundedOutputCapture | None = None
     result: tuple[int, bytes, bytes] | None = None
     primary_error: BaseException | None = None
     cleanup_failed = False
     try:
         stdout_file = tempfile.TemporaryFile()
         stderr_file = tempfile.TemporaryFile()
+        stdout_capture = _BoundedOutputCapture(stdout_file, MAX_OUTPUT_CHARS)
+        stderr_capture = _BoundedOutputCapture(stderr_file, MAX_OUTPUT_CHARS)
         try:
             proc = subprocess.Popen(  # nosec B603
                 [runtime_command, *argv[1:]],
                 stdin=subprocess.PIPE,
-                stdout=stdout_file,
-                stderr=stderr_file,
+                stdout=stdout_capture,
+                stderr=stderr_capture,
                 shell=False,
                 env=_filtered_environment(),
                 start_new_session=True,
@@ -1285,19 +1401,35 @@ def _run_bounded_stdout_command(
             raise
         else:
             try:
-                output = _bounded_command_output_bytes(stdout_file, completed_stdout)
-                error_output = _bounded_command_output_bytes(stderr_file, completed_stderr)
+                _finish_bounded_output_captures(stdout_capture, stderr_capture)
             except (OSError, ValueError) as exc:
                 primary_error = exc
             else:
-                if output is not None and error_output is not None:
-                    result = proc.returncode, output, error_output
+                if stdout_capture is not None and stdout_capture.overflowed:
+                    primary_error = OutputError("bounded command produced too much output")
+                elif stderr_capture is not None and stderr_capture.overflowed:
+                    primary_error = OutputError("bounded command produced too much error output")
+            if primary_error is None:
+                try:
+                    output = _bounded_command_output_bytes(stdout_file, completed_stdout)
+                    error_output = _bounded_command_output_bytes(stderr_file, completed_stderr)
+                except (OSError, ValueError) as exc:
+                    primary_error = exc
+                else:
+                    if output is not None and error_output is not None:
+                        result = proc.returncode, output, error_output
     except (OSError, ValueError) as exc:
         primary_error = exc
     except BaseException as exc:
         primary_error = exc
         raise
     finally:
+        try:
+            _finish_bounded_output_captures(stdout_capture, stderr_capture)
+        except BaseException as cleanup_error:
+            cleanup_failed = True
+            if primary_error is not None:
+                primary_error.add_note(f"bounded command output capture cleanup failed: {cleanup_error}")
         for capture_file in (stderr_file, stdout_file):
             if capture_file is None:
                 continue

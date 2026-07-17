@@ -799,6 +799,24 @@ class OutputTest(unittest.TestCase):
                 with self.assertRaisesRegex(OutputError, "too much output"):
                     _run_with_input(["cmd"], "input")
 
+    def test_bounded_output_capture_drains_pipe_and_caps_file(self) -> None:
+        with tempfile.TemporaryFile() as output_file:
+            capture = output_module._BoundedOutputCapture(output_file, 3)
+            self.assertEqual(capture.write(b"abcdef"), 6)
+            capture.finish()
+            output_file.seek(0)
+            self.assertEqual(output_file.read(), b"abc")
+            self.assertTrue(capture.overflowed)
+
+    def test_run_stdout_bounds_live_process_output(self) -> None:
+        with mock.patch("speed_of_cinnamon.output.MAX_OUTPUT_CHARS", 64):
+            result = output_module._run_stdout_raw(
+                ["sh", "-c", "printf '%0100000d' 0"],
+                timeout=2,
+            )
+
+        self.assertIsNone(result)
+
     def test_run_stdout_rejects_non_sequence_argv(self) -> None:
         with self.assertRaisesRegex(OutputError, "argv must be a sequence"):
             _run_stdout("xdotool", timeout=1)  # type: ignore[arg-type]
