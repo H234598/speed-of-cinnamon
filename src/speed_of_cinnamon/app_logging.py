@@ -1188,7 +1188,12 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         source_cleanup_errors.append(delete_error)
                         continue
                     try:
-                        os.unlink(cleanup_name, dir_fd=parent_fd)
+                        if not _unlink_log_file_with_parent_fsync(
+                            path.with_name(cleanup_name),
+                            moved_stat,
+                            field_name="monthly log source quarantine",
+                        ):
+                            raise RuntimeError("monthly log source quarantine disappeared before cleanup")
                         os.fsync(parent_fd)
                     except OSError as cleanup_error:
                         archive_rollback_safe = False
