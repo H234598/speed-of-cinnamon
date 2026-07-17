@@ -32,7 +32,6 @@ from speed_of_cinnamon.postprocessor import (
     MAX_MODEL_LIST_ENTRIES,
     MAX_POSTPROCESS_JSON_BYTES,
     MAX_POSTPROCESS_PROMPT_CHARS,
-    MAX_POSTPROCESS_URL_CHARS,
     list_ollama_models,
     list_openai_compatible_models,
     render_postprocess_template,
