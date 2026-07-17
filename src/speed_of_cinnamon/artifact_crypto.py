@@ -297,10 +297,14 @@ def _create_private_temp_passphrase_file(parent_fd: int, final_name: str) -> tup
 
 
 def _fsync_fd(fd: int) -> None:
-    try:
-        os.fsync(fd)
-    except OSError as exc:
-        raise ArtifactCryptoError("artifact encryption passphrase file could not be synchronized") from exc
+    while True:
+        try:
+            os.fsync(fd)
+            return
+        except InterruptedError:
+            continue
+        except OSError as exc:
+            raise ArtifactCryptoError("artifact encryption passphrase file could not be synchronized") from exc
 
 
 def _has_posix_acl(path: Path) -> bool:
@@ -370,7 +374,12 @@ def _scrub_temp_passphrase_file(
                 remaining -= written
             with suppress(OSError, RuntimeError):
                 _fsync_fd(fd)
-        os.ftruncate(fd, 0)
+        while True:
+            try:
+                os.ftruncate(fd, 0)
+                break
+            except InterruptedError:
+                continue
         with suppress(OSError, RuntimeError):
             _fsync_fd(fd)
     except BaseException as exc:

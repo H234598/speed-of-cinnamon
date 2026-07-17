@@ -599,6 +599,31 @@ class ArtifactCryptoTest(unittest.TestCase):
 
         self.assertEqual(mocked_write.call_count, 2)
 
+    def test_fsync_retries_interrupted_calls(self) -> None:
+        with mock.patch.object(artifact_crypto.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
+            artifact_crypto._fsync_fd(123)
+
+        self.assertEqual(mocked_fsync.call_count, 2)
+
+    def test_scrub_temp_passphrase_retries_interrupted_truncate(self) -> None:
+        with (
+            mock.patch.object(artifact_crypto.os, "open", return_value=123),
+            mock.patch.object(
+                artifact_crypto.os,
+                "fstat",
+                return_value=mock.Mock(st_mode=stat.S_IFREG, st_size=0),
+            ),
+            mock.patch.object(
+                artifact_crypto.os,
+                "ftruncate",
+                side_effect=[InterruptedError(), None],
+            ) as mocked_ftruncate,
+            mock.patch.object(artifact_crypto.os, "close"),
+        ):
+            artifact_crypto._scrub_temp_passphrase_file(456, ".artifact.key.tmp")
+
+        self.assertEqual(mocked_ftruncate.call_count, 2)
+
     def test_scrub_temp_passphrase_rejects_hardlink_race(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
