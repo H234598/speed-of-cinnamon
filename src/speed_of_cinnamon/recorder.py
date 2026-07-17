@@ -1419,12 +1419,13 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
 
 
 def _normalize_suffixes(suffix: str | tuple[str, ...]) -> tuple[str, ...]:
+    suffixes: tuple[str, ...]
     if isinstance(suffix, str):
         suffixes = (suffix,)
     elif isinstance(suffix, tuple):
         if not suffix:
             raise RecorderError("recording artifact suffix must be a non-empty string or tuple")
-        suffixes = suffix
+        suffixes = tuple(suffix)
     else:
         raise RecorderError("recording artifact suffix must be text")
     normalized: list[str] = []
@@ -2177,7 +2178,7 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             max_bytes=MAX_RECORDER_LOG_BYTES,
         )
         runtime_command = [_command_path(command.argv[0]), *command.argv[1:]]
-        process = subprocess.Popen(
+        process = subprocess.Popen(  # type: ignore[call-overload]
             runtime_command,
             stdout=log_capture,
             stderr=subprocess.STDOUT,
@@ -2236,6 +2237,7 @@ def stop_process(
         )
     if expected_process_identity is None and not allow_unverified_process:
         raise RecorderError("expected_process_identity is required to stop recorder process")
+    process_group_target: bool | None
     try:
         process_group_target = os.getpgid(pid) == pid
         process_target = f"-{pid}" if process_group_target else str(pid)
