@@ -257,7 +257,10 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
     commands: list[str] = []
     seen_commands: set[str] = set()
     for step in steps:
-        for command in step["commands"]:
+        step_commands = step.get("commands")
+        if not isinstance(step_commands, list):
+            continue
+        for command in step_commands:
             command_text = str(command)
             if command_text not in seen_commands:
                 commands.append(command_text)
