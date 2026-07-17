@@ -646,7 +646,7 @@ def _assert_regular_unlinked_file(path: Path, *, field_name: str) -> os.stat_res
         raise RuntimeError(f"{field_name} must be a path")
     try:
         file_stat = path.lstat()
-    except OSError as exc:
+    except OSError:
         raise RuntimeError(f"{field_name} must be an existing file: {path}")
     if stat_module.S_ISLNK(file_stat.st_mode):
         raise RuntimeError(f"{field_name} must not be a symlink: {path}")
@@ -1240,8 +1240,8 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     source_cleanup_errors.append(source_error)
             if source_cleanup_errors:
                 primary_source_error = source_cleanup_errors[0]
-                for source_error in source_cleanup_errors[1:]:
-                    _note_cleanup_failure(primary_source_error, source_error)
+                for additional_source_error in source_cleanup_errors[1:]:
+                    _note_cleanup_failure(primary_source_error, additional_source_error)
                 raise primary_source_error
             if archive_backup_moved and archive_backup_name is not None:
                 backup_path = directory / archive_backup_name
@@ -1861,6 +1861,8 @@ def _gzip_file(source: Path, target: Path) -> None:
             _fsync_fd(parent_fd)
         target_activation_attempted = True
         if target_backup_created:
+            if target_existing_stat is None:
+                raise RuntimeError("log target backup lost its original inode")
             current_target_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
             if (
                 not stat_module.S_ISREG(current_target_stat.st_mode)
