@@ -3343,6 +3343,7 @@ MyApplet.prototype = {
     this.notifyComplete = false;
     this.notifyError = true;
     this.status = "idle";
+    this.recordingArtifactsPresent = false;
     this.lastTranscript = "";
     this.lastMessage = "";
     this.isCommandRunning = false;
@@ -5964,8 +5965,35 @@ MyApplet.prototype = {
   _hasCancelableRecordingWork: function(statusOverride) {
     let effectiveStatus = typeof statusOverride === "string" ? statusOverride : this.status;
     return effectiveStatus === "recording" || effectiveStatus === "recorded" ||
+      (effectiveStatus === "error" && this.recordingArtifactsPresent) ||
       this.autoRelistenPending ||
       (this.isCommandRunning && this.notificationSessionActive && Boolean(this._recordingCommandToken));
+  },
+
+  _updateRecordingArtifactState: function(payload, status) {
+    if (!payload || typeof payload !== "object") {
+      return;
+    }
+    let hasPresenceFields = ["audio_path_present", "log_path_present", "transcript_path_present"]
+      .some((field) => Object.prototype.hasOwnProperty.call(payload, field));
+    if (hasPresenceFields) {
+      this.recordingArtifactsPresent = Boolean(
+        payload.audio_path_present === true ||
+        payload.log_path_present === true ||
+        payload.transcript_path_present === true
+      );
+    }
+    if (
+      payload.discarded_audio_path_present === true ||
+      payload.audio_deleted === false ||
+      payload.log_deleted === false ||
+      payload.transcript_deleted === false
+    ) {
+      this.recordingArtifactsPresent = true;
+    }
+    if (status === "idle" || status === "done") {
+      this.recordingArtifactsPresent = false;
+    }
   },
 
   _cancelRecording: function(statusOverride) {
@@ -11246,6 +11274,7 @@ MyApplet.prototype = {
       this._statusRefreshToken++;
     }
     let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));
+    this._updateRecordingArtifactState(payload, status);
     if (payload.error || status === "error") {
       let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));
       let preserveRecordingOnError = arguments.length > 2 && arguments[2] === true;
