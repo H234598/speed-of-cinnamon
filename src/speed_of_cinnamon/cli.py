@@ -2231,7 +2231,11 @@ def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]
     directory = transcript_dir()
 
     try:
-        candidates = heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
+        candidates = heapq.nlargest(
+            max(limit * 4, limit + 16),
+            _transcript_history_candidates(directory),
+            key=lambda candidate: (candidate[0], str(candidate[1])),
+        )
     except DirectoryScanError:
         return [], 1
 
@@ -2278,7 +2282,15 @@ def build_transcripts_document(
     if max_chars is not None and (isinstance(max_chars, bool) or max_chars < 1):
         raise RuntimeError("transcript document size limit must be positive")
     directory = transcript_dir()
-    candidates = [] if limit <= 0 else heapq.nlargest(max(limit * 4, limit + 16), _transcript_history_candidates(directory))
+    candidates = (
+        []
+        if limit <= 0
+        else heapq.nlargest(
+            max(limit * 4, limit + 16),
+            _transcript_history_candidates(directory),
+            key=lambda candidate: (candidate[0], str(candidate[1])),
+        )
+    )
     lines = [
         "Speed of Cinnamon transcripts",
         f"Generated: {now_iso()}",

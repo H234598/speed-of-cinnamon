@@ -4282,6 +4282,22 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("newer.txt", json.dumps(payload, sort_keys=True))
         self.assertNotIn("text", payload["transcripts"][0])
 
+    def test_history_handles_equal_mtimes_without_comparing_paths(self) -> None:
+        candidates = [(100.0, object()), (100.0, object())]
+        with (
+            mock.patch.object(cli, "transcript_dir", return_value=Path("/tmp/transcripts")),
+            mock.patch.object(cli, "_transcript_history_candidates", side_effect=lambda _directory: iter(candidates)),
+            mock.patch.object(cli, "_read_stored_transcript_text", return_value="safe text\n"),
+            mock.patch.object(cli, "_transcript_display_name", return_value="entry.txt"),
+        ):
+            history = cli.read_transcript_history(2)
+            document, count, truncated = cli.build_transcripts_document(2)
+
+        self.assertEqual(len(history), 2)
+        self.assertEqual(count, 2)
+        self.assertFalse(truncated)
+        self.assertIn("entry.txt", document)
+
     def test_history_plaintext_previews_require_confirmation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
