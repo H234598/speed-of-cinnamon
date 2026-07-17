@@ -2731,6 +2731,15 @@ Source #13
             self.assertFalse(recorder_module.process_group_has_live_processes(1234))
             self.assertFalse(recorder_module._process_group_exists(1234))
 
+    def test_process_group_exists_accepts_successful_kill_zero_fallback(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder._process_group_has_recorder_session", return_value=False),
+            mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None) as mocked_kill,
+        ):
+            self.assertTrue(recorder_module._process_group_exists(1234))
+
+        mocked_kill.assert_called_once_with(-1234, 0)
+
     def test_stop_process_accepts_zombie_group_leader_as_stopped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             process = start_recorder(

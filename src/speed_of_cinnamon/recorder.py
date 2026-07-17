@@ -1751,7 +1751,7 @@ def _process_group_exists(process_group_id: int) -> bool:
         return True
     except (OSError, OverflowError, ValueError):
         return False
-    return False
+    return True
 
 
 def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
