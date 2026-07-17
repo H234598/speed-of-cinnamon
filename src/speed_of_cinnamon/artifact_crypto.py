@@ -1574,6 +1574,10 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
         raise ArtifactCryptoError(f"{field_name} must be a path")
     if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0):
         raise ArtifactCryptoError("max_bytes must be a non-negative integer")
+    if max_bytes is not None and max_bytes > MAX_ENCRYPTED_ARTIFACT_BYTES:
+        raise ArtifactCryptoError(
+            f"max_bytes must not exceed {MAX_ENCRYPTED_ARTIFACT_BYTES} bytes"
+        )
     effective_max_bytes = MAX_ENCRYPTED_ARTIFACT_BYTES if max_bytes is None else max_bytes
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:

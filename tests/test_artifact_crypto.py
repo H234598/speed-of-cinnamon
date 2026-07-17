@@ -1844,6 +1844,15 @@ class ArtifactCryptoTest(unittest.TestCase):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "is too large"):
                     artifact_crypto.read_decrypted_bytes_from_file(path, kind="transcript", field_name="artifact", max_bytes=0)
 
+    def test_read_private_bytes_rejects_max_bytes_above_artifact_limit(self) -> None:
+        with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "must not exceed 4 bytes"):
+                artifact_crypto.read_private_bytes(
+                    Path("/does-not-matter/artifact"),
+                    field_name="artifact",
+                    max_bytes=5,
+                )
+
     def test_encrypt_with_surrogate_passphrase_raises_controlled_error(self) -> None:
         surrogate_passphrase = "".join(chr(0xD800 + (index % 128)) for index in range(40))
         with tempfile.TemporaryDirectory() as tmp:
