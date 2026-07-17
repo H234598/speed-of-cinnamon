@@ -170,6 +170,19 @@ class RecorderTest(unittest.TestCase):
                 pass
             process.communicate()
 
+    def test_timeout_cleanup_does_not_claim_unknown_session_group_complete(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = None
+
+        with (
+            mock.patch.object(recorder_module, "process_group_has_live_processes", return_value=None),
+            mock.patch.object(recorder_module.os, "killpg") as mocked_killpg,
+        ):
+            self.assertFalse(recorder_module._terminate_recorder_process_group(process))
+
+        mocked_killpg.assert_called_once_with(1234, recorder_module.signal.SIGKILL)
+
     def test_bounded_communicate_preserves_timeout_when_cleanup_is_interrupted(self) -> None:
         process = mock.Mock()
         timeout = subprocess.TimeoutExpired(cmd=["ffmpeg"], timeout=1)
@@ -2947,6 +2960,18 @@ Source #13
             result = recorder_module.process_group_has_live_processes(1234)
 
         self.assertFalse(result)
+
+    def test_process_group_scan_fails_closed_for_same_session_different_group(self) -> None:
+        entries = (Path("/proc/100"),)
+        with (
+            mock.patch("speed_of_cinnamon.recorder.Path.iterdir", return_value=entries),
+            mock.patch(
+                "speed_of_cinnamon.recorder._recording_process_stat_fields",
+                return_value=["S", "1", "9999", "1234"],
+            ),
+        ):
+            self.assertIsNone(recorder_module.process_group_has_live_processes(1234))
+            self.assertIsNone(recorder_module._process_group_has_recorder_session(1234))
 
     def test_recording_process_stat_decode_errors_fail_closed(self) -> None:
         error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid process name")

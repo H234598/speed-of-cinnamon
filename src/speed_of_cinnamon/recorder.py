@@ -378,10 +378,12 @@ def _decode_ffmpeg_output(payload: object) -> str:
 
 def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
     try:
-        if process.poll() is not None:
-            group_live = process_group_has_live_processes(process.pid)
-            if group_live is not True:
-                return group_live is False
+        process_finished = process.poll() is not None
+        group_live = process_group_has_live_processes(process.pid)
+        cleanup_incomplete = group_live is None
+        if process_finished:
+            if group_live is False:
+                return True
             try:
                 raw = Path(f"/proc/{process.pid}/stat").read_text(encoding="ascii").strip()
                 close = raw.rindex(")")
@@ -396,9 +398,9 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
         return False
     try:
         os.killpg(process.pid, signal.SIGKILL)
-        return True
+        return not cleanup_incomplete
     except ProcessLookupError:
-        return True
+        return not cleanup_incomplete
     except (OSError, ValueError):
         try:
             process.kill()
@@ -1786,6 +1788,8 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
     except OSError:
         return None
     scan_incomplete = False
+    same_session_different_group = False
+    group_live = False
     for proc_entry in proc_entries:
         if not proc_entry.name.isdecimal():
             continue
@@ -1808,13 +1812,16 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
         except ValueError:
             scan_incomplete = True
             continue
-        if member_group_id != process_group_id or member_session_id != process_group_id:
+        if member_session_id != process_group_id:
+            continue
+        if member_group_id != process_group_id:
+            same_session_different_group = True
             continue
         if stat_fields[0] not in {"Z", "X", "x"}:
-            return True
-    if scan_incomplete:
+            group_live = True
+    if scan_incomplete or same_session_different_group:
         return None
-    return False
+    return group_live
 
 
 def _process_is_gone(process_target: str) -> bool:
@@ -1841,6 +1848,8 @@ def _process_group_has_recorder_session(process_group_id: int) -> bool | None:
     except OSError:
         return None
     scan_incomplete = False
+    same_session_different_group = False
+    same_group = False
     for proc_entry in proc_entries:
         if not proc_entry.name.isdecimal():
             continue
@@ -1854,11 +1863,15 @@ def _process_group_has_recorder_session(process_group_id: int) -> bool | None:
         except ValueError:
             scan_incomplete = True
             continue
-        if member_group_id == process_group_id and member_session_id == process_group_id:
-            return True
-    if scan_incomplete:
+        if member_session_id != process_group_id:
+            continue
+        if member_group_id == process_group_id:
+            same_group = True
+        else:
+            same_session_different_group = True
+    if scan_incomplete or same_session_different_group:
         return None
-    return False
+    return same_group
 
 
 def _process_group_exists(process_group_id: int) -> bool | None:
