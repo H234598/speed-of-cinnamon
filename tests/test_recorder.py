@@ -1680,6 +1680,15 @@ class RecorderTest(unittest.TestCase):
 
             self.assertEqual(log_path.read_bytes(), b"start012")
 
+    def test_cleanup_recording_temp_file_uses_proc_fd_stat_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            temp_path = Path(tmp) / "sample.trimmed.flac"
+            fd = os.open(temp_path, os.O_WRONLY | os.O_CREAT, 0o600)
+            with mock.patch.object(recorder_module.os, "fstat", side_effect=OSError("fstat failed")):
+                recorder_module._cleanup_recording_temp_file(temp_path, fd)
+
+            self.assertFalse(temp_path.exists())
+
     def test_start_recorder_bounds_real_backend_output(self) -> None:
         command = RecorderCommand(
             name="python3",

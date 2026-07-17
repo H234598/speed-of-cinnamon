@@ -667,10 +667,7 @@ def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) ->
 
 
 def _cleanup_recording_temp_file(path: Path, fd: int) -> None:
-    try:
-        expected_stat = os.fstat(fd)
-    except OSError:
-        expected_stat = None
+    expected_stat = _recording_temp_stat_for_fd(fd)
     _close_fd_quietly(fd)
     if expected_stat is not None:
         _unlink_recording_path_if_same(path, expected_stat)
