@@ -1325,6 +1325,29 @@ class RecorderTest(unittest.TestCase):
         self.assertNotIn(str(audio), result.detail)
         self.assertNotIn("secret", result.detail)
 
+    def test_detect_silent_recording_fails_closed_on_invalid_ffmpeg_utf8(self) -> None:
+        def invalid_output(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            stderr = kwargs["stderr"]
+            assert hasattr(stderr, "write")
+            stderr.write(b"\xff")
+            return subprocess.CompletedProcess(args[0], 0, stdout=b"", stderr=b"")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"RIFF" + b"\x00" * 44)
+            with (
+                mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"),
+                mock.patch(
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=_popen_from_run(invalid_output),
+                ),
+            ):
+                result = detect_silent_recording(audio)
+
+        self.assertFalse(result.analyzed)
+        self.assertFalse(result.silent)
+        self.assertIn("invalid UTF-8", result.detail)
+
     def test_detect_silent_recording_rejects_symlink_audio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "target.wav"

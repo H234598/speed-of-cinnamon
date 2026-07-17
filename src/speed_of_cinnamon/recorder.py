@@ -769,13 +769,24 @@ def detect_silent_recording(audio_path: Path) -> SilenceDetectionResult:
     finally:
         if audio_fd is not None:
             _close_fd_quietly(audio_fd)
+    try:
+        stderr_text = _decode_ffmpeg_output(proc.stderr)
+    except RecorderError as exc:
+        detail = _sanitize_ffmpeg_error_detail(exc)
+        return SilenceDetectionResult(
+            False,
+            False,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            f"ffmpeg silence detection failed: {detail}" if detail else "ffmpeg silence detection failed",
+        )
     if proc.returncode != 0:
-        detail = _decode_ffmpeg_output(proc.stderr)
-        detail = _sanitize_ffmpeg_error_detail(detail)
+        detail = _sanitize_ffmpeg_error_detail(stderr_text)
         if detail and not _contains_escaped_null(detail):
             return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, f"ffmpeg silence detection failed: {detail}")
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg silence detection failed")
-    stderr_text = _decode_ffmpeg_output(proc.stderr)
     duration_seconds = _parse_ffmpeg_duration(stderr_text)
     if duration_seconds <= 0:
         return SilenceDetectionResult(False, False, 0.0, 0.0, 0.0, 0.0, "ffmpeg duration was unavailable")
