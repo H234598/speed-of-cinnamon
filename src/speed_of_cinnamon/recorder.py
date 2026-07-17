@@ -84,6 +84,15 @@ def _close_fd_quietly(fd: int | None) -> None:
         pass
 
 
+def _fsync_fd(fd: int) -> None:
+    while True:
+        try:
+            os.fsync(fd)
+            return
+        except InterruptedError:
+            continue
+
+
 def _is_unsafe_env_var(name: str) -> bool:
     return name in _DANGEROUS_ENV_KEYS or name.startswith(_DANGEROUS_ENV_PREFIXES)
 
@@ -688,7 +697,7 @@ def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) ->
                     ):
                         raise OSError("recording artifact changed before cleanup")
                     os.unlink(cleanup_name, dir_fd=parent_fd)
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException:
                     try:
                         _rename_without_replacing(
@@ -697,7 +706,7 @@ def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) ->
                             directory_fd=parent_fd,
                             field_name="recording artifact cleanup restore",
                         )
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                     except BaseException:
                         pass
                     raise
@@ -2001,7 +2010,7 @@ def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) 
                     if not _same_file_identity(claimed, expected_stat):
                         raise OSError("recorder log changed before cleanup")
                     os.unlink(cleanup_name, dir_fd=parent_fd)
-                    os.fsync(parent_fd)
+                    _fsync_fd(parent_fd)
                 except BaseException:
                     try:
                         _rename_without_replacing(
@@ -2010,7 +2019,7 @@ def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) 
                             directory_fd=parent_fd,
                             field_name="recorder log cleanup restore",
                         )
-                        os.fsync(parent_fd)
+                        _fsync_fd(parent_fd)
                     except BaseException:
                         pass
                     raise

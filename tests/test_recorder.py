@@ -126,6 +126,12 @@ def _popen_from_run(runner: object):
 
 
 class RecorderTest(unittest.TestCase):
+    def test_fsync_retries_interrupted_calls(self) -> None:
+        with mock.patch.object(recorder_module.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
+            recorder_module._fsync_fd(123)
+
+        self.assertEqual(mocked_fsync.call_count, 2)
+
     def test_close_fd_quietly_swallows_interrupt(self) -> None:
         with mock.patch.object(recorder_module.os, "close", side_effect=KeyboardInterrupt("close interrupted")):
             recorder_module._close_fd_quietly(42)
