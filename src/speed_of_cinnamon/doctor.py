@@ -46,7 +46,10 @@ class Check:
 
 
 def command_check(name: str, package_hint: str = "") -> Check:
-    path = _which(name)
+    try:
+        path = _which(name)
+    except Exception:
+        return Check(name, False, "check failed")
     if path:
         return Check(name, True, path)
     hint = f" missing; install {package_hint}" if package_hint else " missing"
@@ -54,7 +57,13 @@ def command_check(name: str, package_hint: str = "") -> Check:
 
 
 def run_checks() -> list[Check]:
-    faster_available = faster_whisper_available()
+    try:
+        faster_available = faster_whisper_available()
+    except Exception:
+        faster_available = False
+        faster_probe_failed = True
+    else:
+        faster_probe_failed = False
     return [
         command_check("python3", "python3"),
         command_check("pw-record", "pipewire-utils"),
@@ -75,7 +84,9 @@ def run_checks() -> list[Check]:
         Check(
             "faster-whisper",
             faster_available,
-            "python module available" if faster_available else " missing; install faster-whisper",
+            "check failed"
+            if faster_probe_failed
+            else ("python module available" if faster_available else " missing; install faster-whisper"),
         ),
     ]
 

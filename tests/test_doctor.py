@@ -434,6 +434,24 @@ class DoctorTest(unittest.TestCase):
             if "path" in kwargs:
                 self.assertEqual(kwargs["path"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
+    def test_command_check_contains_probe_resource_failure(self) -> None:
+        with mock.patch.object(doctor, "_which", side_effect=MemoryError("probe exhausted")):
+            check = doctor.command_check("python3", "python3")
+
+        self.assertFalse(check.ok)
+        self.assertEqual(check.detail, "check failed")
+
+    def test_run_checks_contains_faster_whisper_probe_resource_failure(self) -> None:
+        with (
+            mock.patch.object(doctor, "_which", return_value=None),
+            mock.patch.object(doctor, "faster_whisper_available", side_effect=MemoryError("probe exhausted")),
+        ):
+            checks = doctor.run_checks()
+
+        faster_check = next(check for check in checks if check.name == "faster-whisper")
+        self.assertFalse(faster_check.ok)
+        self.assertEqual(faster_check.detail, "check failed")
+
     def test_env_desktop_rejects_control_characters(self) -> None:
         with mock.patch.dict("speed_of_cinnamon.doctor.os.environ", {"XDG_CURRENT_DESKTOP": "x-cinnamon\n", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon\\x00"}):
             payload = doctor.report({"recorder": "auto", "transcriber": "auto", "insert-method": "clipboard"})
