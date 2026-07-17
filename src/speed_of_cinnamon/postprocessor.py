@@ -785,7 +785,7 @@ def post_process_with_ollama(
     }
     try:
         request_data = json.dumps(payload).encode("utf-8")
-    except MemoryError as exc:
+    except (MemoryError, RecursionError) as exc:
         raise PostProcessError("Ollama request could not be rendered") from exc
     request = urllib.request.Request(
         endpoint,
@@ -976,7 +976,7 @@ def post_process_with_openai_compatible(
     def _request_chat_completion(request_payload: dict[str, object]) -> str:
         try:
             request_data = json.dumps(request_payload).encode("utf-8")
-        except MemoryError as exc:
+        except (MemoryError, RecursionError) as exc:
             raise PostProcessError("OpenAI-compatible request could not be rendered") from exc
         request = urllib.request.Request(
             endpoint,
