@@ -424,7 +424,35 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
 
     def _remove_expected_file(name: str, expected_stat: os.stat_result | None, *, description: str) -> None:
         _assert_expected_file(name, expected_stat, description=description)
-        os.unlink(name, dir_fd=parent_fd)
+        for _ in range(100):
+            cleanup_name = f"{name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name=f"{description} cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_leaf_inode(claimed_stat, expected_stat):
+                    raise OSError(f"{description} changed before cleanup")
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        name,
+                        directory_fd=parent_fd,
+                        field_name=f"{description} restore",
+                    )
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return
+        raise OSError(f"{description} cleanup path could not be claimed")
 
     def _remove_temporary_file() -> None:
         nonlocal temp_name

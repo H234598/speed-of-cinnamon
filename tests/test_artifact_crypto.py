@@ -420,6 +420,7 @@ class ArtifactCryptoTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "artifact.key"
             real_close = artifact_crypto.os.close
+            real_rename = artifact_crypto._rename_without_replacing
             parent_fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY)
             leaked_fds: list[int] = []
 
@@ -429,11 +430,22 @@ class ArtifactCryptoTest(unittest.TestCase):
                     raise OSError("parent close failed")
                 real_close(fd)
 
+            def rename_or_conflict(
+                source: str,
+                target: str,
+                *,
+                directory_fd: int,
+                field_name: str,
+            ) -> None:
+                if target == path.name:
+                    raise FileExistsError("target appeared")
+                real_rename(source, target, directory_fd=directory_fd, field_name=field_name)
+
             try:
                 with (
                     mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=path),
                     mock.patch.object(artifact_crypto, "ensure_directory_without_following_symlinks", return_value=parent_fd),
-                    mock.patch.object(artifact_crypto, "_rename_without_replacing", side_effect=FileExistsError("target appeared")),
+                    mock.patch.object(artifact_crypto, "_rename_without_replacing", side_effect=rename_or_conflict),
                     mock.patch.object(
                         artifact_crypto,
                         "_read_private_passphrase_file",
@@ -715,7 +727,7 @@ class ArtifactCryptoTest(unittest.TestCase):
 
             def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
                 nonlocal interrupted
-                if name == path.name and not interrupted:
+                if isinstance(name, str) and name.endswith(".cleanup") and not interrupted:
                     interrupted = True
                     real_unlink(name, *args, **kwargs)
                     raise KeyboardInterrupt
@@ -732,6 +744,49 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
             self.assertFalse(list(Path(tmp).glob(".artifact.key.*.bak")))
             self.assertFalse(list(Path(tmp).glob(".artifact.key.*.tmp")))
+
+    def test_default_passphrase_rotation_preserves_backup_changed_after_cleanup_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "artifact.key"
+            replacement = root / "replacement.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+            replacement.write_text("must survive", encoding="utf-8")
+            replacement.chmod(0o600)
+            real_stat = artifact_crypto.os.stat
+            backup_stats = 0
+
+            def stat_then_replace_after_cleanup_check(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal backup_stats
+                result = real_stat(name, *args, **kwargs)
+                if isinstance(name, str) and name.endswith(".bak"):
+                    backup_stats += 1
+                    if backup_stats == 2:
+                        backup_path = root / name
+                        backup_path.unlink()
+                        replacement.replace(backup_path)
+                return result
+
+            with mock.patch.object(
+                artifact_crypto,
+                "default_passphrase_file",
+                return_value=path,
+            ), mock.patch.object(artifact_crypto.os, "stat", side_effect=stat_then_replace_after_cleanup_check):
+                with self.assertRaisesRegex(
+                    artifact_crypto.ArtifactCryptoError,
+                    "passphrase file could not be generated",
+                ):
+                    artifact_crypto._generate_default_passphrase_file(path, replace=True)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
+            backups = list(root.glob(".artifact.key.*.bak"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "must survive")
 
     def test_default_passphrase_rotation_replace_failure_removes_recovery_backup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -765,11 +820,14 @@ class ArtifactCryptoTest(unittest.TestCase):
             path = Path(tmp) / "artifact.key"
             path.write_text("short\n", encoding="utf-8")
             path.chmod(0o600)
+            real_rename = artifact_crypto._rename_without_replacing
 
-            def conflict(*args: object, **kwargs: object) -> None:
+            def conflict(source: str, target: str, **kwargs: object) -> None:
                 path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
                 path.chmod(0o600)
-                raise FileExistsError("target appeared")
+                if target == path.name:
+                    raise FileExistsError("target appeared")
+                real_rename(source, target, **kwargs)
 
             with mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=path), mock.patch.object(
                 artifact_crypto, "_rename_without_replacing", side_effect=conflict
