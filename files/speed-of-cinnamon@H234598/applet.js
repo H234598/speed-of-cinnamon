@@ -11233,9 +11233,6 @@ MyApplet.prototype = {
       this._statusRefreshToken++;
     }
     let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));
-    this._applyPayloadLanguage(payload, status);
-    this._updateRecordingTiming(payload, status);
-    this._applyMicrophoneLevel(payload.microphone_level, status);
     if (payload.error || status === "error") {
       let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));
       let preserveActiveRecordingState = typeof statusRefreshToken === "number" && this._hasActiveRecordingState();
@@ -11243,6 +11240,9 @@ MyApplet.prototype = {
         this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
         this._scheduleStatusPoll();
       } else {
+        this._applyPayloadLanguage(payload, status);
+        this._updateRecordingTiming(payload, status);
+        this._applyMicrophoneLevel(payload.microphone_level, status);
         this.cancelPendingWhileCommandRunning = false;
         this.autoTranscribeRecordingKey = "";
         this.autoRelistenPending = false;
@@ -11252,6 +11252,9 @@ MyApplet.prototype = {
       this._maybeWarnRejectedArtifactPassphrase(errorMessage);
       return;
     }
+    this._applyPayloadLanguage(payload, status);
+    this._updateRecordingTiming(payload, status);
+    this._applyMicrophoneLevel(payload.microphone_level, status);
     let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);
     if (status === "done") {
       this._maybeWarnUnencryptedArtifactStorage(payload, status);

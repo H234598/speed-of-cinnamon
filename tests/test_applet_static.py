@@ -3275,6 +3275,20 @@ class AppletStaticTest(unittest.TestCase):
             error_block.index("this.cancelPendingWhileCommandRunning = false;")
         )
 
+    def test_status_refresh_error_does_not_clear_active_recording_metrics(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        apply_start = source.index("_applyPayload: function(payload, statusRefreshToken) {")
+        apply_end = source.index("\n  _artifactEncryptionWarningKey:", apply_start)
+        block = source[apply_start:apply_end]
+
+        error_index = block.index('if (payload.error || status === "error") {')
+        first_state_update = min(
+            block.index("this._applyPayloadLanguage(payload, status);"),
+            block.index("this._updateRecordingTiming(payload, status);"),
+            block.index("this._applyMicrophoneLevel(payload.microphone_level, status);"),
+        )
+        self.assertGreater(first_state_update, error_index)
+
     def test_repeating_tracked_timers_remain_teardown_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName)")
