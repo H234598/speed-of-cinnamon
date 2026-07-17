@@ -741,15 +741,24 @@ def _parse_silence_seconds(text: str, duration_seconds: float) -> tuple[float, f
         silence_duration = max(0.0, parsed_duration)
         start = current_start if current_start is not None else max(0.0, end - silence_duration)
         intervals.append((min(start, duration_seconds), end))
-        if leading_silence_seconds == 0.0 and start <= 0.0:
-            leading_silence_seconds = max(0.0, end - start)
         current_start = None
     if current_start is not None and current_start < duration_seconds:
         intervals.append((current_start, duration_seconds))
-        if leading_silence_seconds == 0.0 and current_start <= 0.0:
-            leading_silence_seconds = max(0.0, duration_seconds - current_start)
+    merged_intervals: list[tuple[float, float]] = []
+    for start, end in sorted(intervals, key=lambda interval: interval[0]):
+        start = max(0.0, min(duration_seconds, start))
+        end = max(0.0, min(duration_seconds, end))
+        if end <= start:
+            continue
+        if merged_intervals and start <= merged_intervals[-1][1]:
+            previous_start, previous_end = merged_intervals[-1]
+            merged_intervals[-1] = (previous_start, max(previous_end, end))
+        else:
+            merged_intervals.append((start, end))
+    if merged_intervals and merged_intervals[0][0] <= 0.0:
+        leading_silence_seconds = merged_intervals[0][1] - merged_intervals[0][0]
     return (
-        min(duration_seconds, sum(max(0.0, end - start) for start, end in intervals)),
+        min(duration_seconds, sum(end - start for start, end in merged_intervals)),
         min(duration_seconds, leading_silence_seconds),
     )
 

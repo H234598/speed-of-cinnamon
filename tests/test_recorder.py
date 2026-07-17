@@ -377,6 +377,18 @@ class RecorderTest(unittest.TestCase):
             (0.0, 0.0),
         )
 
+    def test_parse_silence_seconds_merges_overlapping_intervals(self) -> None:
+        self.assertEqual(
+            _parse_silence_seconds(
+                "silence_start: 0\n"
+                "silence_end: 5 | silence_duration: 5\n"
+                "silence_start: 4\n"
+                "silence_end: 9 | silence_duration: 5\n",
+                10.0,
+            ),
+            (9.0, 9.0),
+        )
+
     def test_trim_recording_leading_silence_removes_prefix(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
