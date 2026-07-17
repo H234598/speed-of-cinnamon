@@ -4159,12 +4159,25 @@ def _command_start_locked(
                 expected_process_identity=candidate_process_identity,
             )
         except BaseException as cleanup_error:
+            if not _retain_finalization_lock_for_process(
+                finalization_lock_path,
+                candidate_proc.pid,
+                candidate_process_identity,
+            ):
+                cleanup_error.add_note("recorder lifecycle lock could not be retained")
             if isinstance(cleanup_error, Exception):
                 raise RuntimeError(f"{startup_errors[-1]}; recorder process cleanup failed") from cleanup_error
             cleanup_error.add_note(f"recorder process cleanup failed: {cleanup_error}")
             raise
-        if not stopped:
-            raise RuntimeError(f"{startup_errors[-1]}; recorder process could not be stopped safely")
+        if not stopped and not _recorder_process_is_gone(candidate_proc):
+            error = RuntimeError(f"{startup_errors[-1]}; recorder process could not be stopped safely")
+            if not _retain_finalization_lock_for_process(
+                finalization_lock_path,
+                candidate_proc.pid,
+                candidate_process_identity,
+            ):
+                error.add_note("recorder lifecycle lock could not be retained")
+            raise error
         if args.recorder != "auto":
             if not cleanup_started_artifacts():
                 raise RuntimeError("failed to clean recording artifacts after recorder exited") from None
