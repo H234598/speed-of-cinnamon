@@ -2567,7 +2567,10 @@ MyApplet.prototype = {
         return true;
       }
       if (!processGroupIdentity && hasIdentifier) {
-        return false;
+        processGroupIdentity = this._readProcessGroupIdentity(process);
+        if (!processGroupIdentity) {
+          return false;
+        }
       }
       processGroupIdentity = processGroupIdentity || this._readProcessGroupIdentity(process);
       if (processGroupIdentity) {

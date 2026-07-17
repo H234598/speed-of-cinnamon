@@ -4547,7 +4547,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let hasIdentifier = typeof process.get_identifier === "function";', block)
         self.assertIn('let processIdentifier = hasIdentifier ? String(process.get_identifier() || "").trim() : "";', block)
         self.assertIn('if (hasIdentifier && !processIdentifier && !processGroupIdentity) {\n        return true;', block)
-        self.assertIn('if (!processGroupIdentity && hasIdentifier)', block)
+        self.assertIn(
+            'if (!processGroupIdentity && hasIdentifier) {\n'
+            '        processGroupIdentity = this._readProcessGroupIdentity(process);\n'
+            '        if (!processGroupIdentity) {\n'
+            '          return false;\n'
+            '        }\n'
+            '      }',
+            block,
+        )
         self.assertIn('if (this._processGroupState(processGroupIdentity) === "stopped") {\n            return true;', block)
         self.assertIn("return true;", block)
         self.assertIn("return false;", block)
