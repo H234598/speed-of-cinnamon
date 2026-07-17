@@ -2962,6 +2962,7 @@ def active_artifact_paths(
     state: RecordingState,
     *,
     state_path: Path | None = None,
+    include_finalizing_inflight: bool = True,
 ) -> set[Path]:
     paths: set[Path] = set()
     audio_path = _normalized_state_recording_artifact_path(
@@ -2990,7 +2991,7 @@ def active_artifact_paths(
         sibling_path = _transcript_sibling_path(path)
         if sibling_path is not None:
             paths.add(sibling_path)
-    if state_path is not None and state.status == "finalizing":
+    if state_path is not None and state.status == "finalizing" and include_finalizing_inflight:
         paths.update(_finalizing_inflight_artifact_paths(state_path, state))
     return paths
 
@@ -5930,6 +5931,28 @@ def command_transcripts_export(args: argparse.Namespace) -> dict[str, object]:
 
 def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
+    store = build_store(args)
+    lifecycle_lock_active = _is_finalization_lock_active(store.path)
+    if lifecycle_lock_active:
+        return _command_cleanup_locked(args, store, lifecycle_lock_active=True)
+    lock_path = _acquire_finalization_lock(store.path)
+    if lock_path is None:
+        return {
+            "status": "finalizing",
+            "message": "recording lifecycle in progress; wait for completion",
+        }
+    try:
+        return _command_cleanup_locked(args, store, lifecycle_lock_active=False)
+    finally:
+        _release_finalization_lock(lock_path)
+
+
+def _command_cleanup_locked(
+    args: argparse.Namespace,
+    store: StateStore,
+    *,
+    lifecycle_lock_active: bool,
+) -> dict[str, object]:
     keep_transcripts = _coerce_int(args.keep_transcripts, field_name="keep-transcripts", max_value=MAX_KEEP_TRANSCRIPTS)
     keep_recordings = _coerce_int(args.keep_recordings, field_name="keep-recordings", max_value=MAX_KEEP_RECORDINGS)
     recording_max_age_days = _coerce_int(
@@ -5938,10 +5961,25 @@ def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
         max_value=MAX_RECORDING_MAX_AGE_DAYS,
     )
     dry_run = _coerce_bool(args.dry_run, field_name="dry-run")
-    store = build_store(args)
     state = store.read()
     _raise_if_state_unreadable(state)
-    active_paths = active_artifact_paths(state, state_path=store.path)
+    active_paths = active_artifact_paths(
+        state,
+        state_path=store.path,
+        include_finalizing_inflight=lifecycle_lock_active,
+    )
+    if lifecycle_lock_active and not any(
+        path.suffix.lower() == ".log" or _is_recording_audio_artifact(path)
+        for path in active_paths
+    ):
+        try:
+            active_paths.update(recording_artifact_files())
+        except DirectoryScanError:
+            pass
+        try:
+            active_paths.update(_safe_transcript_artifact_files())
+        except DirectoryScanError:
+            pass
     try:
         transcript_files = _safe_transcript_artifact_files()
     except DirectoryScanError as exc:

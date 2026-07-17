@@ -4823,6 +4823,52 @@ class CliTest(unittest.TestCase):
         self.assertTrue(middle_exists)
         self.assertTrue(newer_exists)
 
+    def test_cleanup_does_not_delete_recordings_while_lifecycle_lock_is_held(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_dir = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcripts_dir = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings_dir.mkdir(parents=True)
+            transcripts_dir.mkdir(parents=True)
+            stale = recordings_dir / "active.wav"
+            stale_transcript = transcripts_dir / "active.txt"
+            stale.write_bytes(b"audio")
+            stale_transcript.write_text("transcript", encoding="utf-8")
+            os.utime(stale, (100, 100))
+            os.utime(stale_transcript, (100, 100))
+            state_file = tmp_path / "state.json"
+            StateStore(state_file).write(RecordingState(status="idle"))
+            lock_path = cli._acquire_finalization_lock(state_file)
+            self.assertIsNotNone(lock_path)
+            stdout = io.StringIO()
+            try:
+                with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                    code = cli.run([
+                        "cleanup",
+                        "--state-file",
+                        str(state_file),
+                        "--keep-transcripts",
+                        "0",
+                        "--keep-recordings",
+                        "0",
+                        "--recording-max-age-days",
+                        "0",
+                        "--json",
+                    ])
+                payload = json.loads(stdout.getvalue())
+            finally:
+                cli._release_finalization_lock(lock_path)
+
+            stale_exists = stale.exists()
+            stale_transcript_exists = stale_transcript.exists()
+
+        self.assertEqual(code, 0)
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["deleted_recordings"], 0)
+        self.assertEqual(payload["deleted_transcripts"], 0)
+        self.assertTrue(stale_exists)
+        self.assertTrue(stale_transcript_exists)
+
     def test_cleanup_deletes_stale_transient_transcripts_without_touching_fresh_ones(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
