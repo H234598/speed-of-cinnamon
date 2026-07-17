@@ -602,8 +602,49 @@ def _write_atomically_without_following_symlinks(
                     and target_stat is not None
                     and _same_leaf_identity(backup_stat, target_stat)
                 ):
-                    os.unlink(backup_name, dir_fd=parent_fd)
-                    os.fsync(parent_fd)
+                    for _ in range(100):
+                        cleanup_name = f"{backup_name}.{secrets.token_hex(8)}.cleanup"
+                        try:
+                            _rename_without_replacing(
+                                backup_name,
+                                cleanup_name,
+                                directory_fd=parent_fd,
+                                field_name=f"{field_name} recovery backup cleanup",
+                            )
+                        except FileExistsError:
+                            continue
+                        except OSError:
+                            break
+                        try:
+                            claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                            if (
+                                stat.S_ISREG(claimed_stat.st_mode)
+                                and getattr(claimed_stat, "st_nlink", 1) == 1
+                                and target_stat is not None
+                                and _same_leaf_identity(claimed_stat, target_stat)
+                            ):
+                                os.unlink(cleanup_name, dir_fd=parent_fd)
+                                os.fsync(parent_fd)
+                            else:
+                                _rename_without_replacing(
+                                    cleanup_name,
+                                    backup_name,
+                                    directory_fd=parent_fd,
+                                    field_name=f"{field_name} recovery backup restore",
+                                )
+                                os.fsync(parent_fd)
+                        except BaseException:
+                            try:
+                                _rename_without_replacing(
+                                    cleanup_name,
+                                    backup_name,
+                                    directory_fd=parent_fd,
+                                    field_name=f"{field_name} recovery backup restore",
+                                )
+                                os.fsync(parent_fd)
+                            except BaseException:
+                                pass
+                        break
             except OSError:
                 pass
             except BaseException:

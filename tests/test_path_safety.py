@@ -274,7 +274,7 @@ class PathSafetyTest(unittest.TestCase):
             with mock.patch.object(
                 path_safety.secrets,
                 "token_hex",
-                side_effect=["temp", "fixed", "free"],
+                side_effect=["temp", "fixed", "free", "cleanup"],
             ):
                 path_safety.write_text_atomically_without_following_symlinks(target, "new")
 
@@ -866,7 +866,7 @@ class PathSafetyTest(unittest.TestCase):
             real_unlink = path_safety.os.unlink
 
             def fail_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".bak"):
+                if isinstance(name, str) and name.endswith(".cleanup"):
                     raise OSError("backup cleanup failed")
                 real_unlink(name, *args, **kwargs)
 
@@ -883,7 +883,7 @@ class PathSafetyTest(unittest.TestCase):
             real_unlink = path_safety.os.unlink
 
             def interrupt_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".bak"):
+                if isinstance(name, str) and name.endswith(".cleanup"):
                     raise KeyboardInterrupt("backup cleanup interrupted")
                 real_unlink(name, *args, **kwargs)
 
@@ -915,6 +915,34 @@ class PathSafetyTest(unittest.TestCase):
                 return result
 
             with mock.patch.object(path_safety.os, "stat", side_effect=stat_then_replace):
+                path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "new")
+            backups = list(Path(tmp).glob(".settings.json.*.bak"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_text(encoding="utf-8"), "foreign backup")
+
+    def test_atomic_write_preserves_recovery_backup_when_changed_after_identity_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            replacement = Path(tmp) / "replacement.txt"
+            replacement.write_text("foreign backup", encoding="utf-8")
+            real_stat = path_safety.os.stat
+            backup_stats = 0
+
+            def stat_then_replace_after_check(name: object, *args: object, **kwargs: object) -> os.stat_result:
+                nonlocal backup_stats
+                result = real_stat(name, *args, **kwargs)
+                if isinstance(name, str) and name.endswith(".bak"):
+                    backup_stats += 1
+                    if backup_stats == 2:
+                        backup_path = Path(tmp) / name
+                        backup_path.unlink()
+                        replacement.replace(backup_path)
+                return result
+
+            with mock.patch.object(path_safety.os, "stat", side_effect=stat_then_replace_after_check):
                 path_safety.write_text_atomically_without_following_symlinks(target, "new")
 
             self.assertEqual(target.read_text(encoding="utf-8"), "new")
