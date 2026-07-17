@@ -13850,7 +13850,7 @@ MyApplet.prototype = {
         if (payload.error) {
           this.autoRelistenPending = false;
           this.autoRelistenPendingToken = "";
-          this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          this._applyPayloadSafely(payload, undefined, true);
           return;
         }
         let nextStatus = this._normalizePayloadStatus(payload && payload.status, Boolean(payload && payload.error));

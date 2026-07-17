@@ -5790,6 +5790,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.autoRelistenPendingToken = "";', block)
         self.assertNotIn("} else if (!shouldRelisten) {", block)
         self.assertIn("if (payload.error) {\n          this.autoRelistenPending = false;", restart_block)
+        self.assertIn("this._applyPayloadSafely(payload, undefined, true);", restart_block)
         self.assertIn('nextStatus === "recording" || nextStatus === "recorded"', restart_block)
         self.assertIn('this.autoRelistenPendingToken = "";', restart_block)
         apply_index = restart_block.index("this._applyPayloadSafely(payload);")
