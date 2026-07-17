@@ -39,6 +39,7 @@ from speed_of_cinnamon.postprocessor import (
 )
 from speed_of_cinnamon.command_chain import CommandChainError
 from speed_of_cinnamon.personalization import MAX_PERSONAL_CONTEXT_CHARS, MAX_VOCABULARY_CHARS
+from speed_of_cinnamon import postprocessor as postprocessor_module
 
 
 class FakeResponse:
@@ -333,6 +334,23 @@ class PostProcessorTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.postprocessor.json.loads", side_effect=RecursionError("too deep")),
         ):
             with self.assertRaisesRegex(PostProcessError, "invalid JSON"):
+                post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
+
+    def test_post_process_with_ollama_wraps_json_memory_error(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"response": "ok"})),
+            mock.patch("speed_of_cinnamon.postprocessor.json.loads", side_effect=MemoryError("too large")),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "invalid JSON"):
+                post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
+
+    def test_post_process_with_ollama_wraps_json_render_memory_error(self) -> None:
+        response = FakeResponse({"response": "ok"})
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=response),
+            mock.patch("speed_of_cinnamon.postprocessor.json.dumps", side_effect=MemoryError("too large")),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "request could not be rendered"):
                 post_process_text("hello", "en", backend="ollama", ollama_model="llama3.2:3b")
 
     def test_post_process_with_ollama_wraps_json_integer_limit_error(self) -> None:
@@ -809,6 +827,35 @@ class PostProcessorTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.postprocessor.json.loads", side_effect=RecursionError("too deep")),
         ):
             with self.assertRaisesRegex(PostProcessError, "invalid JSON"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="local-model",
+                    openai_compatible_url="http://127.0.0.1:1234/v1",
+                )
+
+    def test_openai_compatible_backend_wraps_json_memory_error(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"choices": []})),
+            mock.patch("speed_of_cinnamon.postprocessor.json.loads", side_effect=MemoryError("too large")),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "invalid JSON"):
+                post_process_text(
+                    "hello",
+                    "en",
+                    backend="openai-compatible",
+                    openai_compatible_model="local-model",
+                    openai_compatible_url="http://127.0.0.1:1234/v1",
+                )
+
+    def test_openai_compatible_backend_wraps_json_render_memory_error(self) -> None:
+        response = FakeResponse({"choices": [{"message": {"content": "ok"}}]})
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=response),
+            mock.patch("speed_of_cinnamon.postprocessor.json.dumps", side_effect=MemoryError("too large")),
+        ):
+            with self.assertRaisesRegex(PostProcessError, "request could not be rendered"):
                 post_process_text(
                     "hello",
                     "en",
@@ -1448,6 +1495,21 @@ class PostProcessorTest(unittest.TestCase):
         self.assertFalse(result["available"])
         self.assertEqual(result["models"], [])
         self.assertIn("invalid JSON", result["message"])
+
+    def test_list_ollama_models_wraps_json_memory_error(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=FakeResponse({"models": []})),
+            mock.patch("speed_of_cinnamon.postprocessor.json.loads", side_effect=MemoryError("too large")),
+        ):
+            result = list_ollama_models("http://127.0.0.1:11434")
+
+        self.assertFalse(result["available"])
+        self.assertEqual(result["models"], [])
+        self.assertIn("invalid JSON", result["message"])
+
+    def test_openai_compatible_error_detail_ignores_json_memory_error(self) -> None:
+        with mock.patch.object(postprocessor_module.json, "loads", side_effect=MemoryError("too large")):
+            self.assertEqual(postprocessor_module._openai_compatible_error_detail("{}"), "{}")
 
     def test_list_ollama_models_rejects_oversized_model_list(self) -> None:
         payload = {"models": [{"name": f"model-{index}"} for index in range(MAX_MODEL_LIST_ENTRIES + 1)]}

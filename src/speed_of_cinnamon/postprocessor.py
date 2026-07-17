@@ -290,10 +290,13 @@ def _read_response_text(response: object, max_bytes: int, *, timeout: int | floa
         if total > max_bytes:
             raise PostProcessError(f"remote response is too large (max {max_bytes} bytes)")
         chunks.append(chunk)
-    raw = b"".join(chunks)
+    try:
+        raw = b"".join(chunks)
+    except MemoryError as exc:
+        raise PostProcessError("remote response could not be buffered safely") from exc
     try:
         text = raw.decode("utf-8")
-    except UnicodeDecodeError as exc:
+    except (UnicodeDecodeError, MemoryError) as exc:
         raise PostProcessError("remote response contains invalid UTF-8") from exc
     if _contains_escaped_null(text):
         raise PostProcessError("remote response contains invalid null byte")
@@ -461,8 +464,8 @@ def _read_json(request: urllib.request.Request, timeout: int) -> object:
         raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES, timeout=timeout)
     try:
         return json.loads(raw)
-    except RecursionError as exc:
-        raise json.JSONDecodeError("JSON nesting is too deep", raw, 0) from exc
+    except (RecursionError, MemoryError) as exc:
+        raise json.JSONDecodeError("JSON response is too deeply nested or too large", raw, 0) from exc
 
 
 def _openai_compatible_error_detail(raw: str) -> str:
@@ -470,7 +473,7 @@ def _openai_compatible_error_detail(raw: str) -> str:
         return ""
     try:
         payload = json.loads(raw)
-    except (json.JSONDecodeError, RecursionError, ValueError):
+    except (json.JSONDecodeError, RecursionError, ValueError, MemoryError):
         return raw.strip()
     if not isinstance(payload, dict):
         return str(payload)
@@ -775,9 +778,13 @@ def post_process_with_ollama(
         "prompt": build_ollama_prompt(text, language, personal_context, vocabulary, prompt),
         "stream": False,
     }
+    try:
+        request_data = json.dumps(payload).encode("utf-8")
+    except MemoryError as exc:
+        raise PostProcessError("Ollama request could not be rendered") from exc
     request = urllib.request.Request(
         endpoint,
-        data=json.dumps(payload).encode("utf-8"),
+        data=request_data,
         headers={"Content-Type": "application/json"},
         method="POST",
     )
@@ -791,7 +798,7 @@ def post_process_with_ollama(
         raise PostProcessError(f"Ollama request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
         data = json.loads(raw)
-    except (json.JSONDecodeError, RecursionError, ValueError) as exc:
+    except (json.JSONDecodeError, RecursionError, ValueError, MemoryError) as exc:
         raise PostProcessError("Ollama returned invalid JSON") from exc
     if not isinstance(data, dict):
         raise PostProcessError("Ollama response must be a JSON object")
@@ -962,9 +969,13 @@ def post_process_with_openai_compatible(
     allow_service_tier_fallback = use_flex_processing and openai_compatible_service_tier_fallback
 
     def _request_chat_completion(request_payload: dict[str, object]) -> str:
+        try:
+            request_data = json.dumps(request_payload).encode("utf-8")
+        except MemoryError as exc:
+            raise PostProcessError("OpenAI-compatible request could not be rendered") from exc
         request = urllib.request.Request(
             endpoint,
-            data=json.dumps(request_payload).encode("utf-8"),
+            data=request_data,
             headers=_openai_compatible_headers(api_key),
             method="POST",
         )
@@ -998,7 +1009,7 @@ def post_process_with_openai_compatible(
         raise PostProcessError(f"OpenAI-compatible request failed: {_sanitize_remote_error_detail(exc)}") from exc
     try:
         data = json.loads(raw)
-    except (json.JSONDecodeError, RecursionError, ValueError) as exc:
+    except (json.JSONDecodeError, RecursionError, ValueError, MemoryError) as exc:
         raise PostProcessError("OpenAI-compatible server returned invalid JSON") from exc
     if not isinstance(data, dict):
         raise PostProcessError("OpenAI-compatible response must be a JSON object")
