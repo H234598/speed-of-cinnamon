@@ -375,6 +375,25 @@ class AppLoggingTest(unittest.TestCase):
             self.assertIsNone(handler.stream)
             handler.close()
 
+    def test_file_handler_disables_when_error_recovery_cannot_check_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            handler = app_logging.SizeCappedJsonFileHandler(
+                log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log",
+                log_dir,
+            )
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+
+            with (
+                mock.patch.object(app_logging.json, "dumps", side_effect=MemoryError("render exhausted")),
+                mock.patch.object(handler, "_is_log_path_insecure", side_effect=MemoryError("check exhausted")),
+            ):
+                handler.emit(record)
+
+            self.assertTrue(handler._disabled)
+            handler.close()
+
     def test_file_handler_rejects_active_path_swap_during_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

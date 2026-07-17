@@ -198,7 +198,11 @@ class SizeCappedJsonFileHandler(logging.Handler):
             self._retry_until = 0.0
         except Exception:
             self.close()
-            if self._is_log_path_insecure():
+            try:
+                path_is_insecure = self._is_log_path_insecure()
+            except Exception:
+                path_is_insecure = True
+            if path_is_insecure:
                 self._disabled = True
                 return
             self._retry_count += 1
