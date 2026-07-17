@@ -5219,6 +5219,31 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.error, result["error"])
         mocked_stop.assert_called_once_with(1234, expected_process_identity="stale-process-identity")
 
+    def test_start_locked_preserves_reaped_recording_when_group_lives_without_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "active.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", pid=1234, audio_path=str(audio)))
+            args = argparse.Namespace()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=False),
+                mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder") as mocked_choose,
+            ):
+                result = cli._command_start_locked(args, store)
+            final_state = store.read()
+
+        self.assertEqual(result["status"], "recording")
+        self.assertIn("identity is missing", result["error"])
+        self.assertEqual(final_state.status, "recording")
+        mocked_choose.assert_not_called()
+
     def test_start_locked_does_not_promote_directory_to_recorded_audio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -11038,6 +11063,60 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["status"], "recording")
         self.assertIn("process group is still active", payload["message"])
         self.assertEqual(payload["error"], "")
+
+    def test_stop_preserves_reaped_recording_when_group_lives_without_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            audio.write_bytes(b"audio")
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", pid=1234, audio_path=str(audio)))
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=False),
+                mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.finalize_recording") as mocked_finalize,
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["stop", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "recording")
+        self.assertIn("identity is missing", payload["error"])
+        self.assertEqual(final_state.status, "recording")
+        mocked_finalize.assert_not_called()
+
+    def test_cancel_preserves_reaped_recording_when_group_lives_without_identity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "recording.wav"
+            audio.write_bytes(b"audio")
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", pid=1234, audio_path=str(audio)))
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=False),
+                mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["cancel", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            audio_exists = audio.exists()
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "recording")
+        self.assertIn("identity is missing", payload["error"])
+        self.assertEqual(final_state.status, "recording")
+        self.assertTrue(audio_exists)
 
     def test_status_reports_exited_recording_without_audio_as_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

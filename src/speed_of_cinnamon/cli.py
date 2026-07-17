@@ -3080,6 +3080,15 @@ def _recorder_process_is_gone(process: subprocess.Popen[bytes]) -> bool:
         return False
 
 
+def _recording_process_group_is_active(pid: int | None) -> bool:
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    try:
+        return process_group_has_live_processes(pid) is not False
+    except BaseException:
+        return True
+
+
 def _raise_if_state_unreadable(state: RecordingState) -> None:
     if state.error.startswith("state file "):
         raise RuntimeError(state.error)
@@ -3962,6 +3971,10 @@ def _command_start_locked(
                 "language": current.language,
             }
         expected_process_identity = str(current.process_identity or "").strip()
+        if not expected_process_identity and _recording_process_group_is_active(current.pid):
+            error_text = "recording process identity is missing; recording state preserved"
+            store.update(status="recording", error=error_text, inserted=False)
+            return {"status": "recording", "message": error_text, "error": error_text}
         if current.pid is not None and expected_process_identity:
             stopped = stop_process(
                 current.pid,
@@ -5096,6 +5109,13 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
             return {"status": state.status, "message": "not recording"}
         process_verified_alive = _recording_process_verified_alive(state)
         current_process_identity = None
+        if (
+            not str(state.process_identity or "").strip()
+            and _recording_process_group_is_active(state.pid)
+        ):
+            error_text = "recording process identity is missing; recording state preserved"
+            store.update(status="recording", error=error_text, inserted=False)
+            return {"status": "recording", "message": error_text, "error": error_text}
         if not process_verified_alive and state.pid is not None and state.process_identity:
             current_process_identity = _recording_process_identity_for_pid(state.pid)
         if process_verified_alive:
@@ -5160,6 +5180,13 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         initial_status = state.status
         if state.status == "recording":
             process_verified_alive = _recording_process_verified_alive(state)
+            if (
+                not str(state.process_identity or "").strip()
+                and _recording_process_group_is_active(state.pid)
+            ):
+                error_text = "recording process identity is missing; recording state preserved"
+                store.update(status="recording", error=error_text, inserted=False)
+                return {"status": "recording", "message": error_text, "error": error_text}
             if process_verified_alive:
                 stopped = stop_process(
                     _coerce_int(state.pid, field_name="state pid"),
@@ -5199,6 +5226,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     return {"status": "recording", "message": error_text, "error": error_text}
                 # Continue through the normal finalizing/discard path so cancel also removes
                 # the artifacts left by a recorder whose leader was reaped.
+        elif state.pid is not None and not str(state.process_identity or "").strip():
+            if _recording_process_group_is_active(state.pid):
+                error_text = "recording process identity is missing; recording state preserved"
+                store.update(status=state.status, error=error_text, inserted=state.inserted)
+                return {"status": state.status, "message": error_text, "error": error_text}
         elif state.pid is not None and state.process_identity:
             current_process_identity = _recording_process_identity_for_pid(state.pid)
             if current_process_identity is not None and current_process_identity != state.process_identity:
@@ -5470,12 +5502,7 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
                 payload["error"] = payload["message"]
                 payload["inserted"] = False
             else:
-                process_group_state = (
-                    process_group_has_live_processes(state.pid)
-                    if state.pid is not None and state.process_identity
-                    else False
-                )
-                if process_group_state is not False:
+                if _recording_process_group_is_active(state.pid):
                     payload["status"] = "recording"
                     payload["message"] = "recording process group is still active; run stop to transcribe"
                     payload["error"] = ""
