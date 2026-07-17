@@ -677,7 +677,7 @@ def _retain_finalization_lock_for_process(
             return False
         owner_identity = _read_finalization_lock_identity(lock_path)
         current_identity = _finalization_lock_identity_for_pid(os.getpid())
-        if owner_identity is not None and owner_identity != current_identity:
+        if owner_identity is not None and current_identity is not None and owner_identity != current_identity:
             return False
         payload = f"{pid}\n"
         if process_identity:

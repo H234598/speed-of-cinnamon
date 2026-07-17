@@ -7845,6 +7845,17 @@ class CliTest(unittest.TestCase):
 
             self.assertFalse(lock_path.exists())
 
+    def test_finalization_lock_retention_when_current_identity_is_unreadable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._acquire_finalization_lock(state_file)
+            self.assertIsNotNone(lock_path)
+            with mock.patch("speed_of_cinnamon.cli._finalization_lock_identity_for_pid", return_value=None):
+                retained = cli._retain_finalization_lock_for_process(lock_path, 23456, "proc-identity")
+
+            self.assertTrue(retained)
+            self.assertEqual(lock_path.read_text(encoding="ascii").splitlines(), ["23456", "proc-identity"])
+
     def test_finalization_lock_acquire_fsyncs_lock_file(self) -> None:
         fsync_modes: list[int] = []
         real_fsync = os.fsync
