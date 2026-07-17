@@ -4307,6 +4307,23 @@ def finalize_recording(
         else:
             cleanup_rollback_backups.clear()
 
+    def _raise_error_state_update_failure(
+        update_error: BaseException,
+        final_error_text: str,
+        failure_label: str = "error state",
+    ) -> None:
+        update_error_text = _redact_error_for_user(str(update_error))
+        try:
+            _restore_cleanup_backups()
+        except BaseException as restore_error:
+            update_error.add_note(f"cleanup backup restore failed: {restore_error}")
+        if isinstance(update_error, Exception):
+            raise RuntimeError(
+                f"{final_error_text}; failed to persist {failure_label}: {update_error_text}"
+            ) from update_error
+        update_error.add_note(f"failed to persist {failure_label}: {update_error_text}")
+        raise update_error.with_traceback(update_error.__traceback__)
+
     def _discard_cleanup_backups() -> None:
         if cleanup_backup_restore_failed:
             return
@@ -4844,17 +4861,13 @@ def finalize_recording(
                     cleanup_targets.append(("log_path", str(log_path) if log_path else state.log_path, ".log"))
             try:
                 store.update(**error_update)
-            except Exception as update_exc:
-                update_error = _redact_error_for_user(str(update_exc))
-                _restore_cleanup_backups()
-                raise RuntimeError(f"{final_error_text}; failed to persist error state: {update_error}") from update_exc
+            except BaseException as update_exc:
+                _raise_error_state_update_failure(update_exc, final_error_text)
             if cleanup_clear_update:
                 try:
                     store.update(**cleanup_clear_update)
-                except Exception as update_exc:
-                    update_error = _redact_error_for_user(str(update_exc))
-                    _restore_cleanup_backups()
-                    raise RuntimeError(f"{final_error_text}; failed to persist error cleanup state: {update_error}") from update_exc
+                except BaseException as update_exc:
+                    _raise_error_state_update_failure(update_exc, final_error_text, "error cleanup state")
                 cleanup_restore_update: dict[str, object] = {}
                 for cleanup_field, cleanup_path, cleanup_suffix in cleanup_targets:
                     if not remove_file(cleanup_path, suffix=cleanup_suffix):
@@ -4862,12 +4875,8 @@ def finalize_recording(
                 if cleanup_restore_update:
                     try:
                         store.update(**cleanup_restore_update)
-                    except Exception as update_exc:
-                        update_error = _redact_error_for_user(str(update_exc))
-                        _restore_cleanup_backups()
-                        raise RuntimeError(
-                            f"{final_error_text}; failed to persist error cleanup state: {update_error}"
-                        ) from update_exc
+                    except BaseException as update_exc:
+                        _raise_error_state_update_failure(update_exc, final_error_text, "error cleanup state")
             _discard_cleanup_backups()
         final_error = str(error_update.get("error", error_text)) if state_marked_finalizing else error_text
         if isinstance(exc, Exception):
