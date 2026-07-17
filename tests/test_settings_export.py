@@ -1387,6 +1387,10 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaisesRegex(SettingsExportError, "is too long"):
                 read_export(path)
 
+    def test_build_export_rejects_alarm_store_timestamp_above_store_limit(self) -> None:
+        with self.assertRaisesRegex(SettingsExportError, "settings export alarm last_checked_at is too long"):
+            build_export({"language": "de"}, {"alarms": [], "last_checked_at": "T" * 41})
+
     def test_build_export_rejects_oversized_setting_value(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "is too long"):
             build_export({"personal-context": "A" * (MAX_SETTINGS_TEXT_CHARS + 10)})

@@ -10,7 +10,7 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from . import __version__
-from .alarms import MAX_ALARM_COUNT, STORE_VERSION as ALARM_STORE_VERSION
+from .alarms import MAX_ALARM_COUNT, MAX_ALARM_TRIGGER_CHARS, STORE_VERSION as ALARM_STORE_VERSION
 from .alarms import _dedupe_alarm_ids
 from .alarms import normalize_alarm
 from .http_safety import is_loopback_hostname
@@ -504,7 +504,11 @@ def normalize_alarm_store(value: Any) -> dict[str, Any]:
     alarms = value.get("alarms", [])
     if not isinstance(alarms, list):
         raise SettingsExportError("settings export alarms must be a list")
-    last_checked_at = _sanitize_text_field(value.get("last_checked_at", ""), field_name="settings export alarm last_checked_at")
+    last_checked_at = _sanitize_text_field(
+        value.get("last_checked_at", ""),
+        field_name="settings export alarm last_checked_at",
+        max_chars=MAX_ALARM_TRIGGER_CHARS,
+    )
     normalized_alarms: list[dict[str, Any]] = []
     for raw_alarm in alarms:
         if len(normalized_alarms) >= MAX_ALARM_COUNT:
