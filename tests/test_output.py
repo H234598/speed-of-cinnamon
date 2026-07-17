@@ -2850,7 +2850,8 @@ class OutputTest(unittest.TestCase):
 
         mocked_unlink.assert_called_once()
         args, kwargs = mocked_unlink.call_args
-        self.assertEqual(args[0], state_path.name)
+        self.assertTrue(args[0].startswith(f"{state_path.name}."))
+        self.assertTrue(args[0].endswith(".cleanup"))
         self.assertIsInstance(kwargs.get("dir_fd"), int)
         self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsync_modes))
 
@@ -2871,6 +2872,32 @@ class OutputTest(unittest.TestCase):
                     if isinstance(path, str) and path == state_path.name:
                         calls += 1
                         if calls == 1:
+                            state_path.unlink()
+                            replacement.replace(state_path)
+                    return result
+
+                with mock.patch.object(output_module.os, "stat", side_effect=stat_then_replace):
+                    self.assertFalse(output_module._unlink_clipboard_state_file(state_path))
+
+                self.assertEqual(state_path.read_text(encoding="utf-8"), "replacement state\n")
+
+    def test_clear_clipboard_dedup_state_preserves_replacement_after_latest_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
+                state_path = output_module._clipboard_dedup_state_path()
+                state_path.parent.mkdir(parents=True, exist_ok=True)
+                state_path.write_text("old state\n", encoding="utf-8")
+                replacement = state_path.with_name("replacement-state.json")
+                replacement.write_text("replacement state\n", encoding="utf-8")
+                real_stat = output_module.os.stat
+                calls = 0
+
+                def stat_then_replace(path: object, *args: object, **kwargs: object) -> os.stat_result:
+                    nonlocal calls
+                    result = real_stat(path, *args, **kwargs)
+                    if isinstance(path, str) and path == state_path.name:
+                        calls += 1
+                        if calls == 2:
                             state_path.unlink()
                             replacement.replace(state_path)
                     return result

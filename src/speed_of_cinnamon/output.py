@@ -939,9 +939,7 @@ def _unlink_clipboard_state_file(path: Path) -> bool:
             return False
         if not _same_clipboard_lock_snapshot(latest, current):
             return False
-        os.unlink(path.name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-        return True
+        return _unlink_clipboard_lock_at(parent_fd, path, expected_stat=latest)
     except BaseException:
         return False
     finally:
