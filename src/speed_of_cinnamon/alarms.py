@@ -8,7 +8,7 @@ import stat
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, cast
 
 from .paths import alarms_file
 from .path_safety import (
@@ -145,8 +145,8 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
             cleanup_errors.append(cleanup_error)
         if cleanup_errors:
             if primary_error is not None:
-                for cleanup_error in cleanup_errors:
-                    _note_lock_cleanup_failure(primary_error, cleanup_error)
+                for additional_error in cleanup_errors:
+                    _note_lock_cleanup_failure(primary_error, additional_error)
             else:
                 raise cleanup_errors[0]
 
@@ -233,7 +233,7 @@ def _coerce_alarm_component(value: object, *, field_name: str) -> int:
     if isinstance(value, int):
         return value
     try:
-        return int(value)
+        return int(cast(Any, value))
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{field_name} must be an integer") from exc
 
@@ -408,7 +408,7 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
     except ValueError as exc:
         if "too large" in str(exc):
             raise RuntimeError(f"alarm store last_checked_at is too large (max {MAX_ALARM_TRIGGER_CHARS} characters)") from exc
-        raise RuntimeError(f"alarm store last_checked_at contains invalid null byte") from exc
+        raise RuntimeError("alarm store last_checked_at contains invalid null byte") from exc
     return {
         "version": STORE_VERSION,
         "alarms": _normalize_alarm_list(raw.get("alarms", [])),
@@ -464,13 +464,12 @@ def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
     urgency = str(alarm.get("urgency") or "normal").lower()
     if urgency not in URGENCIES:
         raise ValueError("alarm urgency must be one of: normal, silent, critical")
-    if "days" not in alarm:
-        normalized_days = list(DAY_CODES)
-    else:
+    normalized_days: list[str] = list(DAY_CODES)
+    if "days" in alarm:
         raw_days = alarm.get("days")
         if not isinstance(raw_days, list) or not raw_days:
             raise ValueError("alarm days must be a non-empty list")
-        normalized_days: list[str] = []
+        normalized_days = []
         for raw_day in raw_days:
             if isinstance(raw_day, bool) or not isinstance(raw_day, str):
                 raise ValueError("alarm days must contain text values")
@@ -794,8 +793,12 @@ def format_alarm_overview(alarms: list[dict[str, Any]], now: datetime | None = N
     if not active:
         return "All alarms disabled"
     current = _normalize_local_datetime(now or now_local(), field_name="now")
-    next_items = [(next_occurrence(alarm, current), alarm) for alarm in active]
-    next_items = [(when, alarm) for when, alarm in next_items if when is not None]
+    next_items: list[tuple[datetime, dict[str, Any]]] = [
+        (when, alarm)
+        for alarm in active
+        for when in (next_occurrence(alarm, current),)
+        if when is not None
+    ]
     if not next_items:
         return f"{len(active)} active alarm(s)"
     next_at, next_alarm = min(next_items, key=lambda item: item[0])
