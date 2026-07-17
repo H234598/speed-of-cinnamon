@@ -1114,6 +1114,13 @@ class ArtifactCryptoTest(unittest.TestCase):
         self.assertNotIn("HOME", env)
         self.assertEqual(env["PATH"], artifact_crypto._TRUSTED_COMMAND_PATH)
 
+    def test_secret_tool_environment_skips_unencodable_values(self) -> None:
+        with mock.patch.object(artifact_crypto.os, "environ", {"HOME": "bad\ud800"}):
+            env = artifact_crypto._filtered_environment()
+
+        self.assertNotIn("HOME", env)
+        self.assertEqual(env["PATH"], artifact_crypto._TRUSTED_COMMAND_PATH)
+
     def test_secret_tool_environment_keeps_only_pinned_session_bus(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             runtime = Path(tmp)

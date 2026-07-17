@@ -231,6 +231,14 @@ def _contains_forbidden_environment_chars(value: str) -> bool:
     return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
 
 
+def _is_valid_utf8(value: str) -> bool:
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
 def _new_generated_passphrase() -> str:
     return _b64encode(secrets.token_bytes(KEY_SIZE_BYTES))
 
@@ -1073,7 +1081,12 @@ def _filtered_environment() -> dict[str, str]:
     env = {
         key: value
         for key, value in os.environ.items()
-        if key in _ALLOWED_SECRET_TOOL_ENV and isinstance(value, str) and not _contains_forbidden_environment_chars(value)
+        if (
+            key in _ALLOWED_SECRET_TOOL_ENV
+            and isinstance(value, str)
+            and _is_valid_utf8(value)
+            and not _contains_forbidden_environment_chars(value)
+        )
     }
     runtime_dir = _safe_xdg_runtime_dir(env.get("XDG_RUNTIME_DIR", ""))
     if runtime_dir is None:
