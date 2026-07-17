@@ -311,6 +311,12 @@ class PostProcessorTest(unittest.TestCase):
         with self.assertRaisesRegex(PostProcessError, "max response bytes must be non-negative"):
             _read_response_text(response, -1)
 
+    def test_read_response_text_rejects_unrepresentably_large_timeout(self) -> None:
+        response = FakeBytesResponse(b"{}")
+
+        with self.assertRaisesRegex(PostProcessError, "response timeout must be positive"):
+            _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES, timeout=10**1000)
+
     def test_read_response_text_checks_all_chunks_for_size(self) -> None:
         response = FakeChunkedResponse([b"{}", b"hidden"])
 

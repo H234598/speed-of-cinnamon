@@ -258,13 +258,15 @@ def _read_response_text(response: object, max_bytes: int, *, timeout: int | floa
         raise PostProcessError("max response bytes must be an integer")
     if max_bytes < 0:
         raise PostProcessError("max response bytes must be non-negative")
-    if timeout is not None and (
-        isinstance(timeout, bool)
-        or not isinstance(timeout, (int, float))
-        or not math.isfinite(timeout)
-        or timeout <= 0
-    ):
-        raise PostProcessError("response timeout must be positive")
+    if timeout is not None:
+        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+            raise PostProcessError("response timeout must be positive")
+        try:
+            finite_timeout = math.isfinite(timeout)
+        except OverflowError as exc:
+            raise PostProcessError("response timeout must be positive") from exc
+        if not finite_timeout:
+            raise PostProcessError("response timeout must be positive")
     deadline = time.monotonic() + timeout if timeout is not None else None
     chunks: list[bytes] = []
     total = 0
