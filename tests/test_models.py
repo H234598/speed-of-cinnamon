@@ -3064,6 +3064,62 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual((path / "old.txt").read_text(encoding="utf-8"), "old model")
             self.assertEqual(list(path.parent.glob(f".{spec.filename}.*.backup")), [])
 
+    def test_download_model_restores_existing_multifile_model_when_final_replace_is_interrupted(self) -> None:
+        data = b"small model file"
+        spec = models.ModelSpec(
+            name="ct2-final-replace-interrupted",
+            filename="ct2-final-replace-interrupted",
+            size="2 KiB",
+            sha1="",
+            description="ct2 final replace interruption",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-final-replace-interrupted",
+            files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
+        )
+        real_replace = models._replace_model_sibling_path
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+            path.mkdir(parents=True)
+            (path / "old.txt").write_text("old model", encoding="utf-8")
+
+            def replace_then_interrupt_after_final_activation(
+                source: Path,
+                target: Path,
+                root: Path,
+                *,
+                field_name: str = "model path",
+                expected_source_stat: os.stat_result | None = None,
+            ) -> None:
+                real_replace(
+                    source,
+                    target,
+                    root,
+                    field_name=field_name,
+                    expected_source_stat=expected_source_stat,
+                )
+                if target == path and source.name.startswith(f".{spec.filename}."):
+                    raise KeyboardInterrupt("final activation interrupted")
+
+            with mock.patch.object(
+                models,
+                "_replace_model_sibling_path",
+                side_effect=replace_then_interrupt_after_final_activation,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    models.download_model(spec.name, force=True)
+
+            self.assertEqual((path / "old.txt").read_text(encoding="utf-8"), "old model")
+            self.assertEqual(list(path.parent.glob(f".{spec.filename}.*.backup")), [])
+            self.assertEqual(list(path.parent.glob(f".{spec.filename}.*.tmp")), [])
+
     def test_download_model_restores_existing_multifile_model_when_backup_reports_post_rename_failure(self) -> None:
         data = b"small model file"
         spec = models.ModelSpec(

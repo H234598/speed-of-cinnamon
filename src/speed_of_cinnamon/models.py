@@ -2142,7 +2142,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             _assert_safe_model_directory(path)
         try:
             _replace_model_sibling_path(tmp_dir, path, root, field_name="model path")
-        except (OSError, ModelError) as exc:
+        except BaseException as exc:
             if backup_dir is not None:
                 try:
                     if tmp_dir_stat is None:
@@ -2172,7 +2172,9 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                     )
                 except (OSError, ModelError) as cleanup_exc:
                     raise ModelError(f"failed to remove partially installed model directory: {path}") from cleanup_exc
-            raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
+            if isinstance(exc, (OSError, ModelError)):
+                raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
+            raise
         if backup_dir is not None:
             try:
                 _remove_model_backup_path(backup_dir, expected_stat=backup_dir_stat)
