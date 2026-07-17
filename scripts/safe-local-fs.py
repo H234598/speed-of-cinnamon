@@ -60,7 +60,11 @@ def _open_dir_chain(path: Path, *, action: str, create: bool = False, missing_ok
                     return None
                 if not create:
                     fail(f"path is missing during {action}: {path}")
-                os.mkdir(part, 0o700, dir_fd=fd)
+                try:
+                    os.mkdir(part, 0o700, dir_fd=fd)
+                except FileExistsError:
+                    # Another process created component; verify it below.
+                    pass
                 next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             except OSError as exc:
                 if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
