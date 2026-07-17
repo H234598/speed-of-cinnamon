@@ -756,11 +756,11 @@ def parse_settings_json(value: str) -> dict[str, object]:
         raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} bytes)")
     try:
         parsed = json.loads(value)
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except (json.JSONDecodeError, RecursionError, MemoryError) as exc:
         raise ValueError(f"settings JSON could not be parsed: {exc}") from exc
     try:
         _validate_json_string_encoding(parsed, field_name="settings JSON")
-    except RecursionError as exc:
+    except (RecursionError, MemoryError) as exc:
         raise ValueError(f"settings JSON could not be parsed: {exc}") from exc
     if not isinstance(parsed, dict):
         raise ValueError("settings JSON must be an object")

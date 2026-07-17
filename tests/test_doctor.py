@@ -1049,6 +1049,16 @@ class DoctorTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "settings JSON could not be parsed"):
                 doctor.parse_settings_json('{"language":"en"}')
 
+    def test_parse_settings_json_wraps_json_memory_error(self) -> None:
+        with mock.patch("speed_of_cinnamon.doctor.json.loads", side_effect=MemoryError("too large")):
+            with self.assertRaisesRegex(ValueError, "settings JSON could not be parsed"):
+                doctor.parse_settings_json('{"language":"en"}')
+
+    def test_parse_settings_json_wraps_validation_memory_error(self) -> None:
+        with mock.patch.object(doctor, "_validate_json_string_encoding", side_effect=MemoryError("too large")):
+            with self.assertRaisesRegex(ValueError, "settings JSON could not be parsed"):
+                doctor.parse_settings_json('{"language":"en"}')
+
     def test_parse_settings_json_wraps_validation_recursion_error(self) -> None:
         nested = "{}"
         for _ in range(1_000):
