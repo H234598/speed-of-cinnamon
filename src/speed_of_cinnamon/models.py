@@ -1533,8 +1533,37 @@ def _unlink_temporary_download_name(
         current_stat = os.stat(temporary_name, dir_fd=parent_fd, follow_symlinks=False)
         if not _same_model_temporary_identity(current_stat, expected_stat):
             raise ModelError("temporary model file changed before cleanup")
-        os.unlink(temporary_name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
+        for _ in range(100):
+            cleanup_name = f"{temporary_name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    temporary_name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name="temporary model file cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_model_temporary_identity(claimed_stat, expected_stat):
+                    raise ModelError("temporary model file changed before cleanup")
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        temporary_name,
+                        directory_fd=parent_fd,
+                        field_name="temporary model file cleanup restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return
+        raise ModelError("failed to claim temporary model file cleanup path")
     except OSError as exc:
         raise ModelError("failed to remove temporary model file") from exc
 

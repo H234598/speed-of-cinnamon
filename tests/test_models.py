@@ -930,7 +930,7 @@ class ModelsTest(unittest.TestCase):
             models._set_model_checksum_cache(path, spec.sha1, path.stat())
 
             def unlink_or_fail(target: str, *args: object, **kwargs: object) -> None:
-                if target == tmp_path.name:
+                if target == tmp_path.name or (target.startswith(f"{tmp_path.name}.") and target.endswith(".cleanup")):
                     raise OSError("tmp delete failed")
                 dir_fd = kwargs.get("dir_fd")
                 if isinstance(dir_fd, int):
@@ -970,7 +970,7 @@ class ModelsTest(unittest.TestCase):
             models._set_model_checksum_cache(path, spec.sha1, path.stat())
 
             def unlink_or_fail(target: str, *args: object, **kwargs: object) -> None:
-                if target == tmp_path.name:
+                if target == tmp_path.name or (target.startswith(f"{tmp_path.name}.") and target.endswith(".cleanup")):
                     raise OSError("tmp delete failed")
                 dir_fd = kwargs.get("dir_fd")
                 if isinstance(dir_fd, int):
@@ -1803,6 +1803,45 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(len(leftovers), 1)
             self.assertEqual(leftovers[0].read_bytes(), b"victim")
             self.assertIn("model artifact cleanup failed", "\n".join(caught.exception.__notes__))
+
+    def test_unlink_temporary_download_preserves_replacement_after_cleanup_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            temporary = Path(tmp) / ".model.tmp"
+            replacement = Path(tmp) / "replacement.tmp"
+            temporary.write_bytes(b"owned temporary")
+            replacement.write_bytes(b"foreign temporary")
+            expected_stat = temporary.stat(follow_symlinks=False)
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_stat = models.os.stat
+            temporary_stat_calls = 0
+
+            def stat_then_replace(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal temporary_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == temporary.name and kwargs.get("dir_fd") == parent_fd:
+                    temporary_stat_calls += 1
+                    if temporary_stat_calls == 1:
+                        temporary.unlink()
+                        replacement.replace(temporary)
+                return result
+
+            try:
+                with mock.patch.object(models.os, "stat", side_effect=stat_then_replace):
+                    with self.assertRaisesRegex(models.ModelError, "temporary model file changed before cleanup"):
+                        models._unlink_temporary_download_name(
+                            parent_fd,
+                            temporary.name,
+                            expected_stat=expected_stat,
+                        )
+            finally:
+                os.close(parent_fd)
+
+            self.assertEqual(temporary.read_bytes(), b"foreign temporary")
+            self.assertFalse(list(Path(tmp).glob(".model.tmp.*.cleanup")))
 
     def test_download_directory_model_uses_fd_based_temporary_directory(self) -> None:
         data = b"small model file"
