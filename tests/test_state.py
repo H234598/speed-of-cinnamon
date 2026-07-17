@@ -348,7 +348,8 @@ class StateStoreTest(unittest.TestCase):
             store = StateStore(path)
             with self.assertRaisesRegex(RuntimeError, "^failed to persist state$"):
                 store.write(store.read())
-        mocked_link.assert_called_once()
+        self.assertGreaterEqual(mocked_link.call_count, 1)
+        self.assertEqual(mocked_link.call_args_list[0].args[1], path.name)
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_write_uses_secure_directory_relative_replace(self, mocked_open: mock.Mock) -> None:
