@@ -13214,6 +13214,21 @@ class CliTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "contains invalid UTF-8"):
             cli._assert_text_limit("bad\ud800text", field_name="value", max_chars=20)
 
+    def test_filtered_environment_skips_unencodable_values(self) -> None:
+        with mock.patch.object(cli.os, "environ", {"HOME": "bad\ud800"}):
+            environment = cli._filtered_environment()
+
+        self.assertNotIn("HOME", environment)
+        self.assertIn("PATH", environment)
+
+    def test_filtered_environment_rejects_unencodable_base_values(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "environment value contains invalid UTF-8"):
+            cli._filtered_environment(base={"SAFE_KEY": "bad\ud800"})
+
+    def test_filtered_environment_rejects_unencodable_base_keys(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "environment key contains invalid UTF-8"):
+            cli._filtered_environment(base={"BAD\ud800": "value"})
+
     def test_coerce_path_rejects_non_text_value(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "must be text"):
             cli._coerce_path(123, field_name="path")  # type: ignore[arg-type]
