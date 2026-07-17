@@ -93,6 +93,16 @@ class StateStoreTest(unittest.TestCase):
 
         self.assertEqual(state.error, "state file could not be read")
 
+    def test_read_wraps_json_memory_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":"idle"}', encoding="utf-8")
+            path.chmod(0o600)
+            with mock.patch("speed_of_cinnamon.state.json.loads", side_effect=MemoryError("too large")):
+                state = StateStore(path).read()
+
+        self.assertEqual(state.error, "state file could not be read")
+
     def test_state_store_rejects_non_private_parent_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             os.chmod(tmp, 0o777)
@@ -575,6 +585,16 @@ class StateStoreTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "state payload is not valid UTF-8"):
                 store.write(RecordingState(status="done"))
         mocked_dumps.assert_called_once()
+
+    def test_write_wraps_json_memory_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            with (
+                mock.patch("speed_of_cinnamon.state.json.dumps", side_effect=MemoryError("too large")),
+                self.assertRaisesRegex(RuntimeError, "state payload could not be rendered"),
+            ):
+                store.write(RecordingState(status="done"))
 
     def test_write_rejects_oversized_state(self) -> None:
         long_value = "Y" * (MAX_STATE_STRING_CHARS + 5)

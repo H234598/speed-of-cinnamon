@@ -352,7 +352,7 @@ class StateStore:
             if "too large" in str(exc):
                 return RecordingState(error="state file is too large")
             return RecordingState(error="state file could not be read")
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, RecursionError):
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, RecursionError, MemoryError):
             return RecordingState(error="state file could not be read")
         return RecordingState(**normalized)
 
@@ -364,7 +364,10 @@ class StateStore:
         payload = asdict(state)
         payload["updated_at"] = now_iso()
         normalized_payload = StateStore._normalize_state_data(payload)
-        rendered = json.dumps(normalized_payload, indent=2, sort_keys=True) + "\n"
+        try:
+            rendered = json.dumps(normalized_payload, indent=2, sort_keys=True) + "\n"
+        except MemoryError as exc:
+            raise RuntimeError("state payload could not be rendered") from exc
         try:
             rendered_size = _utf8_byte_count(rendered, field_name="state payload")
         except ValueError as exc:
