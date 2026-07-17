@@ -6048,7 +6048,7 @@ class CliTest(unittest.TestCase):
                 nonlocal directory_fsyncs
                 if cli.stat_module.S_ISDIR(os.fstat(fd).st_mode):
                     directory_fsyncs += 1
-                    if directory_fsyncs == 3:
+                    if directory_fsyncs == 5:
                         raise OSError("backup cleanup fsync failed")
                 real_fsync(fd)
 
@@ -6098,6 +6098,32 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(stable.read_bytes(), b"racing-audio")
             self.assertEqual(temp_trimmed.read_bytes(), b"new-audio")
+
+    def test_stabilize_recording_artifact_preserves_target_replacement_after_cleanup_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            temp_trimmed = recordings_root / "recording.trimmed-race.flac"
+            stable = recordings_root / "recording.flac"
+            replacement = recordings_root / "replacement.flac"
+            temp_trimmed.write_bytes(b"new-audio")
+            stable.write_bytes(b"old-audio")
+            replacement.write_bytes(b"racing-audio")
+            real_rename = cli._rename_without_replacing
+
+            def rename_then_swap(source: object, destination: object, *args: object, **kwargs: object) -> None:
+                if source == stable.name and str(destination).endswith(".cleanup"):
+                    stable.unlink()
+                    replacement.replace(stable)
+                real_rename(source, destination, *args, **kwargs)
+
+            with mock.patch.object(cli, "_rename_without_replacing", side_effect=rename_then_swap):
+                with self.assertRaisesRegex(RuntimeError, "failed to stabilize recording artifact path"):
+                    cli._stabilize_recording_artifact_path(temp_trimmed, replace_existing_path=stable)
+
+            self.assertEqual(stable.read_bytes(), b"racing-audio")
+            self.assertEqual(temp_trimmed.read_bytes(), b"new-audio")
+            self.assertTrue(list(recordings_root.glob(".recording.flac.*.bak")))
 
     def test_stabilize_recording_artifact_restores_no_clobber_backup_after_target_race(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
