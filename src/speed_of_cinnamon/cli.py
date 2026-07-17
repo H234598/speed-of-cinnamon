@@ -1127,6 +1127,13 @@ def _redact_error_payload(value: object) -> object:
     return value
 
 
+def _safe_log_event(level: str, event: str, **fields: object) -> None:
+    try:
+        log_event(level, event, **fields)
+    except Exception:
+        pass
+
+
 def append_space_if_needed(text: str, append_space: bool) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("text must be text")
@@ -6454,7 +6461,7 @@ def run(argv: list[str] | None = None) -> int:
     try:
         json_output = _coerce_bool(getattr(args, "json", False), field_name="json")
         configure_logging(getattr(args, "log_level", DEFAULT_LOG_LEVEL))
-        log_event("info", "command_start", command=command_name)
+        _safe_log_event("info", "command_start", command=command_name)
         payload = _redact_error_payload(args.handler(args))
         status = str(payload.get("status", "ok"))
         if status == "error":
@@ -6465,7 +6472,7 @@ def run(argv: list[str] | None = None) -> int:
         if "error" in payload and payload["error"] is not None:
             payload["error"] = _redact_error_for_user(payload["error"])
         if payload.get("error"):
-            log_event(
+            _safe_log_event(
                 "error",
                 "command_error",
                 command=command_name,
@@ -6474,7 +6481,7 @@ def run(argv: list[str] | None = None) -> int:
                 error_message=_redact_error_for_user(payload.get("error", "")),
             )
         else:
-            log_event("info", "command_done", command=command_name, status=status)
+            _safe_log_event("info", "command_done", command=command_name, status=status)
         print_result(payload, json_output)
         exit_code = payload.get("exit_code")
         if command_name == "cancel" and isinstance(exit_code, int) and not isinstance(exit_code, bool) and 0 <= exit_code <= 255:
@@ -6484,7 +6491,7 @@ def run(argv: list[str] | None = None) -> int:
         return 1
     except Exception as exc:
         error_message = _redact_error_for_user(str(exc))
-        log_event(
+        _safe_log_event(
             "error",
             "command_exception",
             command=command_name,

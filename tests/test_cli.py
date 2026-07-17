@@ -80,6 +80,16 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         print_result.assert_called_once()
 
+    @mock.patch("speed_of_cinnamon.cli.command_status", return_value={"status": "done", "message": "ok"})
+    @mock.patch("speed_of_cinnamon.cli.log_event", side_effect=OSError("log unavailable"))
+    def test_run_continues_when_logging_fails(self, _mock_log_event: mock.Mock, _mock_status: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["status", "--json"])
+
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(stdout.getvalue()), {"message": "ok", "status": "done"})
+
     def test_run_returns_controlled_error_when_json_error_output_runs_out_of_memory(self) -> None:
         parser = argparse.ArgumentParser()
         parser.parse_args = mock.Mock(
