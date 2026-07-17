@@ -1879,6 +1879,14 @@ def insert_text(text: str, method: str, delay_ms: int = 8) -> bool:
             set_clipboard(text, allowed_helpers=("xclip", "xsel"))
             operation_performed = True
             try:
+                clipboard_matches = _clipboard_still_contains_inserted_text(text)
+            except BaseException:
+                paste_not_attempted = True
+                raise
+            if not clipboard_matches:
+                paste_not_attempted = True
+                raise PasteNotAttemptedError("clipboard changed before automatic paste")
+            try:
                 paste_from_clipboard(expected_window_snapshot=target_window_snapshot)
             except PasteNotAttemptedError:
                 paste_not_attempted = True

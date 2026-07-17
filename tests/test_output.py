@@ -1230,6 +1230,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.set_clipboard"),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=1.0),
         ):
             self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
@@ -1263,6 +1264,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.set_clipboard"),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=1.0),
         ):
             self.assertTrue(insert_text("  wiederholung  ", "clipboard-paste"))
@@ -1286,6 +1288,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
             mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "")),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=3.0),
         ):
             self.assertTrue(insert_text("wiederholung", "clipboard"))
@@ -1306,6 +1309,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.set_clipboard"),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard", side_effect=fake_paste),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=3.0),
         ):
             self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
@@ -1332,6 +1336,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.set_clipboard"),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard"),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
             mock.patch(
                 "speed_of_cinnamon.output._read_clipboard_dedup_state_entry",
                 wraps=output_module._read_clipboard_dedup_state_entry,
@@ -1440,6 +1445,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value=None),
             mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "previous text")),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
         ):
             self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
             expected = self._expected_paste_fingerprint("wiederholung")
@@ -1456,6 +1462,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "previous text")),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
             mock.patch("speed_of_cinnamon.output.time.time", return_value=11.0),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
         ):
@@ -1696,7 +1703,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch(
                 "speed_of_cinnamon.output._read_text_clipboard_snapshot",
-                side_effect=[(True, "previous text"), (True, "previous text"), (True, "new text")],
+                side_effect=[(True, "previous text"), (True, "previous text"), (True, "new text"), (True, "new text")],
             ),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
@@ -1741,7 +1748,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "previous text")),
             mock.patch(
                 "speed_of_cinnamon.output._clipboard_still_contains_inserted_text",
-                side_effect=KeyboardInterrupt("clipboard restore check interrupted"),
+                side_effect=[True, KeyboardInterrupt("clipboard restore check interrupted")],
             ),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
@@ -1758,7 +1765,12 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch(
                 "speed_of_cinnamon.output._read_text_clipboard_snapshot",
-                side_effect=[(True, " previous text \n"), (True, " previous text \n"), (True, "new text")],
+                side_effect=[
+                    (True, " previous text \n"),
+                    (True, " previous text \n"),
+                    (True, "new text"),
+                    (True, "new text"),
+                ],
             ),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
@@ -1789,7 +1801,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch(
                 "speed_of_cinnamon.output._read_text_clipboard_snapshot",
-                side_effect=[(True, ""), (True, ""), (True, "new text")],
+                side_effect=[(True, ""), (True, ""), (True, "new text"), (True, "new text")],
             ),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
@@ -1873,7 +1885,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch(
                 "speed_of_cinnamon.output._read_text_clipboard_snapshot",
-                side_effect=[(True, "previous"), (True, "previous"), (True, "external change")],
+                side_effect=[(True, "previous"), (True, "previous"), (True, "new text"), (True, "external change")],
             ),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
@@ -1886,6 +1898,23 @@ class OutputTest(unittest.TestCase):
                 insert_text("new text", "clipboard-paste")
 
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text"])
+
+    def test_insert_text_refuses_paste_when_clipboard_changes_after_overwrite(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
+        ):
+            with self.assertRaisesRegex(OutputError, "clipboard changed before automatic paste"):
+                insert_text("new text", "clipboard-paste")
+            self.assertFalse((Path(tmp) / "speed-of-cinnamon" / output_module.CLIPBOARD_DEDUP_STATE_FILE).exists())
+
+        mocked_clipboard.assert_called_once_with("new text", allowed_helpers=("xclip", "xsel"))
+        mocked_paste.assert_not_called()
+        self.assertEqual(output_module._clipboard_insertion_snapshot(), ("", None, 0.0, None))
 
     def test_insert_text_clipboard_rolls_back_duplicate_state_when_set_clipboard_fails(self) -> None:
         with (
@@ -2041,6 +2070,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._which", return_value="/usr/bin/xdotool"),
             mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", side_effect=[first_target, second_target]),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
             mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "old")),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
@@ -2061,6 +2091,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._which", return_value="/usr/bin/xdotool"),
             mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", side_effect=[first_target, renamed_target]),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
             mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "old")),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
@@ -2080,6 +2111,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._which", return_value="/usr/bin/xdotool"),
             mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=target),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
             mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "old")),
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
         ):
@@ -2108,6 +2140,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._which", return_value="/usr/bin/xdotool"),
             mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=target),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
             mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "old")),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
