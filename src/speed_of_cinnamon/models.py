@@ -1885,10 +1885,10 @@ def _download_url_to_file_with_fd(
         tmp_path = tmp_dir / temporary_name
         try:
             output = os.fdopen(tmp_fd, "wb")
-        except (OSError, ValueError) as exc:
+        except (OSError, ValueError, MemoryError, RecursionError) as exc:
             try:
                 temporary_stat = os.fstat(tmp_fd)
-            except (OSError, ValueError):
+            except (OSError, ValueError, MemoryError, RecursionError):
                 pass
             raise OSError("failed to open temporary model file") from exc
         tmp_fd = None
@@ -1955,6 +1955,8 @@ def _download_url_to_file_with_fd(
                 _unlink_temporary_download_path(tmp_path, expected_stat=temporary_stat)
         except BaseException as cleanup_error:
             _note_cleanup_failure(primary_error, cleanup_error)
+        if isinstance(exc, (MemoryError, RecursionError)):
+            raise OSError("model download could not be buffered safely") from exc
         raise
     finally:
         if tmp_fd is not None:

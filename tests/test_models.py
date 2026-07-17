@@ -1814,6 +1814,42 @@ class ModelsTest(unittest.TestCase):
                 os.fstat(created_fds[0])
             self.assertEqual([], list(Path(tmp).glob("*.tmp")))
 
+    def test_download_url_wraps_fdopen_memory_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(models.os, "fdopen", side_effect=MemoryError("fd exhausted")),
+                self.assertRaisesRegex(OSError, "failed to open temporary model file"),
+            ):
+                models._download_url_to_file(
+                    models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
+                    Path(tmp),
+                    1024,
+                    "test",
+                    prefix=".test.",
+                )
+
+            self.assertEqual([], list(Path(tmp).iterdir()))
+
+    def test_download_url_wraps_response_memory_error(self) -> None:
+        class MemoryErrorResponse(FakeResponse):
+            def read(self, size: int = -1) -> object:
+                raise MemoryError("response exhausted")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(models, "_open_model_download_url", return_value=MemoryErrorResponse(b"")),
+                self.assertRaisesRegex(OSError, "model download could not be buffered safely"),
+            ):
+                models._download_url_to_file(
+                    models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
+                    Path(tmp),
+                    1024,
+                    "test",
+                    prefix=".test.",
+                )
+
+            self.assertEqual([], list(Path(tmp).iterdir()))
+
     def test_download_url_closes_temporary_file_when_identity_inspection_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             created_fds: list[int] = []
