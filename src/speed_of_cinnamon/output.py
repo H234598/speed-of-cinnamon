@@ -481,7 +481,12 @@ def _read_clipboard_dedup_lock_lines_at(parent_fd: int, name: str) -> list[str] 
         file_stat = os.fstat(fd)
         if not stat.S_ISREG(file_stat.st_mode) or getattr(file_stat, "st_nlink", 1) != 1:
             return None
-        raw = os.read(fd, MAX_CLIPBOARD_DEDUP_LOCK_BYTES + 1)
+        while True:
+            try:
+                raw = os.read(fd, MAX_CLIPBOARD_DEDUP_LOCK_BYTES + 1)
+            except InterruptedError:
+                continue
+            break
     except OSError as exc:
         primary_error = exc
         return None
@@ -535,7 +540,10 @@ def _write_all(fd: int, payload: bytes, *, field_name: str) -> None:
     view = memoryview(payload)
     offset = 0
     while offset < len(view):
-        written = os.write(fd, view[offset:])
+        try:
+            written = os.write(fd, view[offset:])
+        except InterruptedError:
+            continue
         if written <= 0:
             raise OSError(f"short write to {field_name}")
         offset += written

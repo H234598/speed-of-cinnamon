@@ -1760,6 +1760,24 @@ class OutputTest(unittest.TestCase):
         ):
             self.assertIsNone(output_module._read_clipboard_dedup_lock_lines_at(456, "lock"))
 
+    def test_clipboard_lock_read_retries_interrupted_reads(self) -> None:
+        with (
+            mock.patch.object(output_module.os, "open", return_value=123),
+            mock.patch.object(output_module.os, "fstat", return_value=os.stat(__file__)),
+            mock.patch.object(output_module.os, "read", side_effect=[InterruptedError(), b"123\n"]),
+            mock.patch.object(output_module.os, "close"),
+        ):
+            self.assertEqual(
+                output_module._read_clipboard_dedup_lock_lines_at(456, "lock"),
+                ["123"],
+            )
+
+    def test_clipboard_lock_write_retries_interrupted_writes(self) -> None:
+        with mock.patch.object(output_module.os, "write", side_effect=[InterruptedError(), 3]) as mocked_write:
+            output_module._write_all(123, b"abc", field_name="clipboard dedupe lock")
+
+        self.assertEqual(mocked_write.call_count, 2)
+
     def test_insert_text_ignores_expired_pending_duplicate_when_stale_lock_is_recovered(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):
