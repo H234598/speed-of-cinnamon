@@ -858,6 +858,10 @@ def update_blacklist_file(path: Path, added: list[str]) -> list[str]:
             entry = _normalize_blacklist_entry(raw_entry)
             if not entry:
                 continue
+            try:
+                _safe_utf8_length(entry, field_name="blacklist entry")
+            except ValueError:
+                continue
             entry_key = entry.casefold()
             if entry_key in existing_keys:
                 continue

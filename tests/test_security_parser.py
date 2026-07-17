@@ -445,6 +445,13 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(entries, ["geheim", "zweite"])
         self.assertEqual(content, "geheim\nzweite\n")
 
+    def test_update_blacklist_file_ignores_unencodable_added_entries(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            entries = update_blacklist_file(path, ["\ud800", "geheim"])
+
+        self.assertEqual(entries, ["geheim"])
+
     def test_update_blacklist_file_fails_closed_on_corrupt_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"
