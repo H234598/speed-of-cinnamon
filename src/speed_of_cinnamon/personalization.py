@@ -57,6 +57,10 @@ def _coerce_environment_value(name: str) -> str | None:
         raise ValueError("environment value must be text")
     if _contains_escaped_null(value) or _contains_environment_control_chars(value):
         raise ValueError("environment value contains invalid control character")
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError("environment value contains invalid UTF-8") from exc
     return value
 
 
