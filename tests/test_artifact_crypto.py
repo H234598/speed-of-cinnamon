@@ -1567,6 +1567,18 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "envelope is malformed"):
                 artifact_crypto.decrypt_bytes(b'{"magic":"SOCENC1"}', kind="transcript")
 
+    def test_encrypted_payload_probe_handles_memory_error(self) -> None:
+        with mock.patch("speed_of_cinnamon.artifact_crypto.json.loads", side_effect=MemoryError("out of memory")):
+            self.assertFalse(artifact_crypto.is_encrypted_payload(b'{"magic":"SOCENC1"}'))
+
+    def test_decrypt_bytes_wraps_json_memory_error(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto.is_encrypted_payload", return_value=True),
+            mock.patch("speed_of_cinnamon.artifact_crypto.json.loads", side_effect=MemoryError("out of memory")),
+        ):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "envelope is malformed"):
+                artifact_crypto.decrypt_bytes(b'{"magic":"SOCENC1"}', kind="transcript")
+
     def test_encrypt_bytes_allows_oversized_payload_in_off_mode(self) -> None:
         with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
             data = b"12345"
