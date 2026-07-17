@@ -45,6 +45,15 @@ class ProfanityFilterTest(unittest.TestCase):
 
         self.assertEqual(compiled[0][0].sub(compiled[0][1], "scho\u0308n"), "blume")
 
+    def test_compile_profanity_replacements_keeps_casefold_expanding_literals(self) -> None:
+        compiled = compile_profanity_replacements((("ß", "ersetzt"), ("ﬀ", "doppelt")))
+
+        softened = "ß und ﬀ"
+        for pattern, replacement in compiled:
+            softened = pattern.sub(replacement, softened)
+
+        self.assertEqual(softened, "ersetzt und doppelt")
+
     def test_compile_profanity_replacements_blocks_common_mixed_script_homoglyphs(self) -> None:
         compiled = compile_profanity_replacements((("fuck", "frog"), ("ass", "donkey")))
 

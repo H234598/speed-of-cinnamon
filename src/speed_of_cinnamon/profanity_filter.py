@@ -309,6 +309,14 @@ def _normalize_profanity_candidate(value: str) -> str:
     return _normalize_profanity_pattern(value).translate(_CASEFOLD_CANDIDATE_FOLD)
 
 
+def _profanity_pattern_needs_literal_variant(pattern: str) -> bool:
+    for char in pattern:
+        casefolded = char.casefold()
+        if len(casefolded) != 1 or unicodedata.normalize("NFKD", char).casefold() != casefolded:
+            return True
+    return False
+
+
 def _profanity_pattern_has_candidate(pattern: str, candidate_chars: set[str]) -> bool:
     if pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in pattern):
         return all(char in candidate_chars for char in _normalize_profanity_candidate("schei"))
@@ -326,6 +334,8 @@ def _build_tolerant_profanity_pattern(
     if not normalized:
         return ""
     source = gap_pattern.join(_confusable_regex_source(char) for char in normalized)
+    if _profanity_pattern_needs_literal_variant(pattern):
+        source = rf"(?:{re.escape(pattern)}|{source})"
     return rf"(?<!{boundary_class}){gap_pattern}{source}{gap_pattern}(?!{boundary_class})"
 
 
@@ -378,6 +388,8 @@ def _safe_compact_profanity_pattern_source(pattern: str) -> str:
     if not normalized:
         return ""
     source = "".join(_confusable_regex_source(char) for char in normalized)
+    if _profanity_pattern_needs_literal_variant(pattern):
+        source = rf"(?:{re.escape(pattern)}|{source})"
     return rf"(?<!\w){source}(?!\w)"
 
 
