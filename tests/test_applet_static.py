@@ -5635,7 +5635,8 @@ class AppletStaticTest(unittest.TestCase):
         artifact_start = source.index("_updateRecordingArtifactState: function(payload, status)")
         artifact_end = source.index("\n  _cancelRecording:", artifact_start)
         artifact_block = source[artifact_start:artifact_end]
-        self.assertIn('"audio_path_present", "log_path_present", "transcript_path_present"', artifact_block)
+        self.assertIn('"audio_path_present"', artifact_block)
+        self.assertIn('"process_identity_present"', artifact_block)
         self.assertIn("payload.audio_deleted === false", artifact_block)
         self.assertIn('if (status === "idle" || status === "done")', artifact_block)
 

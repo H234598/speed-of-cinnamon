@@ -5975,13 +5975,21 @@ MyApplet.prototype = {
     if (!payload || typeof payload !== "object") {
       return;
     }
-    let hasPresenceFields = ["audio_path_present", "log_path_present", "transcript_path_present"]
+    let hasPresenceFields = [
+      "audio_path_present",
+      "log_path_present",
+      "transcript_path_present",
+      "pid_present",
+      "process_identity_present"
+    ]
       .some((field) => Object.prototype.hasOwnProperty.call(payload, field));
     if (hasPresenceFields) {
       this.recordingArtifactsPresent = Boolean(
         payload.audio_path_present === true ||
         payload.log_path_present === true ||
-        payload.transcript_path_present === true
+        payload.transcript_path_present === true ||
+        payload.pid_present === true ||
+        payload.process_identity_present === true
       );
     }
     if (
