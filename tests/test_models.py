@@ -3092,6 +3092,37 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(orphan.read_bytes(), b"new orphan")
             self.assertEqual(replacement.read_bytes(), b"old orphan")
 
+    def test_unlink_model_file_preserves_replacement_after_cleanup_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "model.bin"
+            replacement = root / "replacement.bin"
+            path.write_bytes(b"owned model")
+            replacement.write_bytes(b"foreign model")
+            real_stat = models.os.stat
+            path_stat_calls = 0
+
+            def stat_then_replace(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal path_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == path.name and kwargs.get("dir_fd") is not None:
+                    path_stat_calls += 1
+                    if path_stat_calls == 1:
+                        path.unlink()
+                        replacement.replace(path)
+                return result
+
+            with mock.patch.object(models.os, "stat", side_effect=stat_then_replace):
+                with self.assertRaisesRegex(models.ModelError, "model file changed before cleanup"):
+                    models._unlink_model_file_leaf(path, root)
+
+            self.assertEqual(path.read_bytes(), b"foreign model")
+            self.assertFalse(list(root.glob("model.bin.*.cleanup")))
+
     def test_remove_model_rejects_symlink_randomized_orphan(self) -> None:
         spec = models.ModelSpec(
             name="test-orphan-symlink-remove",
