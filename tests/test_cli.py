@@ -11055,6 +11055,34 @@ class CliTest(unittest.TestCase):
                 self.assertEqual(store.read().status, status)
                 mocked_choose.assert_not_called()
 
+    def test_start_refuses_error_state_with_unresolved_recorder_process(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="error",
+                    pid=1234,
+                    process_identity="live-recorder-identity",
+                    error="previous recorder error",
+                )
+            )
+            args = argparse.Namespace(
+                max_seconds=30,
+                input_device="",
+                recorder="auto",
+                language="en",
+            )
+            with (
+                mock.patch.object(cli, "_recording_process_group_is_active", return_value=True),
+                mock.patch.object(cli, "choose_recorder") as mocked_choose,
+            ):
+                result = cli._command_start_locked(args, store)
+
+        self.assertEqual(result["status"], "error")
+        self.assertIn("process state is unresolved", result["error"])
+        mocked_choose.assert_not_called()
+
     def test_status_includes_microphone_level_for_recording_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

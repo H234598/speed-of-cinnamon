@@ -3957,6 +3957,15 @@ def _command_start_locked(
             "log_path_present": bool(current.log_path),
             "transcript_path_present": bool(current.transcript_path),
         }
+    if current.status == "error" and (current.pid is not None or current.process_identity):
+        if current.pid is None or _recording_process_group_is_active(current.pid):
+            error_text = "previous recorder process state is unresolved; run cancel before starting a new recording"
+            return {
+                "status": "error",
+                "message": error_text,
+                "error": error_text,
+                "pid_present": current.pid is not None,
+            }
     if current.status in {"recorded", "processing"}:
         return {
             "status": current.status,
