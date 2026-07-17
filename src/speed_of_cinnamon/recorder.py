@@ -250,7 +250,7 @@ MAX_FFMPEG_ARTIFACT_BYTES = 256 * 1024 * 1024
 MAX_RECORDING_LEVEL_BYTES = 128_000
 MAX_RECORDER_LOG_BYTES = 256 * 1024
 WAV_TRIM_CHUNK_FRAMES = 16_000
-WAV_HEADER_SCAN_BYTES = 512
+WAV_HEADER_SCAN_BYTES = 128 * 1024
 DEFAULT_WAV_DATA_OFFSET = 44
 SILENCE_DETECT_NOISE = "-62dB"
 SILENCE_DETECT_DURATION_SECONDS = 0.02
@@ -1242,19 +1242,20 @@ def _assert_valid_recording_seconds(seconds: int) -> int:
     return seconds
 
 
-def _wav_data_offset(header: bytes) -> int:
-    if len(header) >= 12 and header[:4] in {b"RIFF", b"RF64"} and header[8:12] == b"WAVE":
-        chunk_offset = 12
-        while chunk_offset + 8 <= len(header):
-            chunk_id = header[chunk_offset : chunk_offset + 4]
-            chunk_size = int.from_bytes(header[chunk_offset + 4 : chunk_offset + 8], "little")
-            if chunk_id == b"data":
-                return chunk_offset + 8
-            next_offset = chunk_offset + 8 + chunk_size + (chunk_size & 1)
-            if next_offset <= chunk_offset or next_offset > len(header):
-                break
-            chunk_offset = next_offset
-    return DEFAULT_WAV_DATA_OFFSET if len(header) >= DEFAULT_WAV_DATA_OFFSET else len(header)
+def _wav_data_offset(header: bytes) -> int | None:
+    if len(header) < 12 or header[:4] not in {b"RIFF", b"RF64"} or header[8:12] != b"WAVE":
+        return None
+    chunk_offset = 12
+    while chunk_offset + 8 <= len(header):
+        chunk_id = header[chunk_offset : chunk_offset + 4]
+        chunk_size = int.from_bytes(header[chunk_offset + 4 : chunk_offset + 8], "little")
+        if chunk_id == b"data":
+            return chunk_offset + 8
+        next_offset = chunk_offset + 8 + chunk_size + (chunk_size & 1)
+        if next_offset <= chunk_offset or next_offset > len(header):
+            return None
+        chunk_offset = next_offset
+    return None
 
 
 def read_recording_level(audio_path: Path) -> RecordingLevel:
@@ -1293,6 +1294,8 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
                 return RecordingLevel(False, 0, 0.0, 0.0, 0, "waiting for audio")
             header = handle.read(WAV_HEADER_SCAN_BYTES)
             data_offset = _wav_data_offset(header)
+            if data_offset is None or data_offset >= size:
+                return RecordingLevel(False, 0, 0.0, 0.0, 0, "waiting for audio")
             data_bytes = max(0, size - data_offset)
             read_bytes = min(MAX_RECORDING_LEVEL_BYTES, data_bytes)
             read_bytes -= read_bytes % 2

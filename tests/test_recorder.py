@@ -204,6 +204,29 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(level.percent, 0)
         self.assertEqual(level.detail, "waiting for audio")
 
+    def test_read_recording_level_ignores_large_riff_metadata(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            metadata = b"\x7f" * 600
+            audio.write_bytes(
+                b"RIFF"
+                + b"\x00\x00\x00\x00"
+                + b"WAVE"
+                + b"JUNK"
+                + len(metadata).to_bytes(4, "little")
+                + metadata
+                + b"data"
+                + (8).to_bytes(4, "little")
+                + b"\x00" * 8
+            )
+
+            level = read_recording_level(audio)
+
+        self.assertTrue(level.ok)
+        self.assertEqual(level.percent, 0)
+        self.assertEqual(level.samples, 4)
+        self.assertEqual(level.detail, "silence")
+
     def test_wav_data_offset_skips_data_text_inside_metadata_chunk(self) -> None:
         header = (
             b"RIFF"
