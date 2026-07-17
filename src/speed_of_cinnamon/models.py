@@ -377,6 +377,14 @@ def _same_model_directory_identity(first: os.stat_result, second: os.stat_result
     )
 
 
+def _same_model_path_identity(first: os.stat_result, second: os.stat_result) -> bool:
+    if stat_module.S_ISDIR(first.st_mode) and stat_module.S_ISDIR(second.st_mode):
+        return _same_model_directory_identity(first, second)
+    if stat_module.S_ISREG(first.st_mode) and stat_module.S_ISREG(second.st_mode):
+        return _same_model_artifact_identity(first, second)
+    return False
+
+
 def _hash_model_file(path: Path) -> tuple[str, os.stat_result]:
     fd = _open_model_hash_file(path)
     try:
@@ -1052,7 +1060,14 @@ def _open_model_parent_directory(path: Path, root: Path, *, field_name: str = "m
     return parent_fd
 
 
-def _replace_model_sibling_path(source: Path, target: Path, root: Path, *, field_name: str = "model path") -> None:
+def _replace_model_sibling_path(
+    source: Path,
+    target: Path,
+    root: Path,
+    *,
+    field_name: str = "model path",
+    expected_source_stat: os.stat_result | None = None,
+) -> None:
     if source.parent != target.parent:
         raise ModelError(f"{field_name} source and target must share a parent directory")
     parent_fd = _open_model_parent_directory(target, root, field_name=field_name)
@@ -1062,6 +1077,8 @@ def _replace_model_sibling_path(source: Path, target: Path, root: Path, *, field
         source_path_stat = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
         if not (stat_module.S_ISREG(source_path_stat.st_mode) or stat_module.S_ISDIR(source_path_stat.st_mode)):
             raise ModelError(f"{field_name} source must be a regular file or directory: {source}")
+        if expected_source_stat is not None and not _same_model_path_identity(source_path_stat, expected_source_stat):
+            raise ModelError(f"{field_name} source changed before activation: {source}")
         source_fd = os.open(
             source.name,
             os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
@@ -1072,7 +1089,7 @@ def _replace_model_sibling_path(source: Path, target: Path, root: Path, *, field
             source_stat = os.fstat(source_fd)
             if not (stat_module.S_ISREG(source_stat.st_mode) or stat_module.S_ISDIR(source_stat.st_mode)):
                 raise ModelError(f"{field_name} source must be a regular file or directory: {source}")
-            if not _same_model_artifact_identity(source_stat, source_path_stat):
+            if not _same_model_path_identity(source_stat, source_path_stat):
                 raise ModelError(f"{field_name} source changed before activation: {source}")
             os.fsync(source_fd)
         except BaseException as exc:
@@ -1087,7 +1104,7 @@ def _replace_model_sibling_path(source: Path, target: Path, root: Path, *, field
                 else:
                     pass
         current_source_stat = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
-        if not _same_model_artifact_identity(current_source_stat, source_stat):
+        if not _same_model_path_identity(current_source_stat, source_stat):
             raise ModelError(f"{field_name} source changed before activation: {source}")
         _rename_without_replacing(
             source.name,
@@ -1776,9 +1793,19 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         if path.exists() and path.is_dir():
             _assert_safe_model_directory(path)
         backup_dir: Path | None = None
+        backup_dir_stat: os.stat_result | None = None
         if path.exists():
             backup_dir = path.with_name(f".{path.name}.{secrets.token_hex(8)}.backup")
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
+            try:
+                backup_dir_stat = path.stat(follow_symlinks=False)
+            except OSError as exc:
+                raise ModelError(f"failed to inspect existing model path: {path}") from exc
+            if not (
+                stat_module.S_ISREG(backup_dir_stat.st_mode)
+                or stat_module.S_ISDIR(backup_dir_stat.st_mode)
+            ):
+                raise ModelError(f"model path must be a regular file or directory: {path}")
             try:
                 assert_no_symlink_ancestors(backup_dir, field_name="model backup directory")
             except RuntimeError as exc:
@@ -1792,7 +1819,13 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 # The helper can raise after moving the directory when parent fsync fails.
                 if not path.exists() and backup_dir.exists():
                     try:
-                        _replace_model_sibling_path(backup_dir, path, root, field_name="model path")
+                        _replace_model_sibling_path(
+                            backup_dir,
+                            path,
+                            root,
+                            field_name="model path",
+                            expected_source_stat=backup_dir_stat,
+                        )
                     except (OSError, ModelError) as restore_exc:
                         raise ModelError(
                             f"failed to restore existing model directory after backup failure: {path}"
@@ -1812,7 +1845,13 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                         tmp_dir_stat,
                         field_name="model restore target",
                     )
-                    _replace_model_sibling_path(backup_dir, path, root, field_name="model path")
+                    _replace_model_sibling_path(
+                        backup_dir,
+                        path,
+                        root,
+                        field_name="model path",
+                        expected_source_stat=backup_dir_stat,
+                    )
                 except (OSError, ModelError) as restore_exc:
                     raise ModelError(f"failed to restore existing model directory after download failure: {path}") from restore_exc
             elif tmp_dir_stat is not None and not tmp_dir.exists() and path.exists():
@@ -1828,12 +1867,18 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
         if backup_dir is not None:
             try:
-                _remove_model_backup_path(backup_dir)
+                _remove_model_backup_path(backup_dir, expected_stat=backup_dir_stat)
             except (OSError, ModelError) as cleanup_exc:
                 orphan_path = backup_dir.with_name(f"{backup_dir.name}.{secrets.token_hex(8)}.orphan")
                 try:
-                    _replace_model_sibling_path(backup_dir, orphan_path, root, field_name="model backup orphan path")
-                    _remove_model_backup_path(orphan_path)
+                    _replace_model_sibling_path(
+                        backup_dir,
+                        orphan_path,
+                        root,
+                        field_name="model backup orphan path",
+                        expected_source_stat=backup_dir_stat,
+                    )
+                    _remove_model_backup_path(orphan_path, expected_stat=backup_dir_stat)
                 except (OSError, ModelError):
                     raise ModelError(f"failed to remove model backup after successful download: {backup_dir}") from cleanup_exc
     except BaseException:
@@ -1859,6 +1904,7 @@ def _restore_model_file_backup(
     backup_path: Path,
     *,
     expected_target_stat: os.stat_result | None = None,
+    expected_backup_stat: os.stat_result | None = None,
 ) -> None:
     root = path.parent
     if expected_target_stat is not None:
@@ -1870,14 +1916,34 @@ def _restore_model_file_backup(
         )
     elif path.exists() or path.is_symlink():
         raise ModelError(f"model restore target must be absent: {path}")
-    _replace_model_sibling_path(backup_path, path, root, field_name="model backup path")
+    _replace_model_sibling_path(
+        backup_path,
+        path,
+        root,
+        field_name="model backup path",
+        expected_source_stat=expected_backup_stat,
+    )
 
 
-def _remove_model_backup_path(backup_path: Path) -> None:
+def _remove_model_backup_path(
+    backup_path: Path,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> None:
     if backup_path.is_dir() and not backup_path.is_symlink():
-        _remove_model_directory_leaf(backup_path, backup_path.parent, field_name="model backup directory")
+        _remove_model_directory_leaf(
+            backup_path,
+            backup_path.parent,
+            field_name="model backup directory",
+            expected_stat=expected_stat,
+        )
         return
-    _unlink_model_file_leaf(backup_path, backup_path.parent, field_name="model backup file")
+    _unlink_model_file_leaf(
+        backup_path,
+        backup_path.parent,
+        field_name="model backup file",
+        expected_stat=expected_stat,
+    )
 
 
 def _is_model_orphan_name(model_name: str, candidate_name: str, *, allow_suffixless: bool = False) -> bool:
@@ -1991,6 +2057,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
     tmp_path: Path | None = None
     replaced_path = False
     backup_path: Path | None = None
+    backup_path_stat: os.stat_result | None = None
     previous_cache_entry: dict[str, int | str] | None = None
     previous_cache_entry_exists = False
     try:
@@ -2016,6 +2083,15 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         try:
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
             if path.exists():
+                try:
+                    backup_path_stat = path.stat(follow_symlinks=False)
+                except OSError as exc:
+                    raise ModelError(f"failed to inspect existing model path: {path}") from exc
+                if not (
+                    stat_module.S_ISREG(backup_path_stat.st_mode)
+                    or stat_module.S_ISDIR(backup_path_stat.st_mode)
+                ):
+                    raise ModelError(f"model path must be a regular file or directory: {path}")
                 _load_model_checksum_cache()
                 cached_entry = _model_checksum_cache.get(str(path))
                 if cached_entry is not None:
@@ -2067,6 +2143,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                         path,
                         backup_path,
                         expected_target_stat=tmp_stat,
+                        expected_backup_stat=backup_path_stat,
                     )
                 except (OSError, ModelError) as restore_exc:
                     raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
@@ -2087,7 +2164,11 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
                     raise ModelError(f"failed to remove partially installed model file after download failure: {path}") from cleanup_exc
         elif backup_path is not None and not path.exists() and not path.is_symlink():
             try:
-                _restore_model_file_backup(path, backup_path)
+                _restore_model_file_backup(
+                    path,
+                    backup_path,
+                    expected_backup_stat=backup_path_stat,
+                )
             except (OSError, ModelError) as restore_exc:
                 raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
             if previous_cache_entry_exists and previous_cache_entry is not None:
@@ -2098,7 +2179,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         raise
     if backup_path is not None:
         try:
-            _remove_model_backup_path(backup_path)
+            _remove_model_backup_path(backup_path, expected_stat=backup_path_stat)
         except (OSError, ModelError) as cleanup_exc:
             raise ModelError(f"failed to remove model backup after successful download: {backup_path}") from cleanup_exc
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {model.name}"}

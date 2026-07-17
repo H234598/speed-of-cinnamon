@@ -2634,8 +2634,15 @@ class ModelsTest(unittest.TestCase):
                 root: Path,
                 *,
                 field_name: str = "model path",
+                expected_source_stat: os.stat_result | None = None,
             ) -> None:
-                real_replace(source, target, root, field_name=field_name)
+                real_replace(
+                    source,
+                    target,
+                    root,
+                    field_name=field_name,
+                    expected_source_stat=expected_source_stat,
+                )
                 if source == path and target.name.endswith(".backup"):
                     raise OSError("backup parent fsync failed after rename")
 
@@ -3548,8 +3555,15 @@ class ModelsTest(unittest.TestCase):
                 root: Path,
                 *,
                 field_name: str = "model path",
+                expected_source_stat: os.stat_result | None = None,
             ) -> None:
-                real_replace(source, target, root, field_name=field_name)
+                real_replace(
+                    source,
+                    target,
+                    root,
+                    field_name=field_name,
+                    expected_source_stat=expected_source_stat,
+                )
                 if target == path and source.name.startswith(f".{path.name}.") and source.name.endswith(".tmp"):
                     raise OSError("parent fsync failed after final activation")
 
@@ -3594,8 +3608,15 @@ class ModelsTest(unittest.TestCase):
                 root: Path,
                 *,
                 field_name: str = "model path",
+                expected_source_stat: os.stat_result | None = None,
             ) -> None:
-                real_replace(source, target, root, field_name=field_name)
+                real_replace(
+                    source,
+                    target,
+                    root,
+                    field_name=field_name,
+                    expected_source_stat=expected_source_stat,
+                )
                 if source == path and target.name.endswith(".backup"):
                     path.symlink_to(missing_target)
                     raise OSError("backup parent fsync failed after rename")
@@ -3838,6 +3859,48 @@ class ModelsTest(unittest.TestCase):
                 with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
                     models.download_model("backup-cleanup-fails", force=True)
 
+    def test_download_model_preserves_changed_backup_during_cleanup(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        foreign_data = b"foreign backup"
+        spec = models.ModelSpec(
+            name="backup-cleanup-race",
+            filename="ggml-backup-cleanup-race.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="backup cleanup race",
+        )
+        real_remove = models._remove_model_backup_path
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+
+            def replace_backup_before_cleanup(
+                backup_path: Path,
+                *,
+                expected_stat: os.stat_result | None = None,
+            ) -> None:
+                foreign = backup_path.with_name(f"{backup_path.name}.foreign")
+                foreign.write_bytes(foreign_data)
+                foreign.replace(backup_path)
+                real_remove(backup_path, expected_stat=expected_stat)
+
+            with mock.patch.object(models, "_remove_model_backup_path", side_effect=replace_backup_before_cleanup):
+                with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
+                    models.download_model(spec.name, force=True)
+
+            backups = list(path.parent.glob(f".{path.name}.*.backup"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), foreign_data)
+            self.assertEqual(path.read_bytes(), new_data)
+
     def test_download_model_preserves_backup_when_restore_fails_after_replace(self) -> None:
         old_data = b"old model"
         new_data = b"new model"
@@ -3919,6 +3982,46 @@ class ModelsTest(unittest.TestCase):
             mocked_rename.assert_not_called()
             self.assertEqual(path.read_bytes(), old_data)
             self.assertEqual(backup.read_bytes(), new_data)
+
+    def test_restore_model_file_backup_preserves_changed_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "model.bin"
+            backup = root / ".model.bin.backup"
+            replacement = root / "replacement.bin"
+            backup.write_bytes(b"old model")
+            expected_backup_stat = backup.stat(follow_symlinks=False)
+            replacement.write_bytes(b"foreign backup")
+            replacement.replace(backup)
+
+            with self.assertRaisesRegex(models.ModelError, "source changed before activation"):
+                models._restore_model_file_backup(
+                    path,
+                    backup,
+                    expected_backup_stat=expected_backup_stat,
+                )
+
+            self.assertFalse(path.exists())
+            self.assertEqual(backup.read_bytes(), b"foreign backup")
+
+    def test_remove_model_backup_path_preserves_changed_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            backup = root / ".model.backup"
+            replacement = root / "replacement"
+            backup.mkdir()
+            (backup / "old.txt").write_text("old model", encoding="utf-8")
+            expected_backup_stat = backup.stat(follow_symlinks=False)
+            (backup / "old.txt").unlink()
+            backup.rmdir()
+            replacement.mkdir()
+            (replacement / "foreign.txt").write_text("foreign backup", encoding="utf-8")
+            replacement.replace(backup)
+
+            with self.assertRaisesRegex(models.ModelError, "changed before cleanup"):
+                models._remove_model_backup_path(backup, expected_stat=expected_backup_stat)
+
+            self.assertTrue((backup / "foreign.txt").exists())
 
     def test_replace_model_sibling_path_rejects_symlink_parent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
