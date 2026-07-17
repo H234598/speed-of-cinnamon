@@ -8,7 +8,9 @@ from speed_of_cinnamon.http_safety import is_loopback_hostname
 class HttpSafetyTest(unittest.TestCase):
     def test_is_loopback_hostname_accepts_valid_loopback_forms(self) -> None:
         self.assertTrue(is_loopback_hostname("localhost"))
+        self.assertTrue(is_loopback_hostname("localhost."))
         self.assertTrue(is_loopback_hostname("127.0.0.1"))
+        self.assertTrue(is_loopback_hostname("127.0.0.1."))
         self.assertTrue(is_loopback_hostname("[::1]"))
 
     def test_is_loopback_hostname_rejects_malformed_bracket_forms(self) -> None:
