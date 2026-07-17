@@ -140,9 +140,40 @@ def _remove_model_checksum_cache_file(cache_path: Path) -> bool:
             cache_path.parent,
             field_name="model checksum cache directory",
         )
-        os.unlink(cache_path.name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-        return True
+        file_stat = os.stat(cache_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        if not stat_module.S_ISREG(file_stat.st_mode) or getattr(file_stat, "st_nlink", 1) != 1:
+            return False
+        for _ in range(100):
+            cleanup_name = f"{cache_path.name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    cache_path.name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name="model checksum cache cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_model_artifact_identity(claimed_stat, file_stat):
+                    raise OSError("model checksum cache changed before cleanup")
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        cache_path.name,
+                        directory_fd=parent_fd,
+                        field_name="model checksum cache cleanup restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return True
+        return False
     except FileNotFoundError:
         return False
     except (OSError, RuntimeError):

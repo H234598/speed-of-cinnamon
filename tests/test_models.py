@@ -800,12 +800,43 @@ class ModelsTest(unittest.TestCase):
             self.assertFalse(cache_path.exists())
             self.assertTrue(
                 any(
-                    args == (cache_path.name,)
+                    len(args) == 1
+                    and args[0].startswith(f"{cache_path.name}.")
+                    and args[0].endswith(".cleanup")
                     and isinstance(kwargs.get("dir_fd"), int)
                     for args, kwargs in mocked_unlink.call_args_list
                 )
             )
             mocked_fsync.assert_called()
+
+    def test_invalid_model_checksum_cache_delete_preserves_replacement_after_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            cache_path = Path(tmp) / "model_checksums.json"
+            replacement = Path(tmp) / "replacement-cache.json"
+            cache_path.write_text("{not-json", encoding="utf-8")
+            replacement.write_text("foreign cache", encoding="utf-8")
+            real_stat = models.os.stat
+            cache_stat_calls = 0
+
+            def stat_then_replace(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal cache_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == cache_path.name and kwargs.get("dir_fd") is not None:
+                    cache_stat_calls += 1
+                    if cache_stat_calls == 1:
+                        cache_path.unlink()
+                        replacement.replace(cache_path)
+                return result
+
+            with mock.patch.object(models.os, "stat", side_effect=stat_then_replace):
+                self.assertFalse(models._remove_model_checksum_cache_file(cache_path))
+
+            self.assertEqual(cache_path.read_text(encoding="utf-8"), "foreign cache")
+            self.assertFalse(list(Path(tmp).glob("model_checksums.json.*.cleanup")))
 
     def test_model_checksum_cache_rejects_invalid_utf8(self) -> None:
         with (
