@@ -6124,6 +6124,43 @@ class CliTest(unittest.TestCase):
             self.assertEqual(temp_trimmed.read_bytes(), b"new-audio")
             self.assertTrue(list(recordings_root.glob(".recording.wav.*.bak")))
 
+    def test_stabilize_recording_artifact_preserves_changed_backup_during_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings_root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            temp_trimmed = recordings_root / "recording.trimmed-race.wav"
+            stable = recordings_root / "recording.wav"
+            replacement = recordings_root / "replacement.wav"
+            temp_trimmed.write_bytes(b"new-audio")
+            stable.write_bytes(b"old-audio")
+            replacement.write_bytes(b"foreign-audio")
+            real_stat = cli.os.stat
+            backup_stats = 0
+
+            def stat_then_replace_after_cleanup_check(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal backup_stats
+                result = real_stat(name, *args, **kwargs)
+                if isinstance(name, str) and name.endswith(".bak"):
+                    backup_stats += 1
+                    if backup_stats == 2:
+                        backup_path = recordings_root / name
+                        backup_path.unlink()
+                        replacement.replace(backup_path)
+                return result
+
+            with mock.patch.object(cli.os, "stat", side_effect=stat_then_replace_after_cleanup_check):
+                with self.assertRaisesRegex(RuntimeError, "failed to stabilize recording artifact path"):
+                    cli._stabilize_recording_artifact_path(temp_trimmed, replace_existing_path=stable)
+
+            self.assertEqual(stable.read_bytes(), b"new-audio")
+            backups = list(recordings_root.glob(".recording.wav.*.bak"))
+            self.assertEqual(len(backups), 1)
+            self.assertEqual(backups[0].read_bytes(), b"foreign-audio")
+
     def test_cleanup_rejects_boolean_recording_counts(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
