@@ -1716,6 +1716,7 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
                 MAX_PACTL_OUTPUT_CHARS,
             )
             primary_error: BaseException | None = None
+            proc: subprocess.Popen[bytes] | None = None
             try:
                 try:
                     proc = subprocess.Popen(  # nosec B603
@@ -1734,7 +1735,21 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
                 except FileNotFoundError as exc:
                     raise RecorderError(f"{pactl} command not found") from exc
 
-                _finish_bounded_output_captures(stdout_capture, stderr_capture)
+                try:
+                    _finish_bounded_output_captures(stdout_capture, stderr_capture)
+                except BaseException as capture_error:
+                    try:
+                        terminated = _reap_timed_out_recorder_process(proc)
+                    except BaseException as cleanup_error:
+                        capture_error.add_note(f"pactl process cleanup failed: {cleanup_error}")
+                    else:
+                        if not terminated:
+                            capture_error.add_note("pactl process cleanup was incomplete")
+                    try:
+                        _finish_bounded_output_captures(stdout_capture, stderr_capture)
+                    except BaseException as retry_error:
+                        capture_error.add_note(f"pactl output capture cleanup failed: {retry_error}")
+                    raise
                 if stdout_capture.overflowed or stderr_capture.overflowed:
                     raise RecorderError(f"pactl command output exceeded {MAX_PACTL_OUTPUT_CHARS} bytes")
 

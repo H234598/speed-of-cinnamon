@@ -2656,6 +2656,34 @@ class RecorderTest(unittest.TestCase):
                 os.kill(child_pid, 9)
                 self.fail(f"pactl descendant {child_pid} survived timeout")
 
+    def test_run_pactl_cleans_descendant_when_leader_exits_with_pipe_open(self) -> None:
+        if not Path("/proc/self/stat").exists() or not hasattr(os, "killpg"):
+            self.skipTest("process group inspection unavailable")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            child_pid_path = Path(tmp) / "child.pid"
+            command = [
+                "pactl",
+                "-c",
+                f"sleep 30 & child=$!; echo $child > {child_pid_path}; exit 0",
+            ]
+            with mock.patch.object(recorder_module, "_command_path", return_value="/bin/sh"):
+                with self.assertRaisesRegex(RecorderError, "pactl command failed: bounded output capture failed"):
+                    recorder_module._run_pactl_command(command, required=False)
+
+            child_pid = int(child_pid_path.read_text(encoding="utf-8").strip())
+            for _ in range(200):
+                stat_fields = recorder_module._recording_process_stat_fields(child_pid)
+                if stat_fields is None or stat_fields[0] in {"Z", "X", "x"}:
+                    break
+                time.sleep(0.01)
+            else:
+                try:
+                    os.kill(child_pid, 9)
+                except ProcessLookupError:
+                    pass
+                self.fail(f"pactl descendant {child_pid} survived capture cleanup")
+
     def test_run_kill_rejects_bad_command_shape(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid kill command"):
             _run_kill(("kill", "-9", 10), check_exit=True)  # type: ignore[arg-type]
