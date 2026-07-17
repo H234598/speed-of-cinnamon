@@ -1322,9 +1322,37 @@ def _remove_model_directory_leaf(
             raise ModelError(f"{field_name} must be a directory: {path}")
         if expected_stat is not None and not _same_model_directory_identity(file_stat, expected_stat):
             raise ModelError(f"{field_name} changed before cleanup: {path}")
-        shutil.rmtree(path.name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-        return True
+        for _ in range(100):
+            cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    path.name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name=f"{field_name} cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_model_directory_identity(claimed_stat, file_stat):
+                    raise ModelError(f"{field_name} changed before cleanup: {path}")
+                shutil.rmtree(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        path.name,
+                        directory_fd=parent_fd,
+                        field_name=f"{field_name} cleanup restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return True
+        raise ModelError(f"failed to claim {field_name} cleanup path: {path}")
     except OSError as exc:
         raise ModelError(f"failed to remove {field_name}: {path}") from exc
     except BaseException as exc:
@@ -1359,9 +1387,37 @@ def _remove_model_directory_if_same(
             return False
         if not stat_module.S_ISDIR(current_stat.st_mode) or not _same_model_directory_identity(current_stat, expected_stat):
             raise ModelError(f"{field_name} changed before cleanup: {path}")
-        shutil.rmtree(path.name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
-        return True
+        for _ in range(100):
+            cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    path.name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name=f"{field_name} cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_model_directory_identity(claimed_stat, current_stat):
+                    raise ModelError(f"{field_name} changed before cleanup: {path}")
+                shutil.rmtree(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        path.name,
+                        directory_fd=parent_fd,
+                        field_name=f"{field_name} cleanup restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return True
+        raise ModelError(f"failed to claim {field_name} cleanup path: {path}")
     except BaseException as exc:
         primary_error = exc
         raise

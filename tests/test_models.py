@@ -2978,8 +2978,41 @@ class ModelsTest(unittest.TestCase):
         self.assertFalse(path_exists)
         self.assertEqual(len(calls), 1)
         target, kwargs = calls[0]
-        self.assertEqual(target, path.name)
+        self.assertTrue(str(target).startswith(f"{path.name}."))
+        self.assertTrue(str(target).endswith(".cleanup"))
         self.assertIsInstance(kwargs.get("dir_fd"), int)
+
+    def test_remove_model_directory_preserves_replacement_after_cleanup_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "model-dir"
+            replacement = root / "replacement-dir"
+            path.mkdir()
+            replacement.mkdir()
+            (replacement / "foreign-model").write_bytes(b"foreign model")
+            real_stat = models.os.stat
+            path_stat_calls = 0
+
+            def stat_then_replace(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal path_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == path.name and kwargs.get("dir_fd") is not None:
+                    path_stat_calls += 1
+                    if path_stat_calls == 1:
+                        path.rmdir()
+                        replacement.replace(path)
+                return result
+
+            with mock.patch.object(models.os, "stat", side_effect=stat_then_replace):
+                with self.assertRaisesRegex(models.ModelError, "changed before cleanup"):
+                    models._remove_model_directory_leaf(path, root)
+
+            self.assertEqual((path / "foreign-model").read_bytes(), b"foreign model")
+            self.assertFalse(list(root.glob("model-dir.*.cleanup")))
 
     def test_remove_model_directory_fsyncs_parent_after_delete(self) -> None:
         spec = models.ModelSpec(
