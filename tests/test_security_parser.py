@@ -486,6 +486,20 @@ class SecurityParserTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 update_blacklist_file(path, ["neu"])
 
+    def test_update_blacklist_file_detects_unique_entry_after_duplicate_at_capacity(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            entries = [f"entry-{index}" for index in range(_MAX_BLACKLIST_ENTRIES)]
+            entries.extend([entries[-1], "overflow"])
+            path.write_text("\n".join(entries) + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            before = path.read_bytes()
+
+            with self.assertRaisesRegex(ValueError, "exceeds maximum entries"):
+                update_blacklist_file(path, ["neu"])
+
+            self.assertEqual(path.read_bytes(), before)
+
     def test_update_blacklist_file_rejects_new_entry_at_capacity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"

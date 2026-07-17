@@ -519,13 +519,14 @@ def _read_blacklist(path: Path, *, strict: bool = False) -> list[str]:
         if not entry:
             continue
         entry_key = entry.casefold()
+        if entry_key in value_keys:
+            continue
         if len(values) >= _MAX_BLACKLIST_ENTRIES:
-            if strict and entry_key not in value_keys:
+            if strict:
                 raise ValueError("blacklist file exceeds maximum entries")
             break
-        if entry_key not in value_keys:
-            values.append(entry)
-            value_keys.add(entry_key)
+        values.append(entry)
+        value_keys.add(entry_key)
     return values
 
 
