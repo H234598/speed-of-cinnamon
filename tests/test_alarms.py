@@ -601,6 +601,15 @@ class AlarmTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
                     load_alarm_store(path)
 
+    def test_load_alarm_store_wraps_json_memory_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text("{}", encoding="utf-8")
+            path.chmod(0o600)
+            with mock.patch.object(alarm_module.json, "loads", side_effect=MemoryError("too large")):
+                with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
+                    load_alarm_store(path)
+
     def test_due_check_with_zero_catch_up_skips_past_alarm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
@@ -1112,6 +1121,13 @@ class AlarmTest(unittest.TestCase):
             path = Path(tmp) / "alarms.json"
             with self.assertRaisesRegex(ValueError, "alarm store contains invalid unicode"):
                 save_alarm_store({}, path)
+
+    def test_save_alarm_store_wraps_json_memory_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            with mock.patch.object(alarm_module.json, "dumps", side_effect=MemoryError("too large")):
+                with self.assertRaisesRegex(RuntimeError, "alarm store could not be rendered"):
+                    save_alarm_store({}, path)
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
     def test_save_alarm_store_uses_secure_directory_relative_replace(self, mocked_open: mock.Mock) -> None:

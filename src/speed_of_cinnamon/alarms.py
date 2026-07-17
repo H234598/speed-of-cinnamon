@@ -386,7 +386,7 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
         raise RuntimeError("alarm store contains invalid null byte")
     try:
         raw = json.loads(text)
-    except (json.JSONDecodeError, RecursionError) as exc:
+    except (json.JSONDecodeError, RecursionError, MemoryError) as exc:
         if isinstance(exc, OSError):
             raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
         raise RuntimeError(f"alarm store could not be parsed: {exc}") from exc
@@ -419,7 +419,10 @@ def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
             max_chars=MAX_ALARM_TRIGGER_CHARS,
         ),
     }
-    rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    try:
+        rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
+    except MemoryError as exc:
+        raise RuntimeError("alarm store could not be rendered") from exc
     try:
         rendered_bytes = len(rendered.encode("utf-8"))
     except UnicodeEncodeError as exc:
