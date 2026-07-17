@@ -21,6 +21,22 @@ from speed_of_cinnamon import state as state_module
 
 
 class StateStoreTest(unittest.TestCase):
+    def test_state_lock_retries_interrupted_exclusive_lock(self) -> None:
+        operations: list[int] = []
+
+        def interrupt_first_lock(_fd: int, operation: int) -> None:
+            operations.append(operation)
+            if len(operations) == 1:
+                raise InterruptedError()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            with mock.patch.object(state_module.fcntl, "flock", side_effect=interrupt_first_lock):
+                with store._locked():
+                    pass
+
+        self.assertEqual(operations, [fcntl.LOCK_EX, fcntl.LOCK_EX, fcntl.LOCK_UN])
+
     def test_contains_escaped_null_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be text"):
             _contains_escaped_null(1)  # type: ignore[arg-type]

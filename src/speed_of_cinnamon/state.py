@@ -35,6 +35,15 @@ def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseExcept
     primary.add_note(f"state lock cleanup failed: {cleanup_error}")
 
 
+def _flock_retry(fd: int, operation: int) -> None:
+    while True:
+        try:
+            fcntl.flock(fd, operation)
+            return
+        except InterruptedError:
+            continue
+
+
 def _utf8_byte_count(value: str, *, field_name: str) -> int:
     try:
         return len(value.encode("utf-8"))
@@ -165,7 +174,7 @@ class StateStore:
         primary_error: BaseException | None = None
         try:
             assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
-            fcntl.flock(fd, fcntl.LOCK_EX)
+            _flock_retry(fd, fcntl.LOCK_EX)
             assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
             yield
         except BaseException as exc:
@@ -174,7 +183,7 @@ class StateStore:
         finally:
             cleanup_errors: list[BaseException] = []
             try:
-                fcntl.flock(fd, fcntl.LOCK_UN)
+                _flock_retry(fd, fcntl.LOCK_UN)
             except BaseException as cleanup_error:
                 cleanup_errors.append(cleanup_error)
             try:
