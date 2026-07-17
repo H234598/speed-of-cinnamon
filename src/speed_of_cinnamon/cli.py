@@ -4398,14 +4398,15 @@ def finalize_recording(
                 error_text = "recording process identity does not match; recording state preserved"
                 store.update(status=state.status, error=error_text)
                 raise RuntimeError(error_text)
-            stopped = stop_process(
-                _coerce_int(state.pid, field_name="state pid"),
-                expected_process_identity=state.process_identity,
-            )
-            if not stopped:
-                error_text = "recording process could not be stopped safely; recording state preserved"
-                store.update(status=state.status, error=error_text)
-                raise RuntimeError(error_text)
+            if process_verified_alive or process_group_has_live_processes(state.pid) is not False:
+                stopped = stop_process(
+                    _coerce_int(state.pid, field_name="state pid"),
+                    expected_process_identity=state.process_identity,
+                )
+                if not stopped:
+                    error_text = "recording process could not be stopped safely; recording state preserved"
+                    store.update(status=state.status, error=error_text)
+                    raise RuntimeError(error_text)
         if state.status == "finalizing":
             inserted = bool(state.inserted)
 
