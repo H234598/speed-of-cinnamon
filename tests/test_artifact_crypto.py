@@ -1236,6 +1236,13 @@ class ArtifactCryptoTest(unittest.TestCase):
         with mock.patch.object(artifact_crypto.Path, "read_text", side_effect=decode_error):
             self.assertFalse(artifact_crypto._secret_tool_leader_is_gone_or_zombie(1234))
 
+    def test_secret_tool_process_scan_fails_closed_for_same_session_different_group(self) -> None:
+        with (
+            mock.patch.object(artifact_crypto.Path, "iterdir", return_value=(Path("/proc/100"),)),
+            mock.patch.object(artifact_crypto.Path, "read_text", return_value="100 (child) S 1 9999 1234"),
+        ):
+            self.assertIsNone(artifact_crypto._secret_tool_process_group_has_live_descendants(1234))
+
     def test_secret_tool_rejects_oversized_output(self) -> None:
         fake_proc_holder: dict[str, object] = {}
 

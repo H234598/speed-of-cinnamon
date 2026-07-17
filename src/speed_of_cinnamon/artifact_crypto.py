@@ -1189,6 +1189,8 @@ def _secret_tool_process_group_has_live_descendants(process_group_id: int) -> bo
     except OSError:
         return None
     scan_incomplete = False
+    same_session_different_group = False
+    group_live = False
     for proc_entry in proc_entries:
         if not proc_entry.name.isdecimal():
             continue
@@ -1209,13 +1211,16 @@ def _secret_tool_process_group_has_live_descendants(process_group_id: int) -> bo
         except (IndexError, ValueError):
             scan_incomplete = True
             continue
-        if process_id == process_group_id or process_group != process_group_id or session_id != process_group_id:
+        if session_id != process_group_id:
             continue
-        if process_state not in {"Z", "X", "x"}:
-            return True
-    if scan_incomplete:
+        if process_group != process_group_id:
+            same_session_different_group = True
+            continue
+        if process_id != process_group_id and process_state not in {"Z", "X", "x"}:
+            group_live = True
+    if scan_incomplete or same_session_different_group:
         return None
-    return False
+    return group_live
 
 
 def _secret_tool_leader_is_gone_or_zombie(process_id: int) -> bool:
