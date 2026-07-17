@@ -8087,6 +8087,22 @@ class CliTest(unittest.TestCase):
             finally:
                 cli._release_finalization_lock(acquired)
 
+    def test_finalization_lock_does_not_reclaim_reaped_owner_with_live_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("999999999\nowner-identity\n", encoding="ascii")
+            lock_path.chmod(0o600)
+
+            with (
+                mock.patch("speed_of_cinnamon.cli._process_is_running", return_value=False),
+                mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
+            ):
+                acquired = cli._acquire_finalization_lock(state_file)
+
+            self.assertIsNone(acquired)
+            self.assertTrue(lock_path.exists())
+
     def test_finalization_lock_does_not_delete_replaced_stale_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
@@ -8163,6 +8179,21 @@ class CliTest(unittest.TestCase):
             lock_path.chmod(0o600)
 
             self.assertTrue(cli._is_finalization_lock_active(state_file))
+
+    def test_finalization_lock_activity_stays_active_for_reaped_owner_with_live_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text("999999999\nowner-identity\n", encoding="ascii")
+            lock_path.chmod(0o600)
+
+            with (
+                mock.patch("speed_of_cinnamon.cli._process_is_running", return_value=False),
+                mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
+            ):
+                active = cli._is_finalization_lock_active(state_file)
+
+            self.assertTrue(active)
 
     def test_toggle_rejects_null_personal_context(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -11549,7 +11580,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc) as mocked_start,
                 mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
                 mock.patch("speed_of_cinnamon.cli._finalization_lock_identity_for_pid", side_effect=fake_lock_identity),
-                mock.patch("speed_of_cinnamon.cli._process_is_running", side_effect=lambda pid: pid == proc.pid),
+                mock.patch("speed_of_cinnamon.cli._process_is_running", return_value=False),
                 mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
                 mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False),
                 mock.patch("speed_of_cinnamon.cli.time.sleep"),
@@ -11704,7 +11735,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc) as mocked_start,
                 mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
                 mock.patch("speed_of_cinnamon.cli._finalization_lock_identity_for_pid", side_effect=fake_lock_identity),
-                mock.patch("speed_of_cinnamon.cli._process_is_running", side_effect=lambda pid: pid == failed_proc.pid),
+                mock.patch("speed_of_cinnamon.cli._process_is_running", return_value=False),
                 mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
                 mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False) as mocked_stop,
                 mock.patch("speed_of_cinnamon.cli.time.sleep"),
@@ -11858,7 +11889,7 @@ class CliTest(unittest.TestCase):
                 ) as mocked_choose,
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc) as mocked_start,
                 mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None),
-                mock.patch("speed_of_cinnamon.cli._process_is_running", side_effect=lambda pid: pid == failed_proc.pid),
+                mock.patch("speed_of_cinnamon.cli._process_is_running", return_value=False),
                 mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
                 mock.patch("speed_of_cinnamon.cli.time.sleep"),
             ):

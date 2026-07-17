@@ -508,13 +508,17 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                     return None
                 owner_pid = _read_finalization_lock_pid(lock_path)
                 owner_identity = _read_finalization_lock_identity(lock_path)
-                if owner_pid is not None and _process_is_running(owner_pid):
+                owner_running = owner_pid is not None and _process_is_running(owner_pid)
+                if owner_running:
                     if owner_identity is None:
                         return None
                     owner_current_identity = _finalization_lock_identity_for_pid(owner_pid)
                     if owner_current_identity is None:
                         return None
                     if owner_identity == owner_current_identity:
+                        return None
+                if owner_pid is not None and not owner_running:
+                    if process_group_has_live_processes(owner_pid) is not False:
                         return None
                 if owner_pid is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
                     return None
@@ -3642,7 +3646,7 @@ def _is_finalization_lock_active(state_path: Path) -> bool:
     if not owner_pid:
         return True
     if not _process_is_running(owner_pid):
-        return False
+        return process_group_has_live_processes(owner_pid) is not False
     owner_identity = _read_finalization_lock_identity(lock_path)
     if owner_identity is None:
         return True
