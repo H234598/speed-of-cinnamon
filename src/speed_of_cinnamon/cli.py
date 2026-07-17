@@ -3912,30 +3912,33 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
     ) -> None:
         artifacts_safe_to_remove = process is None
         if process is not None:
-            try:
-                stopped = stop_process(
-                    process.pid,
-                    expected_process_identity=expected_process_identity,
-                    allow_unverified_process=expected_process_identity is None,
-                )
-                if stopped:
-                    artifacts_safe_to_remove = True
+            if expected_process_identity is None:
+                primary_error.add_note("recorder process identity could not be verified; process cleanup skipped")
+            else:
+                try:
+                    stopped = stop_process(
+                        process.pid,
+                        expected_process_identity=expected_process_identity,
+                    )
+                except BaseException as cleanup_error:
+                    primary_error.add_note(f"recorder process cleanup failed: {cleanup_error}")
+                    artifacts_safe_to_remove = False
                 else:
-                    try:
-                        process_gone = process.poll() is not None
-                    except BaseException:
-                        process_gone = False
-                        artifacts_safe_to_remove = False
-                        primary_error.add_note("recorder process could not be stopped safely")
+                    if stopped:
+                        artifacts_safe_to_remove = True
                     else:
-                        artifacts_safe_to_remove = False
-                        if not process_gone:
+                        try:
+                            process_gone = process.poll() is not None
+                        except BaseException:
+                            process_gone = False
+                            artifacts_safe_to_remove = False
                             primary_error.add_note("recorder process could not be stopped safely")
                         else:
-                            primary_error.add_note("recorder process stop was not confirmed")
-            except BaseException as cleanup_error:
-                primary_error.add_note(f"recorder process cleanup failed: {cleanup_error}")
-                artifacts_safe_to_remove = False
+                            artifacts_safe_to_remove = False
+                            if not process_gone:
+                                primary_error.add_note("recorder process could not be stopped safely")
+                            else:
+                                primary_error.add_note("recorder process stop was not confirmed")
         if artifacts_safe_to_remove:
             try:
                 if not cleanup_started_artifacts():
@@ -3957,6 +3960,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
     proc: subprocess.Popen[bytes] | None = None
     for recorder_preference in recorder_preferences:
         candidate_proc: subprocess.Popen[bytes] | None = None
+        candidate_process_identity: str | None = None
         try:
             candidate = choose_recorder(recorder_preference, audio_path, max_seconds, normalized_input_device)
             candidate_proc = start_recorder(candidate, log_path)
@@ -3972,10 +3976,19 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             cleanup_unpersisted_startup(exc, candidate_proc)
             raise
         try:
+            candidate_process_identity = _recording_process_identity_for_pid(candidate_proc.pid)
+        except BaseException as exc:
+            cleanup_unpersisted_startup(exc, candidate_proc)
+            raise
+        try:
             time.sleep(RECORDER_START_GRACE_SECONDS)
             candidate_running = candidate_proc.poll() is None
         except BaseException as exc:
-            cleanup_unpersisted_startup(exc, candidate_proc)
+            cleanup_unpersisted_startup(
+                exc,
+                candidate_proc,
+                expected_process_identity=candidate_process_identity,
+            )
             raise
         if candidate_running:
             command = candidate
@@ -3983,8 +3996,16 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             break
         detail = read_log_excerpt(log_path) or f"exit code {candidate_proc.returncode}"
         startup_errors.append(f"{candidate.name} exited immediately: {detail}")
+        if candidate_process_identity is None:
+            raise RuntimeError(
+                f"{startup_errors[-1]}; recorder process identity could not be verified; "
+                "recorder artifacts were preserved"
+            )
         try:
-            stopped = stop_process(candidate_proc.pid, allow_unverified_process=True)
+            stopped = stop_process(
+                candidate_proc.pid,
+                expected_process_identity=candidate_process_identity,
+            )
         except BaseException as cleanup_error:
             if isinstance(cleanup_error, Exception):
                 raise RuntimeError(f"{startup_errors[-1]}; recorder process cleanup failed") from cleanup_error
@@ -4011,15 +4032,11 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
 
     process_identity = _recording_process_identity_for_pid(proc.pid)
     if process_identity is None:
-        try:
-            stopped = stop_process(proc.pid, allow_unverified_process=True)
-        except Exception as cleanup_error:
-            raise RuntimeError("recording process identity could not be verified; recorder process cleanup failed") from cleanup_error
-        if not stopped and not recorder_process_is_gone():
-            raise RuntimeError("recording process identity could not be verified; recorder process could not be stopped safely")
-        if not cleanup_started_artifacts():
-            raise RuntimeError("recording process identity could not be verified; recorder artifacts could not be cleaned")
-        raise RuntimeError("recording process identity could not be verified")
+        identity_error = RuntimeError(
+            "recording process identity could not be verified; recorder artifacts were preserved"
+        )
+        cleanup_unpersisted_startup(identity_error, proc)
+        raise identity_error
     language = args.language or "en"
     state = RecordingState(
         status="recording",

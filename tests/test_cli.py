@@ -10762,6 +10762,7 @@ class CliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
                 mock.patch("speed_of_cinnamon.cli.time.sleep", side_effect=KeyboardInterrupt("startup interrupted")),
                 mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True) as mocked_stop,
             ):
@@ -10770,7 +10771,7 @@ class CliTest(unittest.TestCase):
             artifacts = list(recordings.glob("*")) if recordings.exists() else []
 
         self.assertEqual(str(context.exception), "startup interrupted")
-        mocked_stop.assert_called_once_with(23456, expected_process_identity=None, allow_unverified_process=True)
+        mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity")
         self.assertEqual(artifacts, [])
 
     def test_start_preserves_artifacts_when_interrupt_cleanup_cannot_stop_recorder(self) -> None:
@@ -10784,16 +10785,17 @@ class CliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None),
                 mock.patch("speed_of_cinnamon.cli.time.sleep", side_effect=KeyboardInterrupt("startup interrupted")),
-                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False) as mocked_stop,
+                mock.patch("speed_of_cinnamon.cli.stop_process") as mocked_stop,
             ):
                 with self.assertRaises(KeyboardInterrupt) as context:
                     cli.run(["start", "--state-file", str(state_file)])
             artifacts = list(recordings.glob("*")) if recordings.exists() else []
 
         self.assertEqual(str(context.exception), "startup interrupted")
-        self.assertIn("process stop was not confirmed", "\n".join(context.exception.__notes__))
-        mocked_stop.assert_called_once_with(23456, expected_process_identity=None, allow_unverified_process=True)
+        self.assertIn("identity could not be verified", "\n".join(context.exception.__notes__))
+        mocked_stop.assert_not_called()
         self.assertTrue(artifacts)
 
     def test_start_preserves_artifacts_when_exited_leader_stop_is_unconfirmed(self) -> None:
@@ -10807,16 +10809,17 @@ class CliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None),
                 mock.patch("speed_of_cinnamon.cli.time.sleep", side_effect=KeyboardInterrupt("startup interrupted")),
-                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False) as mocked_stop,
+                mock.patch("speed_of_cinnamon.cli.stop_process") as mocked_stop,
             ):
                 with self.assertRaises(KeyboardInterrupt) as context:
                     cli.run(["start", "--state-file", str(state_file)])
             artifacts = list(recordings.glob("*")) if recordings.exists() else []
 
         self.assertEqual(str(context.exception), "startup interrupted")
-        self.assertIn("process stop was not confirmed", "\n".join(context.exception.__notes__))
-        mocked_stop.assert_called_once_with(23456, expected_process_identity=None, allow_unverified_process=True)
+        self.assertIn("identity could not be verified", "\n".join(context.exception.__notes__))
+        mocked_stop.assert_not_called()
         self.assertTrue(artifacts)
 
     def test_start_preserves_interrupt_and_cleans_artifacts_when_state_write_is_interrupted(self) -> None:
@@ -10840,7 +10843,7 @@ class CliTest(unittest.TestCase):
             artifacts = list(recordings.glob("*")) if recordings.exists() else []
 
         self.assertEqual(str(context.exception), "state interrupted")
-        mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity", allow_unverified_process=False)
+        mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity")
         self.assertEqual(artifacts, [])
 
     def test_start_preserves_artifacts_when_state_write_cleanup_cannot_stop_recorder(self) -> None:
@@ -10883,7 +10886,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
                 mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None),
-                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False) as mocked_stop,
+                mock.patch("speed_of_cinnamon.cli.stop_process") as mocked_stop,
                 redirect_stdout(stdout),
             ):
                 code = cli.run(["start", "--state-file", str(state_file), "--json"])
@@ -10892,8 +10895,8 @@ class CliTest(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("process identity could not be verified", payload["error"])
-        self.assertIn("could not be stopped safely", payload["error"])
-        mocked_stop.assert_called_once_with(23456, allow_unverified_process=True)
+        self.assertIn("artifacts were preserved", payload["error"])
+        mocked_stop.assert_not_called()
         self.assertTrue(artifacts)
 
     def test_start_reports_post_delete_artifact_cleanup_failure(self) -> None:
@@ -10921,8 +10924,9 @@ class CliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("test-recorder", [])),
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=proc),
-                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
                 mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.StateStore.write", side_effect=RuntimeError("state write failed")),
                 mock.patch(
                     "speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync",
                     side_effect=delete_then_report_failure,
@@ -10965,6 +10969,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.choose_recorder", side_effect=fake_choose) as mocked_choose,
                 mock.patch("speed_of_cinnamon.cli.start_recorder", side_effect=fake_start),
                 mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True) as mocked_stop,
                 redirect_stdout(stdout),
             ):
                 code = cli.run(["start", "--state-file", str(state_file), "--json"])
@@ -10976,6 +10981,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(state.recorder, "parecord")
         self.assertEqual([call.args[0] for call in mocked_choose.call_args_list], ["pw-record", "parecord"])
         self.assertEqual(second_log_existed, [False])
+        mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity")
 
     def test_start_auto_fails_closed_when_failed_recorder_artifact_cleanup_fails(self) -> None:
         failed_proc = mock.Mock()
@@ -10991,6 +10997,8 @@ class CliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.cli.choose_recorder", return_value=RecorderCommand("pw-record", ["pw-record"])),
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True),
                 mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False),
                 redirect_stdout(stdout),
             ):
@@ -11018,6 +11026,7 @@ class CliTest(unittest.TestCase):
                     return_value=RecorderCommand("pw-record", ["pw-record"]),
                 ) as mocked_choose,
                 mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
                 mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True) as mocked_stop,
                 redirect_stdout(stdout),
             ):
@@ -11028,7 +11037,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("pw-record exited immediately", payload["error"])
         self.assertEqual([call.args[0] for call in mocked_choose.call_args_list], ["pw-record"])
-        mocked_stop.assert_called_once_with(23456, allow_unverified_process=True)
+        mocked_stop.assert_called_once_with(23456, expected_process_identity="proc-identity")
         self.assertEqual(recording_artifacts, [])
 
     def test_start_explicit_recorder_redacts_immediate_exit_log_tail(self) -> None:
@@ -11058,6 +11067,37 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("sk-secret-token", payload["error"])
         self.assertNotIn("ghp_secret", payload["error"])
 
+    def test_start_preserves_immediate_exit_artifacts_without_process_identity(self) -> None:
+        failed_proc = mock.Mock()
+        failed_proc.pid = 23456
+        failed_proc.poll.return_value = 1
+        failed_proc.returncode = 1
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch(
+                    "speed_of_cinnamon.cli.choose_recorder",
+                    return_value=RecorderCommand("pw-record", ["pw-record"]),
+                ),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value=None),
+                mock.patch("speed_of_cinnamon.cli.stop_process") as mocked_stop,
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--recorder", "pw-record", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+            artifacts = list(recordings.glob("*"))
+
+        self.assertEqual(code, 1)
+        self.assertIn("process identity could not be verified", payload["error"])
+        self.assertIn("artifacts were preserved", payload["error"])
+        mocked_stop.assert_not_called()
+        self.assertTrue(artifacts)
+
     def test_start_auto_removes_artifacts_when_all_recorders_fail(self) -> None:
         failed_processes = []
         for returncode in (1, 2, 3):
@@ -11077,6 +11117,8 @@ class CliTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.cli.choose_recorder", side_effect=fake_choose),
                 mock.patch("speed_of_cinnamon.cli.start_recorder", side_effect=failed_processes),
+                mock.patch("speed_of_cinnamon.cli._recording_process_identity_for_pid", return_value="proc-identity"),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=True),
                 redirect_stdout(stdout),
             ):
                 code = cli.run(["start", "--state-file", str(state_file), "--json"])
