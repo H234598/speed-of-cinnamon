@@ -9769,6 +9769,55 @@ class CliTest(unittest.TestCase):
         mocked_transcribe.assert_not_called()
         mocked_insert.assert_not_called()
 
+    def test_finalize_silent_cap_failure_preserves_encrypted_artifact_paths(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "silent.wav"
+            log = recordings_root / "silent.log"
+            audio.write_bytes(b"silent-audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            args.skip_silent_auto_relisten = True
+            args.artifact_encryption = "passphrase"
+            strong_passphrase = artifact_crypto._b64encode(bytes(range(32)))
+            env = {
+                "XDG_CACHE_HOME": tmp,
+                "XDG_STATE_HOME": tmp,
+                artifact_crypto.PASSPHRASE_ENV: strong_passphrase,
+            }
+            silence = cli.SilenceDetectionResult(True, True, 3.0, 3.0, 0.0, 0.0, "silent recording")
+            failed_cleanup = {
+                "planned_paths": [],
+                "deleted_paths": [],
+                "failed_paths": [str(recordings_root / "old.wav")],
+                "skipped_active_paths": [],
+            }
+            with (
+                mock.patch.dict(os.environ, env, clear=False),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli._enforce_recording_artifact_cap", return_value=failed_cleanup),
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            encrypted_audio = Path(final_state.audio_path)
+            encrypted_audio_exists = encrypted_audio.exists()
+            original_audio_exists = audio.exists()
+            final_log_path = final_state.log_path
+
+        self.assertEqual(payload["status"], "error")
+        self.assertTrue(encrypted_audio_exists)
+        self.assertTrue(str(encrypted_audio).endswith(".wav.socenc"))
+        self.assertFalse(original_audio_exists)
+        self.assertEqual(final_state.audio_path, str(encrypted_audio))
+        self.assertEqual(final_log_path, "")
+
     def test_finalize_skips_silent_initial_recording_without_transcribing(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

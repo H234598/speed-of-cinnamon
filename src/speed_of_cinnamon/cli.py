@@ -4407,7 +4407,7 @@ def finalize_recording(
             cleanup_failed_paths = _cleanup_failed_paths(artifact_cleanup)
             message = "silent recording skipped"
             if cleanup_failed_paths:
-                _persist_cleanup_failure_state(store, cleanup_failed_paths)
+                _persist_cleanup_failure_state(store, cleanup_failed_paths, artifact_state=state)
                 message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
                 return {
                     "status": "error",
