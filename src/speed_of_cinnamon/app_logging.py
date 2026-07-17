@@ -253,6 +253,24 @@ class SizeCappedJsonFileHandler(logging.Handler):
                     pass
 
     def _open(self) -> None:
+        if self.stream is not None:
+            try:
+                stream_stat = os.fstat(self.stream.fileno())
+                path_stat = self.path.lstat()
+                stream_matches_path = (
+                    stat_module.S_ISREG(stream_stat.st_mode)
+                    and stat_module.S_ISREG(path_stat.st_mode)
+                    and getattr(stream_stat, "st_nlink", 1) == 1
+                    and getattr(path_stat, "st_nlink", 1) == 1
+                    and stream_stat.st_dev == path_stat.st_dev
+                    and stream_stat.st_ino == path_stat.st_ino
+                    and stream_stat.st_mode == path_stat.st_mode
+                )
+            except (OSError, ValueError):
+                stream_matches_path = False
+            if stream_matches_path:
+                return
+            self.close()
         if self.stream is None:
             try:
                 expected_stat = self.path.lstat()

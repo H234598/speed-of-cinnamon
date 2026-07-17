@@ -313,6 +313,28 @@ class AppLoggingTest(unittest.TestCase):
 
         mocked_maintain.assert_called_once_with(log_dir)
 
+    def test_file_handler_reopens_after_external_active_rotation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+
+            with mock.patch("speed_of_cinnamon.app_logging.MAX_DAILY_LOG_BYTES", 1):
+                handler.emit(record)
+                app_logging.maintain_logs(log_dir, today=date.today())
+                rotated = active.with_name(f"{active.stem}.1{active.suffix}")
+                self.assertFalse(active.exists())
+                self.assertTrue(rotated.exists())
+
+                handler.emit(record)
+                handler.close()
+
+            self.assertTrue(active.exists())
+            self.assertEqual(len(rotated.read_text(encoding="utf-8").splitlines()), 1)
+            self.assertEqual(len(active.read_text(encoding="utf-8").splitlines()), 1)
+
     def test_file_handler_does_not_scan_total_limit_on_every_emit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
