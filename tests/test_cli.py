@@ -5201,6 +5201,7 @@ class CliTest(unittest.TestCase):
                     pid=1234,
                     process_identity="stale-process-identity",
                     audio_path="recordings/active.wav",
+                    inserted=True,
                 )
             )
             with (
@@ -5250,6 +5251,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(result["status"], "error")
         self.assertIn("recording exited before audio was saved", result["message"])
         self.assertEqual(final_state.status, "error")
+        self.assertFalse(final_state.inserted)
 
     def test_start_locked_rejects_relative_recording_path_escape(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5260,12 +5262,13 @@ class CliTest(unittest.TestCase):
             (tmp_path / "escape.wav").write_bytes(b"audio")
             state_file = state_dir / "state.json"
             store = StateStore(state_file)
-            store.write(RecordingState(status="recording", audio_path="../escape.wav"))
+            store.write(RecordingState(status="recording", audio_path="../escape.wav", inserted=True))
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}):
                 result = cli._command_start_locked(argparse.Namespace(), store)
             final_state = store.read()
             self.assertEqual(result["status"], "error")
             self.assertEqual(final_state.status, "error")
+            self.assertFalse(final_state.inserted)
 
     def test_status_reports_microphone_level_for_relative_recording_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -10936,6 +10939,7 @@ class CliTest(unittest.TestCase):
                     status="recording",
                     pid=1234,
                     process_identity="owner-identity",
+                    inserted=True,
                 )
             )
             stdout = io.StringIO()
@@ -10950,6 +10954,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertEqual(payload["status"], "error")
         self.assertIn("identity", payload["error"])
+        self.assertFalse(payload["inserted"])
         mocked_alive.assert_called()
 
     def test_status_reports_matching_zombie_recording_as_recorded(self) -> None:
@@ -10994,11 +10999,12 @@ class CliTest(unittest.TestCase):
     def test_status_reports_exited_recording_without_audio_as_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
-            StateStore(state_file).write(RecordingState(status="recording", pid=999999999))
+            StateStore(state_file).write(RecordingState(status="recording", pid=999999999, inserted=True))
             payload = cli.command_status(argparse.Namespace(state_file=str(state_file)))
 
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["message"], "recording exited before audio was saved")
+        self.assertFalse(payload["inserted"])
 
     def test_status_redacts_microphone_level_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -12478,6 +12484,32 @@ class CliTest(unittest.TestCase):
         self.assertIn("no recording is available", payload["error"])
         self.assertEqual(final_state.status, "error")
         self.assertIn("no recording is available", final_state.error)
+
+    def test_finalize_refuses_active_process_in_non_recording_state(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="processing",
+                    pid=1234,
+                    process_identity="owner-identity",
+                )
+            )
+            args = self._build_finalize_args(insert_method="none")
+
+            with (
+                mock.patch("speed_of_cinnamon.cli._recording_process_verified_alive", return_value=True),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False) as mocked_stop,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "could not be stopped safely"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+
+        mocked_stop.assert_called_once_with(1234, expected_process_identity="owner-identity")
+        self.assertEqual(final_state.status, "processing")
+        self.assertIn("could not be stopped safely", final_state.error)
 
     def test_toggle_processing_without_audio_path_does_not_start_recording(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -3938,6 +3938,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
                 process_identity="",
                 stopped_at=current.stopped_at or now_iso(),
                 error="recording state references an invalid artifact path",
+                inserted=False,
             )
             return {
                 "status": "error",
@@ -3949,6 +3950,7 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
             process_identity="",
             stopped_at=current.stopped_at or now_iso(),
             error="recording exited before audio was saved",
+            inserted=False,
         )
         return {
             "status": "error",
@@ -4378,6 +4380,32 @@ def finalize_recording(
         persisted_log_path = state.log_path
         if state.status in {"done", "error", "idle"}:
             return {"status": state.status, "message": state.error or f"recording already {state.status}"}
+        if state.status in {"recorded", "processing"} and (state.pid is not None or state.process_identity):
+            if state.pid is None or not str(state.process_identity or "").strip():
+                error_text = "recording process identity is incomplete; recording state preserved"
+                store.update(status=state.status, error=error_text)
+                raise RuntimeError(error_text)
+            process_verified_alive = _recording_process_verified_alive(state)
+            current_process_identity = (
+                _recording_process_identity_for_pid(state.pid)
+                if not process_verified_alive
+                else None
+            )
+            if (
+                current_process_identity is not None
+                and current_process_identity != state.process_identity
+            ):
+                error_text = "recording process identity does not match; recording state preserved"
+                store.update(status=state.status, error=error_text)
+                raise RuntimeError(error_text)
+            stopped = stop_process(
+                _coerce_int(state.pid, field_name="state pid"),
+                expected_process_identity=state.process_identity,
+            )
+            if not stopped:
+                error_text = "recording process could not be stopped safely; recording state preserved"
+                store.update(status=state.status, error=error_text)
+                raise RuntimeError(error_text)
         if state.status == "finalizing":
             inserted = bool(state.inserted)
 
@@ -5344,6 +5372,8 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
         except RuntimeError as exc:
             payload["status"] = "error"
             payload["message"] = str(exc)
+            payload["error"] = str(exc)
+            payload["inserted"] = False
             return payload
         if not verified_alive:
             current_process_identity = (
@@ -5357,6 +5387,8 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
             ):
                 payload["status"] = "error"
                 payload["message"] = "recording process identity does not match; recording state preserved"
+                payload["error"] = payload["message"]
+                payload["inserted"] = False
             else:
                 current_audio_path = _normalized_state_recording_artifact_path(
                     state.audio_path,
@@ -5369,6 +5401,7 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
                     payload["status"] = "error"
                     payload["message"] = "recording exited before audio was saved"
                     payload["error"] = payload["message"]
+                    payload["inserted"] = False
                 else:
                     payload["status"] = "recorded"
                     payload["message"] = "recording process has exited; run stop to transcribe"
