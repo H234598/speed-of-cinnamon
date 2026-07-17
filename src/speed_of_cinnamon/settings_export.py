@@ -938,7 +938,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             except BaseException as rollback_error:
                 _note_cleanup_failure(primary_error, rollback_error)
         if isinstance(exc, (MemoryError, OSError, RecursionError)):
-            cleanup_error: BaseException | None = None
+            cleanup_failure: BaseException | None = None
             if temp_name:
                 try:
                     _unlink_temp_if_same()
@@ -947,18 +947,18 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                         _scrub_temp_if_same()
                     except BaseException as scrub_error:
                         _note_cleanup_failure(exc, scrub_error)
-                    cleanup_error = cleanup_exc
+                    cleanup_failure = cleanup_exc
                 except BaseException as cleanup_exc:
                     try:
                         _scrub_temp_if_same()
                     except BaseException as scrub_error:
                         _note_cleanup_failure(exc, scrub_error)
-                    cleanup_error = cleanup_exc
-            if cleanup_error is not None:
+                    cleanup_failure = cleanup_exc
+            if cleanup_failure is not None:
                 error = SettingsExportError(f"failed to write settings export: {path}")
                 for note in getattr(exc, "__notes__", ()):
                     error.add_note(note)
-                _note_cleanup_failure(error, cleanup_error)
+                _note_cleanup_failure(error, cleanup_failure)
                 primary_error = error
                 raise error from exc
             error = SettingsExportError(f"failed to write settings export: {path}")

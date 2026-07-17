@@ -24,7 +24,6 @@ from speed_of_cinnamon.settings_export import (
     SettingsExportError,
     normalize_setting,
     normalize_alarm_store,
-    MAX_RECORDING_SECONDS,
     build_export,
     read_export,
     write_export,
