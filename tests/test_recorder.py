@@ -678,6 +678,26 @@ class RecorderTest(unittest.TestCase):
                 self.assertFalse(path.exists())
                 real_close(parent_fd)
 
+    def test_unlink_recording_path_rejects_hardlink_race(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recording.tmp"
+            alias = Path(tmp) / "recording-alias.tmp"
+            path.write_bytes(b"audio")
+            expected_stat = path.stat()
+            os.link(path, alias)
+
+            fd = os.open(path, os.O_RDONLY)
+            try:
+                self.assertFalse(recorder_module._recording_temp_path_matches_fd(path, fd))
+            finally:
+                os.close(fd)
+            recorder_module._unlink_recording_path_if_same(path, expected_stat)
+
+            self.assertTrue(path.exists())
+            self.assertTrue(alias.exists())
+
     def test_inspect_recording_temp_file_preserves_result_on_fd_close_failure(self) -> None:
         from speed_of_cinnamon import recorder as recorder_module
 

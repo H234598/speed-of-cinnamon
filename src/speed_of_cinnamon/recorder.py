@@ -554,6 +554,8 @@ def _recording_temp_path_matches_fd(path: Path, fd: int) -> bool:
         stat.S_ISREG(path_stat.st_mode)
         and path_stat.st_dev == fd_stat.st_dev
         and path_stat.st_ino == fd_stat.st_ino
+        and getattr(path_stat, "st_nlink", 1) == 1
+        and getattr(fd_stat, "st_nlink", 1) == 1
     )
 
 
@@ -586,6 +588,7 @@ def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) ->
             and current.st_dev == expected_stat.st_dev
             and current.st_ino == expected_stat.st_ino
             and current.st_mode == expected_stat.st_mode
+            and getattr(current, "st_nlink", 1) == getattr(expected_stat, "st_nlink", 1)
         ):
             os.unlink(path.name, dir_fd=parent_fd)
             os.fsync(parent_fd)
@@ -1603,7 +1606,17 @@ def _run_kill(command: list[str] | tuple[str, ...], *, check_exit: bool) -> None
 
 
 def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
-    return (left.st_dev, left.st_ino, left.st_mode) == (right.st_dev, right.st_ino, right.st_mode)
+    return (
+        left.st_dev,
+        left.st_ino,
+        left.st_mode,
+        getattr(left, "st_nlink", 1),
+    ) == (
+        right.st_dev,
+        right.st_ino,
+        right.st_mode,
+        getattr(right, "st_nlink", 1),
+    )
 
 
 def process_group_has_live_processes(process_group_id: int) -> bool | None:
