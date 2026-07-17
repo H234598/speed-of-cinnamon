@@ -8148,12 +8148,29 @@ class CliTest(unittest.TestCase):
             lock_path.write_text(f"{os.getpid()}\nother-identity\n", encoding="ascii")
             lock_path.chmod(0o600)
 
-            acquired = cli._acquire_finalization_lock(state_file)
+            with mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=False):
+                acquired = cli._acquire_finalization_lock(state_file)
             try:
                 self.assertEqual(acquired, lock_path)
                 self.assertEqual(lock_path.read_text(encoding="ascii").splitlines()[0], str(os.getpid()))
             finally:
                 cli._release_finalization_lock(acquired)
+
+    def test_finalization_lock_does_not_reclaim_identity_mismatch_with_live_group(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            lock_path.write_text(f"{os.getpid()}\nforeign-identity\n", encoding="ascii")
+            lock_path.chmod(0o600)
+
+            with (
+                mock.patch("speed_of_cinnamon.cli._finalization_lock_identity_for_pid", return_value="current-identity"),
+                mock.patch("speed_of_cinnamon.cli.process_group_has_live_processes", return_value=True),
+            ):
+                acquired = cli._acquire_finalization_lock(state_file)
+
+            self.assertIsNone(acquired)
+            self.assertTrue(lock_path.exists())
 
     def test_finalization_lock_reclaims_old_pidless_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

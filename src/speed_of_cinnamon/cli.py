@@ -517,6 +517,8 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                         return None
                     if owner_identity == owner_current_identity:
                         return None
+                    if process_group_has_live_processes(owner_pid) is not False:
+                        return None
                 if owner_pid is not None and not owner_running:
                     if process_group_has_live_processes(owner_pid) is not False:
                         return None
@@ -3651,7 +3653,9 @@ def _is_finalization_lock_active(state_path: Path) -> bool:
     if owner_identity is None:
         return True
     current_identity = _finalization_lock_identity_for_pid(owner_pid)
-    return current_identity is None or current_identity == owner_identity
+    if current_identity is None or current_identity == owner_identity:
+        return True
+    return process_group_has_live_processes(owner_pid) is not False
 
 
 def _inflight_recording_artifact_paths(audio_path: Path) -> set[Path]:
