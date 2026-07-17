@@ -692,6 +692,45 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             return
         raise _RecoveryBackupChanged("settings export recovery backup cleanup path could not be claimed")
 
+    def _unlink_target_safely(expected_stat: os.stat_result) -> bool:
+        try:
+            current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            return False
+        if not _same_leaf_snapshot(current_stat, expected_stat):
+            raise OSError("settings export path changed before cleanup")
+        for _ in range(100):
+            cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    path.name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name="settings export target cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_leaf_identity(claimed_stat, expected_stat):
+                    raise OSError("settings export path changed before cleanup")
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        path.name,
+                        directory_fd=parent_fd,
+                        field_name="settings export target restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return True
+        raise OSError("settings export target cleanup path could not be claimed")
+
     try:
         try:
             assert_fd_is_private_directory(parent_fd, field_name="settings export directory")
@@ -783,7 +822,8 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                     ):
                         raise OSError("settings export path changed during backup activation")
                     backup_name = candidate_name
-                    os.unlink(path.name, dir_fd=parent_fd)
+                    if not _unlink_target_safely(current_target_stat):
+                        raise OSError("settings export path disappeared before activation")
                     backup_moved = True
                     os.fsync(parent_fd)
                     break

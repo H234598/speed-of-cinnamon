@@ -730,7 +730,7 @@ class SettingsExportTest(unittest.TestCase):
             with mock.patch.object(
                 settings_export_module.secrets,
                 "token_hex",
-                side_effect=["temp", "fixed", "free", "cleanup"],
+                side_effect=["temp", "fixed", "free", "target-cleanup", "cleanup"],
             ):
                 write_export(path, {"language": "de"})
 
@@ -1085,7 +1085,7 @@ class SettingsExportTest(unittest.TestCase):
             real_unlink = os.unlink
 
             def fail_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".cleanup"):
+                if isinstance(name, str) and ".bak." in name and name.endswith(".cleanup"):
                     raise OSError("backup cleanup failed")
                 real_unlink(name, *args, **kwargs)
 
@@ -1102,7 +1102,7 @@ class SettingsExportTest(unittest.TestCase):
             real_unlink = os.unlink
 
             def interrupt_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and name.endswith(".cleanup"):
+                if isinstance(name, str) and ".bak." in name and name.endswith(".cleanup"):
                     raise KeyboardInterrupt("backup cleanup interrupted")
                 real_unlink(name, *args, **kwargs)
 
@@ -1190,7 +1190,7 @@ class SettingsExportTest(unittest.TestCase):
                 mode = os.fstat(fd).st_mode
                 if stat.S_ISDIR(mode):
                     directory_syncs += 1
-                    if directory_syncs == 2:
+                    if directory_syncs == 3:
                         backups = list(Path(tmp).glob(".settings-export.json.*.bak"))
                         self.assertEqual(len(backups), 1)
                         replacement.replace(backups[0])
@@ -1216,7 +1216,7 @@ class SettingsExportTest(unittest.TestCase):
 
             def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
                 nonlocal interrupted
-                if name == path.name and not interrupted:
+                if isinstance(name, str) and name.endswith(".cleanup") and not interrupted:
                     interrupted = True
                     real_unlink(name, *args, **kwargs)
                     raise KeyboardInterrupt
@@ -1230,6 +1230,27 @@ class SettingsExportTest(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), "old export\n")
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
+
+    def test_write_export_preserves_target_replacement_after_target_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            replacement = Path(tmp) / "replacement.json"
+            path.write_text("old export\n", encoding="utf-8")
+            replacement.write_text("replacement export\n", encoding="utf-8")
+            real_rename = settings_export_module._rename_without_replacing
+
+            def rename_then_swap(source: object, target: object, *args: object, **kwargs: object) -> None:
+                if source == path.name and str(target).endswith(".cleanup"):
+                    path.unlink()
+                    replacement.replace(path)
+                real_rename(source, target, *args, **kwargs)
+
+            with mock.patch.object(settings_export_module, "_rename_without_replacing", side_effect=rename_then_swap):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "de"})
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "replacement export\n")
+            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
 
     def test_write_export_removes_temp_file_when_file_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
