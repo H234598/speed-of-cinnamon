@@ -1717,7 +1717,7 @@ def _process_group_has_recorder_session(process_group_id: int) -> bool | None:
     try:
         proc_entries = tuple(Path("/proc").iterdir())
     except OSError:
-        return False
+        return None
     scan_incomplete = False
     for proc_entry in proc_entries:
         if not proc_entry.name.isdecimal():
@@ -1739,12 +1739,14 @@ def _process_group_has_recorder_session(process_group_id: int) -> bool | None:
     return False
 
 
-def _process_group_exists(process_group_id: int) -> bool:
+def _process_group_exists(process_group_id: int) -> bool | None:
     if process_group_id <= 0:
         return False
     session_present = _process_group_has_recorder_session(process_group_id)
-    if session_present is not False:
-        return session_present is True
+    if session_present is True:
+        return True
+    if session_present is None:
+        return None
     try:
         os.kill(-process_group_id, 0)
     except PermissionError:
@@ -1960,8 +1962,10 @@ def stop_process(
         # process-group ID. The leader can be reaped by another process before
         # a later stop/cancel invocation, while descendants still remain.
         process_group_target = _process_group_exists(pid)
-        if not process_group_target:
+        if process_group_target is False:
             return True
+        if process_group_target is not True:
+            return False
         process_target = f"-{pid}"
     except (OSError, OverflowError, ValueError) as exc:
         raise RecorderError(f"failed to inspect recorder process {pid}: {exc}") from exc
