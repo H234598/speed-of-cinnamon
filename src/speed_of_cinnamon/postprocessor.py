@@ -280,6 +280,8 @@ def _read_response_text(response: object, max_bytes: int, *, timeout: int | floa
             if deadline is not None:
                 raise PostProcessError("remote response read timed out") from exc
             raise
+        except (MemoryError, RecursionError) as exc:
+            raise PostProcessError("remote response could not be buffered safely") from exc
         if deadline is not None and time.monotonic() >= deadline:
             raise PostProcessError("remote response read timed out")
         if not chunk:
@@ -289,7 +291,10 @@ def _read_response_text(response: object, max_bytes: int, *, timeout: int | floa
         total += len(chunk)
         if total > max_bytes:
             raise PostProcessError(f"remote response is too large (max {max_bytes} bytes)")
-        chunks.append(chunk)
+        try:
+            chunks.append(chunk)
+        except (MemoryError, RecursionError) as exc:
+            raise PostProcessError("remote response could not be buffered safely") from exc
     try:
         raw = b"".join(chunks)
     except MemoryError as exc:

@@ -293,6 +293,12 @@ class PostProcessorTest(unittest.TestCase):
         with self.assertRaisesRegex(PostProcessError, "remote response chunk must be bytes"):
             _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
 
+    def test_read_response_text_wraps_read_memory_error(self) -> None:
+        response = mock.Mock()
+        response.read.side_effect = MemoryError("read exhausted")
+        with self.assertRaisesRegex(PostProcessError, "could not be buffered safely"):
+            _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES)
+
     def test_read_response_text_rejects_invalid_max_bytes(self) -> None:
         response = FakeBytesResponse(b"{}")
 
