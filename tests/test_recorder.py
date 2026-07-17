@@ -698,6 +698,38 @@ class RecorderTest(unittest.TestCase):
             self.assertTrue(path.exists())
             self.assertTrue(alias.exists())
 
+    def test_unlink_recording_path_preserves_replacement_during_cleanup(self) -> None:
+        from speed_of_cinnamon import recorder as recorder_module
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "recording.flac"
+            replacement = Path(tmp) / "replacement.flac"
+            path.write_bytes(b"owned audio")
+            replacement.write_bytes(b"foreign audio")
+            expected_stat = path.stat()
+            real_stat = recorder_module.os.stat
+            path_stat_calls = 0
+
+            def stat_then_replace(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal path_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == path.name and kwargs.get("dir_fd") is not None:
+                    path_stat_calls += 1
+                    if path_stat_calls == 1:
+                        path.unlink()
+                        replacement.replace(path)
+                return result
+
+            with mock.patch.object(recorder_module.os, "stat", side_effect=stat_then_replace):
+                recorder_module._unlink_recording_path_if_same(path, expected_stat)
+
+            self.assertEqual(path.read_bytes(), b"foreign audio")
+            self.assertFalse(list(Path(tmp).glob("recording.flac.*.cleanup")))
+
     def test_inspect_recording_temp_file_preserves_result_on_fd_close_failure(self) -> None:
         from speed_of_cinnamon import recorder as recorder_module
 

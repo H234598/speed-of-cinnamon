@@ -19,6 +19,7 @@ from pathlib import Path
 
 from .paths import recordings_dir
 from .path_safety import (
+    _rename_without_replacing,
     assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
@@ -590,8 +591,44 @@ def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) ->
             and current.st_mode == expected_stat.st_mode
             and getattr(current, "st_nlink", 1) == getattr(expected_stat, "st_nlink", 1)
         ):
-            os.unlink(path.name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            for _ in range(100):
+                cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
+                try:
+                    _rename_without_replacing(
+                        path.name,
+                        cleanup_name,
+                        directory_fd=parent_fd,
+                        field_name="recording artifact cleanup",
+                    )
+                except FileExistsError:
+                    continue
+                try:
+                    claimed = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                    if (
+                        not stat.S_ISREG(claimed.st_mode)
+                        or claimed.st_dev != expected_stat.st_dev
+                        or claimed.st_ino != expected_stat.st_ino
+                        or claimed.st_mode != expected_stat.st_mode
+                        or getattr(claimed, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+                    ):
+                        raise OSError("recording artifact changed before cleanup")
+                    os.unlink(cleanup_name, dir_fd=parent_fd)
+                    os.fsync(parent_fd)
+                except BaseException:
+                    try:
+                        _rename_without_replacing(
+                            cleanup_name,
+                            path.name,
+                            directory_fd=parent_fd,
+                            field_name="recording artifact cleanup restore",
+                        )
+                        os.fsync(parent_fd)
+                    except BaseException:
+                        pass
+                    raise
+                break
+            else:
+                raise OSError("recording artifact cleanup path could not be claimed")
     except OSError:
         return
     finally:
