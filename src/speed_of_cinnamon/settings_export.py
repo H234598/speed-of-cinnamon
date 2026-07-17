@@ -60,7 +60,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "primary-language-keybinding": (str, ""),
     "secondary-language-keybinding": (str, ""),
     "cancel-keybinding": (str, ""),
-    "show-panel-label": (bool, False),
+    "show-panel-label": (bool, True),
     "language": (str, "en"),
     "secondary-language": (str, "de"),
     "max-seconds": (int, DEFAULT_MAX_SECONDS),

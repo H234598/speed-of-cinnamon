@@ -485,7 +485,7 @@ class SettingsExportTest(unittest.TestCase):
             )
             payload = read_export(path)
 
-        self.assertFalse(payload["settings"]["show-panel-label"])
+        self.assertTrue(payload["settings"]["show-panel-label"])
 
     def test_write_export_rejects_out_of_range_numeric_settings(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "must be at least"):
