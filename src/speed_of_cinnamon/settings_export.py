@@ -886,7 +886,8 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                     if current_target_stat is not None:
                         if expected_activation_stat is None or not _same_leaf_identity(current_target_stat, expected_activation_stat):
                             raise OSError("settings export target changed during rollback")
-                        os.unlink(path.name, dir_fd=parent_fd)
+                        if not _unlink_target_safely(current_target_stat):
+                            raise OSError("settings export target disappeared during rollback")
                         os.fsync(parent_fd)
                 if backup_moved:
                     try:
