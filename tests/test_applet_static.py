@@ -379,6 +379,23 @@ class AppletStaticTest(unittest.TestCase):
         read_end = source.index("\n  _writeExternalApiEnvFileContents:", read_start)
         self.assertIn("this._assertExternalApiEnvDirectoryChainSafe(path);", source[read_start:read_end])
 
+    def test_external_api_env_values_are_quoted_and_unescaped_symmetrically(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        content_start = source.index("_externalApiEnvContent: function()")
+        content_end = source.index("\n  _externalApiEnvFileInfo:", content_start)
+        content_block = source[content_start:content_end]
+        self.assertIn("_externalApiEnvEncodeValue: function(value)", source)
+        self.assertIn("this._externalApiEnvEncodeValue(config.url)", content_block)
+        self.assertIn("this._externalApiEnvEncodeValue(config.model)", content_block)
+        self.assertIn("this._externalApiEnvEncodeValue(config.textModel)", content_block)
+        self.assertIn("this._externalApiEnvEncodeValue(config.apiKey)", content_block)
+
+        parse_start = source.index("_parseExternalApiEnvText: function(text)")
+        parse_end = source.index("\n  _applyExternalApiEnvFile:", parse_start)
+        parse_block = source[parse_start:parse_end]
+        self.assertIn("value.slice(1, -1).replace(/", parse_block)
+        self.assertIn('(["\\\\])/g, "$1")', parse_block)
+
     def test_external_api_urls_reject_out_of_range_ports_and_fake_loopback(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_validateExternalApiUrl: function(value, fieldName)")

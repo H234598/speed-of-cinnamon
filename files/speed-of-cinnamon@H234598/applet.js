@@ -8195,6 +8195,11 @@ MyApplet.prototype = {
     }
   },
 
+  _externalApiEnvEncodeValue: function(value) {
+    let text = typeof value === "string" ? value : "";
+    return '"' + text.replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+  },
+
   _externalApiEnvContent: function() {
     let config = this._validatedExternalApiConfig({
       url: this.openaiCompatibleUrl,
@@ -8203,10 +8208,10 @@ MyApplet.prototype = {
       apiKey: this.externalApiEnvApiKey || this.openaiCompatibleApiKey || "",
     });
     return [
-      "OPENAI_COMPATIBLE_URL=" + config.url,
-      "OPENAI_COMPATIBLE_STT_MODEL=" + config.model,
-      "OPENAI_COMPATIBLE_TEXT_MODEL=" + config.textModel,
-      "OPENAI_COMPATIBLE_API_KEY=" + config.apiKey,
+      "OPENAI_COMPATIBLE_URL=" + this._externalApiEnvEncodeValue(config.url),
+      "OPENAI_COMPATIBLE_STT_MODEL=" + this._externalApiEnvEncodeValue(config.model),
+      "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvEncodeValue(config.textModel),
+      "OPENAI_COMPATIBLE_API_KEY=" + this._externalApiEnvEncodeValue(config.apiKey),
       ""
     ].join("\n");
   },
@@ -8440,7 +8445,9 @@ MyApplet.prototype = {
       }
       let key = trimmed.slice(0, pos).trim();
       let value = trimmed.slice(pos + 1).trim();
-      if ((value.indexOf('"') === 0 && value.lastIndexOf('"') === value.length - 1) || (value.indexOf("'") === 0 && value.lastIndexOf("'") === value.length - 1)) {
+      if (value.indexOf('"') === 0 && value.lastIndexOf('"') === value.length - 1) {
+        value = value.slice(1, -1).replace(/\\(["\\])/g, "$1");
+      } else if (value.indexOf("'") === 0 && value.lastIndexOf("'") === value.length - 1) {
         value = value.slice(1, -1);
       }
       values[key] = value;
