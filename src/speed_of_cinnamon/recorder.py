@@ -416,6 +416,25 @@ def _reap_timed_out_recorder_process(process: subprocess.Popen[bytes]) -> bool:
     return terminated
 
 
+def _create_bounded_output_captures(
+    stdout_file: io.BufferedRandom,
+    stderr_file: io.BufferedRandom,
+    max_bytes: int,
+) -> tuple[_BoundedOutputCapture, _BoundedOutputCapture]:
+    stdout_capture: _BoundedOutputCapture | None = None
+    stderr_capture: _BoundedOutputCapture | None = None
+    try:
+        stdout_capture = _BoundedOutputCapture(stdout_file, max_bytes)
+        stderr_capture = _BoundedOutputCapture(stderr_file, max_bytes)
+        return stdout_capture, stderr_capture
+    except BaseException as exc:
+        try:
+            _finish_bounded_output_captures(stdout_capture, stderr_capture)
+        except BaseException as cleanup_error:
+            exc.add_note(f"recorder output capture cleanup failed: {cleanup_error}")
+        raise
+
+
 def _communicate_recorder_process_bounded(
     process: subprocess.Popen[bytes],
     *,
@@ -440,8 +459,11 @@ def _run_ffmpeg_bounded(
     pass_fds: tuple[int, ...],
 ) -> subprocess.CompletedProcess[bytes]:
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-        stdout_capture = _BoundedOutputCapture(stdout_file, MAX_FFMPEG_OUTPUT_BYTES)
-        stderr_capture = _BoundedOutputCapture(stderr_file, MAX_FFMPEG_OUTPUT_BYTES)
+        stdout_capture, stderr_capture = _create_bounded_output_captures(
+            stdout_file,
+            stderr_file,
+            MAX_FFMPEG_OUTPUT_BYTES,
+        )
         primary_error: BaseException | None = None
         try:
             proc = subprocess.Popen(  # nosec B603
@@ -1627,8 +1649,11 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
     runtime_command = [_command_path(pactl), *command[1:]]
     try:
         with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
-            stdout_capture = _BoundedOutputCapture(stdout_file, MAX_PACTL_OUTPUT_CHARS)
-            stderr_capture = _BoundedOutputCapture(stderr_file, MAX_PACTL_OUTPUT_CHARS)
+            stdout_capture, stderr_capture = _create_bounded_output_captures(
+                stdout_file,
+                stderr_file,
+                MAX_PACTL_OUTPUT_CHARS,
+            )
             primary_error: BaseException | None = None
             try:
                 try:

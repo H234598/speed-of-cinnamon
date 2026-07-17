@@ -1712,6 +1712,21 @@ class RecorderTest(unittest.TestCase):
 
             self.assertFalse(temp_path.exists())
 
+    def test_bounded_output_capture_setup_cleans_first_capture_when_second_fails(self) -> None:
+        first_capture = mock.Mock()
+        with mock.patch(
+            "speed_of_cinnamon.recorder._BoundedOutputCapture",
+            side_effect=[first_capture, OSError("second capture failed")],
+        ):
+            with self.assertRaisesRegex(OSError, "second capture failed"):
+                recorder_module._create_bounded_output_captures(
+                    object(),  # type: ignore[arg-type]
+                    object(),  # type: ignore[arg-type]
+                    128,
+                )
+
+        first_capture.finish.assert_called_once_with()
+
     def test_start_recorder_bounds_real_backend_output(self) -> None:
         command = RecorderCommand(
             name="python3",
