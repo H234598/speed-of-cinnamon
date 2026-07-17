@@ -1879,6 +1879,10 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         raise RecorderError("invalid recorder log path")
     if not isinstance(command, RecorderCommand):
         raise RecorderError("invalid recorder command")
+    if not isinstance(command.name, str) or isinstance(command.name, bool):
+        raise RecorderError("recorder name must be text")
+    if not isinstance(command.argv, (list, tuple)):
+        raise RecorderError("recorder command arguments must be a sequence")
     if not command.argv:
         raise RecorderError("recorder command is empty")
     if not all(isinstance(item, str) for item in command.argv):

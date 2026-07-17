@@ -1574,6 +1574,16 @@ class RecorderTest(unittest.TestCase):
         with self.assertRaisesRegex(RecorderError, "invalid recorder log path"):
             start_recorder(command, "/tmp/session.log")  # type: ignore[arg-type]
 
+    def test_start_recorder_rejects_non_text_recorder_name(self) -> None:
+        command = RecorderCommand(name=None, argv=["true"])  # type: ignore[arg-type]
+        with self.assertRaisesRegex(RecorderError, "recorder name must be text"):
+            start_recorder(command, Path("/tmp/session.log"))
+
+    def test_start_recorder_rejects_non_sequence_recorder_arguments(self) -> None:
+        command = RecorderCommand(name="noop", argv=1)  # type: ignore[arg-type]
+        with self.assertRaisesRegex(RecorderError, "arguments must be a sequence"):
+            start_recorder(command, Path("/tmp/session.log"))
+
     def test_start_recorder_resolves_recorder_command(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         with tempfile.TemporaryDirectory() as tmp:
