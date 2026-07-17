@@ -848,6 +848,8 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
             parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="log directory")
             candidate_linked = False
             source_unlink_attempted = False
+            source_claimed = False
+            source_cleanup_name: str | None = None
             primary_error: BaseException | None = None
             try:
                 rotation_stat = _assert_regular_unlinked_file(path, field_name="active log file")
@@ -880,10 +882,46 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                 # Keep candidate if unlink outcome is ambiguous; process can
                 # die after the syscall but before Python records success.
                 source_unlink_attempted = True
-                os.unlink(path.name, dir_fd=parent_fd)
+                for _ in range(100):
+                    source_cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
+                    try:
+                        _rename_without_replacing(
+                            path.name,
+                            source_cleanup_name,
+                            directory_fd=parent_fd,
+                            field_name="active log cleanup",
+                        )
+                    except FileExistsError:
+                        continue
+                    source_claimed = True
+                    break
+                else:
+                    raise RuntimeError("failed to claim active log cleanup path")
+                claimed_source_stat = os.stat(source_cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_log_inode(claimed_source_stat, rotation_stat):
+                    raise RuntimeError("active log changed during rotation")
+                os.unlink(source_cleanup_name, dir_fd=parent_fd)
                 os.fsync(parent_fd)
             except BaseException as exc:
                 primary_error = exc
+                if source_claimed and source_cleanup_name is not None:
+                    try:
+                        os.stat(source_cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                    except FileNotFoundError:
+                        pass
+                    except BaseException as cleanup_error:
+                        _note_cleanup_failure(primary_error, cleanup_error)
+                    else:
+                        try:
+                            _rename_without_replacing(
+                                source_cleanup_name,
+                                path.name,
+                                directory_fd=parent_fd,
+                                field_name="active log cleanup restore",
+                            )
+                            os.fsync(parent_fd)
+                        except BaseException as cleanup_error:
+                            _note_cleanup_failure(primary_error, cleanup_error)
                 if candidate_linked and not source_unlink_attempted:
                     try:
                         candidate_stat = os.stat(candidate.name, dir_fd=parent_fd, follow_symlinks=False)

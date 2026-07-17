@@ -1277,7 +1277,7 @@ class AppLoggingTest(unittest.TestCase):
             real_unlink = app_logging.os.unlink
 
             def unlink_then_fail(name: str, *, dir_fd: int | None = None) -> None:
-                if name == active.name and dir_fd is not None:
+                if name.endswith(".cleanup") and dir_fd is not None:
                     real_unlink(name, dir_fd=dir_fd)
                     raise OSError("source unlink outcome unknown")
                 real_unlink(name, dir_fd=dir_fd)
@@ -1288,6 +1288,37 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertFalse(active.exists())
             self.assertEqual(candidate.read_text(encoding="utf-8"), "active\n")
+
+    def test_rotate_active_preserves_source_replacement_after_final_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            active = root / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            replacement = root / "replacement.log"
+            active.write_text("active\n", encoding="utf-8")
+            replacement.write_text("must survive\n", encoding="utf-8")
+            real_stat = app_logging.os.stat
+            source_stat_calls = 0
+
+            def stat_with_swap(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal source_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == active.name and kwargs.get("dir_fd") is not None:
+                    source_stat_calls += 1
+                    if source_stat_calls == 2:
+                        active.unlink()
+                        replacement.replace(active)
+                return result
+
+            with mock.patch.object(app_logging.os, "stat", side_effect=stat_with_swap):
+                with self.assertRaisesRegex(RuntimeError, "active log changed during rotation"):
+                    app_logging._rotate_active_if_needed(active, force=True)
+
+            self.assertEqual(active.read_text(encoding="utf-8"), "must survive\n")
+            self.assertFalse(list(root.glob(f"{active.name}.*.cleanup")))
 
     def test_rotate_active_rejects_source_swap_before_unlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
