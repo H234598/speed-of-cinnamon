@@ -5128,6 +5128,8 @@ class CliTest(unittest.TestCase):
                     pid=1234,
                     process_identity="stale-process-identity",
                     audio_path="recordings/active.wav",
+                    error="previous stop failed",
+                    inserted=True,
                 )
             )
             with (
@@ -5141,6 +5143,8 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.status, "recorded")
             self.assertIsNone(final_state.pid)
             self.assertFalse(final_state.process_identity)
+            self.assertEqual(final_state.error, "")
+            self.assertFalse(final_state.inserted)
             mocked_stop.assert_called_once_with(1234, expected_process_identity="stale-process-identity")
 
     def test_start_locked_does_not_treat_reaped_recorder_leader_as_active(self) -> None:

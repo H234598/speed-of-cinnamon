@@ -3922,6 +3922,8 @@ def _command_start_locked(args: argparse.Namespace, store: StateStore) -> dict[s
                 pid=None,
                 process_identity="",
                 stopped_at=current.stopped_at or now_iso(),
+                error="",
+                inserted=False,
             )
             return {
                 "status": "recorded",
