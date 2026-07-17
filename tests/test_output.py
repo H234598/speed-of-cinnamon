@@ -2952,6 +2952,12 @@ class OutputTest(unittest.TestCase):
 
         self.assertTrue(any(stat.S_ISDIR(mode) for mode in fsync_modes))
 
+    def test_clipboard_dedupe_fsync_retries_interrupted_calls(self) -> None:
+        with mock.patch.object(output_module.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
+            output_module._fsync_fd(123)
+
+        self.assertEqual(mocked_fsync.call_count, 2)
+
     def test_clipboard_dedupe_lock_release_does_not_delete_replaced_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}):

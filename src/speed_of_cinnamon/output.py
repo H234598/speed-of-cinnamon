@@ -549,6 +549,15 @@ def _write_all(fd: int, payload: bytes, *, field_name: str) -> None:
         offset += written
 
 
+def _fsync_fd(fd: int) -> None:
+    while True:
+        try:
+            os.fsync(fd)
+            return
+        except InterruptedError:
+            continue
+
+
 def _same_clipboard_lock_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
     return (
         first.st_dev,
@@ -623,7 +632,7 @@ def _unlink_clipboard_lock_at(
                 changed = True
                 raise OSError("clipboard dedupe lock changed before cleanup")
             os.unlink(cleanup_name, dir_fd=parent_fd)
-            os.fsync(parent_fd)
+            _fsync_fd(parent_fd)
         except BaseException as exc:
             try:
                 _rename_without_replacing(
@@ -632,7 +641,7 @@ def _unlink_clipboard_lock_at(
                     directory_fd=parent_fd,
                     field_name="clipboard dedupe lock cleanup restore",
                 )
-                os.fsync(parent_fd)
+                _fsync_fd(parent_fd)
             except BaseException as restore_error:
                 exc.add_note(f"clipboard dedupe lock cleanup restore failed: {restore_error}")
             if changed:
@@ -742,8 +751,8 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
                     _write_all(fd, f"{os.getpid()}\n".encode("ascii"), field_name="clipboard dedupe lock")
                 else:
                     _write_all(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"), field_name="clipboard dedupe lock")
-                os.fsync(fd)
-                os.fsync(parent_fd)
+                _fsync_fd(fd)
+                _fsync_fd(parent_fd)
             except OSError:
                 cleanup_stat = created_stat
                 try:
