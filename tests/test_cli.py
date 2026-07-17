@@ -7632,6 +7632,47 @@ class CliTest(unittest.TestCase):
             self.assertTrue(lock_path.exists())
             self.assertEqual(lock_path.read_text(encoding="ascii"), "12345\nforeign-identity\n")
 
+    def test_finalization_lock_cleanup_preserves_replacement_after_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            replacement = Path(tmp) / "replacement.lock"
+            lock_path.write_bytes(b"owned lock")
+            replacement.write_bytes(b"foreign lock")
+            expected_stat = lock_path.stat(follow_symlinks=False)
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_stat = cli.os.stat
+            lock_stat_calls = 0
+
+            def stat_then_replace(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal lock_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == lock_path.name and kwargs.get("dir_fd") == parent_fd:
+                    lock_stat_calls += 1
+                    if lock_stat_calls == 1:
+                        lock_path.unlink()
+                        replacement.replace(lock_path)
+                return result
+
+            try:
+                with mock.patch.object(cli.os, "stat", side_effect=stat_then_replace):
+                    self.assertFalse(
+                        cli._unlink_finalization_lock_at(
+                            parent_fd,
+                            lock_path,
+                            expected_stat=expected_stat,
+                        )
+                    )
+            finally:
+                os.close(parent_fd)
+
+            self.assertEqual(lock_path.read_bytes(), b"foreign lock")
+            self.assertFalse(list(Path(tmp).glob(f"{lock_path.name}.*.cleanup")))
+
     def test_finalization_lock_rejects_hardlinked_existing_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"

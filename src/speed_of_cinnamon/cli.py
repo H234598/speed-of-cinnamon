@@ -417,9 +417,41 @@ def _unlink_finalization_lock_at(
         return False
     if expected_stat is not None and not _same_finalization_lock_identity(current, expected_stat):
         return False
-    os.unlink(lock_path.name, dir_fd=parent_fd)
-    os.fsync(parent_fd)
-    return True
+    for _ in range(100):
+        cleanup_name = f"{lock_path.name}.{secrets.token_hex(8)}.cleanup"
+        try:
+            _rename_without_replacing(
+                lock_path.name,
+                cleanup_name,
+                directory_fd=parent_fd,
+                field_name="finalization lock cleanup",
+            )
+        except FileExistsError:
+            continue
+        try:
+            claimed = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+            if not stat_module.S_ISREG(claimed.st_mode) or getattr(claimed, "st_nlink", 1) != 1:
+                raise RuntimeError("finalization lock changed before cleanup")
+            if expected_stat is not None and not _same_finalization_lock_identity(claimed, expected_stat):
+                raise RuntimeError("finalization lock changed before cleanup")
+            os.unlink(cleanup_name, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+        except BaseException as exc:
+            try:
+                _rename_without_replacing(
+                    cleanup_name,
+                    lock_path.name,
+                    directory_fd=parent_fd,
+                    field_name="finalization lock cleanup restore",
+                )
+                os.fsync(parent_fd)
+            except BaseException as restore_error:
+                exc.add_note(f"finalization lock cleanup restore failed: {restore_error}")
+            if isinstance(exc, RuntimeError) and str(exc) == "finalization lock changed before cleanup":
+                return False
+            raise
+        return True
+    return False
 
 
 def _acquire_finalization_lock(state_path: Path) -> Path | None:
