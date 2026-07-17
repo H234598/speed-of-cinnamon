@@ -2445,7 +2445,7 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
                     field_name="model path",
                     expected_source_stat=tmp_stat,
                 )
-            except (OSError, ModelError):
+            except BaseException:
                 replaced_path = tmp_path is not None and not tmp_path.exists()
                 raise
             else:

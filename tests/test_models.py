@@ -4271,6 +4271,58 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(list(path.parent.glob(f".{path.name}.*.backup")), [])
             self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
 
+    def test_download_model_restores_existing_file_when_final_replace_is_interrupted(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        spec = models.ModelSpec(
+            name="final-replace-interrupted",
+            filename="ggml-final-replace-interrupted.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="final replace interruption",
+        )
+        real_replace = models._replace_model_sibling_path
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+
+            def replace_then_interrupt_after_final_activation(
+                source: Path,
+                target: Path,
+                root: Path,
+                *,
+                field_name: str = "model path",
+                expected_source_stat: os.stat_result | None = None,
+            ) -> None:
+                real_replace(
+                    source,
+                    target,
+                    root,
+                    field_name=field_name,
+                    expected_source_stat=expected_source_stat,
+                )
+                if target == path and source.name.startswith(f".{path.name}.") and source.name.endswith(".tmp"):
+                    raise KeyboardInterrupt("final activation interrupted")
+
+            with mock.patch.object(
+                models,
+                "_replace_model_sibling_path",
+                side_effect=replace_then_interrupt_after_final_activation,
+            ):
+                with self.assertRaises(KeyboardInterrupt):
+                    models.download_model(spec.name, force=True)
+
+            self.assertEqual(path.read_bytes(), old_data)
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.backup")), [])
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.tmp")), [])
+
     def test_download_model_rejects_temp_change_after_checksum(self) -> None:
         data = b"trusted model"
         spec = models.ModelSpec(
