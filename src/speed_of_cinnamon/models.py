@@ -1727,7 +1727,7 @@ def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool
         current_checksum = checksum or _sha1_file_without_cache(path)
     except ModelError:
         return False
-    return bool(model.sha1 and current_checksum == model.sha1)
+    return bool(model.sha1 and current_checksum == model.sha1.lower())
 
 
 def _model_is_downloadable(model: ModelSpec) -> bool:
@@ -2390,7 +2390,7 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
             except OSError:
                 pass
         checksum = sha1_file(tmp_path)
-        if checksum != model.sha1:
+        if checksum != model.sha1.lower():
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
         try:
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")

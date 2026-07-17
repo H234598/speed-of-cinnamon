@@ -1163,6 +1163,26 @@ class ModelsTest(unittest.TestCase):
         self.assertNotIn(str(payload["path"]), payload["message"])
         self.assertNotIn(str(second_payload["path"]), second_payload["message"])
 
+    def test_download_model_accepts_uppercase_single_file_checksum(self) -> None:
+        data = b"uppercase checksum model"
+        spec = models.ModelSpec(
+            name="uppercase-checksum",
+            filename="ggml-uppercase-checksum.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest().upper(),
+            description="uppercase checksum model",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            payload = models.download_model(spec.name)
+
+            self.assertTrue(payload["verified"])
+            self.assertEqual(payload["checksum"], spec.sha1.lower())
+
     def test_download_model_fsyncs_download_file_before_atomic_replace(self) -> None:
         data = b"tiny model"
         spec = models.ModelSpec(
