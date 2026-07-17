@@ -1063,7 +1063,10 @@ class _BoundedOutputCapture:
     def _drain(self) -> None:
         try:
             while True:
-                chunk = os.read(self._read_fd, 64 * 1024)
+                try:
+                    chunk = os.read(self._read_fd, 64 * 1024)
+                except InterruptedError:
+                    continue
                 if not chunk:
                     break
                 remaining = self._max_bytes - self._captured_bytes

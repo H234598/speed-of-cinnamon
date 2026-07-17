@@ -874,6 +874,23 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual(bytes(output_file.payload), b"abc")
 
+    def test_bounded_output_capture_retries_interrupted_reads(self) -> None:
+        with tempfile.TemporaryFile() as output_file:
+            capture = output_module._BoundedOutputCapture(output_file, 3)
+            try:
+                with mock.patch.object(
+                    output_module.os,
+                    "read",
+                    side_effect=[InterruptedError(), b"abc", b""],
+                ):
+                    capture.write(b"abc")
+                    capture.finish()
+            finally:
+                capture.close_writer()
+
+            output_file.seek(0)
+            self.assertEqual(output_file.read(), b"abc")
+
     def test_bounded_output_capture_preserves_sink_write_error_over_flush_error(self) -> None:
         class FailingOutput:
             def write(self, _payload: bytes) -> int:
