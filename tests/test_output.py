@@ -661,7 +661,10 @@ class OutputTest(unittest.TestCase):
         process.poll.return_value = 0
         process.returncode = 0
         process.communicate.return_value = (b"", b"")
-        with mock.patch("speed_of_cinnamon.output.os.killpg") as mocked_killpg:
+        with (
+            mock.patch("speed_of_cinnamon.output._process_group_has_live_descendants", return_value=False),
+            mock.patch("speed_of_cinnamon.output.os.killpg") as mocked_killpg,
+        ):
             self.assertTrue(output_module._reap_timed_out_output_process(process))
 
         mocked_killpg.assert_not_called()
