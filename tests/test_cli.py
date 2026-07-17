@@ -10970,6 +10970,10 @@ class CliTest(unittest.TestCase):
 
             with tempfile.TemporaryDirectory() as tmp:
                 state_file = Path(tmp) / "state.json"
+                recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+                recordings.mkdir(parents=True)
+                audio = recordings / "recording.wav"
+                audio.write_bytes(b"audio")
                 process_identity = cli._recording_process_identity_for_pid(process.pid)
                 self.assertIsNotNone(process_identity)
                 StateStore(state_file).write(
@@ -10977,6 +10981,7 @@ class CliTest(unittest.TestCase):
                         status="recording",
                         pid=process.pid,
                         process_identity=process_identity or "",
+                        audio_path=str(audio),
                     )
                 )
                 payload = cli.command_status(argparse.Namespace(state_file=str(state_file)))
@@ -10985,6 +10990,15 @@ class CliTest(unittest.TestCase):
             self.assertIn("exited", payload["message"])
         finally:
             process.wait()
+
+    def test_status_reports_exited_recording_without_audio_as_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(RecordingState(status="recording", pid=999999999))
+            payload = cli.command_status(argparse.Namespace(state_file=str(state_file)))
+
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["message"], "recording exited before audio was saved")
 
     def test_status_redacts_microphone_level_errors(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

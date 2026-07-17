@@ -5358,10 +5358,22 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
                 payload["status"] = "error"
                 payload["message"] = "recording process identity does not match; recording state preserved"
             else:
-                payload["status"] = "recorded"
-                payload["message"] = "recording process has exited; run stop to transcribe"
-                payload["error"] = ""
-                payload["inserted"] = False
+                current_audio_path = _normalized_state_recording_artifact_path(
+                    state.audio_path,
+                    suffix=(".wav", ".flac", ".socenc"),
+                    state_path=store.path,
+                    require_recordings_dir=False,
+                )
+                current_audio_stat = _recording_artifact_stat(current_audio_path) if current_audio_path else None
+                if current_audio_stat is None or current_audio_stat.st_size == 0:
+                    payload["status"] = "error"
+                    payload["message"] = "recording exited before audio was saved"
+                    payload["error"] = payload["message"]
+                else:
+                    payload["status"] = "recorded"
+                    payload["message"] = "recording process has exited; run stop to transcribe"
+                    payload["error"] = ""
+                    payload["inserted"] = False
     if payload.get("status") in {"recording", "recorded"}:
         microphone_level = _recording_level_payload(state, state_path=store.path)
         if microphone_level is not None:
