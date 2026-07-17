@@ -562,7 +562,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
     payload = build_export(settings, alarm_store)
     try:
         rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
-    except MemoryError as exc:
+    except (MemoryError, RecursionError) as exc:
         raise SettingsExportError("settings export could not be rendered") from exc
     if _utf8_byte_count(rendered, field_name="settings export payload") > MAX_SETTINGS_EXPORT_BYTES:
         raise SettingsExportError(f"settings export is too large: {path}")

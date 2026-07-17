@@ -217,6 +217,15 @@ class SettingsExportTest(unittest.TestCase):
             ):
                 write_export(path, {"language": "en"})
 
+    def test_write_export_wraps_json_recursion_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            with (
+                mock.patch.object(settings_export_module.json, "dumps", side_effect=RecursionError("too deep")),
+                self.assertRaisesRegex(SettingsExportError, "could not be rendered"),
+            ):
+                write_export(path, {"language": "en"})
+
     def test_sanitize_text_field_rejects_oversized_text_bytes(self) -> None:
         with mock.patch("speed_of_cinnamon.settings_export.MAX_SETTINGS_TEXT_CHARS", 4):
             with self.assertRaisesRegex(SettingsExportError, "is too long"):
