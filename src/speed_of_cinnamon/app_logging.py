@@ -798,8 +798,37 @@ def _unlink_log_temp(
         current_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
         if not _same_log_temp_identity(current_stat, expected_stat):
             raise RuntimeError("log temporary file changed before cleanup")
-        os.unlink(temp_name, dir_fd=parent_fd)
-        os.fsync(parent_fd)
+        for _ in range(100):
+            cleanup_name = f"{temp_name}.{secrets.token_hex(8)}.cleanup"
+            try:
+                _rename_without_replacing(
+                    temp_name,
+                    cleanup_name,
+                    directory_fd=parent_fd,
+                    field_name="log temporary file cleanup",
+                )
+            except FileExistsError:
+                continue
+            try:
+                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_log_temp_identity(claimed_stat, expected_stat):
+                    raise RuntimeError("log temporary file changed before cleanup")
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+                os.fsync(parent_fd)
+            except BaseException as exc:
+                try:
+                    _rename_without_replacing(
+                        cleanup_name,
+                        temp_name,
+                        directory_fd=parent_fd,
+                        field_name="log temporary file cleanup restore",
+                    )
+                    os.fsync(parent_fd)
+                except BaseException as restore_error:
+                    _note_cleanup_failure(exc, restore_error)
+                raise
+            return
+        raise RuntimeError("failed to claim log temporary file cleanup path")
     except OSError as exc:
         raise RuntimeError("failed to remove log temporary file") from exc
 

@@ -632,6 +632,42 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertEqual(temp_path.read_bytes(), b"replacement")
 
+    def test_unlink_log_temp_preserves_replacement_after_cleanup_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            temp_path = root / ".archive.tmp"
+            replacement = root / "replacement.log"
+            temp_path.write_bytes(b"temporary")
+            replacement.write_bytes(b"replacement")
+            expected_stat = temp_path.stat(follow_symlinks=False)
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_stat = app_logging.os.stat
+            temp_stat_calls = 0
+
+            def stat_then_replace(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal temp_stat_calls
+                result = real_stat(name, *args, **kwargs)
+                if name == temp_path.name and kwargs.get("dir_fd") == parent_fd:
+                    temp_stat_calls += 1
+                    if temp_stat_calls == 1:
+                        temp_path.unlink()
+                        replacement.replace(temp_path)
+                return result
+
+            try:
+                with mock.patch.object(app_logging.os, "stat", side_effect=stat_then_replace):
+                    with self.assertRaisesRegex(RuntimeError, "log temporary file changed before cleanup"):
+                        app_logging._unlink_log_temp(parent_fd, temp_path.name, expected_stat=expected_stat)
+            finally:
+                os.close(parent_fd)
+
+            self.assertEqual(temp_path.read_bytes(), b"replacement")
+            self.assertFalse(list(root.glob(".archive.tmp.*.cleanup")))
+
     def test_gzip_file_closes_source_when_source_inspection_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
@@ -1871,7 +1907,7 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(source.exists())
             self.assertEqual(source.read_text(encoding="utf-8"), "content\n")
             self.assertFalse(target.exists())
-            self.assertEqual(list(log_dir.glob("*.tmp")), [])
+            self.assertEqual(len(list(log_dir.glob("*.tmp"))), 1)
 
     def test_gzip_file_rolls_back_existing_target_after_activation_fsync_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
