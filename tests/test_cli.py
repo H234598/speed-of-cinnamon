@@ -8985,7 +8985,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=fake_remove),
             ):
                 with self.assertRaisesRegex(RuntimeError, "done write failed"):
-                    cli.finalize_recording(args, store, store.read())
+                    cli.finalize_recording(args, store, RecordingState(status="processing"))
 
             final_state = store.read()
             self.assertEqual(final_state.status, "error")

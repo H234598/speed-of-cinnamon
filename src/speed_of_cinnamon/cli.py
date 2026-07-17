@@ -4210,8 +4210,8 @@ def finalize_recording(
     cleanup_backup_restore_failed = False
     preserve_recording_artifacts_after_cleanup_failure = False
     preserved_encrypted_audio_path: Path | None = None
-    persisted_audio_path = state.audio_path
-    persisted_log_path = state.log_path
+    persisted_audio_path: str | None = None
+    persisted_log_path: str | None = None
 
     def _backup_cleanup_file(path_text: str | None, *, suffix: str) -> Path | None:
         nonlocal audio_deleted, log_deleted, preserve_recording_artifacts_after_cleanup_failure
@@ -4372,6 +4372,8 @@ def finalize_recording(
     try:
         state = store.read()
         _raise_if_state_unreadable(state)
+        persisted_audio_path = state.audio_path
+        persisted_log_path = state.log_path
         if state.status in {"done", "error", "idle"}:
             return {"status": state.status, "message": state.error or f"recording already {state.status}"}
         if state.status == "finalizing":
