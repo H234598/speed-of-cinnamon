@@ -1448,6 +1448,23 @@ class ModelsTest(unittest.TestCase):
                 with self.assertRaisesRegex(models.ModelError, "missing per-file checksums"):
                     models.download_model(model.name)
 
+    def test_catalog_single_file_models_with_invalid_checksums_are_not_downloadable(self) -> None:
+        spec = models.ModelSpec(
+            name="invalid-single-checksum",
+            filename="ggml-invalid-single-checksum.bin",
+            size="1 KiB",
+            sha1="not-a-checksum",
+            description="invalid single-file checksum",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+        ):
+            self.assertFalse(models.model_status(spec)["downloadable"])
+            with self.assertRaisesRegex(models.ModelError, "not downloadable without pinned checksums"):
+                models.download_model(spec.name)
+
     def test_downloadable_catalog_directory_models_have_complete_file_hashes(self) -> None:
         for model in models.CATALOG:
             with self.subTest(model=model.name):
@@ -5174,7 +5191,7 @@ class ModelsTest(unittest.TestCase):
             name="evil-host",
             filename="ggml-evil-host.bin",
             size="1 KiB",
-            sha1="not-used",
+            sha1="a" * 40,
             description="evil host",
             download_url="https://example.com/ggml-evil-host.bin",
         )

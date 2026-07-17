@@ -1739,7 +1739,7 @@ def _model_is_downloadable(model: ModelSpec) -> bool:
         except ModelError:
             return False
         return True
-    return bool(model.sha1)
+    return _is_valid_checksum(model.sha1)
 
 
 def _model_file_sha1s(model: ModelSpec) -> dict[str, str]:
