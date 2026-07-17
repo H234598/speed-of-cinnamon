@@ -6,6 +6,7 @@ import io
 import os
 import shutil
 import tempfile
+import threading
 import time
 import unittest
 import urllib.error
@@ -4228,6 +4229,95 @@ class ModelsTest(unittest.TestCase):
             with mock.patch("speed_of_cinnamon.models.os.unlink", side_effect=unlink_or_fail):
                 with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
                     models.download_model("backup-cleanup-fails", force=True)
+
+    def test_remove_model_waits_for_download_transaction(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        spec = models.ModelSpec(
+            name="download-remove-race",
+            filename="ggml-download-remove-race.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="download/remove transaction race",
+        )
+        real_remove_backup = models._remove_model_backup_path
+        real_unlink_file = models._unlink_model_file_leaf
+        backup_cleanup_started = threading.Event()
+        allow_backup_cleanup = threading.Event()
+        remove_started = threading.Event()
+        download_finished = threading.Event()
+        errors: list[BaseException] = []
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+
+            def block_backup_cleanup(
+                backup_path: Path,
+                *,
+                expected_stat: os.stat_result | None = None,
+            ) -> None:
+                backup_cleanup_started.set()
+                if not allow_backup_cleanup.wait(timeout=5):
+                    raise AssertionError("timed out waiting to release backup cleanup")
+                real_remove_backup(backup_path, expected_stat=expected_stat)
+
+            def record_model_remove(
+                candidate: Path,
+                root: Path,
+                *,
+                field_name: str = "model file",
+                expected_stat: os.stat_result | None = None,
+            ) -> bool:
+                if candidate == path:
+                    remove_started.set()
+                return real_unlink_file(candidate, root, field_name=field_name, expected_stat=expected_stat)
+
+            def run_download() -> None:
+                try:
+                    models.download_model(spec.name, force=True)
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    download_finished.set()
+
+            def run_remove() -> None:
+                try:
+                    models.remove_model(spec.name)
+                except BaseException as exc:
+                    errors.append(exc)
+
+            with (
+                mock.patch.object(models, "_remove_model_backup_path", side_effect=block_backup_cleanup),
+                mock.patch.object(models, "_unlink_model_file_leaf", side_effect=record_model_remove),
+            ):
+                download_thread = threading.Thread(target=run_download)
+                download_thread.start()
+                remove_thread: threading.Thread | None = None
+                try:
+                    self.assertTrue(backup_cleanup_started.wait(timeout=5))
+
+                    remove_thread = threading.Thread(target=run_remove)
+                    remove_thread.start()
+                    self.assertFalse(remove_started.wait(timeout=0.2))
+                finally:
+                    allow_backup_cleanup.set()
+                    download_thread.join(timeout=5)
+                    if remove_thread is not None:
+                        remove_thread.join(timeout=5)
+
+            self.assertFalse(download_thread.is_alive())
+            self.assertIsNotNone(remove_thread)
+            assert remove_thread is not None
+            self.assertFalse(remove_thread.is_alive())
+            self.assertFalse(errors)
+            self.assertTrue(download_finished.is_set())
 
     def test_download_model_preserves_changed_backup_during_cleanup(self) -> None:
         old_data = b"old model"

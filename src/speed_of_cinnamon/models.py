@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import hashlib
 import math
@@ -11,15 +12,16 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from .http_safety import is_loopback_hostname
 from .paths import ctranslate2_models_dir, models_dir
 from .path_safety import (
     assert_fd_is_regular_private_file,
+    assert_fd_is_private_directory,
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
     open_directory_without_following_symlinks,
@@ -48,10 +50,85 @@ ENGLISH_LANGUAGE_CODES = {"", "en", "eng", "english"}
 MODEL_DOWNLOAD_REDIRECT_CODES = {301, 302, 303, 307, 308}
 MAX_MODEL_DOWNLOAD_REDIRECTS = 5
 MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS = 60 * 60
+_MODEL_OPERATION_LOCK_SUFFIX = "model-operation.lock"
 
 
 def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
     primary.add_note(f"model artifact cleanup failed: {cleanup_error}")
+
+
+@contextmanager
+def _locked_model_operation(root: Path) -> Iterator[None]:
+    if isinstance(root, bool) or not isinstance(root, Path):
+        raise ModelError("model root must be a path")
+    lock_parent = root.parent
+    lock_path = lock_parent / f".{root.name}.{_MODEL_OPERATION_LOCK_SUFFIX}"
+    try:
+        assert_no_symlink_ancestors(lock_path, field_name="model operation lock path")
+    except RuntimeError as exc:
+        raise ModelError(str(exc)) from exc
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise ModelError("secure model operation lock is not supported on this platform")
+
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(
+            lock_parent,
+            field_name="model operation lock directory",
+        )
+    except (OSError, RuntimeError) as exc:
+        raise ModelError("model operation lock directory is not safe") from exc
+
+    lock_fd: int | None = None
+    primary_error: BaseException | None = None
+    try:
+        try:
+            os.fchmod(parent_fd, 0o700)
+            assert_fd_is_private_directory(parent_fd, field_name="model operation lock directory")
+            lock_fd = os.open(
+                lock_path.name,
+                os.O_RDWR | os.O_CREAT | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+                0o600,
+                dir_fd=parent_fd,
+            )
+            assert_fd_is_regular_private_file(
+                lock_fd,
+                field_name="model operation lock file",
+                require_private_mode=True,
+            )
+            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+            assert_fd_is_regular_private_file(
+                lock_fd,
+                field_name="model operation lock file",
+                require_private_mode=True,
+            )
+        except (OSError, RuntimeError) as exc:
+            raise ModelError("failed to acquire model operation lock") from exc
+        yield
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        cleanup_errors: list[BaseException] = []
+        if lock_fd is not None:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+            try:
+                os.close(lock_fd)
+            except BaseException as cleanup_error:
+                cleanup_errors.append(cleanup_error)
+        try:
+            os.close(parent_fd)
+        except BaseException as cleanup_error:
+            cleanup_errors.append(cleanup_error)
+        if cleanup_errors:
+            if primary_error is not None:
+                for cleanup_error in cleanup_errors:
+                    _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise ModelError("failed to release model operation lock") from cleanup_errors[0]
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -2226,7 +2303,7 @@ def _remove_model_orphan_paths(path: Path, root: Path, *, allow_suffixless: bool
     return removed
 
 
-def download_model(name: str, force: bool = False) -> dict[str, object]:
+def _download_model_transaction(name: str, force: bool = False) -> dict[str, object]:
     if not isinstance(force, bool):
         raise ModelError("force must be a boolean")
     model = resolve_model(name)
@@ -2389,7 +2466,7 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {model.name}"}
 
 
-def remove_model(name: str) -> dict[str, object]:
+def _remove_model_transaction(name: str) -> dict[str, object]:
     model = resolve_model(name)
     path = model_path(model)
     root = _model_root(model)
@@ -2428,3 +2505,25 @@ def remove_model(name: str) -> dict[str, object]:
         "removed_tmp": removed_tmp,
         "removed_orphans": removed_orphans,
     }
+
+
+def download_model(name: str, force: bool = False) -> dict[str, object]:
+    if not isinstance(force, bool):
+        raise ModelError("force must be a boolean")
+    model = resolve_model(name)
+    if not model.files and not _model_is_downloadable(model):
+        raise ModelError(f"model catalog entry {model.name} is not downloadable without pinned checksums")
+    path = model_path(model)
+    root = _model_root(model)
+    _ensure_model_parent_directory(path, root, field_name="model path")
+    with _locked_model_operation(root):
+        return _download_model_transaction(name, force)
+
+
+def remove_model(name: str) -> dict[str, object]:
+    model = resolve_model(name)
+    path = model_path(model)
+    root = _model_root(model)
+    _ensure_model_parent_directory(path, root, field_name="model path")
+    with _locked_model_operation(root):
+        return _remove_model_transaction(name)
