@@ -1070,7 +1070,17 @@ class _BoundedOutputCapture:
                 if remaining > 0 and self._error is None:
                     captured = chunk[:remaining]
                     try:
-                        self._output_file.write(captured)
+                        offset = 0
+                        while offset < len(captured):
+                            written = self._output_file.write(captured[offset:])
+                            if (
+                                not isinstance(written, int)
+                                or isinstance(written, bool)
+                                or written <= 0
+                                or written > len(captured) - offset
+                            ):
+                                raise OSError("bounded output capture sink made no progress")
+                            offset += written
                     except BaseException as exc:
                         self._error = exc
                         self._captured_bytes = self._max_bytes
@@ -1078,7 +1088,8 @@ class _BoundedOutputCapture:
                         self._captured_bytes += len(captured)
                 if len(chunk) > max(remaining, 0):
                     self.overflowed = True
-            self._output_file.flush()
+            if self._error is None:
+                self._output_file.flush()
         except BaseException as exc:
             self._error = exc
         finally:

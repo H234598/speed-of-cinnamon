@@ -855,6 +855,40 @@ class OutputTest(unittest.TestCase):
             finally:
                 capture.finish()
 
+    def test_bounded_output_capture_completes_partial_sink_writes(self) -> None:
+        class PartialOutput:
+            def __init__(self) -> None:
+                self.payload = bytearray()
+
+            def write(self, payload: bytes) -> int:
+                self.payload.extend(payload[:1])
+                return 1
+
+            def flush(self) -> None:
+                return None
+
+        output_file = PartialOutput()
+        capture = output_module._BoundedOutputCapture(output_file, 3)
+        capture.write(b"abc")
+        capture.finish()
+
+        self.assertEqual(bytes(output_file.payload), b"abc")
+
+    def test_bounded_output_capture_preserves_sink_write_error_over_flush_error(self) -> None:
+        class FailingOutput:
+            def write(self, _payload: bytes) -> int:
+                raise OSError("write failed")
+
+            def flush(self) -> None:
+                raise OSError("flush failed")
+
+        capture = output_module._BoundedOutputCapture(FailingOutput(), 3)
+        capture.write(b"x")
+        with self.assertRaisesRegex(OSError, "bounded output capture failed") as caught:
+            capture.finish()
+
+        self.assertIn("write failed", str(caught.exception.__cause__))
+
     def test_bounded_output_capture_closes_pipe_when_thread_start_fails(self) -> None:
         with (
             mock.patch.object(output_module.os, "pipe", return_value=(41, 42)),
