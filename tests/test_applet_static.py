@@ -2095,7 +2095,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('relistenToken = String(this.autoRelistenSequence) + ":" + recordingKey;', source)
         self.assertIn('this.autoRelistenPending = Boolean(relistenToken);', source)
         self.assertIn('this.autoRelistenPendingToken = relistenToken;', source)
-        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {\n        this.isCommandRunning = false;\n        if (this.cancelPendingWhileCommandRunning) {\n          this._applyPayloadSafely(nextPayload);\n        }\n        return;\n      }', source)
+        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {\n        this.isCommandRunning = false;\n        if (this.cancelPendingWhileCommandRunning) {\n          this._applyPayloadSafely(nextPayload, undefined, true);\n        }\n        return;\n      }', source)
         self.assertIn('if (nextPayload && nextPayload.error) {\n        this.autoTranscribeRecordingKey = "";\n      }', source)
         self.assertIn('const EMPTY_TRANSCRIPT_MARKERS = [', source)
         self.assertIn('"leere aufnahme"', source)
@@ -4383,7 +4383,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatusPreservingRecording("error", _("Backend response handling failed: ") + safeError', helper_block)
         for marker in [
             "this._applyPayloadSafely(payload);",
-            "this._applyPayloadSafely(nextPayload);",
+            "this._applyPayloadSafely(nextPayload, undefined, true);",
         ]:
             self.assertIn(marker, source)
 
@@ -5731,7 +5731,7 @@ class AppletStaticTest(unittest.TestCase):
         mismatch_end = block.index("return;", mismatch)
         self.assertIn("this.isCommandRunning = false;", block[mismatch:mismatch_end])
         self.assertIn("if (this.cancelPendingWhileCommandRunning)", block[mismatch:mismatch_end])
-        self.assertIn("this._applyPayloadSafely(nextPayload);", block[mismatch:mismatch_end])
+        self.assertIn("this._applyPayloadSafely(nextPayload, undefined, true);", block[mismatch:mismatch_end])
         toggle_start = source.index("_toggleRecording: function()")
         toggle_end = source.index("\n  _restartApplet:", toggle_start)
         self.assertIn("this.cancelPendingWhileCommandRunning = false;", source[toggle_start:toggle_end])

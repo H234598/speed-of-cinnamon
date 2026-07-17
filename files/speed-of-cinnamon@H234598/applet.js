@@ -11562,7 +11562,7 @@ MyApplet.prototype = {
       if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {
         this.isCommandRunning = false;
         if (this.cancelPendingWhileCommandRunning) {
-          this._applyPayloadSafely(nextPayload);
+          this._applyPayloadSafely(nextPayload, undefined, true);
         }
         return;
       }
@@ -11570,7 +11570,7 @@ MyApplet.prototype = {
         this.autoTranscribeRecordingKey = "";
       }
       this.isCommandRunning = false;
-      this._applyPayloadSafely(nextPayload);
+      this._applyPayloadSafely(nextPayload, undefined, true);
     });
   },
 
