@@ -100,11 +100,15 @@ def _add_step(
 
 def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
     ready = _coerce_plan_bool(doctor_payload, "ok")
+    applet = doctor_payload.get("applet", False)
+    if not isinstance(applet, bool):
+        raise RuntimeError("applet must be a boolean")
     steps: list[dict[str, object]] = []
 
     configured = _configured(doctor_payload)
     desktop = _desktop(doctor_payload)
-    if not _coerce_plan_bool(desktop, "cinnamon"):
+    cinnamon = _coerce_plan_bool(desktop, "cinnamon")
+    if applet and not cinnamon:
         _add_step(
             steps,
             "cinnamon-session",
