@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import subprocess
 import os
+import sys
 import tempfile
 import time
 import unittest
@@ -1664,6 +1665,39 @@ class RecorderTest(unittest.TestCase):
                 result = start_recorder(command, Path(tmp) / "session.log")
         self.assertIs(result, mocked_process)
         self.assertEqual(mocked_popen.call_args.args[0][0], "/usr/bin/true")
+        self.assertIsInstance(mocked_popen.call_args.kwargs["stdout"], recorder_module._RecorderLogCapture)
+        self.assertEqual(mocked_popen.call_args.kwargs["stderr"], subprocess.STDOUT)
+        mocked_popen.call_args.kwargs["stdout"].finish()
+
+    def test_recorder_log_capture_caps_output_and_preserves_existing_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            log_path.write_bytes(b"start")
+            with log_path.open("ab") as log_file:
+                capture = recorder_module._RecorderLogCapture(log_file, initial_size=5, max_bytes=8)
+                os.write(capture.fileno(), b"0123456789" * 100)
+                capture.finish()
+
+            self.assertEqual(log_path.read_bytes(), b"start012")
+
+    def test_start_recorder_bounds_real_backend_output(self) -> None:
+        command = RecorderCommand(
+            name="python3",
+            argv=["python3", "-c", "import sys; sys.stderr.write('x' * 1000000)"],
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.object(recorder_module, "MAX_RECORDER_LOG_BYTES", 64),
+                mock.patch.object(recorder_module, "_command_path", return_value=sys.executable),
+            ):
+                process = start_recorder(command, log_path)
+                self.assertEqual(process.wait(timeout=5), 0)
+
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline and log_path.stat().st_size < 64:
+                time.sleep(0.01)
+            self.assertLessEqual(log_path.stat().st_size, 64)
 
     def test_start_recorder_wraps_log_fdopen_value_error(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
@@ -1704,10 +1738,12 @@ class RecorderTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.recorder._open_recorder_log_file", return_value=(log_file, False)),
                 mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
-                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process) as mocked_popen,
                 mock.patch("speed_of_cinnamon.recorder.os.fchmod"),
             ):
                 self.assertIs(start_recorder(command, log_path), process)
+                mocked_capture = mocked_popen.call_args.kwargs["stdout"]
+                mocked_capture.finish()
 
         log_file.close.assert_called_once()
 
@@ -1723,10 +1759,12 @@ class RecorderTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.recorder._open_recorder_log_file", return_value=(log_file, False)),
                 mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
-                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process) as mocked_popen,
                 mock.patch("speed_of_cinnamon.recorder.os.fchmod"),
             ):
                 self.assertIs(start_recorder(command, log_path), process)
+                mocked_capture = mocked_popen.call_args.kwargs["stdout"]
+                mocked_capture.finish()
 
         log_file.close.assert_called_once()
 

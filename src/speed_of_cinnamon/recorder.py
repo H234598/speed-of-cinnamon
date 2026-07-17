@@ -12,6 +12,7 @@ import subprocess  # nosec B404
 import sys
 import stat
 import tempfile
+import threading
 import time
 import wave
 from dataclasses import dataclass
@@ -247,6 +248,7 @@ MAX_PROCESS_STOP_TIMEOUT_SECONDS = 60
 MAX_FFMPEG_OUTPUT_BYTES = 256 * 1024
 MAX_FFMPEG_ARTIFACT_BYTES = 256 * 1024 * 1024
 MAX_RECORDING_LEVEL_BYTES = 128_000
+MAX_RECORDER_LOG_BYTES = 256 * 1024
 WAV_TRIM_CHUNK_FRAMES = 16_000
 WAV_HEADER_SCAN_BYTES = 512
 DEFAULT_WAV_DATA_OFFSET = 44
@@ -1937,14 +1939,97 @@ def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) 
         _close_fd_quietly(parent_fd)
 
 
-def _cleanup_created_recorder_log(log_path: Path, log_file: io.BufferedWriter, created_log: bool) -> None:
-    if not created_log:
+class _RecorderLogCapture:
+    def __init__(self, log_file: io.BufferedWriter, *, initial_size: int, max_bytes: int) -> None:
+        self._log_file = log_file
+        self._remaining_bytes = max(0, max_bytes - initial_size)
+        self._read_fd: int | None = None
+        self._write_fd: int | None = None
+        try:
+            self._read_fd, self._write_fd = os.pipe()
+            self._thread = threading.Thread(target=self._drain, name="soc-recorder-log", daemon=True)
+            self._thread.start()
+        except BaseException:
+            _close_fd_quietly(self._read_fd)
+            _close_fd_quietly(self._write_fd)
+            self._read_fd = None
+            self._write_fd = None
+            raise
+
+    def fileno(self) -> int:
+        if self._write_fd is None:
+            raise ValueError("recorder log capture writer is closed")
+        return self._write_fd
+
+    def close_writer(self) -> None:
+        write_fd = self._write_fd
+        self._write_fd = None
+        _close_fd_quietly(write_fd)
+
+    def finish(self) -> None:
+        self.close_writer()
+        self._thread.join(timeout=1.0)
+        if self._thread.is_alive():
+            raise OSError("recorder log capture did not finish")
+
+    def _drain(self) -> None:
+        read_fd = self._read_fd
+        if read_fd is None:
+            return
+        try:
+            while True:
+                try:
+                    chunk = os.read(read_fd, 64 * 1024)
+                except InterruptedError:
+                    continue
+                if not chunk:
+                    break
+                if self._remaining_bytes <= 0:
+                    continue
+                payload = chunk[: self._remaining_bytes]
+                try:
+                    self._log_file.write(payload)
+                except BaseException:
+                    self._remaining_bytes = 0
+                    continue
+                self._remaining_bytes -= len(payload)
+            try:
+                self._log_file.flush()
+            except BaseException:
+                pass
+        finally:
+            _close_fd_quietly(self._read_fd)
+            self._read_fd = None
+            try:
+                self._log_file.close()
+            except BaseException:
+                pass
+
+
+def _finish_recorder_log_capture(capture: _RecorderLogCapture | None, primary: BaseException) -> None:
+    if capture is None:
         return
     try:
-        opened_stat = os.fstat(log_file.fileno())
-    except (OSError, ValueError):
+        capture.finish()
+    except BaseException as cleanup_error:
+        primary.add_note(f"recorder log capture cleanup failed: {cleanup_error}")
+
+
+def _cleanup_created_recorder_log(
+    log_path: Path,
+    log_file: io.BufferedWriter,
+    created_log: bool,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> None:
+    if not created_log:
         return
-    _unlink_recorder_log_if_same(log_path, opened_stat)
+    if expected_stat is None:
+        try:
+            expected_stat = os.fstat(log_file.fileno())
+        except (OSError, ValueError):
+            return
+    _unlink_recorder_log_if_same(log_path, expected_stat)
 
 
 def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen[bytes]:
@@ -1972,37 +2057,54 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         raise RecorderError("recorder command contains invalid control character")
     log_path = validate_recording_path(log_path, suffix=".log")
     log_file, created_log = _open_recorder_log_file(log_path)
+    log_capture: _RecorderLogCapture | None = None
+    opened_stat: os.stat_result | None = None
     try:
         try:
             os.fchmod(log_file.fileno(), 0o600)
         except OSError:
             pass
+        try:
+            opened_stat = os.fstat(log_file.fileno())
+        except (OSError, ValueError):
+            pass
+        log_capture = _RecorderLogCapture(
+            log_file,
+            initial_size=opened_stat.st_size if opened_stat is not None else 0,
+            max_bytes=MAX_RECORDER_LOG_BYTES,
+        )
         runtime_command = [_command_path(command.argv[0]), *command.argv[1:]]
-        return subprocess.Popen(
+        process = subprocess.Popen(
             runtime_command,
-            stdout=log_file,
-            stderr=log_file,
+            stdout=log_capture,
+            stderr=subprocess.STDOUT,
             start_new_session=True,
             shell=False,
             env=_filtered_environment(),  # nosec B603
         )
+        log_capture.close_writer()
+        return process
     except (OSError, ValueError) as exc:
-        _cleanup_created_recorder_log(log_path, log_file, created_log)
+        _finish_recorder_log_capture(log_capture, exc)
+        _cleanup_created_recorder_log(log_path, log_file, created_log, expected_stat=opened_stat)
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
-    except RecorderError:
-        _cleanup_created_recorder_log(log_path, log_file, created_log)
+    except RecorderError as exc:
+        _finish_recorder_log_capture(log_capture, exc)
+        _cleanup_created_recorder_log(log_path, log_file, created_log, expected_stat=opened_stat)
         raise
     except BaseException as exc:
+        _finish_recorder_log_capture(log_capture, exc)
         try:
-            _cleanup_created_recorder_log(log_path, log_file, created_log)
+            _cleanup_created_recorder_log(log_path, log_file, created_log, expected_stat=opened_stat)
         except BaseException as cleanup_error:
             exc.add_note(f"recorder log cleanup failed: {cleanup_error}")
         raise
     finally:
-        try:
-            log_file.close()
-        except BaseException:
-            pass
+        if log_capture is None:
+            try:
+                log_file.close()
+            except BaseException:
+                pass
 
 
 def stop_process(
