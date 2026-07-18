@@ -714,6 +714,7 @@ class OutputTest(unittest.TestCase):
         try:
             self.assertTrue(child_is_live())
             self.assertTrue(output_module._terminate_output_process_group(process))
+            self.assertFalse(child_is_live())
             deadline = time.monotonic() + 2
             while child_is_live() and time.monotonic() < deadline:
                 time.sleep(0.01)
@@ -753,6 +754,45 @@ class OutputTest(unittest.TestCase):
             deadline = time.monotonic() + 2
             while child_is_live() and time.monotonic() < deadline:
                 time.sleep(0.01)
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+
+    def test_live_process_cleanup_kills_child_that_created_new_session(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import os,time; read_fd,write_fd=os.pipe(); child=os.fork(); "
+                "(os.close(read_fd), os.setsid(), os.write(write_fd, str(os.getpid()).encode()), "
+                "os.close(write_fd), time.sleep(30)) if child == 0 else "
+                "(os.close(write_fd), print(os.read(read_fd, 32).decode(), flush=True), "
+                "os.close(read_fd), time.sleep(30))",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+
+        def child_is_live() -> bool:
+            try:
+                state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()[0]
+            except OSError:
+                return False
+            return state not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            self.assertTrue(output_module._terminate_output_process_group(process))
+            process.wait(timeout=2)
             self.assertFalse(child_is_live())
         finally:
             try:

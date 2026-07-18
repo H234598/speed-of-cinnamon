@@ -1379,6 +1379,113 @@ def _same_session_process_group_ids(session_id: int) -> set[int] | None:
     return process_group_ids
 
 
+def _process_tree_descendant_identities(process_id: int) -> dict[int, str] | None:
+    if not isinstance(process_id, int) or isinstance(process_id, bool) or process_id <= 0:
+        return None
+    try:
+        proc_entries = tuple(Path("/proc").iterdir())
+    except OSError:
+        return None
+    children_by_parent: dict[int, set[int]] = {}
+    process_identities: dict[int, str] = {}
+    scan_incomplete = False
+    for proc_entry in proc_entries:
+        if not proc_entry.name.isdecimal():
+            continue
+        member_id = int(proc_entry.name)
+        try:
+            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError):
+            scan_incomplete = True
+            continue
+        try:
+            close = raw.rindex(")")
+            fields = raw[close + 2 :].split()
+            parent_id = int(fields[1])
+            start_time = fields[19]
+        except (IndexError, ValueError):
+            scan_incomplete = True
+            continue
+        children_by_parent.setdefault(parent_id, set()).add(member_id)
+        process_identities[member_id] = start_time
+    if scan_incomplete:
+        return None
+    descendants: dict[int, str] = {}
+    pending = [process_id]
+    while pending:
+        parent_id = pending.pop()
+        for child_id in children_by_parent.get(parent_id, ()):
+            if child_id in descendants:
+                continue
+            descendants[child_id] = process_identities[child_id]
+            pending.append(child_id)
+    return descendants
+
+
+def _process_tree_has_live_processes(process_identities: dict[int, str]) -> bool | None:
+    for process_id, expected_start_time in process_identities.items():
+        try:
+            raw = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii").strip()
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError):
+            return None
+        try:
+            close = raw.rindex(")")
+            fields = raw[close + 2 :].split()
+            process_state = fields[0]
+            start_time = fields[19]
+        except (IndexError, ValueError):
+            return None
+        if start_time != expected_start_time:
+            continue
+        if process_state not in {"Z", "X", "x"}:
+            return True
+    return False
+
+
+def _kill_output_process_tree(process_identities: dict[int, str]) -> bool:
+    cleanup_incomplete = False
+    for process_id, expected_start_time in sorted(process_identities.items()):
+        try:
+            raw = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii").strip()
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError):
+            cleanup_incomplete = True
+            continue
+        try:
+            close = raw.rindex(")")
+            fields = raw[close + 2 :].split()
+            process_state = fields[0]
+            start_time = fields[19]
+        except (IndexError, ValueError):
+            cleanup_incomplete = True
+            continue
+        if start_time != expected_start_time or process_state in {"Z", "X", "x"}:
+            continue
+        try:
+            os.kill(process_id, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        except (OSError, ValueError):
+            cleanup_incomplete = True
+    return not cleanup_incomplete
+
+
+def _wait_for_output_process_tree_stop(process_identities: dict[int, str], timeout_seconds: float = 1.0) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        tree_live = _process_tree_has_live_processes(process_identities)
+        if tree_live is False:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
 def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
     if not isinstance(process_group_id, int) or isinstance(process_group_id, bool) or process_group_id <= 0:
         return None
@@ -1421,6 +1528,17 @@ def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
     return group_live
 
 
+def _wait_for_output_process_group_stop(process_group_id: int, timeout_seconds: float = 1.0) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        descendants = _process_group_has_live_descendants(process_group_id)
+        if descendants is False:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
+
+
 def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     if not process or not isinstance(process.pid, int) or process.pid <= 0:
         return False
@@ -1446,6 +1564,11 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     session_group_ids = _same_session_process_group_ids(process.pid)
     if session_group_ids is None:
         return False
+    process_tree = _process_tree_descendant_identities(process.pid)
+    process_tree_scan_incomplete = process_tree is None
+    if process_tree is None:
+        process_tree = {}
+    process_tree_cleanup = _kill_output_process_tree(process_tree)
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -1465,7 +1588,14 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
             continue
         except (OSError, ValueError):
             return False
-    return True
+    process_tree_stopped = _wait_for_output_process_tree_stop(process_tree)
+    process_group_stopped = _wait_for_output_process_group_stop(process.pid)
+    return (
+        process_tree_cleanup
+        and not process_tree_scan_incomplete
+        and process_tree_stopped
+        and process_group_stopped
+    )
 
 
 def _reap_timed_out_output_process(process: subprocess.Popen[bytes]) -> bool:
