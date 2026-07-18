@@ -3603,6 +3603,8 @@ class AppletStaticTest(unittest.TestCase):
         spawn_text_end = source.index("\n  _applyPayload:", spawn_text_index)
         spawn_text_block = source[spawn_text_index:spawn_text_end]
         self.assertIn("this._statusRefreshToken++;", spawn_text_block)
+        self.assertIn('callbackFn("", result || {});', spawn_text_block)
+        self.assertIn('callbackFn(utf8ByteLength(output) > MAX_SPAWN_TEXT_BYTES ? "" : output, result || {});', spawn_text_block)
         self.assertIn("this._scheduleTrackedTimer(timeoutKey", source)
         self.assertIn("this._terminateProcess(process);", source)
         self.assertIn("this._unregisterProcess(processToken);", source)
@@ -3665,7 +3667,9 @@ class AppletStaticTest(unittest.TestCase):
         benchmark_start = source.index("_benchmarkDownloadedModels: function(audioPath, flowToken)")
         benchmark_end = source.index("\n  _setAlarmOptionStatus:", benchmark_start)
         benchmark_block = source[benchmark_start:benchmark_end]
-        self.assertIn("if (this.isCommandRunning || this._hasActiveRecordingState())", benchmark_block)
+        self.assertIn("flowToken = flowToken || this.benchmarkFlowToken;", benchmark_block)
+        self.assertIn("if (!flowToken || this.benchmarkFlowToken !== flowToken)", benchmark_block)
+        self.assertIn("if (this.isCommandRunning || (this._hasActiveRecordingState() && this.status !== \"processing\"))", benchmark_block)
         self.assertIn("let benchmarkArgs;", benchmark_block)
         self.assertIn("benchmarkArgs = this._benchmarkArgs(audioPath);", benchmark_block)
         self.assertIn('this._setStatus("error", _("Could not prepare benchmark command: ") + safeError', benchmark_block)
@@ -4037,6 +4041,9 @@ class AppletStaticTest(unittest.TestCase):
         choose_block = source[choose_start:choose_end]
         self.assertIn("this.ollamaModelFlowToken !== flowToken", choose_block)
         self.assertIn("!this._lifecycleAllowsWork()", choose_block)
+        self.assertIn('this._spawnText(choiceArgs, (output, result) => {', choose_block)
+        self.assertIn("result.startupFailed === true", choose_block)
+        self.assertIn('this._setStatus("error", _("Could not open Ollama model selection")', choose_block)
         self.assertIn("this._promptInstallOllamaTextModel(flowToken);", choose_block)
 
         install_start = source.index("_promptInstallOllamaTextModel: function(flowToken)")
@@ -4044,6 +4051,9 @@ class AppletStaticTest(unittest.TestCase):
         install_block = source[install_start:install_end]
         self.assertIn("this.ollamaModelFlowToken !== flowToken", install_block)
         self.assertIn("!this._lifecycleAllowsWork()", install_block)
+        self.assertIn('this._spawnText(promptArgs, (output, result) => {', install_block)
+        self.assertIn("result.startupFailed === true", install_block)
+        self.assertIn('this._setStatus("error", _("Could not open Ollama model prompt")', install_block)
 
     def test_ollama_dialog_cleanup_failures_do_not_report_ready(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -5711,7 +5721,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let completed = false;", block)
         self.assertIn("let completeOnce = (stdout, result, stderr) =>", block)
         self.assertIn("let handle = this._runBoundedSubprocess(", block)
-        self.assertIn('if (!handle) {\n      completeOnce("", { error: "Subprocess could not be started" }, "");\n    }', block)
+        self.assertIn('if (!handle) {\n      completeOnce("", { error: "Subprocess could not be started", startupFailed: true }, "");\n    }', block)
         self.assertIn("return handle;", block)
 
     def test_cancel_pending_during_command_suppresses_done_transcript_insert(self) -> None:

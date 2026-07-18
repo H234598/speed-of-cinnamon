@@ -7048,8 +7048,11 @@ MyApplet.prototype = {
   },
 
   _benchmarkDownloadedModels: function(audioPath, flowToken) {
-    flowToken = flowToken || {};
-    if (this.isCommandRunning || this._hasActiveRecordingState()) {
+    flowToken = flowToken || this.benchmarkFlowToken;
+    if (!flowToken || this.benchmarkFlowToken !== flowToken) {
+      return;
+    }
+    if (this.isCommandRunning || (this._hasActiveRecordingState() && this.status !== "processing")) {
       this.benchmarkFlowToken = null;
       return;
     }
@@ -9436,7 +9439,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not prepare Ollama model selection"), this.lastTranscript);
       return;
     }
-    this._spawnText(choiceArgs, (output) => {
+    this._spawnText(choiceArgs, (output, result) => {
       if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -9454,6 +9457,13 @@ MyApplet.prototype = {
         this._setStatus("ready", message, this.lastTranscript);
         return true;
       };
+      if (result && result.startupFailed === true) {
+        if (!clearFlow()) {
+          return;
+        }
+        this._setStatus("error", _("Could not open Ollama model selection"), this.lastTranscript);
+        return;
+      }
       let choice = String(output || "").trim();
       if (choice === "") {
         finish(_("Ollama model selection cancelled"));
@@ -9518,8 +9528,16 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not prepare Ollama model prompt"), this.lastTranscript);
       return;
     }
-    this._spawnText(promptArgs, (output) => {
+    this._spawnText(promptArgs, (output, result) => {
       if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      if (result && result.startupFailed === true) {
+        if (!this._clearOllamaModelFlow(flowToken)) {
+          this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+          return;
+        }
+        this._setStatus("error", _("Could not open Ollama model prompt"), this.lastTranscript);
         return;
       }
       let model = String(output || "").trim();
@@ -11242,7 +11260,7 @@ MyApplet.prototype = {
       completeOnce(String(stdout || ""), result || {}, String(stderr || ""));
     });
     if (!handle) {
-      completeOnce("", { error: "Subprocess could not be started" }, "");
+      completeOnce("", { error: "Subprocess could not be started", startupFailed: true }, "");
     }
     return handle;
   },
@@ -11312,11 +11330,11 @@ MyApplet.prototype = {
         : CLI_COMMAND_TIMEOUT_MS;
       return this._spawnJsonWithBackendEnvironment(normalizedArgs, {}, (stdout, result) => {
         if ((result && (result.timedOut || result.outputTooLarge || result.error))) {
-          callbackFn("");
+          callbackFn("", result || {});
           return;
         }
         let output = String(stdout || "");
-        callbackFn(utf8ByteLength(output) > MAX_SPAWN_TEXT_BYTES ? "" : output);
+        callbackFn(utf8ByteLength(output) > MAX_SPAWN_TEXT_BYTES ? "" : output, result || {});
       }, null, {
         timeoutMs: timeoutMs,
         maxStdoutBytes: MAX_SPAWN_TEXT_BYTES,
@@ -11325,7 +11343,7 @@ MyApplet.prototype = {
       });
     } catch (error) {
       this._recordLifecycleError("backend-text-spawn", error);
-      callbackFn("");
+      callbackFn("", { error: "Subprocess could not be started", startupFailed: true });
       return null;
     }
   },
