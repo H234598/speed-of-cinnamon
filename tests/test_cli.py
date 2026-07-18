@@ -11500,6 +11500,18 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["message"], "recording exited before audio was saved")
         self.assertFalse(payload["inserted"])
 
+    def test_status_does_not_treat_user_error_prefix_as_state_read_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            StateStore(state_file).write(
+                RecordingState(status="done", error="state file was rejected by recorder")
+            )
+
+            payload = cli.command_status(argparse.Namespace(state_file=str(state_file)))
+
+        self.assertEqual(payload["status"], "done")
+        self.assertEqual(payload["error"], "state file was rejected by recorder")
+
     def test_status_preserves_recording_state_without_pid(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

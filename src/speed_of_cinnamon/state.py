@@ -38,6 +38,10 @@ _STATE_READ_ERRORS = frozenset(
 )
 
 
+def is_state_read_error(error: object) -> bool:
+    return isinstance(error, str) and error in _STATE_READ_ERRORS
+
+
 def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
     primary.add_note(f"state lock cleanup failed: {cleanup_error}")
 
@@ -403,7 +407,7 @@ class StateStore:
     def update(self, **values: Any) -> RecordingState:
         with self._locked():
             state = self._read_unlocked()
-            if state.error in _STATE_READ_ERRORS:
+            if is_state_read_error(state.error):
                 raise RuntimeError(state.error)
             state_fields = {state_field.name for state_field in fields(RecordingState)}
             for key, value in values.items():

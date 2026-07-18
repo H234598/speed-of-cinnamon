@@ -120,7 +120,7 @@ from .recorder import MAX_RECORDING_SECONDS, RecorderError, validate_recording_p
 from .settings_export import read_export, write_export
 from .settings_export import MAX_SETTINGS_EXPORT_PATH_CHARS
 from .setup_plan import build_setup_plan
-from .state import RecordingState, StateStore, now_iso, process_is_alive
+from .state import RecordingState, StateStore, is_state_read_error, now_iso, process_is_alive
 from .text_utils import sanitize_special_chars
 from .transcriber import (
     MAX_AUDIO_PATH_CHARS,
@@ -3133,7 +3133,7 @@ def _recording_process_group_is_active(pid: int | None) -> bool:
 
 
 def _raise_if_state_unreadable(state: RecordingState) -> None:
-    if state.error.startswith("state file "):
+    if is_state_read_error(state.error):
         raise RuntimeError(state.error)
 
 
@@ -5593,7 +5593,7 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
     store = build_store(args)
     state = store.read()
     payload = _diagnostics_state_payload(state)
-    if state.error.startswith("state file "):
+    if is_state_read_error(state.error):
         payload["status"] = "error"
         return payload
     if state.status not in {"recording", "recorded", "processing", "finalizing"} and _is_finalization_lock_active(store.path):
