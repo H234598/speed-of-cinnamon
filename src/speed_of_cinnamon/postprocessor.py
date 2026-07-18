@@ -438,7 +438,7 @@ def _is_flex_service_tier_rejected(detail: object) -> bool:
     if not isinstance(detail, str):
         return False
     normalized = detail.lower()
-    if "service_tier" not in normalized and "service tier" not in normalized:
+    if not any(marker in normalized for marker in ("service_tier", "service tier", "service-tier")):
         return False
     rejected_terms = (
         "bad",
