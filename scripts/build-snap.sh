@@ -90,6 +90,10 @@ def _identity(path_stat):
     return (path_stat.st_dev, path_stat.st_ino)
 
 
+def _safe_fs_identity(path_stat):
+    return f"{path_stat.st_dev}:{path_stat.st_ino}:{path_stat.st_mode}"
+
+
 def _new_backup_path():
     for _ in range(16):
         backup_path = f"{final_path}.{os.getpid()}.{secrets.token_hex(8)}.backup"
@@ -104,7 +108,25 @@ def _rollback(*, backup_path, backup_attempted, backup_created, final_stat, fina
         if backup_stat is not None:
             if _identity(backup_stat) != final_identity:
                 raise RuntimeError(f"refusing to restore changed snap backup: {backup_path}")
-            _run_safe_fs("replace", "build-snap", backup_path, final_path, "--src-kind", "file")
+            current = _lstat(final_path)
+            restore_guard = []
+            if current is None:
+                restore_guard.append("--dst-must-not-exist")
+            elif activation_attempted and _identity(current) == staging_identity:
+                restore_guard.extend(("--expected-dst-identity", _safe_fs_identity(current)))
+            else:
+                raise RuntimeError(f"refusing to restore changed snap output: {final_path}")
+            _run_safe_fs(
+                "replace",
+                "build-snap",
+                backup_path,
+                final_path,
+                "--src-kind",
+                "file",
+                "--expected-src-identity",
+                _safe_fs_identity(backup_stat),
+                *restore_guard,
+            )
             return
         current = _lstat(final_path)
         if backup_created or current is None or _identity(current) != final_identity:
@@ -116,7 +138,13 @@ def _rollback(*, backup_path, backup_attempted, backup_created, final_stat, fina
             return
         if _identity(current) != staging_identity:
             raise RuntimeError(f"refusing to remove changed snap output during rollback: {final_path}")
-        _run_safe_fs("remove-leaf", "build-snap", final_path)
+        _run_safe_fs(
+            "remove-leaf",
+            "build-snap",
+            final_path,
+            "--expected-identity",
+            _safe_fs_identity(current),
+        )
 
 
 if not lock_name:
@@ -164,6 +192,7 @@ try:
         final_stat = _regular_file(final_path, "existing snap output", required=False)
         staging_identity = _identity(staging_stat)
         final_identity = _identity(final_stat) if final_stat is not None else None
+        final_fs_identity = _safe_fs_identity(final_stat) if final_stat is not None else None
         backup_path = _new_backup_path()
         backup_attempted = False
         backup_created = False
@@ -179,6 +208,8 @@ try:
                     "--src-kind",
                     "file",
                     "--dst-must-not-exist",
+                    "--expected-src-identity",
+                    final_fs_identity,
                 )
                 backup_created = True
             activation_attempted = True
