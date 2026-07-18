@@ -214,6 +214,12 @@ class CliTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     cli._apply_security_post_processing("sichtbarer text")
 
+    def test_empty_security_post_processing_uses_numeric_counters(self) -> None:
+        security = cli._public_security_post_processing(cli._empty_security_post_processing())
+
+        self.assertEqual(security["redacted_words"], 0)
+        self.assertEqual(security["blacklist_hits"], 0)
+
     @mock.patch(
         "speed_of_cinnamon.cli.write_text_atomically_without_following_symlinks",
         side_effect=OSError("out of space"),

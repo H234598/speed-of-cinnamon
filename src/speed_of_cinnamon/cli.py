@@ -1371,7 +1371,7 @@ def _apply_security_post_processing(text: str) -> tuple[str, dict[str, object]]:
 
 
 def _empty_security_post_processing() -> dict[str, object]:
-    return {"blacklist_added": [], "blacklist_opened": False, "redacted_words": [], "blacklist_hits": 0}
+    return {"blacklist_added": [], "blacklist_opened": False, "redacted_words": 0, "blacklist_hits": 0}
 
 
 def _empty_transcript_marker(text: str) -> str:
