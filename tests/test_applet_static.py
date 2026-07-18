@@ -4665,9 +4665,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("fields[19]", identity_block)
         self.assertIn("currentProcessGroupIdentity.startTime !== processGroupIdentity.startTime", source)
         self.assertIn("_processGroupState: function(identity)", source)
-        self.assertIn('return memberFound ? "live" : "stopped";', source)
+        self.assertIn('return sessionMemberFound ? "live" : "stopped";', source)
+        self.assertIn("_processSessionGroupIds: function(identity)", source)
+        self.assertIn("let sessionGroupIds = this._processSessionGroupIds(identity);", source)
+        self.assertIn("for (let processGroupId of sessionGroupIds)", source)
         self.assertIn("let groupState = this._processGroupState(identity);", source)
-        self.assertIn('"-" + identity.pid', source)
+        self.assertIn('"-" + processGroupId', source)
 
     def test_keyboard_group_cancel_notifies_active_insert_cleanup(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

@@ -2701,7 +2701,7 @@ MyApplet.prototype = {
         Gio.FileQueryInfoFlags.NONE,
         null
       );
-      let memberFound = false;
+      let sessionMemberFound = false;
       try {
         while (true) {
           let info = enumerator.next_file(null);
@@ -2730,16 +2730,72 @@ MyApplet.prototype = {
           if (fields.length <= 19) {
             return "invalid";
           }
-          if (fields[2] === groupPid && fields[3] === groupPid) {
-            memberFound = true;
+          if (fields[3] === groupPid && fields[0] !== "Z" && fields[0] !== "X" && fields[0] !== "x") {
+            sessionMemberFound = true;
           }
         }
       } finally {
         enumerator.close(null);
       }
-      return memberFound ? "live" : "stopped";
+      return sessionMemberFound ? "live" : "stopped";
     } catch (error) {
       return "invalid";
+    }
+  },
+
+  _processSessionGroupIds: function(identity) {
+    try {
+      if (!identity || !/^[1-9][0-9]*$/.test(String(identity.pid || "")) ||
+          !/^[0-9]+$/.test(String(identity.startTime || ""))) {
+        return null;
+      }
+      let groupPid = String(identity.pid);
+      let groups = {};
+      let procDirectory = Gio.File.new_for_path("/proc");
+      let enumerator = procDirectory.enumerate_children(
+        "standard::name",
+        Gio.FileQueryInfoFlags.NONE,
+        null
+      );
+      try {
+        while (true) {
+          let info = enumerator.next_file(null);
+          if (!info) {
+            break;
+          }
+          let memberPid = String(info.get_name() || "");
+          if (!/^[1-9][0-9]*$/.test(memberPid)) {
+            continue;
+          }
+          let contents = GLib.file_get_contents("/proc/" + memberPid + "/stat");
+          if (!contents || contents[0] !== true) {
+            return null;
+          }
+          let stat = ByteArray.toString(contents[1] || "");
+          let commandEnd = stat.lastIndexOf(") ");
+          if (commandEnd < 0) {
+            return null;
+          }
+          let fields = stat.slice(commandEnd + 2).trim().split(/\s+/);
+          if (fields.length <= 19 || !/^[1-9][0-9]*$/.test(fields[2])) {
+            return null;
+          }
+          if (fields[3] !== groupPid) {
+            continue;
+          }
+          if (memberPid === groupPid) {
+            if (fields[2] !== groupPid || fields[19] !== String(identity.startTime)) {
+              return null;
+            }
+          }
+          groups[fields[2]] = true;
+        }
+      } finally {
+        enumerator.close(null);
+      }
+      return Object.keys(groups);
+    } catch (error) {
+      return null;
     }
   },
 
@@ -2756,8 +2812,17 @@ MyApplet.prototype = {
       if (!kill) {
         return false;
       }
-      let result = GLib.spawn_sync(null, [kill, "-KILL", "--", "-" + identity.pid], null, 0, null);
-      return Boolean(result && result[0] === true && result[3] === 0);
+      let sessionGroupIds = this._processSessionGroupIds(identity);
+      if (!sessionGroupIds) {
+        return false;
+      }
+      for (let processGroupId of sessionGroupIds) {
+        let result = GLib.spawn_sync(null, [kill, "-KILL", "--", "-" + processGroupId], null, 0, null);
+        if (!result || result[0] !== true || result[3] !== 0) {
+          return false;
+        }
+      }
+      return true;
     } catch (error) {
       this._recordLifecycleError("process-group-kill", error);
       return false;
