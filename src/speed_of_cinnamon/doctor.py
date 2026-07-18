@@ -662,6 +662,13 @@ def configured_status(
     desktop: Mapping[str, object],
     applet: bool = False,
 ) -> dict[str, object]:
+    if not isinstance(settings, Mapping):
+        raise RuntimeError("settings must be an object")
+    if not isinstance(checks, Mapping):
+        raise RuntimeError("checks must be an object")
+    if not isinstance(desktop, Mapping):
+        raise RuntimeError("desktop must be an object")
+
     def _status_result(fn: object, *, fallback_value: str) -> dict[str, object]:
         try:
             return fn()  # type: ignore[misc]

@@ -1172,6 +1172,17 @@ class DoctorTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "settings must be an object"):
                     doctor.report(settings)  # type: ignore[arg-type]
 
+    def test_configured_status_rejects_non_object_payloads(self) -> None:
+        cases = (
+            ([], {}, {"cinnamon": True}, "settings"),
+            ({}, [], {"cinnamon": True}, "checks"),
+            ({}, {}, [], "desktop"),
+        )
+        for settings, checks, desktop, field_name in cases:
+            with self.subTest(field_name=field_name):
+                with self.assertRaisesRegex(RuntimeError, f"{field_name} must be an object"):
+                    doctor.configured_status(settings, checks, desktop)  # type: ignore[arg-type]
+
     def test_configured_status_rejects_non_boolean_applet(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "applet must be a boolean"):
             doctor.configured_status({}, {}, {"cinnamon": True}, applet="yes")  # type: ignore[arg-type]
