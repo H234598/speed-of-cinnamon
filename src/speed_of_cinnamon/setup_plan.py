@@ -99,6 +99,8 @@ def _add_step(
 
 
 def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
+    if not isinstance(doctor_payload, Mapping):
+        raise RuntimeError("doctor payload must be an object")
     ready = _coerce_plan_bool(doctor_payload, "ok")
     applet = doctor_payload.get("applet", False)
     if not isinstance(applet, bool):

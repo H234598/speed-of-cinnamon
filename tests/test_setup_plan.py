@@ -6,6 +6,12 @@ from speed_of_cinnamon.setup_plan import _sanitize_setup_text, build_setup_plan
 
 
 class SetupPlanTest(unittest.TestCase):
+    def test_non_mapping_doctor_payload_rejects_plan(self) -> None:
+        for payload in (None, [], "{}", 123):
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(RuntimeError, "doctor payload must be an object"):
+                    build_setup_plan(payload)  # type: ignore[arg-type]
+
     def test_ready_pipeline_has_no_required_steps(self) -> None:
         payload = {
             "ok": True,
