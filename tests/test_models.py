@@ -2455,6 +2455,32 @@ class ModelsTest(unittest.TestCase):
         with self.assertRaisesRegex(models.ModelError, "model repo_id contains invalid character"):
             models.model_download_urls(spec)
 
+    def test_download_model_supports_nested_multifile_model_path(self) -> None:
+        data = b"nested model file"
+        spec = models.ModelSpec(
+            name="ct2-nested-model",
+            filename="nested/ct2-nested-model",
+            size="2 KiB",
+            sha1="",
+            description="nested model path",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-nested-model",
+            files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            payload = models.download_model(spec.name)
+
+            path = models.model_path(spec)
+            self.assertEqual(payload["status"], "done")
+            self.assertEqual((path / "config.json").read_bytes(), data)
+
     def test_model_url_rejects_malformed_single_file_repo_id(self) -> None:
         spec = models.ModelSpec(
             name="bad-repo",

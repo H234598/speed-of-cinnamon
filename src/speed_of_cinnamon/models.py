@@ -2004,7 +2004,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
     try:
         try:
             tmp_dir = path.parent / _create_temporary_directory_in_parent_directory(
-                parent_fd, prefix=f".{model.filename}."
+                parent_fd, prefix=f".{path.name}."
             )
         except OSError as exc:
             raise ModelError(str(exc)) from exc
