@@ -451,6 +451,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let connectionId = this._connectSafe(monitor, "changed",', block)
         self.assertIn("if (!connectionId) {\n        this._clearExternalApiEnvMonitor();", block)
         self.assertIn("} catch (err) {\n      this._clearExternalApiEnvMonitor();", block)
+        self.assertIn('let applyTarget = this.externalApiEnvApplyTarget || "voice";', block)
+        self.assertIn("this._applyExternalApiEnvTarget(applyTarget);", block)
 
     def test_external_env_monitor_ignores_stale_changed_signals(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -462,6 +464,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn(guard, block)
         self.assertIn("this.externalApiEnvMonitor !== monitor", block)
         self.assertLess(block.index(guard), block.index("this._applyExternalApiEnvFile(true)"))
+        self.assertLess(block.index('let applyTarget = this.externalApiEnvApplyTarget || "voice";'), block.index('"changed", (changedMonitor'))
+        self.assertLess(block.index("this._applyExternalApiEnvFile(true)"), block.index("this._applyExternalApiEnvTarget(applyTarget);"))
 
     def test_signal_rollback_restores_registry_when_orphan_tracking_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -486,6 +490,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", block)
         self.assertIn("this._untrackMonitor(monitor)", block)
         self.assertIn("this._clearExternalApiEnvMonitorReference(monitor)", block)
+        self.assertIn("let clearReference = () =>", block)
 
     def test_failed_external_env_monitor_signal_disconnect_remains_tracked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -501,6 +506,7 @@ class AppletStaticTest(unittest.TestCase):
         monitor_block = source[start:end]
         self.assertIn("if (!this._disconnectTrackedSignalsForTarget(monitor))", monitor_block)
         self.assertIn("return false;", monitor_block)
+        self.assertIn("clearReference();", monitor_block)
         self.assertLess(
             monitor_block.index("_disconnectTrackedSignalsForTarget(monitor)"),
             monitor_block.index("monitor.cancel()"),
@@ -594,8 +600,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._clearExternalApiEnvMonitorReference(monitor)", clear_block)
         self.assertIn("this._trackOrphanedMonitor(monitor, true);", clear_block)
         self.assertIn("return false;", clear_block)
-        self.assertLess(clear_block.index("this._untrackMonitor(monitor)"), clear_block.index("this._clearExternalApiEnvMonitorReference(monitor)"))
-        self.assertLess(clear_block.index("this._untrackOrphanedMonitor(monitor)"), clear_block.index("this._clearExternalApiEnvMonitorReference(monitor)"))
+        self.assertIn("clearReference();", clear_block)
+        clear_reference_index = clear_block.rindex("this._clearExternalApiEnvMonitorReference(monitor)")
+        self.assertLess(clear_block.index("this._untrackMonitor(monitor)"), clear_reference_index)
+        self.assertLess(clear_block.index("this._untrackOrphanedMonitor(monitor)"), clear_reference_index)
 
     def test_failed_dialog_untrack_does_not_escape_dialog_close(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1646,13 +1654,18 @@ class AppletStaticTest(unittest.TestCase):
             ("_selectVoiceModel: function(model, preserveRecording)", "\n  _selectAutomaticVoiceBackend:", "return false;"),
             ("_selectAutomaticVoiceBackend: function()", "\n  _selectStaticVoiceBackend:", "return;"),
             ("_selectStaticVoiceBackend: function(transcriber, message)", "\n  _externalApiEnvPath:", "return;"),
-            ("_selectExternalApiVoiceBackend: function()", "\n  _refreshTextModelMenu:", "return;"),
+            ("_selectExternalApiVoiceBackend: function()", "\n  _refreshTextModelMenu:", "return false;"),
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn("if (this.voiceModelActionToken)", block)
             self.assertIn(result, block)
+
+        voice_start = source.index("_selectExternalApiVoiceBackend: function()")
+        voice_end = source.index("\n  _refreshTextModelMenu:", voice_start)
+        voice_block = source[voice_start:voice_end]
+        self.assertIn('this._setStatusPreservingRecording("error", _("Voice model operation is still running")', voice_block)
 
         voice_start = source.index("_onVoiceBackendSettingsChanged: function()")
         voice_end = source.index("\n  _onTextModelSettingsChanged:", voice_start)

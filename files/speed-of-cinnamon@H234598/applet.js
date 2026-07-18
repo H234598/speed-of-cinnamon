@@ -8794,10 +8794,14 @@ MyApplet.prototype = {
       return this._retryOrphanedMonitors();
     }
     let monitor = this.externalApiEnvMonitor;
+    let clearReference = () => {
+      this._clearExternalApiEnvMonitorReference(monitor);
+    };
     let cancelSucceeded = this._externalApiEnvMonitorCancelSucceeded === true;
     if (!cancelSucceeded) {
       if (!this._disconnectTrackedSignalsForTarget(monitor)) {
         this._trackOrphanedMonitor(monitor, false);
+        clearReference();
         return false;
       }
       try {
@@ -8810,16 +8814,19 @@ MyApplet.prototype = {
       } catch (err) {
         this._recordLifecycleError("monitor-cancel", err);
         this._trackOrphanedMonitor(monitor, false);
+        clearReference();
         return false;
       }
     }
     if (!cancelSucceeded || !this._untrackMonitor(monitor)) {
       this._trackOrphanedMonitor(monitor, true);
+      clearReference();
       return false;
     }
     let orphanUntracked = this._untrackOrphanedMonitor(monitor);
     if (!orphanUntracked) {
       this._trackOrphanedMonitor(monitor, true);
+      clearReference();
       return false;
     }
     if (!this._clearExternalApiEnvMonitorReference(monitor)) {
@@ -8841,6 +8848,7 @@ MyApplet.prototype = {
       this._recordLifecycleError("monitor-state", new Error("An orphaned monitor is still pending"));
       return;
     }
+    let applyTarget = this.externalApiEnvApplyTarget || "voice";
     try {
       let file = Gio.File.new_for_path(path);
       let monitor = file.monitor_file(Gio.FileMonitorFlags.NONE, null);
@@ -8856,7 +8864,7 @@ MyApplet.prototype = {
             if (!this._lifecycleAllowsWork() || this.externalApiEnvMonitor !== monitor) {
               return;
             }
-            this._applyExternalApiEnvTarget(this.externalApiEnvApplyTarget || "voice");
+            this._applyExternalApiEnvTarget(applyTarget);
           }
         }
       });
@@ -8929,7 +8937,8 @@ MyApplet.prototype = {
 
   _selectExternalApiVoiceBackend: function() {
     if (this.voiceModelActionToken) {
-      return;
+      this._setStatusPreservingRecording("error", _("Voice model operation is still running"), this.lastTranscript);
+      return false;
     }
     if (!this._commitVoiceBackendSettings(
       "openai-compatible",
