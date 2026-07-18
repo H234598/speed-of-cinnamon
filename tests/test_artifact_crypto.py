@@ -1300,6 +1300,44 @@ class ArtifactCryptoTest(unittest.TestCase):
         process.kill.assert_not_called()
         process.wait.assert_not_called()
 
+    def test_secret_tool_stop_kills_same_session_child_process_group(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import os,time; child=os.fork(); (os.setpgid(0,0) if child == 0 else print(child, flush=True)); time.sleep(30)",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+
+        def child_is_live() -> bool:
+            try:
+                state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()[0]
+            except OSError:
+                return False
+            return state not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            artifact_crypto._stop_secret_tool_process(process)
+            process.wait(timeout=2)
+            deadline = artifact_crypto.time.monotonic() + 2
+            while child_is_live() and artifact_crypto.time.monotonic() < deadline:
+                artifact_crypto.time.sleep(0.01)
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+
     def test_secret_tool_process_state_decode_errors_fail_closed(self) -> None:
         decode_error = UnicodeDecodeError("ascii", b"\xff", 0, 1, "invalid byte")
         proc_entry = mock.Mock()
@@ -1313,12 +1351,12 @@ class ArtifactCryptoTest(unittest.TestCase):
         with mock.patch.object(artifact_crypto.Path, "read_text", side_effect=decode_error):
             self.assertFalse(artifact_crypto._secret_tool_leader_is_gone_or_zombie(1234))
 
-    def test_secret_tool_process_scan_fails_closed_for_same_session_different_group(self) -> None:
+    def test_secret_tool_process_scan_reports_live_same_session_different_group(self) -> None:
         with (
             mock.patch.object(artifact_crypto.Path, "iterdir", return_value=(Path("/proc/100"),)),
             mock.patch.object(artifact_crypto.Path, "read_text", return_value="100 (child) S 1 9999 1234"),
         ):
-            self.assertIsNone(artifact_crypto._secret_tool_process_group_has_live_descendants(1234))
+            self.assertTrue(artifact_crypto._secret_tool_process_group_has_live_descendants(1234))
 
     def test_secret_tool_rejects_oversized_output(self) -> None:
         fake_proc_holder: dict[str, object] = {}
