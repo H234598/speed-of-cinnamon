@@ -254,6 +254,53 @@ class InstallLocalTest(unittest.TestCase):
             self.assertFalse((home / ".local" / "bin" / "speed-of-cinnamon").exists())
             self.assertTrue(bad_target.is_symlink())
 
+    def test_install_local_preserves_changed_target_and_recovery_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            home = tmp_path / "home"
+            home.mkdir()
+            applet_target = home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598"
+            applet_target.mkdir(parents=True)
+            (applet_target / "existing.txt").write_text("old install\n", encoding="utf-8")
+            bad_target = home / ".local" / "share" / "man" / "man1" / "speed-of-cinnamon.1"
+            bad_target.parent.mkdir(parents=True)
+            bad_target.symlink_to(tmp_path / "payload")
+            trigger = tmp_path / "race-triggered"
+            raced_target = tmp_path / "raced-applet"
+
+            real_helper = repo_root / "scripts" / "safe-local-fs-real.py"
+            shutil.copy2(repo_root / "scripts" / "safe-local-fs.py", real_helper)
+            helper = repo_root / "scripts" / "safe-local-fs.py"
+            helper.write_text(
+                "from pathlib import Path\n"
+                "import subprocess\n"
+                "import sys\n"
+                f"real_helper = Path({str(real_helper)!r})\n"
+                "result = subprocess.run([sys.executable, str(real_helper), *sys.argv[1:]], check=False)\n"
+                "if result.returncode:\n"
+                "    raise SystemExit(result.returncode)\n"
+                f"target = Path({str(applet_target)!r})\n"
+                f"trigger = Path({str(trigger)!r})\n"
+                f"raced_target = Path({str(raced_target)!r})\n"
+                "if len(sys.argv) > 4 and sys.argv[1] == 'replace' and sys.argv[2] == 'install' and '/share/speed-of-cinnamon@H234598' in sys.argv[3] and sys.argv[4] == str(target) and not trigger.exists():\n"
+                "    target.rename(raced_target)\n"
+                "    target.mkdir()\n"
+                "    trigger.write_text(str(target.stat().st_ino), encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+
+            result = self._run_install_local(repo_root, home)
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertIn("preserving install recovery workspace", result.stderr)
+            self.assertEqual(applet_target.stat().st_ino, int(trigger.read_text(encoding="utf-8")))
+            stages = list((home / ".local" / "share" / "speed-of-cinnamon").glob("install-stage-*"))
+            self.assertEqual(len(stages), 1)
+            recovery = stages[0] / "rollback" / ".applet"
+            self.assertEqual((recovery / "existing.txt").read_text(encoding="utf-8"), "old install\n")
+            self.assertTrue(bad_target.is_symlink())
+
     def test_install_local_refuses_hardlinked_man_page_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

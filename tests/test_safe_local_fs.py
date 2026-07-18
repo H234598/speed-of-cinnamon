@@ -196,6 +196,36 @@ class SafeLocalFsTest(unittest.TestCase):
             self.assertFalse(link.exists())
             self.assertTrue(target.exists())
 
+    def test_identity_reports_device_inode_and_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.txt"
+            target.write_text("safe\n", encoding="utf-8")
+
+            result = run_helper("identity", "test", str(target), "--kind", "file")
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            stat_result = target.stat()
+            self.assertEqual(
+                result.stdout.strip(),
+                f"{stat_result.st_dev}:{stat_result.st_ino}:{stat_result.st_mode}",
+            )
+
+    def test_remove_leaf_expected_identity_preserves_changed_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "target.txt"
+            target.write_text("foreign\n", encoding="utf-8")
+
+            result = run_helper(
+                "remove-leaf",
+                "test",
+                str(target),
+                "--expected-identity",
+                "0:0:0",
+            )
+
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(target.read_text(encoding="utf-8"), "foreign\n")
+
     def test_atomic_write_preserves_replaced_temp_during_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = SAFE_LOCAL_FS

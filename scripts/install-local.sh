@@ -209,6 +209,7 @@ activate_staged() {
   local kind="$3"
   local label="$4"
   local backup_path="${rollback_root}/.${label}"
+  local source_identity
 
   if [[ -L "${target}" ]]; then
     rollback_staged_items
@@ -216,10 +217,17 @@ activate_staged() {
     exit 1
   fi
 
+  if ! source_identity="$(safe_fs identity install "${source}" --kind "${kind}")"; then
+    rollback_staged_items
+    printf 'failed to inspect staged %s\n' "${label}" >&2
+    exit 1
+  fi
+
+  activated_targets+=("${target}")
+  activated_backups+=("${backup_path}")
+  activated_kinds+=("${kind}")
+  activated_identities+=("${source_identity}")
   if [[ -e "${target}" ]]; then
-    activated_targets+=("${target}")
-    activated_backups+=("${backup_path}")
-    activated_kinds+=("${kind}")
     activated_had_existing+=("1")
     if ! "${safe_fs_cmd[@]}" replace install "${target}" "${backup_path}" --src-kind "${kind}"; then
       rollback_staged_items
@@ -227,9 +235,6 @@ activate_staged() {
       exit 1
     fi
   else
-    activated_targets+=("${target}")
-    activated_backups+=("${backup_path}")
-    activated_kinds+=("${kind}")
     activated_had_existing+=("0")
   fi
 
@@ -244,6 +249,7 @@ rollback_staged_items() {
   local target
   local backup
   local kind
+  local expected_identity
   local index
 
   if [[ "${rollback_attempted}" == "1" ]]; then
@@ -255,24 +261,42 @@ rollback_staged_items() {
     target="${activated_targets[index]}"
     backup="${activated_backups[index]}"
     kind="${activated_kinds[index]}"
+    expected_identity="${activated_identities[index]}"
 
     if [[ "${activated_had_existing[index]}" == "1" ]]; then
       if [[ -e "${backup}" || -L "${backup}" ]]; then
-        if ! "${safe_fs_cmd[@]}" replace install "${backup}" "${target}" --src-kind "${kind}"; then
+        if [[ -e "${target}" || -L "${target}" ]]; then
+          if ! "${safe_fs_cmd[@]}" replace install "${backup}" "${target}" --src-kind "${kind}" \
+            --expected-dst-identity "${expected_identity}"; then
+            rollback_failed=1
+            printf 'rollback failed for %s\n' "${target}" >&2
+          fi
+        elif ! "${safe_fs_cmd[@]}" replace install "${backup}" "${target}" --src-kind "${kind}" \
+          --dst-must-not-exist; then
+          rollback_failed=1
           printf 'rollback failed for %s\n' "${target}" >&2
         fi
       elif [[ ! -e "${target}" && ! -L "${target}" ]]; then
+        rollback_failed=1
         printf 'rollback failed for %s: backup is missing\n' "${target}" >&2
       fi
     else
-      if ! "${safe_fs_cmd[@]}" remove-leaf install "${target}"; then
-        printf 'rollback failed for %s\n' "${target}" >&2
+      if [[ -e "${target}" || -L "${target}" ]]; then
+        if ! "${safe_fs_cmd[@]}" remove-leaf install "${target}" \
+          --expected-identity "${expected_identity}"; then
+          rollback_failed=1
+          printf 'rollback failed for %s\n' "${target}" >&2
+        fi
       fi
     fi
   done
 }
 
 install_workspace_cleanup() {
+  if [[ "${rollback_failed}" == "1" ]]; then
+    printf 'preserving install recovery workspace: %s\n' "${staged_workspace}" >&2
+    return 0
+  fi
   if [[ -n "${staged_workspace}" && -e "${staged_workspace}" ]]; then
     if ! safe_fs remove install "${staged_workspace}" --kind dir; then
       printf 'failed to clean install staging workspace: %s\n' "${staged_workspace}" >&2
@@ -328,8 +352,10 @@ resolve_tmp_root >/dev/null
 activated_targets=()
 activated_backups=()
 activated_kinds=()
+activated_identities=()
 activated_had_existing=()
 rollback_attempted=0
+rollback_failed=0
 install_complete=0
 staged_workspace="$(mktemp -d "${app_data}/install-stage-XXXXXX")"
 trap install_exit_cleanup EXIT

@@ -110,6 +110,23 @@ def _same_identity(left: os.stat_result | None, right: os.stat_result | None) ->
     return left is not None and right is not None and _stat_identity(left) == _stat_identity(right)
 
 
+def _identity_text(stat_result: os.stat_result) -> str:
+    return ":".join(str(value) for value in _stat_identity(stat_result))
+
+
+def _parse_identity(value: str, *, action: str) -> tuple[int, int, int]:
+    parts = value.split(":")
+    if len(parts) != 3:
+        fail(f"invalid filesystem identity during {action}: {value}")
+    try:
+        identity = (int(parts[0], 10), int(parts[1], 10), int(parts[2], 10))
+    except ValueError:
+        fail(f"invalid filesystem identity during {action}: {value}")
+    if any(part < 0 for part in identity):
+        fail(f"invalid filesystem identity during {action}: {value}")
+    return identity
+
+
 def _rename_without_replacing(
     source_name: str,
     target_name: str,
@@ -209,6 +226,23 @@ def _assert_target_unchanged(
         raise OSError(f"destination changed during {action}")
 
 
+def _assert_expected_identity(
+    parent_fd: int,
+    name: str,
+    expected_identity: str,
+    *,
+    action: str,
+    path: Path,
+) -> None:
+    current_stat = _lstat_at(parent_fd, name)
+    if expected_identity == "missing":
+        if current_stat is not None:
+            raise OSError(f"destination changed during {action}: {path}")
+        return
+    if current_stat is None or _stat_identity(current_stat) != _parse_identity(expected_identity, action=action):
+        raise OSError(f"destination changed during {action}: {path}")
+
+
 def _check_leaf(parent_fd: int, name: str, path: Path, *, action: str, kind: str, must_exist: bool) -> None:
     stat_result = _lstat_at(parent_fd, name)
     if stat_result is None:
@@ -289,7 +323,17 @@ def cmd_replace(args: argparse.Namespace) -> None:
             fail(f"source changed during {args.action}: {src}")
         if src_signature is None and not _same_identity(src_stat, source_before_replace):
             fail(f"source changed during {args.action}: {src}")
-        _assert_target_unchanged(dst_fd, dst_name, existing, action=args.action)
+        expected_dst_identity = getattr(args, "expected_dst_identity", None)
+        if expected_dst_identity is None:
+            _assert_target_unchanged(dst_fd, dst_name, existing, action=args.action)
+        else:
+            _assert_expected_identity(
+                dst_fd,
+                dst_name,
+                expected_dst_identity,
+                action=args.action,
+                path=dst,
+            )
         if args.dst_must_not_exist:
             _rename_without_replacing(
                 src_name,
@@ -517,6 +561,23 @@ def cmd_assert_file(args: argparse.Namespace) -> None:
         os.close(parent_fd)
 
 
+def cmd_identity(args: argparse.Namespace) -> None:
+    path = _validate_absolute(args.path, "path")
+    parent_fd, leaf = _open_parent(path, action=args.action)
+    if parent_fd is None:
+        fail(f"failed to open parent directory during {args.action}: {path}")
+    try:
+        _check_leaf(parent_fd, leaf, path, action=args.action, kind=args.kind, must_exist=True)
+        stat_result = _lstat_at(parent_fd, leaf)
+        if stat_result is None:
+            fail(f"path is missing during {args.action}: {path}")
+        if args.kind == "file" and stat_result.st_nlink != 1:
+            fail(f"refusing to use hardlinked file during {args.action}: {path}")
+        print(_identity_text(stat_result))
+    finally:
+        os.close(parent_fd)
+
+
 def _reject_unsafe_tree(tree: Path, label: str, *, reject_symlink_ancestors: bool = False) -> None:
     if reject_symlink_ancestors:
         _reject_symlink_ancestors(tree, label)
@@ -729,6 +790,15 @@ def cmd_remove_leaf(args: argparse.Namespace) -> None:
         stat_result = _lstat_at(parent_fd, leaf)
         if stat_result is None:
             return
+        expected_identity = getattr(args, "expected_identity", None)
+        if expected_identity is not None:
+            _assert_expected_identity(
+                parent_fd,
+                leaf,
+                expected_identity,
+                action=args.action,
+                path=path,
+            )
         mode = stat_result.st_mode
         if stat_is_dir_no_follow(mode):
             _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
@@ -778,6 +848,7 @@ def build_parser() -> argparse.ArgumentParser:
     replace.add_argument("dst")
     replace.add_argument("--src-kind", choices=("file", "dir"), required=True)
     replace.add_argument("--dst-must-not-exist", action="store_true")
+    replace.add_argument("--expected-dst-identity")
     replace.set_defaults(func=cmd_replace)
 
     write_wrapper = subparsers.add_parser("write-wrapper")
@@ -801,6 +872,12 @@ def build_parser() -> argparse.ArgumentParser:
     assert_file.add_argument("label")
     assert_file.set_defaults(func=cmd_assert_file)
 
+    identity = subparsers.add_parser("identity")
+    identity.add_argument("action")
+    identity.add_argument("path")
+    identity.add_argument("--kind", choices=("file", "dir"), required=True)
+    identity.set_defaults(func=cmd_identity)
+
     install_tree = subparsers.add_parser("install-tree")
     install_tree.add_argument("action")
     install_tree.add_argument("source")
@@ -817,6 +894,7 @@ def build_parser() -> argparse.ArgumentParser:
     remove_leaf = subparsers.add_parser("remove-leaf")
     remove_leaf.add_argument("action")
     remove_leaf.add_argument("path")
+    remove_leaf.add_argument("--expected-identity")
     remove_leaf.set_defaults(func=cmd_remove_leaf)
 
     rmdir = subparsers.add_parser("rmdir")
