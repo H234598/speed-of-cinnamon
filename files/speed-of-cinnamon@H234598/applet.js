@@ -6261,6 +6261,7 @@ MyApplet.prototype = {
         cleanupPreviewCleanupSucceeded = false;
         this._recordLifecycleError("dialog-state", new Error("Cleanup preview dialog is unavailable"));
         this._setStatusPreservingRecording("error", _("Cleanup preview could not be stopped"), this.lastTranscript);
+        this.cleanupPreviewDialogToken = null;
       } else {
         cleanupPreviewCleanupSucceeded = this._dialogClose(this.cleanupPreviewDialog, "cleanup-preview");
         if (cleanupPreviewCleanupSucceeded) {
@@ -10179,6 +10180,7 @@ MyApplet.prototype = {
       } else {
         this._setStatusPreservingRecording("error", _("Cleanup preview could not be closed"), this.lastTranscript);
       }
+      releaseDialog();
     };
     if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(this._cleanupPreviewText(payload), { x_expand: true }, "cleanup-preview"), "cleanup-preview") ||
       !this._dialogSetButtons(dialog, [
