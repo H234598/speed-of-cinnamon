@@ -5137,11 +5137,15 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Could not prepare custom duration prompt"), this.lastTranscript);
       return;
     }
-    this._spawnText(recordingPromptArgs, (output) => {
+    this._spawnText(recordingPromptArgs, (output, result) => {
       if (this.customLimitPromptToken !== promptToken || !this._lifecycleAllowsWork()) {
         return;
       }
       this.customLimitPromptToken = null;
+      if (result && result.startupFailed === true) {
+        this._setStatusPreservingRecording("error", _("Could not open custom duration prompt"), this.lastTranscript);
+        return;
+      }
       let seconds = this._parseCustomRecordingLimit(output);
       if (seconds === null) {
         return;
@@ -5249,11 +5253,15 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Could not prepare custom transcript limit prompt"), this.lastTranscript);
       return;
     }
-    this._spawnText(transcriptPromptArgs, (output) => {
+    this._spawnText(transcriptPromptArgs, (output, result) => {
       if (this.customLimitPromptToken !== promptToken || !this._lifecycleAllowsWork()) {
         return;
       }
       this.customLimitPromptToken = null;
+      if (result && result.startupFailed === true) {
+        this._setStatusPreservingRecording("error", _("Could not open custom transcript limit prompt"), this.lastTranscript);
+        return;
+      }
       let limit = this._parseCustomTranscriptLimit(output);
       if (limit === null) {
         return;
@@ -5578,11 +5586,15 @@ MyApplet.prototype = {
       this._setTextOptionStatus(_("Could not prepare Auto-Submit prompt"));
       return;
     }
-    this._spawnText(promptArgs, (output) => {
+    this._spawnText(promptArgs, (output, result) => {
       if (this.autoPastePromptToken !== promptToken || !this._lifecycleAllowsWork()) {
         return;
       }
       this.autoPastePromptToken = null;
+      if (result && result.startupFailed === true) {
+        this._setStatusPreservingRecording("error", _("Could not open Auto-Submit prompt"), this.lastTranscript);
+        return;
+      }
       this._setAutoPasteTitles(this._autoPasteTitleValues(output));
     }, { timeoutMs: 0, resourceGroup: "settings-prompt" });
   },

@@ -968,7 +968,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('Built-in marker names match known window classes/app IDs; codex matches known terminal identities and the window title. Custom strings match the full window title case-insensitively. Empty disables Auto-Submit.', source)
         self.assertIn('"--entry-text=" + current', source)
         self.assertIn('if (!this._findTrustedProgramInPath("zenity"))', source)
-        self.assertIn('this._spawnText(promptArgs, (output) => {', source)
+        self.assertIn('this._spawnText(promptArgs, (output, result) => {', source)
+        self.assertIn("result.startupFailed === true", source)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not open Auto-Submit prompt")', source)
         self.assertIn('this._setAutoPasteTitles(this._autoPasteTitleValues(output));', source)
         self.assertIn('_autoPasteTitleValues: function(value)', source)
         self.assertIn('raw.split(/[,\\n\\r]+/)', source)
@@ -4490,6 +4492,20 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.autoPastePromptToken = promptToken;", block)
         self.assertIn("this.autoPastePromptToken !== promptToken", block)
         self.assertIn("!this._lifecycleAllowsWork()", block)
+
+    def test_text_prompt_startup_failures_do_not_change_settings(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, args_name, message in [
+            ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:", "recordingPromptArgs", "Could not open custom duration prompt"),
+            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:", "transcriptPromptArgs", "Could not open custom transcript limit prompt"),
+            ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:", "promptArgs", "Could not open Auto-Submit prompt"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn(f"this._spawnText({args_name}, (output, result) => {{", block)
+            self.assertIn("if (result && result.startupFailed === true)", block)
+            self.assertIn(f'this._setStatusPreservingRecording("error", _("{message}")', block)
 
     def test_process_group_cancellation_suppresses_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
