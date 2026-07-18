@@ -653,12 +653,17 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
         if backup_created and activated and _lstat_at(parent_fd, backup_name) is not None:
             with context_suppress():
                 current = _lstat_at(parent_fd, leaf)
-                if current is not None and stat_is_dir_no_follow(current.st_mode):
+                if (
+                    current is not None
+                    and activated_stat is not None
+                    and _same_identity(current, activated_stat)
+                    and stat_is_dir_no_follow(current.st_mode)
+                ):
                     _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
                     os.fsync(parent_fd)
-                os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
-                os.fsync(parent_fd)
-                backup_created = False
+                    os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                    os.fsync(parent_fd)
+                    backup_created = False
         elif activated and not backup_created and _lstat_at(parent_fd, leaf) is not None:
             with context_suppress():
                 current = _lstat_at(parent_fd, leaf)
