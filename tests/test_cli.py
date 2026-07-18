@@ -2200,6 +2200,72 @@ class CliTest(unittest.TestCase):
         self.assertFalse(recording.exists())
         self.assertEqual(decrypted, b"encrypted audio")
 
+    def test_downgrading_socenc_recording_to_plaintext_removes_encrypted_source(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recording = Path(tmp) / "speed-of-cinnamon" / "recordings" / "recording.flac"
+            recording.parent.mkdir(parents=True)
+            args = argparse.Namespace(artifact_encryption="off")
+            env = {
+                "XDG_CACHE_HOME": tmp,
+                "XDG_STATE_HOME": tmp,
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                encrypted_recording, _mode = artifact_crypto.write_encrypted_bytes_atomically(
+                    recording,
+                    b"encrypted audio",
+                    "passphrase",
+                    kind="recording",
+                    field_name="recording audio file",
+                )
+
+                output_path, effective_mode = cli._encrypt_kept_recording_artifact(encrypted_recording, args)
+
+            plaintext = recording.read_bytes()
+            encrypted_exists = encrypted_recording.exists()
+
+        self.assertEqual(output_path, recording)
+        self.assertEqual(effective_mode, cli.ARTIFACT_ENCRYPTION_OFF)
+        self.assertEqual(plaintext, b"encrypted audio")
+        self.assertFalse(encrypted_exists)
+
+    def test_downgrading_socenc_recording_rolls_back_plaintext_on_source_cleanup_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recording = Path(tmp) / "speed-of-cinnamon" / "recordings" / "recording.flac"
+            recording.parent.mkdir(parents=True)
+            args = argparse.Namespace(artifact_encryption="off")
+            env = {
+                "XDG_CACHE_HOME": tmp,
+                "XDG_STATE_HOME": tmp,
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+            }
+            with mock.patch.dict(os.environ, env, clear=False):
+                encrypted_recording, _mode = artifact_crypto.write_encrypted_bytes_atomically(
+                    recording,
+                    b"encrypted audio",
+                    "passphrase",
+                    kind="recording",
+                    field_name="recording audio file",
+                )
+                real_remove_file = cli.remove_file
+
+                def fail_source_cleanup(path_value: str | None, **kwargs: object) -> bool:
+                    if path_value == str(encrypted_recording):
+                        return False
+                    return real_remove_file(path_value, **kwargs)
+
+                with (
+                    mock.patch.object(cli, "remove_file", side_effect=fail_source_cleanup),
+                    self.assertRaisesRegex(RuntimeError, "failed to remove encrypted recording artifact"),
+                ):
+                    cli._encrypt_kept_recording_artifact(encrypted_recording, args)
+
+            plaintext_exists = recording.exists()
+            encrypted_exists = encrypted_recording.exists()
+
+        self.assertFalse(plaintext_exists)
+        self.assertTrue(encrypted_exists)
+
     def test_encrypt_kept_recording_rolls_back_encrypted_file_when_plaintext_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recording = Path(tmp) / "speed-of-cinnamon" / "recordings" / "recording.flac"

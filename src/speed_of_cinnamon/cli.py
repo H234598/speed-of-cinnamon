@@ -2255,13 +2255,44 @@ def _raise_encrypted_artifact_rollback_failure(primary_error: RuntimeError, roll
 def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tuple[Path, str]:
     mode = _artifact_encryption_mode(args)
     if mode == ARTIFACT_ENCRYPTION_OFF:
-        if not is_encrypted_path(path):
-            encrypted_sibling = encrypted_path_for(path)
-            if encrypted_sibling.exists() or encrypted_sibling.is_symlink():
-                if not remove_file(str(encrypted_sibling), suffix=".socenc"):
+        if is_encrypted_path(path):
+            plaintext_path = _plaintext_recording_sibling_for_encrypted_path(path)
+            if plaintext_path is None:
+                raise RuntimeError(f"encrypted recording artifact has no safe plaintext sibling: {path}")
+            try:
+                payload = read_decrypted_bytes_from_file(
+                    path,
+                    kind="recording",
+                    field_name="recording audio file",
+                    require_encrypted=True,
+                )
+                plaintext_path, _effective_mode = write_encrypted_bytes_atomically(
+                    plaintext_path,
+                    payload,
+                    mode,
+                    kind="recording",
+                    field_name="recording audio file",
+                )
+            except ArtifactCryptoError as exc:
+                raise RuntimeError(str(exc)) from exc
+            if not remove_file(str(path), suffix=".socenc"):
+                try:
+                    if (plaintext_path.exists() or plaintext_path.is_symlink()) and not remove_file(
+                        str(plaintext_path), suffix=plaintext_path.suffix.lower()
+                    ):
+                        raise RuntimeError(f"failed to roll back plaintext recording artifact: {plaintext_path}")
+                except RuntimeError as cleanup_exc:
                     raise RuntimeError(
-                        f"failed to remove encrypted recording sibling after plaintext storage: {encrypted_sibling}"
-                    )
+                        f"failed to remove encrypted recording artifact after plaintext storage: {path}"
+                    ) from cleanup_exc
+                raise RuntimeError(f"failed to remove encrypted recording artifact after plaintext storage: {path}")
+            return plaintext_path, ARTIFACT_ENCRYPTION_OFF
+        encrypted_sibling = encrypted_path_for(path)
+        if encrypted_sibling.exists() or encrypted_sibling.is_symlink():
+            if not remove_file(str(encrypted_sibling), suffix=".socenc"):
+                raise RuntimeError(
+                    f"failed to remove encrypted recording sibling after plaintext storage: {encrypted_sibling}"
+                )
         return path, ARTIFACT_ENCRYPTION_OFF
     encrypted_target_existed = False
     try:
