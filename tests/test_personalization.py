@@ -91,6 +91,10 @@ class PersonalizationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "personal context is too large"):
             build_personalization_prompt("x" * (MAX_PERSONAL_CONTEXT_CHARS + 1), "PipeWire")
 
+    def test_prompt_normalizes_context_before_size_validation(self) -> None:
+        with mock.patch("speed_of_cinnamon.personalization.MAX_PERSONAL_CONTEXT_CHARS", 4):
+            self.assertEqual(build_personalization_prompt("     ", "PipeWire"), "Vocabulary:\n- PipeWire")
+
     def test_prompt_rejects_surrogate_characters(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
             build_personalization_prompt("bad\ud800text", "PipeWire")

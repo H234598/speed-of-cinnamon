@@ -132,20 +132,6 @@ def build_personalization_prompt(personal_context: str = "", vocabulary: str = "
         raise ValueError("personal context must be text")
     if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
         raise ValueError("vocabulary must be text")
-    try:
-        personal_context.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise ValueError("personal context contains invalid UTF-8") from exc
-    try:
-        vocabulary.encode("utf-8")
-    except UnicodeEncodeError as exc:
-        raise ValueError("vocabulary contains invalid UTF-8") from exc
-    if len(personal_context) > MAX_PERSONAL_CONTEXT_CHARS:
-        raise ValueError(f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} characters)")
-    if len(personal_context.encode("utf-8")) > MAX_PERSONAL_CONTEXT_CHARS:
-        raise ValueError(f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} bytes)")
-    if len(vocabulary.encode("utf-8")) > MAX_VOCABULARY_CHARS:
-        raise ValueError(f"vocabulary is too large (max {MAX_VOCABULARY_CHARS} bytes)")
     context = normalize_context(personal_context)
     terms = vocabulary_terms(vocabulary)
     sections: list[str] = []
