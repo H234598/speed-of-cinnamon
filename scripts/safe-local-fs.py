@@ -289,6 +289,7 @@ def cmd_replace(args: argparse.Namespace) -> None:
             fail(f"source changed during {args.action}: {src}")
         if src_signature is None and not _same_identity(src_stat, source_before_replace):
             fail(f"source changed during {args.action}: {src}")
+        _assert_target_unchanged(dst_fd, dst_name, existing, action=args.action)
         if args.dst_must_not_exist:
             _rename_without_replacing(
                 src_name,
@@ -632,6 +633,7 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
         finally:
             os.close(stage_fd)
         existing = _lstat_at(parent_fd, leaf)
+        _assert_target_unchanged(parent_fd, leaf, existing, action=args.action)
         if existing is not None:
             if stat_is_symlink_no_follow(existing.st_mode):
                 fail(f"refusing to follow symlink during {args.action}: {target}")

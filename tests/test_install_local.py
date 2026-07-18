@@ -370,6 +370,46 @@ class InstallLocalTest(unittest.TestCase):
             self.assertEqual((backups[0] / "payload.txt").read_text(encoding="utf-8"), "old\n")
             self.assertEqual(list(root.glob(".target.*.install")), [])
 
+    def test_safe_fs_install_tree_does_not_move_destination_changed_after_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source"
+            target = root / "target"
+            raced_target = root / "raced-target"
+            source.mkdir()
+            target.mkdir()
+            (source / "payload.txt").write_text("new\n", encoding="utf-8")
+            (target / "payload.txt").write_text("old\n", encoding="utf-8")
+            real_lstat_at = module._lstat_at
+            destination_checks = 0
+
+            def lstat_and_replace_destination(parent_fd: int, name: str) -> os.stat_result | None:
+                nonlocal destination_checks
+                result = real_lstat_at(parent_fd, name)
+                if (
+                    name == target.name
+                    and result is not None
+                    and Path(os.readlink(f"/proc/self/fd/{parent_fd}")) == root
+                ):
+                    destination_checks += 1
+                    if destination_checks == 2:
+                        target.rename(raced_target)
+                        target.mkdir()
+                        (target / "foreign.txt").write_text("foreign\n", encoding="utf-8")
+                        return real_lstat_at(parent_fd, name)
+                return result
+
+            args = module.argparse.Namespace(action="install", source=str(source), target=str(target), label="tree")
+            with mock.patch.object(module, "_lstat_at", side_effect=lstat_and_replace_destination):
+                with self.assertRaisesRegex(OSError, "destination changed"):
+                    module.cmd_install_tree(args)
+
+            self.assertEqual((source / "payload.txt").read_text(encoding="utf-8"), "new\n")
+            self.assertEqual((target / "foreign.txt").read_text(encoding="utf-8"), "foreign\n")
+            self.assertEqual((raced_target / "payload.txt").read_text(encoding="utf-8"), "old\n")
+            self.assertEqual(list(root.glob(".target.*.install")), [])
+
     def test_safe_fs_install_tree_restores_backup_when_backup_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = self._load_safe_fs_module()

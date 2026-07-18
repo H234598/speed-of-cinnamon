@@ -144,6 +144,43 @@ class SafeLocalFsTest(unittest.TestCase):
             self.assertEqual(source.read_text(encoding="utf-8"), "source\n")
             self.assertEqual(target.read_text(encoding="utf-8"), "raced\n")
 
+    def test_replace_does_not_move_destination_changed_after_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.txt"
+            target = root / "target.txt"
+            raced_target = root / "raced-target.txt"
+            source.write_text("source\n", encoding="utf-8")
+            target.write_text("old\n", encoding="utf-8")
+            real_lstat_at = SAFE_LOCAL_FS._lstat_at
+            destination_checks = 0
+
+            def lstat_and_replace_destination(parent_fd: int, name: str) -> os.stat_result | None:
+                nonlocal destination_checks
+                result = real_lstat_at(parent_fd, name)
+                if name == target.name and result is not None:
+                    destination_checks += 1
+                    if destination_checks == 2:
+                        target.rename(raced_target)
+                        target.write_text("raced\n", encoding="utf-8")
+                        return real_lstat_at(parent_fd, name)
+                return result
+
+            args = SAFE_LOCAL_FS.argparse.Namespace(
+                action="test",
+                src=str(source),
+                dst=str(target),
+                src_kind="file",
+                dst_must_not_exist=False,
+            )
+            with mock.patch.object(SAFE_LOCAL_FS, "_lstat_at", side_effect=lstat_and_replace_destination):
+                with self.assertRaisesRegex(OSError, "destination changed"):
+                    SAFE_LOCAL_FS.cmd_replace(args)
+
+            self.assertEqual(source.read_text(encoding="utf-8"), "source\n")
+            self.assertEqual(target.read_text(encoding="utf-8"), "raced\n")
+            self.assertEqual(raced_target.read_text(encoding="utf-8"), "old\n")
+
     def test_remove_leaf_unlinks_symlink_leaf_without_following_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
