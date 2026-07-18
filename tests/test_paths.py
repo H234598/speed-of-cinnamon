@@ -296,6 +296,16 @@ class PathsTest(unittest.TestCase):
                 ):
                     self.assertEqual(paths.xdg_data_home(), custom)
 
+    def test_xdg_path_preserves_path_component_whitespace(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            custom = Path(tmp) / " custom-data "
+            custom.mkdir()
+            with mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(custom)}):
+                self.assertEqual(paths.xdg_data_home(), custom)
+
+            with mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": "   "}):
+                self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
+
     def test_xdg_paths_do_not_resolve_after_symlink_check(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             custom = Path(tmp) / "custom-data"

@@ -64,9 +64,9 @@ def _xdg_path(environment_variable: str, default: Path | Callable[[], Path]) -> 
         return fallback()
     if _contains_escaped_null(value) or _contains_control_chars(value):
         return fallback()
-    normalized = (value or "").strip()
-    if not normalized:
+    if not value or not value.strip():
         return fallback()
+    normalized = value
     if len(normalized) > MAX_XDG_PATH_CHARS or _is_oversized_utf8_text(
         normalized, max_chars=MAX_XDG_PATH_CHARS
     ):
