@@ -1958,6 +1958,22 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
         proc_entries = tuple(Path("/proc").iterdir())
     except OSError:
         return None
+    try:
+        target_group_id = os.getpgid(process_group_id)
+    except ProcessLookupError:
+        target_session_id = process_group_id
+    except (OSError, OverflowError, ValueError):
+        return None
+    else:
+        if target_group_id == process_group_id:
+            try:
+                target_session_id = os.getsid(process_group_id)
+            except ProcessLookupError:
+                target_session_id = process_group_id
+            except (OSError, OverflowError, ValueError):
+                return None
+        else:
+            target_session_id = process_group_id
     scan_incomplete = False
     same_session_different_group = False
     group_live = False
@@ -1983,7 +1999,7 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
         except ValueError:
             scan_incomplete = True
             continue
-        if member_session_id != process_group_id:
+        if member_session_id != target_session_id:
             continue
         if member_group_id != process_group_id:
             if stat_fields[0] not in {"Z", "X", "x"}:

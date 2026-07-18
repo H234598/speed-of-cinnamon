@@ -3187,6 +3187,19 @@ Source #13
             self.assertIsNone(recorder_module.process_group_has_live_processes(1234))
             self.assertIsNone(recorder_module._process_group_has_recorder_session(1234))
 
+    def test_process_group_scan_reports_live_non_leader_group(self) -> None:
+        entries = (Path("/proc/4321"),)
+        with (
+            mock.patch("speed_of_cinnamon.recorder.Path.iterdir", return_value=entries),
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=4321),
+            mock.patch("speed_of_cinnamon.recorder.os.getsid", return_value=1234),
+            mock.patch(
+                "speed_of_cinnamon.recorder._recording_process_stat_fields",
+                return_value=["S", "1", "4321", "1234"],
+            ),
+        ):
+            self.assertTrue(recorder_module.process_group_has_live_processes(4321))
+
     def test_stop_process_signals_live_same_session_process_groups(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=4321),
