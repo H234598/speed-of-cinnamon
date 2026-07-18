@@ -367,6 +367,18 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(loaded.transcript, "  hello  ")
         self.assertEqual(loaded.audio_path, " /tmp/audio.wav ")
 
+    def test_state_roundtrip_preserves_unset_optional_fields(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            store.write(RecordingState())
+            loaded = store.read()
+
+        self.assertIsNone(loaded.audio_path)
+        self.assertIsNone(loaded.log_path)
+        self.assertIsNone(loaded.started_at)
+        self.assertIsNone(loaded.stopped_at)
+        self.assertIsNone(loaded.transcript_path)
+
     def test_state_roundtrip_preserves_multiline_transcript(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")

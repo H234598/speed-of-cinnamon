@@ -214,10 +214,10 @@ class StateStore:
         *,
         field_name: str,
         allow_null: bool = False,
-    ) -> str:
+    ) -> str | None:
         if value is None:
             if allow_null:
-                return ""
+                return None
             raise ValueError(f"state {field_name} must be text")
         if isinstance(value, bool) or not isinstance(value, str):
             raise ValueError(f"state {field_name} must be text")

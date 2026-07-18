@@ -4667,8 +4667,8 @@ def finalize_recording(
             cleanup_log_path = str(log_path) if log_path else None
             recording_encryption = ARTIFACT_ENCRYPTION_OFF
             if not keep_recording_artifacts:
-                done_audio_path = None
-                done_log_path = None
+                done_audio_path = ""
+                done_log_path = ""
             elif done_audio_path:
                 plaintext_done_audio_path = Path(done_audio_path)
                 encrypted_audio_path, recording_encryption = _encrypt_kept_recording_artifact(plaintext_done_audio_path, args)
@@ -4677,7 +4677,7 @@ def finalize_recording(
                 if encrypted_audio_path != plaintext_done_audio_path:
                     done_audio_path = str(encrypted_audio_path)
                 if artifact_encryption != ARTIFACT_ENCRYPTION_OFF:
-                    done_log_path = None
+                    done_log_path = ""
             state.audio_path = done_audio_path
             state.log_path = done_log_path
             silent_transcript_state_cleared = True
@@ -4840,8 +4840,8 @@ def finalize_recording(
         if not keep_recording_artifacts:
             cleanup_audio_path = audio_path
             cleanup_log_path = str(log_path) if log_path else None
-            done_audio_path = None
-            done_log_path = None
+            done_audio_path = ""
+            done_log_path = ""
         elif trimmed_audio_path is not None:
             stabilized_audio_path = _stabilize_recording_artifact_path(
                 trimmed_audio_path,
@@ -4883,7 +4883,7 @@ def finalize_recording(
                     remove_original_after_state_update = False
             if artifact_encryption != ARTIFACT_ENCRYPTION_OFF and done_log_path:
                 cleanup_log_path = done_log_path
-                done_log_path = None
+                done_log_path = ""
 
         cleanup_failures: list[tuple[str, str, str]] = []
         if cleanup_audio_path is not None:
@@ -5080,6 +5080,9 @@ def finalize_recording(
                 except BaseException as cleanup_exc:
                     cleanup_error = _redact_error_for_user(str(cleanup_exc))
                     error_update["error"] = f"{error_text}; {cleanup_error}"
+                    error_update["transcript_path"] = (
+                        str(written_text_path) if isinstance(cleanup_exc, Exception) else ""
+                    )
                     exc.add_note(f"transcript cleanup failed: {cleanup_error}")
                 else:
                     error_update["transcript"] = ""
@@ -5484,8 +5487,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             store.write(
                 RecordingState(
                     status="error",
-                    audio_path=state.audio_path if (not audio_deleted or not inflight_deleted) else None,
-                    log_path=state.log_path if not log_deleted else None,
+                    audio_path=state.audio_path if (not audio_deleted or not inflight_deleted) else "",
+                    log_path=state.log_path if not log_deleted else "",
                     transcript=state.transcript,
                     transcript_path=state.transcript_path if not transcript_deleted else "",
                     inserted=state.inserted,
@@ -5514,6 +5517,9 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             store.write(
                 RecordingState(
                     status="idle",
+                    audio_path="",
+                    log_path="",
+                    transcript_path="",
                     stopped_at=now_iso(),
                     language=state.language,
                     recorder=state.recorder,
@@ -5526,6 +5532,9 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 store.write(
                     RecordingState(
                         status="error",
+                        audio_path="",
+                        log_path="",
+                        transcript_path="",
                         stopped_at=now_iso(),
                         language=state.language,
                         recorder=state.recorder,
