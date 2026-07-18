@@ -176,6 +176,41 @@ class RecorderTest(unittest.TestCase):
                 pass
             process.communicate()
 
+    def test_live_process_group_cleanup_kills_same_session_child_process_group(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import os,time; child=os.fork(); (os.setpgid(0,0) if child == 0 else print(child, flush=True)); time.sleep(30)",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+
+        def child_is_live() -> bool:
+            stat_fields = recorder_module._recording_process_stat_fields(child_pid)
+            return stat_fields is not None and stat_fields[0] not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            self.assertFalse(recorder_module._terminate_recorder_process_group(process))
+            process.wait(timeout=2)
+            deadline = time.monotonic() + 2
+            while child_is_live() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+
     def test_timeout_cleanup_does_not_claim_unknown_session_group_complete(self) -> None:
         process = mock.Mock()
         process.pid = 1234

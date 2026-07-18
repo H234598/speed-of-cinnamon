@@ -401,6 +401,7 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
     try:
         process_finished = process.poll() is not None
         group_live = process_group_has_live_processes(process.pid)
+        session_group_ids = _same_session_process_group_ids(process.pid)
         cleanup_incomplete = group_live is None
         if process_finished:
             if group_live is False:
@@ -419,15 +420,25 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
         return False
     try:
         os.killpg(process.pid, signal.SIGKILL)
-        return not cleanup_incomplete
     except ProcessLookupError:
-        return not cleanup_incomplete
+        pass
     except (OSError, ValueError):
         try:
             process.kill()
         except (OSError, ValueError):
             return False
         return False
+    if session_group_ids is not None:
+        for process_group_id in sorted(session_group_ids):
+            if process_group_id == process.pid:
+                continue
+            try:
+                os.killpg(process_group_id, signal.SIGKILL)
+            except ProcessLookupError:
+                continue
+            except (OSError, ValueError):
+                return False
+    return not cleanup_incomplete
 
 
 def _reap_timed_out_recorder_process(process: subprocess.Popen[bytes]) -> bool:
