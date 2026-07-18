@@ -8588,21 +8588,63 @@ MyApplet.prototype = {
     if (text === "") {
       return;
     }
-    let migrated = text;
-    if (migrated.indexOf("OPENAI_COMPATIBLE_URL=" + LEGACY_OPENAI_COMPATIBLE_URL) >= 0) {
-      migrated = migrated.replace("OPENAI_COMPATIBLE_URL=" + LEGACY_OPENAI_COMPATIBLE_URL, "OPENAI_COMPATIBLE_URL=" + DEFAULT_OPENAI_COMPATIBLE_URL);
+    let newline = text.indexOf("\r\n") >= 0 ? "\r\n" : "\n";
+    let lines = text.split(/\r?\n/);
+    let assignmentPattern = /^(\s*)(OPENAI_COMPATIBLE_URL|OPENAI_COMPATIBLE_STT_MODEL|OPENAI_COMPATIBLE_MODEL|OPENAI_COMPATIBLE_TEXT_MODEL)\s*=/;
+    let assignments = [];
+    for (let index = 0; index < lines.length; index++) {
+      let match = assignmentPattern.exec(lines[index]);
+      if (!match) {
+        continue;
+      }
+      let parsedLine = this._parseExternalApiEnvText(lines[index]);
+      assignments.push({
+        index: index,
+        key: match[2],
+        indent: match[1],
+        value: typeof parsedLine[match[2]] === "string" ? parsedLine[match[2]] : "",
+      });
     }
-    if (migrated.indexOf("OPENAI_COMPATIBLE_STT_MODEL=") < 0 && migrated.indexOf("OPENAI_COMPATIBLE_MODEL=") >= 0) {
-      migrated = migrated.replace("OPENAI_COMPATIBLE_MODEL=", "OPENAI_COMPATIBLE_STT_MODEL=");
+    for (let assignment of assignments) {
+      if (assignment.key === "OPENAI_COMPATIBLE_URL" && assignment.value === LEGACY_OPENAI_COMPATIBLE_URL) {
+        lines[assignment.index] = assignment.indent + assignment.key + "=" + this._externalApiEnvEncodeValue(DEFAULT_OPENAI_COMPATIBLE_URL);
+      }
     }
-    if (migrated.indexOf("OPENAI_COMPATIBLE_STT_MODEL=") < 0) {
-      let suffix = migrated.lastIndexOf("\n") === migrated.length - 1 ? "" : "\n";
-      migrated += suffix + "OPENAI_COMPATIBLE_STT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleModel, DEFAULT_OPENAI_COMPATIBLE_MODEL) + "\n";
+    let hasSttModel = assignments.some((assignment) => assignment.key === "OPENAI_COMPATIBLE_STT_MODEL");
+    let legacyModelAssignments = assignments.filter((assignment) => assignment.key === "OPENAI_COMPATIBLE_MODEL");
+    if (!hasSttModel && legacyModelAssignments.length > 0) {
+      for (let assignment of legacyModelAssignments) {
+        lines[assignment.index] = lines[assignment.index].replace(
+          /^(\s*)OPENAI_COMPATIBLE_MODEL(\s*=)/,
+          "$1OPENAI_COMPATIBLE_STT_MODEL$2"
+        );
+      }
+      hasSttModel = true;
     }
-    if (migrated.indexOf("OPENAI_COMPATIBLE_TEXT_MODEL=") < 0) {
-      let suffix = migrated.lastIndexOf("\n") === migrated.length - 1 ? "" : "\n";
-      migrated += suffix + "OPENAI_COMPATIBLE_TEXT_MODEL=" + this._externalApiEnvValue(this.openaiCompatibleTextModel, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL) + "\n";
+    let appendAssignment = (key, value) => {
+      let assignment = key + "=" + this._externalApiEnvEncodeValue(value);
+      if (lines.length > 0 && lines[lines.length - 1] === "") {
+        lines[lines.length - 1] = assignment;
+      } else {
+        lines.push(assignment);
+      }
+      lines.push("");
+    };
+    if (!hasSttModel) {
+      let model = this._coerceCliTextArg(
+        this._externalApiEnvValue(this.openaiCompatibleModel, DEFAULT_OPENAI_COMPATIBLE_MODEL),
+        "openai-compatible model"
+      ).trim();
+      appendAssignment("OPENAI_COMPATIBLE_STT_MODEL", model);
     }
+    if (!assignments.some((assignment) => assignment.key === "OPENAI_COMPATIBLE_TEXT_MODEL")) {
+      let textModel = this._coerceCliTextArg(
+        this._externalApiEnvValue(this.openaiCompatibleTextModel, DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL),
+        "openai-compatible text model"
+      ).trim();
+      appendAssignment("OPENAI_COMPATIBLE_TEXT_MODEL", textModel);
+    }
+    let migrated = lines.join(newline);
     let legacyApiKey = this._coerceCliTextArg(
       this.openaiCompatibleApiKey || "",
       "openai-compatible API key"
@@ -8612,8 +8654,15 @@ MyApplet.prototype = {
       ? migratedValues.OPENAI_COMPATIBLE_API_KEY.trim()
       : "";
     if (legacyApiKey !== "" && migratedApiKey === "") {
-      let suffix = migrated.lastIndexOf("\n") === migrated.length - 1 ? "" : "\n";
-      migrated += suffix + "OPENAI_COMPATIBLE_API_KEY=" + legacyApiKey + "\n";
+      let migratedLines = migrated.split(newline);
+      let assignment = "OPENAI_COMPATIBLE_API_KEY=" + this._externalApiEnvEncodeValue(legacyApiKey);
+      if (migratedLines.length > 0 && migratedLines[migratedLines.length - 1] === "") {
+        migratedLines[migratedLines.length - 1] = assignment;
+      } else {
+        migratedLines.push(assignment);
+      }
+      migratedLines.push("");
+      migrated = migratedLines.join(newline);
     }
     if (migrated !== text) {
       try {
@@ -8683,11 +8732,25 @@ MyApplet.prototype = {
       textModel: this.openaiCompatibleTextModel,
       apiKey: this.externalApiEnvApiKey,
     };
+    let previousPersistedApiKey = this.openaiCompatibleApiKey;
     let settingsWrites = [
       ["openai-compatible-url", config.url, previousConfig.url],
       ["openai-compatible-model", config.model, previousConfig.model],
       ["openai-compatible-text-model", config.textModel, previousConfig.textModel],
     ];
+    let rollbackSettings = (writes) => {
+      for (let index = writes.length - 1; index >= 0; index--) {
+        let setting = writes[index];
+        try {
+          let rollbackResult = this.settings.setValue(setting[0], setting[2]);
+          if (rollbackResult === false) {
+            throw new Error("External API setting rollback failed");
+          }
+        } catch (rollbackErr) {
+          this._safeLogError(rollbackErr);
+        }
+      }
+    };
     let attemptedWrites = [];
     try {
       for (let setting of settingsWrites) {
@@ -8698,17 +8761,7 @@ MyApplet.prototype = {
         }
       }
     } catch (err) {
-      for (let index = attemptedWrites.length - 1; index >= 0; index--) {
-        let setting = attemptedWrites[index];
-        try {
-          let rollbackResult = this.settings.setValue(setting[0], setting[2]);
-          if (rollbackResult === false) {
-            throw new Error("External API setting rollback failed");
-          }
-        } catch (rollbackErr) {
-          this._safeLogError(rollbackErr);
-        }
-      }
+      rollbackSettings(attemptedWrites);
       this._safeLogError(err);
       this._setStatusPreservingRecording("error", _("External API settings could not be saved"), this.lastTranscript);
       return false;
@@ -8717,7 +8770,16 @@ MyApplet.prototype = {
     this.openaiCompatibleModel = config.model;
     this.openaiCompatibleTextModel = config.textModel;
     this.externalApiEnvApiKey = config.apiKey;
-    this._clearPersistedOpenAiCompatibleApiKey();
+    if (!this._clearPersistedOpenAiCompatibleApiKey()) {
+      rollbackSettings(settingsWrites);
+      this.openaiCompatibleUrl = previousConfig.url;
+      this.openaiCompatibleModel = previousConfig.model;
+      this.openaiCompatibleTextModel = previousConfig.textModel;
+      this.externalApiEnvApiKey = previousConfig.apiKey;
+      this.openaiCompatibleApiKey = previousPersistedApiKey;
+      this._setStatusPreservingRecording("error", _("External API settings could not be finalized"), this.lastTranscript);
+      return false;
+    }
     if (showStatus) {
       this._setStatusPreservingRecording("ready", _("External API config loaded: ") + (this.openaiCompatibleModel || _("not configured")), this.lastTranscript);
     }
