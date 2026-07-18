@@ -703,6 +703,8 @@ def configured_status(
 
 
 def report(settings: Mapping[str, object] | None = None, applet: bool = False) -> dict[str, object]:
+    if settings is not None and not isinstance(settings, Mapping):
+        raise RuntimeError("settings must be an object")
     applet = _coerce_required_bool(applet, field_name="applet")
     checks = run_checks()
     by_name = {check.name: check for check in checks}

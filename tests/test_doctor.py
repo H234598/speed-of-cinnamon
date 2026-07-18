@@ -1166,6 +1166,12 @@ class DoctorTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "applet must be a boolean"):
             doctor.report({}, applet="yes")  # type: ignore[arg-type]
 
+    def test_report_rejects_non_mapping_settings(self) -> None:
+        for settings in (["bad"], "bad", 1):
+            with self.subTest(settings=settings):
+                with self.assertRaisesRegex(RuntimeError, "settings must be an object"):
+                    doctor.report(settings)  # type: ignore[arg-type]
+
     def test_configured_status_rejects_non_boolean_applet(self) -> None:
         with self.assertRaisesRegex(RuntimeError, "applet must be a boolean"):
             doctor.configured_status({}, {}, {"cinnamon": True}, applet="yes")  # type: ignore[arg-type]
