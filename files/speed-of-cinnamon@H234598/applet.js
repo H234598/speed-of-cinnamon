@@ -10994,6 +10994,11 @@ MyApplet.prototype = {
       if (!this._unregisterCancellable(cancellableToken)) {
         this._trackOrphanedCancellable(cancellableToken, false);
       }
+      let orphanCancellableCleanupSucceeded = this._retryOrphanedCancellables();
+      if (!orphanCancellableCleanupSucceeded ||
+          !Array.isArray(this._orphanedCancellables) || this._orphanedCancellables.length > 0) {
+        this._scheduleProcessCleanupRetry();
+      }
       let processTerminated = this._terminateProcess(process);
       if (processTerminated) {
         if (!this._unregisterProcess(processToken)) {

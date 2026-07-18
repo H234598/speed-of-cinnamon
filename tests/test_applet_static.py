@@ -2196,6 +2196,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("cancellable = new Gio.Cancellable();", block)
         self.assertIn("cancellableToken = this._registerCancellable(cancellable);", block)
         self.assertIn("if (!this._unregisterProcess(processToken))", block)
+        self.assertIn("let orphanCancellableCleanupSucceeded = this._retryOrphanedCancellables();", block)
+        self.assertIn("this._orphanedCancellables.length > 0", block)
         self.assertIn("this._terminateProcess(process);", block)
         self.assertIn("this._trackOrphanedProcess(process, generation, options.resourceGroup);", block)
         self.assertIn("let processTerminated = this._terminateProcess(process);", block)
