@@ -9862,6 +9862,13 @@ MyApplet.prototype = {
     let windowToken = {};
     this.transcriptWindowToken = windowToken;
     let isCurrentWindow = () => this.transcriptWindowToken === windowToken && this._lifecycleAllowsWork();
+    let setTranscriptWindowError = (message) => {
+      if (this.status === "recording" || this.status === "recorded" || (this.status === "processing" && this.isCommandRunning)) {
+        this._setStatusPreservingRecording("error", message, this.lastTranscript);
+        return;
+      }
+      this._setStatus("error", message, this.lastTranscript);
+    };
     let releaseWindow = () => {
       if (this.transcriptWindowToken !== windowToken) {
         return false;
@@ -9906,7 +9913,7 @@ MyApplet.prototype = {
         }
         releaseWindow();
         if (result && result.error && !result.cancelled) {
-          this._setStatus("error", _("Transcript list window closed unexpectedly"), this.lastTranscript);
+          setTranscriptWindowError(_("Transcript list window closed unexpectedly"));
         }
       });
       if (!handle) {
@@ -9928,7 +9935,7 @@ MyApplet.prototype = {
       }
       releaseWindow();
       let safeError = this._sanitizeErrorMessage(String(err && err.message ? err.message : err));
-      this._setStatus("error", _("Could not open transcript list: ") + safeError, this.lastTranscript);
+      setTranscriptWindowError(_("Could not open transcript list: ") + safeError);
       this._notify(_("Could not open transcript list"), safeError, true);
     }
   },
