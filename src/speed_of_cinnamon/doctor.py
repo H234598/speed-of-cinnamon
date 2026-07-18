@@ -595,10 +595,16 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
         )
         if command_detail:
             return {"ok": False, "value": "command", "detail": command_detail}
+        if not command_template:
+            return {
+                "ok": False,
+                "value": "command",
+                "detail": "custom post-process command is empty",
+            }
         return {
             "ok": True,
             "value": "command",
-            "detail": "custom command configured" if command_template else "text polishing disabled",
+            "detail": "custom command configured",
         }
     if backend == "ollama":
         if not ollama_model:

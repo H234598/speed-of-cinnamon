@@ -879,6 +879,15 @@ class DoctorTest(unittest.TestCase):
         )
         self.assertTrue(status["ok"])
 
+    def test_postprocessor_command_requires_command_template(self) -> None:
+        for backend in ("command", "custom"):
+            with self.subTest(backend=backend):
+                status = doctor._postprocessor_status({"post-process-backend": backend})
+
+                self.assertFalse(status["ok"])
+                self.assertEqual(status["value"], "command")
+                self.assertEqual(status["detail"], "custom post-process command is empty")
+
     def test_postprocessor_rejects_command_chain_oversized_template(self) -> None:
         status = doctor._postprocessor_status(
             {
