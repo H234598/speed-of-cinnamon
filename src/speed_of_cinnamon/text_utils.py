@@ -37,6 +37,8 @@ def sanitize_special_chars(text: str) -> str:
     for char in text:
         if char not in "\n\t" and (char < " " or unicodedata.category(char).startswith("C")):
             continue
+        if unicodedata.category(char).startswith("M"):
+            continue
         if char in SAFE_CHAR_MAP:
             parts.append(SAFE_CHAR_MAP[char])
             continue
