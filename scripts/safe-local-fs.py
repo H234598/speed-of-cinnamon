@@ -233,14 +233,15 @@ def _assert_expected_identity(
     *,
     action: str,
     path: Path,
+    role: str = "destination",
 ) -> None:
     current_stat = _lstat_at(parent_fd, name)
     if expected_identity == "missing":
         if current_stat is not None:
-            raise OSError(f"destination changed during {action}: {path}")
+            raise OSError(f"{role} changed during {action}: {path}")
         return
     if current_stat is None or _stat_identity(current_stat) != _parse_identity(expected_identity, action=action):
-        raise OSError(f"destination changed during {action}: {path}")
+        raise OSError(f"{role} changed during {action}: {path}")
 
 
 def _check_leaf(parent_fd: int, name: str, path: Path, *, action: str, kind: str, must_exist: bool) -> None:
@@ -323,6 +324,16 @@ def cmd_replace(args: argparse.Namespace) -> None:
             fail(f"source changed during {args.action}: {src}")
         if src_signature is None and not _same_identity(src_stat, source_before_replace):
             fail(f"source changed during {args.action}: {src}")
+        expected_src_identity = getattr(args, "expected_src_identity", None)
+        if expected_src_identity is not None:
+            _assert_expected_identity(
+                src_fd,
+                src_name,
+                expected_src_identity,
+                action=args.action,
+                path=src,
+                role="source",
+            )
         expected_dst_identity = getattr(args, "expected_dst_identity", None)
         if expected_dst_identity is None:
             _assert_target_unchanged(dst_fd, dst_name, existing, action=args.action)
@@ -875,6 +886,7 @@ def build_parser() -> argparse.ArgumentParser:
     replace.add_argument("dst")
     replace.add_argument("--src-kind", choices=("file", "dir"), required=True)
     replace.add_argument("--dst-must-not-exist", action="store_true")
+    replace.add_argument("--expected-src-identity")
     replace.add_argument("--expected-dst-identity")
     replace.set_defaults(func=cmd_replace)
 

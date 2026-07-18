@@ -301,6 +301,47 @@ class InstallLocalTest(unittest.TestCase):
             self.assertEqual((recovery / "existing.txt").read_text(encoding="utf-8"), "old install\n")
             self.assertTrue(bad_target.is_symlink())
 
+    def test_install_local_rejects_target_changed_before_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            home = tmp_path / "home"
+            home.mkdir()
+            applet_target = home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598"
+            applet_target.mkdir(parents=True)
+            (applet_target / "old.txt").write_text("old\n", encoding="utf-8")
+            trigger = tmp_path / "race-triggered"
+            raced_target = tmp_path / "raced-applet"
+
+            real_helper = repo_root / "scripts" / "safe-local-fs-real.py"
+            shutil.copy2(repo_root / "scripts" / "safe-local-fs.py", real_helper)
+            helper = repo_root / "scripts" / "safe-local-fs.py"
+            helper.write_text(
+                "from pathlib import Path\n"
+                "import subprocess\n"
+                "import sys\n"
+                f"real_helper = Path({str(real_helper)!r})\n"
+                "result = subprocess.run([sys.executable, str(real_helper), *sys.argv[1:]], check=False)\n"
+                "if result.returncode:\n"
+                "    raise SystemExit(result.returncode)\n"
+                f"target = Path({str(applet_target)!r})\n"
+                f"trigger = Path({str(trigger)!r})\n"
+                f"raced_target = Path({str(raced_target)!r})\n"
+                "if len(sys.argv) > 3 and sys.argv[1] == 'identity' and sys.argv[3] == str(target) and not trigger.exists():\n"
+                "    target.rename(raced_target)\n"
+                "    target.mkdir()\n"
+                "    (target / 'foreign.txt').write_text('foreign\\n', encoding='utf-8')\n"
+                "    trigger.write_text('1', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+
+            result = self._run_install_local(repo_root, home)
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertTrue(trigger.exists())
+            self.assertEqual((applet_target / "foreign.txt").read_text(encoding="utf-8"), "foreign\n")
+            self.assertEqual((raced_target / "old.txt").read_text(encoding="utf-8"), "old\n")
+
     def test_install_local_refuses_hardlinked_man_page_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

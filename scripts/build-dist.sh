@@ -236,6 +236,10 @@ def _file_identity(path_stat):
     return (path_stat.st_dev, path_stat.st_ino)
 
 
+def _safe_fs_identity(path_stat):
+    return f"{path_stat.st_dev}:{path_stat.st_ino}:{path_stat.st_mode}"
+
+
 def _new_backup_path(final_path):
     for _ in range(16):
         backup_path = f"{final_path}.{os.getpid()}.{secrets.token_hex(8)}.backup"
@@ -255,6 +259,19 @@ def _rollback(entries):
                         raise RuntimeError(
                             f"refusing to restore changed backup during rollback: {entry['backup']}"
                         )
+                    current_stat = _lstat(entry["final"])
+                    restore_guard = []
+                    if current_stat is None:
+                        restore_guard.append("--dst-must-not-exist")
+                    elif (
+                        entry["activation_attempted"]
+                        and _file_identity(current_stat) == entry["staging_identity"]
+                    ):
+                        restore_guard.extend(("--expected-dst-identity", _safe_fs_identity(current_stat)))
+                    else:
+                        raise RuntimeError(
+                            f"refusing to restore changed final during rollback: {entry['final']}"
+                        )
                     _run_safe_fs(
                         "replace",
                         "build-dist",
@@ -262,6 +279,9 @@ def _rollback(entries):
                         entry["final"],
                         "--src-kind",
                         "file",
+                        "--expected-src-identity",
+                        _safe_fs_identity(backup_stat),
+                        *restore_guard,
                     )
                     entry["backup_created"] = False
                 else:
@@ -277,7 +297,13 @@ def _rollback(entries):
                         raise RuntimeError(
                             f"refusing to remove changed final file during rollback: {entry['final']}"
                         )
-                    _run_safe_fs("remove-leaf", "build-dist", entry["final"])
+                    _run_safe_fs(
+                        "remove-leaf",
+                        "build-dist",
+                        entry["final"],
+                        "--expected-identity",
+                        _safe_fs_identity(current),
+                    )
         except BaseException as rollback_exc:
             rollback_errors.append(f"{entry['final']}: {rollback_exc}")
     return rollback_errors
@@ -344,6 +370,7 @@ try:
                     "activation_attempted": False,
                     "final": final,
                     "final_identity": _file_identity(final_stat) if final_stat is not None else None,
+                    "final_fs_identity": _safe_fs_identity(final_stat) if final_stat is not None else None,
                     "had_existing": final_stat is not None,
                     "staging": staging,
                     "staging_identity": _file_identity(staging_stat),
@@ -362,6 +389,8 @@ try:
                         "--src-kind",
                         "file",
                         "--dst-must-not-exist",
+                        "--expected-src-identity",
+                        entry["final_fs_identity"],
                     )
                     entry["backup_created"] = True
             for entry in entries:

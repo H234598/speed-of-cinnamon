@@ -210,6 +210,7 @@ activate_staged() {
   local label="$4"
   local backup_path="${rollback_root}/.${label}"
   local source_identity
+  local existing_identity="missing"
 
   if [[ -L "${target}" ]]; then
     rollback_staged_items
@@ -223,13 +224,23 @@ activate_staged() {
     exit 1
   fi
 
+  if [[ -e "${target}" ]]; then
+    if ! existing_identity="$(safe_fs identity install "${target}" --kind "${kind}")"; then
+      rollback_staged_items
+      printf 'failed to inspect existing %s\n' "${label}" >&2
+      exit 1
+    fi
+  fi
+
   activated_targets+=("${target}")
   activated_backups+=("${backup_path}")
   activated_kinds+=("${kind}")
   activated_identities+=("${source_identity}")
-  if [[ -e "${target}" ]]; then
+  activated_original_identities+=("${existing_identity}")
+  if [[ "${existing_identity}" != "missing" ]]; then
     activated_had_existing+=("1")
-    if ! "${safe_fs_cmd[@]}" replace install "${target}" "${backup_path}" --src-kind "${kind}"; then
+    if ! "${safe_fs_cmd[@]}" replace install "${target}" "${backup_path}" --src-kind "${kind}" \
+      --expected-src-identity "${existing_identity}"; then
       rollback_staged_items
       printf 'failed to back up existing %s\n' "${label}" >&2
       exit 1
@@ -238,7 +249,8 @@ activate_staged() {
     activated_had_existing+=("0")
   fi
 
-  if ! "${safe_fs_cmd[@]}" replace install "${source}" "${target}" --src-kind "${kind}"; then
+  if ! "${safe_fs_cmd[@]}" replace install "${source}" "${target}" --src-kind "${kind}" \
+    --expected-dst-identity missing; then
     rollback_staged_items
     printf 'failed to activate staged %s\n' "${label}" >&2
     exit 1
@@ -250,6 +262,7 @@ rollback_staged_items() {
   local backup
   local kind
   local expected_identity
+  local original_identity
   local index
 
   if [[ "${rollback_attempted}" == "1" ]]; then
@@ -262,17 +275,19 @@ rollback_staged_items() {
     backup="${activated_backups[index]}"
     kind="${activated_kinds[index]}"
     expected_identity="${activated_identities[index]}"
+    original_identity="${activated_original_identities[index]}"
 
     if [[ "${activated_had_existing[index]}" == "1" ]]; then
       if [[ -e "${backup}" || -L "${backup}" ]]; then
         if [[ -e "${target}" || -L "${target}" ]]; then
           if ! "${safe_fs_cmd[@]}" replace install "${backup}" "${target}" --src-kind "${kind}" \
+            --expected-src-identity "${original_identity}" \
             --expected-dst-identity "${expected_identity}"; then
             rollback_failed=1
             printf 'rollback failed for %s\n' "${target}" >&2
           fi
         elif ! "${safe_fs_cmd[@]}" replace install "${backup}" "${target}" --src-kind "${kind}" \
-          --dst-must-not-exist; then
+          --expected-src-identity "${original_identity}" --dst-must-not-exist; then
           rollback_failed=1
           printf 'rollback failed for %s\n' "${target}" >&2
         fi
@@ -353,6 +368,7 @@ activated_targets=()
 activated_backups=()
 activated_kinds=()
 activated_identities=()
+activated_original_identities=()
 activated_had_existing=()
 rollback_attempted=0
 rollback_failed=0
