@@ -245,6 +245,12 @@ _IGNORABLE_MATCH_RANGES = _unicode_category_char_class_ranges(_MATCH_IGNORE_CATE
 _IGNORABLE_CHAR_CLASS = f"[{_IGNORABLE_MATCH_RANGES}]"
 _IGNORABLE_BOUNDARY_CLASS = f"[\\w{_IGNORABLE_MATCH_RANGES}]"
 _IGNORABLE_GAP_PATTERN = rf"{_IGNORABLE_CHAR_CLASS}*"
+_CJK_CONTEXT_CLASS = (
+    r"[\u1100-\u11FF\u2E80-\u2FFF\u3040-\u30FF\u3130-\u318F"
+    r"\u31A0-\u31BF\u3400-\u4DBF\u4E00-\u9FFF\uA960-\uA97F"
+    r"\uAC00-\uD7FF\uF900-\uFAFF\uFE30-\uFE4F\uFF65-\uFF9F"
+    r"\U00020000-\U0002FA1F]"
+)
 _CONFUSABLE_FOLD = str.maketrans({
     "а": "a",
     "А": "a",
@@ -324,6 +330,14 @@ def _profanity_pattern_has_candidate(pattern: str, candidate_chars: set[str]) ->
     return bool(normalized) and all(char in candidate_chars for char in normalized)
 
 
+def _profanity_left_boundary(boundary_class: str) -> str:
+    return rf"(?:(?<!{boundary_class})|(?<={_CJK_CONTEXT_CLASS}))"
+
+
+def _profanity_right_boundary(boundary_class: str) -> str:
+    return rf"(?:(?!{boundary_class})|(?={_CJK_CONTEXT_CLASS}))"
+
+
 def _build_tolerant_profanity_pattern(
     pattern: str,
     *,
@@ -336,7 +350,10 @@ def _build_tolerant_profanity_pattern(
     source = gap_pattern.join(_confusable_regex_source(char) for char in normalized)
     if _profanity_pattern_needs_literal_variant(pattern):
         source = rf"(?:{re.escape(pattern)}|{source})"
-    return rf"(?<!{boundary_class}){gap_pattern}{source}{gap_pattern}(?!{boundary_class})"
+    return (
+        rf"{_profanity_left_boundary(boundary_class)}{gap_pattern}"
+        rf"{source}{gap_pattern}{_profanity_right_boundary(boundary_class)}"
+    )
 
 
 def _build_tolerant_trusted_profanity_pattern(
@@ -360,7 +377,10 @@ def _build_tolerant_trusted_profanity_pattern(
         source += gap_pattern + r"e?"
     elif suffix:
         source += gap_pattern + _literal_source(suffix)
-    return rf"(?<!{boundary_class}){gap_pattern}{source}{gap_pattern}(?!{boundary_class})"
+    return (
+        rf"{_profanity_left_boundary(boundary_class)}{gap_pattern}"
+        rf"{source}{gap_pattern}{_profanity_right_boundary(boundary_class)}"
+    )
 
 
 def _safe_profanity_pattern_source(
@@ -377,20 +397,29 @@ def _safe_profanity_pattern_source(
         )
         if tolerant_trusted_pattern:
             return tolerant_trusted_pattern
-        return rf"(?<!{boundary_class}){gap_pattern}(?:{pattern}){gap_pattern}(?!{boundary_class})"
+        return (
+            rf"{_profanity_left_boundary(boundary_class)}{gap_pattern}"
+            rf"(?:{pattern}){gap_pattern}{_profanity_right_boundary(boundary_class)}"
+        )
     return _build_tolerant_profanity_pattern(pattern, boundary_class=boundary_class, gap_pattern=gap_pattern)
 
 
 def _safe_compact_profanity_pattern_source(pattern: str) -> str:
     if pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in pattern):
-        return rf"(?<!\w)(?:{pattern})(?!\w)"
+        return (
+            rf"{_profanity_left_boundary(_IGNORABLE_BOUNDARY_CLASS)}"
+            rf"(?:{pattern}){_profanity_right_boundary(_IGNORABLE_BOUNDARY_CLASS)}"
+        )
     normalized = _normalize_profanity_pattern(pattern)
     if not normalized:
         return ""
     source = "".join(_confusable_regex_source(char) for char in normalized)
     if _profanity_pattern_needs_literal_variant(pattern):
         source = rf"(?:{re.escape(pattern)}|{source})"
-    return rf"(?<!\w){source}(?!\w)"
+    return (
+        rf"{_profanity_left_boundary(_IGNORABLE_BOUNDARY_CLASS)}"
+        rf"{source}{_profanity_right_boundary(_IGNORABLE_BOUNDARY_CLASS)}"
+    )
 
 
 PROFANITY_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = tuple(

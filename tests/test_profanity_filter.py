@@ -60,6 +60,16 @@ class ProfanityFilterTest(unittest.TestCase):
         self.assertEqual(compiled[0][0].sub(compiled[0][1], "fu\u0441\u043a"), "frog")
         self.assertEqual(compiled[1][0].sub(compiled[1][1], "\u0430\u0455s"), "donkey")
 
+    def test_compile_profanity_replacements_matches_cjk_adjacent_text(self) -> None:
+        text = "我fuck你"
+        compiled = compile_profanity_replacements((("fuck", "frog"),), text=text)
+
+        softened = text
+        for pattern, replacement in compiled:
+            softened = pattern.sub(replacement, softened)
+
+        self.assertEqual(softened, "我frog你")
+
     def test_compile_profanity_replacements_uses_compact_ascii_patterns(self) -> None:
         compiled = compile_profanity_replacements((("fuck", "frog"), ("f.*k", "rainbow")), text="fuck f.*k")
 
