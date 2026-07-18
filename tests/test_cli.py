@@ -12647,7 +12647,7 @@ class CliTest(unittest.TestCase):
         self,
         mocked_alive: mock.Mock,
     ) -> None:
-        for command_name in ("stop", "cancel", "toggle"):
+        for command_name in ("start", "stop", "cancel", "toggle"):
             with tempfile.TemporaryDirectory() as tmp:
                 state_file = Path(tmp) / "state.json"
                 store = StateStore(state_file)
@@ -12661,7 +12661,9 @@ class CliTest(unittest.TestCase):
                 args = self._build_finalize_args(insert_method="none")
                 args.state_file = str(state_file)
                 with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}):
-                    if command_name == "stop":
+                    if command_name == "start":
+                        result = cli.command_start(args)
+                    elif command_name == "stop":
                         result = cli.command_stop(args)
                     elif command_name == "cancel":
                         result = cli.command_cancel(args)

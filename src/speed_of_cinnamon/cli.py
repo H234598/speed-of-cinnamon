@@ -3986,7 +3986,13 @@ def _command_start_locked(
             state_path=store.path,
             require_recordings_dir=False,
         )
-        if _recording_process_verified_active(current):
+        try:
+            recording_active = _recording_process_verified_active(current)
+        except RuntimeError as exc:
+            error_text = f"{exc}; recording state preserved"
+            store.update(status="recording", error=error_text, inserted=False)
+            return {"status": "recording", "message": error_text, "error": error_text}
+        if recording_active:
             return {
                 "status": "recording",
                 "message": "already recording",
