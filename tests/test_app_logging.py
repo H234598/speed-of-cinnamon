@@ -335,6 +335,40 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(len(rotated.read_text(encoding="utf-8").splitlines()), 1)
             self.assertEqual(len(active.read_text(encoding="utf-8").splitlines()), 1)
 
+    def test_file_handler_switches_to_new_daily_path_after_midnight(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            first_day = date(2026, 6, 1)
+            next_day = date(2026, 6, 2)
+            active = log_dir / f"speed-of-cinnamon-{first_day.isoformat()}.log"
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            first_record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "first", (), None)
+            next_record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "next", (), None)
+
+            class FirstDay(date):
+                @classmethod
+                def today(cls) -> date:
+                    return first_day
+
+            class NextDay(date):
+                @classmethod
+                def today(cls) -> date:
+                    return next_day
+
+            with mock.patch.object(app_logging, "date", FirstDay):
+                handler.emit(first_record)
+            with mock.patch.object(app_logging, "date", NextDay):
+                handler.emit(next_record)
+            handler.close()
+
+            first_lines = (log_dir / f"speed-of-cinnamon-{first_day.isoformat()}.log").read_text(encoding="utf-8").splitlines()
+            next_lines = (log_dir / f"speed-of-cinnamon-{next_day.isoformat()}.log").read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(first_lines), 1)
+            self.assertIn('"event":"first"', first_lines[0])
+            self.assertEqual(len(next_lines), 1)
+            self.assertIn('"event":"next"', next_lines[0])
+
     def test_file_handler_does_not_scan_total_limit_on_every_emit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

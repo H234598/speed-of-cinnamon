@@ -182,6 +182,11 @@ class SizeCappedJsonFileHandler(logging.Handler):
         if now < self._retry_until:
             return
         try:
+            daily_path = _active_log_path(self.base_dir)
+            if self.path != daily_path:
+                self.close()
+                self.path = daily_path
+                self._next_maintenance_at = 0.0
             line = self.format(record) + "\n"
             encoded = line.encode("utf-8")
             if len(encoded) > MAX_DAILY_LOG_BYTES:
