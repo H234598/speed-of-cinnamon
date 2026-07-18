@@ -3697,6 +3697,10 @@ def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState)
     )
     if audio_path is None:
         return set()
+    if _is_encrypted_recording_artifact(audio_path):
+        audio_path = _plaintext_recording_sibling_for_encrypted_path(audio_path)
+        if audio_path is None:
+            return set()
     if audio_path.suffix.lower() in {".wav", ".flac"}:
         transcript_path = transcript_dir() / f"{audio_path.stem}.txt"
         in_flight_paths.add(transcript_path)

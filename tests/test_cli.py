@@ -5574,6 +5574,25 @@ class CliTest(unittest.TestCase):
         self.assertNotIn(str(encrypted_audio), result["planned_paths"])
         self.assertIn(str(encrypted_audio), result["skipped_active_paths"])
 
+    def test_finalizing_encrypted_audio_protects_transcript_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            encrypted_audio = recordings / "active.flac.socenc"
+            state_file = tmp_path / "speed-of-cinnamon" / "state.json"
+            state = RecordingState(status="finalizing", audio_path=str(encrypted_audio))
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(cli, "_is_finalization_lock_active", return_value=True),
+            ):
+                active_paths = cli._finalizing_inflight_artifact_paths(state_file, state)
+
+            transcript = tmp_path / "speed-of-cinnamon" / "transcripts" / "active.txt"
+            self.assertIn(transcript, active_paths)
+            self.assertIn(artifact_crypto.encrypted_path_for(transcript), active_paths)
+
     def test_cleanup_defaults_to_keeping_twenty_recording_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
