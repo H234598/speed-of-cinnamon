@@ -4326,6 +4326,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("releaseWindow();", block)
         self.assertIn('this._recordLifecycleError("transcript-window", error);', block)
         self.assertIn('_("Could not prepare transcript list window")', block)
+        self.assertIn('this._setStatus("done", message, this.lastTranscript);', block)
+        self.assertIn('this._setStatus("error", _("Transcript list window closed unexpectedly"), this.lastTranscript);', block)
 
     def test_busy_backend_actions_prepare_arguments_before_setting_busy_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

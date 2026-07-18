@@ -9876,14 +9876,14 @@ MyApplet.prototype = {
       releaseWindow();
       this._recordLifecycleError("transcript-window", error);
       let message = _("Could not prepare transcript list window");
-      this._setStatusPreservingRecording("error", message, this.lastTranscript);
+      this._setStatus("error", message, this.lastTranscript);
       this._notify(_("Could not open transcript list"), message, true);
       return;
     }
     if (!zenity) {
       releaseWindow();
       let message = _("Install zenity to show the transcript list without writing a plaintext file.");
-      this._setStatusPreservingRecording("error", message, this.lastTranscript);
+      this._setStatus("error", message, this.lastTranscript);
       this._notify(_("Speed of Cinnamon"), message, true);
       return;
     }
@@ -9906,7 +9906,7 @@ MyApplet.prototype = {
         }
         releaseWindow();
         if (result && result.error && !result.cancelled) {
-          this._setStatusPreservingRecording("error", _("Transcript list window closed unexpectedly"), this.lastTranscript);
+          this._setStatus("error", _("Transcript list window closed unexpectedly"), this.lastTranscript);
         }
       });
       if (!handle) {
@@ -9921,14 +9921,14 @@ MyApplet.prototype = {
           false
         );
       }
-      this._setStatusPreservingRecording("done", message, this.lastTranscript);
+      this._setStatus("done", message, this.lastTranscript);
     } catch (err) {
       if (!isCurrentWindow()) {
         return;
       }
       releaseWindow();
       let safeError = this._sanitizeErrorMessage(String(err && err.message ? err.message : err));
-      this._setStatusPreservingRecording("error", _("Could not open transcript list: ") + safeError, this.lastTranscript);
+      this._setStatus("error", _("Could not open transcript list: ") + safeError, this.lastTranscript);
       this._notify(_("Could not open transcript list"), safeError, true);
     }
   },
