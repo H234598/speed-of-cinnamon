@@ -73,7 +73,12 @@ def _xdg_path(environment_variable: str, default: Path | Callable[[], Path]) -> 
         return fallback()
     try:
         candidate = Path(normalized).expanduser()
+        candidate_text = str(candidate)
     except (OSError, RuntimeError):
+        return fallback()
+    if len(candidate_text) > MAX_XDG_PATH_CHARS or _is_oversized_utf8_text(
+        candidate_text, max_chars=MAX_XDG_PATH_CHARS
+    ):
         return fallback()
     if not candidate.is_absolute():
         return fallback()

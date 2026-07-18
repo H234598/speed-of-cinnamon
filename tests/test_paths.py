@@ -346,6 +346,16 @@ class PathsTest(unittest.TestCase):
             ):
                 self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
 
+    def test_xdg_path_rejects_oversized_value_after_home_expansion(self) -> None:
+        oversized_home = "/" + ("a" * paths.MAX_XDG_PATH_CHARS)
+
+        with mock.patch.dict(
+            paths.os.environ,
+            {"HOME": oversized_home, "XDG_CACHE_HOME": "~"},
+            clear=False,
+        ):
+            self.assertEqual(paths._xdg_path("XDG_CACHE_HOME", Path("/safe/fallback")), Path("/safe/fallback"))
+
     def test_xdg_paths_reject_unencodable_roots(self) -> None:
         with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
             with mock.patch("speed_of_cinnamon.paths.os.environ.__getitem__", return_value="/tmp/root\ud800"):
