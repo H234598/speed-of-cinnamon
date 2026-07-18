@@ -1300,6 +1300,22 @@ class ArtifactCryptoTest(unittest.TestCase):
         process.kill.assert_not_called()
         process.wait.assert_not_called()
 
+    def test_secret_tool_stop_fails_closed_when_pid_identity_changes(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.returncode = None
+        process._soc_process_identity = "owner-identity"
+
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._output_process_identity_is_current", return_value=False),
+            mock.patch("speed_of_cinnamon.artifact_crypto.os.killpg") as mocked_killpg,
+        ):
+            artifact_crypto._stop_secret_tool_process(process)
+
+        mocked_killpg.assert_not_called()
+        process.kill.assert_not_called()
+        process.wait.assert_not_called()
+
     def test_secret_tool_stop_kills_same_session_child_process_group(self) -> None:
         process = subprocess.Popen(
             [

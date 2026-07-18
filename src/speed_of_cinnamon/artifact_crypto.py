@@ -16,7 +16,9 @@ from pathlib import Path
 from typing import Any
 
 from .output import (
+    _clipboard_lock_identity_for_pid,
     _kill_output_process_tree,
+    _output_process_identity_is_current,
     _process_tree_descendant_identities,
     _wait_for_output_process_tree_stop,
 )
@@ -1318,6 +1320,8 @@ def _wait_for_secret_tool_process_groups_stop(process_group_id: int, timeout_sec
 
 
 def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
+    if not _output_process_identity_is_current(proc):
+        return
     poll = getattr(proc, "poll", None)
     if callable(poll):
         try:
@@ -1338,7 +1342,11 @@ def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
             raise ValueError("invalid secret-tool process pid")
         process_tree = _process_tree_descendant_identities(pid)
         if process_tree is not None:
+            if not _output_process_identity_is_current(proc):
+                return
             _kill_output_process_tree(process_tree)
+        if not _output_process_identity_is_current(proc):
+            return
         session_group_ids = _secret_tool_same_session_process_group_ids(pid)
         try:
             os.killpg(pid, signal.SIGKILL)
@@ -1348,6 +1356,8 @@ def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
             for process_group_id in sorted(session_group_ids):
                 if process_group_id == pid:
                     continue
+                if not _output_process_identity_is_current(proc):
+                    return
                 try:
                     os.killpg(process_group_id, signal.SIGKILL)
                 except ProcessLookupError:
@@ -1443,6 +1453,9 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
                 env=env,
                 start_new_session=True,
             )
+            proc_pid = getattr(proc, "pid", None)
+            if isinstance(proc_pid, int) and not isinstance(proc_pid, bool) and proc_pid > 0:
+                setattr(proc, "_soc_process_identity", _clipboard_lock_identity_for_pid(proc_pid) or "")
         except (OSError, ValueError) as exc:
             raise ArtifactCryptoError("Secret Service keyring helper could not be started") from exc
         deadline = time.monotonic() + _SECRET_TOOL_TIMEOUT_SECONDS
