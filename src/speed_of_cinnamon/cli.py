@@ -6348,12 +6348,12 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
         max_chars=_settings_json_path_limit(args.input),
     )
     payload = read_export(path)
-    with _locked_alarm_store() as store_path:
-        save_alarm_store(payload["alarms"], store_path)
     include_settings = _coerce_bool(
         getattr(args, "confirm_plaintext_settings_output", False),
         field_name="confirm_plaintext_settings_output",
     )
+    with _locked_alarm_store() as store_path:
+        save_alarm_store(payload["alarms"], store_path)
     result: dict[str, object] = {
         "status": "done",
         "message": "settings imported",

@@ -4150,6 +4150,31 @@ class CliTest(unittest.TestCase):
         mocked_save.assert_called_once_with(mocked_read.return_value["alarms"], locked_path)
         self.assertEqual(result["status"], "done")
 
+    @mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs")
+    @mock.patch("speed_of_cinnamon.cli.read_export")
+    @mock.patch("speed_of_cinnamon.cli.save_alarm_store")
+    @mock.patch("speed_of_cinnamon.cli._locked_alarm_store")
+    def test_settings_import_validates_confirmation_before_persisting(
+        self,
+        mocked_lock: mock.Mock,
+        mocked_save: mock.Mock,
+        mocked_read: mock.Mock,
+        mocked_ensure_dirs: mock.Mock,
+    ) -> None:
+        mocked_read.return_value = {
+            "version": 1,
+            "settings": {},
+            "alarms": {"alarms": [], "last_checked_at": ""},
+        }
+
+        with self.assertRaisesRegex(RuntimeError, "confirm_plaintext_settings_output must be a boolean"):
+            cli.command_settings_import(
+                argparse.Namespace(input="/tmp/settings.json", confirm_plaintext_settings_output="yes")
+            )
+
+        mocked_lock.assert_not_called()
+        mocked_save.assert_not_called()
+
     def test_settings_export_import_supports_home_tilde_paths(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             home = Path(tmp) / "home"
