@@ -4636,6 +4636,44 @@ class ModelsTest(unittest.TestCase):
                 with self.assertRaisesRegex(models.ModelError, "failed to remove model backup"):
                     models.download_model("backup-cleanup-fails", force=True)
 
+    def test_download_model_recovers_backup_cleanup_failure(self) -> None:
+        old_data = b"old model"
+        new_data = b"new model"
+        spec = models.ModelSpec(
+            name="backup-cleanup-recovered",
+            filename="ggml-backup-cleanup-recovered.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(new_data).hexdigest(),
+            description="backup cleanup recovery",
+        )
+        real_os_unlink = os.unlink
+
+        def unlink_backup_once(target: str, *args: object, **kwargs: object) -> None:
+            if str(target).endswith(".backup"):
+                raise OSError("cleanup failed")
+            dir_fd = kwargs.get("dir_fd")
+            if isinstance(dir_fd, int):
+                real_os_unlink(target, dir_fd=dir_fd)
+                return
+            real_os_unlink(target)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(new_data)),
+            mock.patch("speed_of_cinnamon.models.os.unlink", side_effect=unlink_backup_once),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(old_data)
+
+            payload = models.download_model(spec.name, force=True)
+            self.assertEqual(payload["status"], "done")
+            self.assertEqual(path.read_bytes(), new_data)
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.backup")), [])
+            self.assertEqual(list(path.parent.glob(f".{path.name}.*.backup.*.orphan")), [])
+
     def test_remove_model_waits_for_download_transaction(self) -> None:
         old_data = b"old model"
         new_data = b"new model"

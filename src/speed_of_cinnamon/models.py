@@ -2520,7 +2520,18 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
         try:
             _remove_model_backup_path(backup_path, expected_stat=backup_path_stat)
         except (OSError, ModelError) as cleanup_exc:
-            raise ModelError(f"failed to remove model backup after successful download: {backup_path}") from cleanup_exc
+            orphan_path = backup_path.with_name(f"{backup_path.name}.{secrets.token_hex(8)}.orphan")
+            try:
+                _replace_model_sibling_path(
+                    backup_path,
+                    orphan_path,
+                    root,
+                    field_name="model backup orphan path",
+                    expected_source_stat=backup_path_stat,
+                )
+                _remove_model_backup_path(orphan_path, expected_stat=backup_path_stat)
+            except (OSError, ModelError):
+                raise ModelError(f"failed to remove model backup after successful download: {backup_path}") from cleanup_exc
     return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {model.name}"}
 
 
