@@ -7596,7 +7596,7 @@ MyApplet.prototype = {
       }
       let sourceName;
       try {
-        sourceName = this._coerceCliTextArg(source.name, "input source");
+        sourceName = this._coerceCliTextArg(source.name, "input device");
       } catch (err) {
         this._safeLogError(err);
         continue;

@@ -1786,7 +1786,7 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _selectInputSource:", start)
         block = source[start:end]
         self.assertIn('typeof source.name === "string"', block)
-        self.assertIn('sourceName = this._coerceCliTextArg(source.name, "input source");', block)
+        self.assertIn('sourceName = this._coerceCliTextArg(source.name, "input device");', block)
         self.assertIn('typeof source.description === "string"', block)
         self.assertIn("let label = description || sourceName;", block)
         select_start = source.index("_selectInputSource: function(name, label)")
