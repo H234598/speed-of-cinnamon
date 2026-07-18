@@ -15,6 +15,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from .output import (
+    _kill_output_process_tree,
+    _process_tree_descendant_identities,
+    _wait_for_output_process_tree_stop,
+)
 from .paths import APP_ID, APP_NAME, config_dir
 from .path_safety import (
     assert_fd_is_regular_private_file,
@@ -1303,6 +1308,15 @@ def _secret_tool_leader_is_gone_or_zombie(process_id: int) -> bool:
     return process_state in {"Z", "X", "x"}
 
 
+def _wait_for_secret_tool_process_groups_stop(process_group_id: int, timeout_seconds: float = 1.0) -> None:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        descendants = _secret_tool_process_group_has_live_descendants(process_group_id)
+        if descendants is False or time.monotonic() >= deadline:
+            return
+        time.sleep(0.01)
+
+
 def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
     poll = getattr(proc, "poll", None)
     if callable(poll):
@@ -1317,12 +1331,19 @@ def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
                 return
             if descendants is not True or not _secret_tool_leader_is_gone_or_zombie(proc.pid):
                 return
+    process_tree: dict[int, str] | None = None
     try:
         pid = proc.pid
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             raise ValueError("invalid secret-tool process pid")
+        process_tree = _process_tree_descendant_identities(pid)
+        if process_tree is not None:
+            _kill_output_process_tree(process_tree)
         session_group_ids = _secret_tool_same_session_process_group_ids(pid)
-        os.killpg(pid, signal.SIGKILL)
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
         if session_group_ids is not None:
             for process_group_id in sorted(session_group_ids):
                 if process_group_id == pid:
@@ -1334,6 +1355,11 @@ def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
     except BaseException:
         with suppress(BaseException):
             proc.kill()
+    with suppress(BaseException):
+        if process_tree is not None:
+            _wait_for_output_process_tree_stop(process_tree)
+    with suppress(BaseException):
+        _wait_for_secret_tool_process_groups_stop(proc.pid)
     with suppress(BaseException):
         proc.wait(timeout=1)
 

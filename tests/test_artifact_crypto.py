@@ -1338,6 +1338,79 @@ class ArtifactCryptoTest(unittest.TestCase):
                 process.kill()
             process.communicate()
 
+    def test_secret_tool_stop_kills_child_group_after_leader_exit(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import os,time; child=os.fork(); (os.setpgid(0,0) if child == 0 else print(child, flush=True)); "
+                "(time.sleep(30) if child == 0 else None)",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+        process.wait()
+
+        def child_is_live() -> bool:
+            try:
+                state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()[0]
+            except OSError:
+                return False
+            return state not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            artifact_crypto._stop_secret_tool_process(process)
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+
+    def test_secret_tool_stop_kills_child_that_created_new_session(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import os,time; read_fd,write_fd=os.pipe(); child=os.fork(); "
+                "(os.close(read_fd), os.setsid(), os.write(write_fd, str(os.getpid()).encode()), "
+                "os.close(write_fd), time.sleep(30)) if child == 0 else "
+                "(os.close(write_fd), print(os.read(read_fd, 32).decode(), flush=True), "
+                "os.close(read_fd), time.sleep(30))",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+
+        def child_is_live() -> bool:
+            try:
+                state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()[0]
+            except OSError:
+                return False
+            return state not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            artifact_crypto._stop_secret_tool_process(process)
+            process.wait(timeout=2)
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+
     def test_secret_tool_process_state_decode_errors_fail_closed(self) -> None:
         decode_error = UnicodeDecodeError("ascii", b"\xff", 0, 1, "invalid byte")
         proc_entry = mock.Mock()
