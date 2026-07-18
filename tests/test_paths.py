@@ -346,6 +346,15 @@ class PathsTest(unittest.TestCase):
             ):
                 self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
 
+    def test_xdg_paths_reject_oversized_components(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            custom = Path(tmp) / ("x" * (paths.MAX_PATH_COMPONENT_BYTES + 1))
+            with (
+                mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")),
+                mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(custom)}),
+            ):
+                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+
     def test_xdg_path_rejects_oversized_value_after_home_expansion(self) -> None:
         oversized_home = "/" + ("a" * paths.MAX_XDG_PATH_CHARS)
 

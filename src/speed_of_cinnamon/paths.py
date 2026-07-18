@@ -17,6 +17,7 @@ APP_ID = "speed-of-cinnamon"
 APP_NAME = "Speed of Cinnamon"
 APPLET_UUID = "speed-of-cinnamon@H234598"
 MAX_XDG_PATH_CHARS = 4_096
+MAX_PATH_COMPONENT_BYTES = 255
 _MAX_XDG_DERIVED_SUFFIX = f"/{APP_ID}/settings-export.json"
 
 
@@ -50,6 +51,16 @@ def _is_oversized_utf8_text(value: str, *, max_chars: int) -> bool:
         return True
 
 
+def _has_oversized_path_component(path: Path) -> bool:
+    try:
+        return any(
+            len(component.encode("utf-8")) > MAX_PATH_COMPONENT_BYTES
+            for component in path.parts[1:]
+        )
+    except UnicodeEncodeError:
+        return True
+
+
 def _xdg_path(environment_variable: str, default: Path | Callable[[], Path]) -> Path:
     if isinstance(environment_variable, bool) or not isinstance(environment_variable, str):
         raise RuntimeError("environment variable name must be text")
@@ -77,8 +88,10 @@ def _xdg_path(environment_variable: str, default: Path | Callable[[], Path]) -> 
         candidate_text = str(candidate)
     except (OSError, RuntimeError):
         return fallback()
-    if len(candidate_text) > MAX_XDG_PATH_CHARS or _is_oversized_utf8_text(
-        candidate_text, max_chars=MAX_XDG_PATH_CHARS
+    if (
+        len(candidate_text) > MAX_XDG_PATH_CHARS
+        or _is_oversized_utf8_text(candidate_text, max_chars=MAX_XDG_PATH_CHARS)
+        or _has_oversized_path_component(candidate)
     ):
         return fallback()
     if len(candidate_text) + len(_MAX_XDG_DERIVED_SUFFIX) > MAX_XDG_PATH_CHARS or _is_oversized_utf8_text(
@@ -106,6 +119,7 @@ def _private_runtime_temp_root() -> Path:
             or _contains_control_chars(temp_root_text)
             or len(temp_root_text) > MAX_XDG_PATH_CHARS
             or _is_oversized_utf8_text(temp_root_text, max_chars=MAX_XDG_PATH_CHARS)
+            or _has_oversized_path_component(temp_root)
         ):
             raise RuntimeError("temporary directory is invalid")
         assert_safe_path_components(temp_root, field_name="temporary directory")
@@ -176,6 +190,7 @@ def _safe_home_path(*parts: str) -> Path:
             or not candidate_text
             or len(candidate_text) > MAX_XDG_PATH_CHARS
             or _is_oversized_utf8_text(candidate_text, max_chars=MAX_XDG_PATH_CHARS)
+            or _has_oversized_path_component(candidate)
             or _contains_escaped_null(candidate_text)
             or _contains_control_chars(candidate_text)
         ):
