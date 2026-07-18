@@ -3466,6 +3466,7 @@ MyApplet.prototype = {
     this.cancelPendingWhileCommandRunning = false;
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
+    this.autoRelistenPendingLanguage = "";
     this.autoRelistenManualStopRequested = false;
     this.autoRelistenSequence = 0;
     this.autoInsertFingerprint = "";
@@ -4561,6 +4562,7 @@ MyApplet.prototype = {
     if (hadInsertToken && this.autoRelistenPending) {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
+      this.autoRelistenPendingLanguage = "";
       this.autoRelistenManualStopRequested = true;
     }
     return cancellationSucceeded;
@@ -4585,6 +4587,7 @@ MyApplet.prototype = {
     }
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
+    this.autoRelistenPendingLanguage = "";
     this.autoRelistenManualStopRequested = false;
     this.terminalWorkflowRunning = false;
     this.terminalWorkflowToken = null;
@@ -4661,7 +4664,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-orphaned-tooltip", () => this._retryOrphanedTooltip());
   },
 
-  _baseArgs: function(command) {
+  _baseArgs: function(command, languageOverride) {
     let safeInputDevice = this._coerceCliTextArgOrFallback(this.inputDevice, "input device", "");
     let safeTranscriberCommand = this._coerceCliTextArgOrFallback(this.transcriberCommand, "transcriber command", "");
     let safePostProcessCommand = this._coerceCliTextArgOrFallback(this.postProcessCommand, "post-process command", "");
@@ -4675,6 +4678,7 @@ MyApplet.prototype = {
     let safePersonalContext = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.personalContext), "personal context", "");
     let safeVocabulary = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.vocabulary), "vocabulary", "");
     let safeRecorder = this._normalizeRecorder(this.recorder);
+    let safeLanguage = this._normalizeLanguage(languageOverride, this._currentLanguage());
     let safeTranscriber = TRANSCRIBER_METHODS.indexOf(String(this.transcriber || "")) >= 0
       ? String(this.transcriber)
       : "auto";
@@ -4698,7 +4702,7 @@ MyApplet.prototype = {
       this._cliCommand(),
       command,
       "--json",
-      "--language", String(this._currentLanguage()),
+      "--language", safeLanguage,
       "--max-seconds", String(this._normalizeRecordingLimit(this.maxSeconds)),
       "--recorder", safeRecorder,
       "--transcriber", safeTranscriber,
@@ -5984,6 +5988,7 @@ MyApplet.prototype = {
         this.autoRelistenManualStopRequested = true;
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
+        this.autoRelistenPendingLanguage = "";
         this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);
       }
       return;
@@ -6010,6 +6015,7 @@ MyApplet.prototype = {
     this.autoTranscribeRecordingKey = "";
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
+    this.autoRelistenPendingLanguage = "";
     this.autoRelistenManualStopRequested = manualRelistenStopRequested;
     this.autoInsertFingerprint = "";
     this.autoInsertFingerprints = [];
@@ -6141,6 +6147,7 @@ MyApplet.prototype = {
       }
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
+      this.autoRelistenPendingLanguage = "";
       this.autoRelistenManualStopRequested = true;
       this._setStatus("ready", _("Auto Relisten cancelled"), this.lastTranscript);
       return;
@@ -6150,6 +6157,7 @@ MyApplet.prototype = {
       this.cancelPendingWhileCommandRunning = true;
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
+      this.autoRelistenPendingLanguage = "";
       this.autoRelistenManualStopRequested = true;
       this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);
       return;
@@ -6169,6 +6177,7 @@ MyApplet.prototype = {
     this.cancelPendingWhileCommandRunning = false;
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
+    this.autoRelistenPendingLanguage = "";
     this.autoRelistenManualStopRequested = true;
     this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
     this._spawnJson(cancelArgs, (payload) => {
@@ -13761,6 +13770,7 @@ MyApplet.prototype = {
       releaseFingerprint();
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
+      this.autoRelistenPendingLanguage = "";
       this.autoRelistenManualStopRequested = true;
       return;
     }
@@ -13772,13 +13782,26 @@ MyApplet.prototype = {
     if (this.autoRelistenManualStopRequested) {
       return;
     }
-    if (this.autoRelistenPending || !this.autoRelisten || !this.notificationSessionActive) {
+    let payloadLanguage = payload && typeof payload.language === "string"
+      ? payload.language.trim().toLowerCase()
+      : "";
+    if (LANGUAGE_CODES.indexOf(payloadLanguage) < 0) {
+      payloadLanguage = "";
+    }
+    if (this.autoRelistenPending) {
+      if (payloadLanguage !== "") {
+        this.autoRelistenPendingLanguage = payloadLanguage;
+      }
+      return;
+    }
+    if (!this.autoRelisten || !this.notificationSessionActive) {
       return;
     }
     let marker = this._payloadStringMarker(payload, ["audio_path", "audio", "transcript_path", "stopped_at", "started_at"], "done");
     this.autoRelistenSequence += 1;
     this.autoRelistenPending = true;
     this.autoRelistenPendingToken = String(this.autoRelistenSequence) + ":done:" + marker;
+    this.autoRelistenPendingLanguage = payloadLanguage;
   },
 
   _finishPendingRelisten: function() {
@@ -13794,11 +13817,13 @@ MyApplet.prototype = {
     } else if (shouldRelisten) {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
+      this.autoRelistenPendingLanguage = "";
       this.autoRelistenManualStopRequested = false;
       this.notificationSessionActive = previousNotificationSessionActive;
     } else {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
+      this.autoRelistenPendingLanguage = "";
       this.autoRelistenManualStopRequested = false;
     }
     return relistenStarted;
@@ -14131,17 +14156,22 @@ MyApplet.prototype = {
     if (!this.autoRelisten) {
       return false;
     }
-    if (!this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
+    let relistenLanguage = this._normalizeLanguage(this.autoRelistenPendingLanguage, this._currentLanguage());
+    let voiceModelCompatible = this.autoRelistenPendingLanguage
+      ? this._ensureVoiceModelCompatibleForLanguage(relistenLanguage, true, _("relisten language"))
+      : this._ensureVoiceModelCompatibleWithCurrentLanguage(true);
+    if (!voiceModelCompatible) {
       return false;
     }
     let startArgs;
     try {
-      startArgs = this._baseArgs("start");
+      startArgs = this._baseArgs("start", relistenLanguage);
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatus("error", _("Could not prepare relisten command: ") + safeError, this.lastTranscript);
       return false;
     }
+    this.autoRelistenPendingLanguage = "";
     this.autoTranscribeRecordingKey = "";
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
@@ -14159,6 +14189,7 @@ MyApplet.prototype = {
         if (payload.error) {
           this.autoRelistenPending = false;
           this.autoRelistenPendingToken = "";
+          this.autoRelistenPendingLanguage = "";
           this._applyPayloadSafely(payload, undefined, true);
           return;
         }
@@ -14166,6 +14197,7 @@ MyApplet.prototype = {
         if (nextStatus === "recording" || nextStatus === "recorded") {
           this.autoRelistenPending = false;
           this.autoRelistenPendingToken = "";
+          this.autoRelistenPendingLanguage = "";
         }
         this._applyPayloadSafely(payload);
       } catch (error) {
@@ -14175,6 +14207,7 @@ MyApplet.prototype = {
         this.isCommandRunning = false;
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
+        this.autoRelistenPendingLanguage = "";
         this._recordLifecycleError("recording-relisten", error);
         this._setStatus("error", _("Could not start next recording"), this.lastTranscript);
       }
