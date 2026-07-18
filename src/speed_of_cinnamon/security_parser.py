@@ -718,8 +718,32 @@ def _placeholder_for_sensitive_label(label: str) -> str:
     return "[redacted token]"
 
 
+def _apply_pattern_around_redaction_placeholders(
+    text: str,
+    pattern: re.Pattern[str],
+    replacement: str | Callable[[re.Match[str]], str | None],
+) -> tuple[str, int]:
+    pieces: list[str] = []
+    cursor = 0
+    redactions = 0
+    for placeholder_match in _REDACTION_PLACEHOLDER_RE.finditer(text):
+        segment, count = _sub_with_normalized_projection(
+            text[cursor:placeholder_match.start()],
+            pattern,
+            replacement,
+        )
+        pieces.append(segment)
+        pieces.append(placeholder_match.group(0))
+        redactions += count
+        cursor = placeholder_match.end()
+    segment, count = _sub_with_normalized_projection(text[cursor:], pattern, replacement)
+    pieces.append(segment)
+    redactions += count
+    return "".join(pieces), redactions
+
+
 def _apply_multiline_sensitive_redaction(text: str) -> tuple[str, int]:
-    return _sub_with_normalized_projection(
+    return _apply_pattern_around_redaction_placeholders(
         text,
         _MULTILINE_SENSITIVE_RE,
         lambda match: _placeholder_for_sensitive_label(match.group("label")),
@@ -751,33 +775,17 @@ def _apply_normalized_card_redaction(text: str) -> tuple[str, int]:
 
 
 def _apply_name_redaction(text: str) -> tuple[str, int]:
-    return _sub_with_normalized_projection(text, _NAME_RE, "[redacted name]")
+    return _apply_pattern_around_redaction_placeholders(text, _NAME_RE, "[redacted name]")
 
 
 def _apply_blacklist_around_redaction_placeholders(
     text: str, pattern: re.Pattern[str]
 ) -> tuple[str, int]:
-    pieces: list[str] = []
-    cursor = 0
-    redactions = 0
-    for placeholder_match in _REDACTION_PLACEHOLDER_RE.finditer(text):
-        segment, count = _sub_with_normalized_projection(
-            text[cursor:placeholder_match.start()],
-            pattern,
-            "[redacted blacklist item]",
-        )
-        pieces.append(segment)
-        pieces.append(placeholder_match.group(0))
-        redactions += count
-        cursor = placeholder_match.end()
-    segment, count = _sub_with_normalized_projection(
-        text[cursor:],
+    return _apply_pattern_around_redaction_placeholders(
+        text,
         pattern,
         "[redacted blacklist item]",
     )
-    pieces.append(segment)
-    redactions += count
-    return "".join(pieces), redactions
 
 
 def parse_security_directives(text: str) -> SecurityParserResult:
@@ -824,7 +832,7 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
         if pattern is _URL_CRED_RE:
             clean, count = _apply_url_credential_redaction(clean)
         else:
-            clean, count = _sub_with_normalized_projection(clean, pattern, placeholder)
+            clean, count = _apply_pattern_around_redaction_placeholders(clean, pattern, placeholder)
         if count:
             redactions += count
     clean, count = _apply_name_redaction(clean)

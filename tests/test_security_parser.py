@@ -385,6 +385,12 @@ class SecurityParserTest(unittest.TestCase):
                 self.assertEqual(count, 1)
                 self.assertNotIn(secret, sanitized)
 
+    def test_apply_security_mode_does_not_rebreak_redacted_placeholder_with_token_blacklist(self) -> None:
+        sanitized, count = apply_security_mode("The token is [redacted token]", ["token"])
+
+        self.assertEqual(sanitized, "The [redacted blacklist item] is [redacted token]")
+        self.assertEqual(count, 1)
+
     def test_apply_security_mode_masks_blacklist_items_case_insensitive(self) -> None:
         text = "Das GeHeIm hier steht. Und noch GEHEIM."
         sanitized, count = apply_security_mode(text, ["geheim"])
