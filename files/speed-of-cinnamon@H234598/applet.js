@@ -7107,6 +7107,15 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not open benchmark audio selection"), this.lastTranscript);
         return;
       }
+      if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
+        this.benchmarkFlowToken = null;
+        this._setStatus(
+          result.cancelled ? "ready" : "error",
+          result.cancelled ? _("Benchmark cancelled") : _("Could not complete benchmark audio selection"),
+          this.lastTranscript
+        );
+        return;
+      }
       let audioPath = String(output || "").trim();
       if (audioPath === "") {
         this.benchmarkFlowToken = null;
@@ -9616,6 +9625,17 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not open Ollama model selection"), this.lastTranscript);
         return;
       }
+      if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
+        if (!clearFlow()) {
+          return;
+        }
+        this._setStatus(
+          result.cancelled ? "ready" : "error",
+          result.cancelled ? _("Ollama model selection cancelled") : _("Could not complete Ollama model selection"),
+          this.lastTranscript
+        );
+        return;
+      }
       let choice = String(output || "").trim();
       if (choice === "") {
         finish(_("Ollama model selection cancelled"));
@@ -9690,6 +9710,18 @@ MyApplet.prototype = {
           return;
         }
         this._setStatus("error", _("Could not open Ollama model prompt"), this.lastTranscript);
+        return;
+      }
+      if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
+        if (!this._clearOllamaModelFlow(flowToken)) {
+          this._setStatus("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+          return;
+        }
+        this._setStatus(
+          result.cancelled ? "ready" : "error",
+          result.cancelled ? _("Ollama model installation cancelled") : _("Could not complete Ollama model prompt"),
+          this.lastTranscript
+        );
         return;
       }
       let model = String(output || "").trim();

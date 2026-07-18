@@ -3706,7 +3706,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.benchmarkFlowToken !== flowToken", select_block)
         self.assertIn('this._spawnText(audioDialogArgs, (output, result) => {', select_block)
         self.assertIn("result.startupFailed === true", select_block)
+        self.assertIn("if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge))", select_block)
         self.assertIn('this._setStatus("error", _("Could not open benchmark audio selection")', select_block)
+        self.assertLess(
+            select_block.index("if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge))"),
+            select_block.index('let audioPath = String(output || "").trim();')
+        )
         self.assertIn("this._benchmarkDownloadedModels(audioPath, flowToken);", select_block)
         self.assertIn('resourceGroup: "benchmark"', select_block)
 
@@ -4093,6 +4098,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("!this._lifecycleAllowsWork()", choose_block)
         self.assertIn('this._spawnText(choiceArgs, (output, result) => {', choose_block)
         self.assertIn("result.startupFailed === true", choose_block)
+        self.assertIn("if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge))", choose_block)
+        self.assertLess(
+            choose_block.index("if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge))"),
+            choose_block.index('let choice = String(output || "").trim();')
+        )
         self.assertIn('this._setStatus("error", _("Could not open Ollama model selection")', choose_block)
         self.assertIn("this._promptInstallOllamaTextModel(flowToken);", choose_block)
 
@@ -4103,6 +4113,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("!this._lifecycleAllowsWork()", install_block)
         self.assertIn('this._spawnText(promptArgs, (output, result) => {', install_block)
         self.assertIn("result.startupFailed === true", install_block)
+        self.assertIn("if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge))", install_block)
+        self.assertLess(
+            install_block.index("if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge))"),
+            install_block.index('let model = String(output || "").trim();')
+        )
         self.assertIn('this._setStatus("error", _("Could not open Ollama model prompt")', install_block)
 
     def test_ollama_dialog_cleanup_failures_do_not_report_ready(self) -> None:
