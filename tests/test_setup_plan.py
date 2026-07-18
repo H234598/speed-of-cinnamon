@@ -29,6 +29,29 @@ class SetupPlanTest(unittest.TestCase):
         self.assertEqual(plan["steps"], [])
         self.assertIn("No required setup steps", plan["text"])
 
+    def test_missing_python_runtime_gets_setup_step(self) -> None:
+        payload = {
+            "ok": False,
+            "checks": [
+                {"name": "python3", "ok": False, "detail": "python3 missing; install python3"},
+            ],
+            "configured": {
+                "recorder": {"ok": True},
+                "transcriber": {"ok": True},
+                "output": {"ok": True},
+                "postprocessor": {"ok": True},
+                "warnings": [],
+            },
+            "desktop": {"cinnamon": True},
+        }
+
+        plan = build_setup_plan(payload)
+
+        self.assertFalse(plan["ready"])
+        self.assertEqual(plan["steps"][0]["id"], "python-runtime")
+        self.assertIn("python3 missing", plan["steps"][0]["detail"])
+        self.assertIn("sudo dnf install -y python3", plan["commands"])
+
     def test_missing_auto_asr_gets_backend_step(self) -> None:
         payload = {
             "ok": False,

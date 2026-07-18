@@ -110,6 +110,23 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
     configured = _configured(doctor_payload)
     desktop = _desktop(doctor_payload)
     cinnamon = _coerce_plan_bool(desktop, "cinnamon")
+    checks = doctor_payload.get("checks")
+    if not ready and isinstance(checks, list):
+        for check in checks:
+            if not isinstance(check, Mapping) or check.get("name") != "python3":
+                continue
+            if check.get("ok") is False:
+                _add_step(
+                    steps,
+                    "python-runtime",
+                    "Install Python 3",
+                    _sanitize_setup_text(
+                        check.get("detail"),
+                        "Python 3 is required to run Speed of Cinnamon.",
+                    ),
+                    ["sudo dnf install -y python3"],
+                )
+            break
     if applet and not cinnamon:
         _add_step(
             steps,
