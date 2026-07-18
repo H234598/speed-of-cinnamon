@@ -1293,6 +1293,13 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
 
     @mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True)
+    def test_insert_text_accepts_append_space_flag(self, mocked_insert: mock.Mock) -> None:
+        with redirect_stdout(io.StringIO()):
+            code = cli.run(["insert-text", "hello", "--insert-method", "none", "--append-space", "--json"])
+        self.assertEqual(code, 0)
+        mocked_insert.assert_called_once_with("hello ", "none", 8)
+
+    @mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True)
     def test_insert_text_can_sanitize_special_chars(self, mocked_insert: mock.Mock) -> None:
         with redirect_stdout(io.StringIO()):
             code = cli.run(["insert-text", "Grüße", "--insert-method", "none", "--sanitize-special-chars", "--json"])
@@ -6868,6 +6875,21 @@ class CliTest(unittest.TestCase):
         self.assertNotIn(str(transcript_path), encoded)
         self.assertNotIn("private-process-identity", encoded)
         self.assertNotIn("secret dictated words", encoded)
+
+    def test_diagnostics_reports_missing_state_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "missing-state.json"
+            stdout = io.StringIO()
+            with mock.patch.dict(
+                os.environ,
+                {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp, "XDG_CACHE_HOME": tmp},
+            ), redirect_stdout(stdout):
+                code = cli.run(["diagnostics", "--state-file", str(state_file), "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertFalse(state_file.exists())
+        self.assertFalse(payload["paths"]["state_file_present"])
 
     @mock.patch("speed_of_cinnamon.cli.list_input_sources", side_effect=RuntimeError("token abc123"))
     def test_diagnostics_redacts_nested_source_errors(self, mocked_sources: mock.Mock) -> None:

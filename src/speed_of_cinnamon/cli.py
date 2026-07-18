@@ -6298,7 +6298,7 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
         },
         "paths": {
             "state_dir_present": bool(state_dir()),
-            "state_file_present": bool(state_file_path),
+            "state_file_present": state_file_path.is_file(),
             "transcript_dir_present": bool(transcript_dir()),
             "recordings_dir_present": bool(recordings_dir()),
             "diagnostics_dir_present": bool(diagnostics_dir()),
@@ -6783,6 +6783,7 @@ def build_parser() -> argparse.ArgumentParser:
     insert.add_argument("text")
     insert.add_argument("--insert-method", default="clipboard-paste", choices=["clipboard-paste", "clipboard", "type", "none"])
     insert.add_argument("--typing-delay-ms", type=int, default=DEFAULT_TYPING_DELAY_MS)
+    insert.add_argument("--append-space", action="store_true")
     insert.add_argument("--sanitize-special-chars", action="store_true")
     insert.add_argument("--soften-profanity", action="store_true")
     insert.set_defaults(handler=command_insert_text)
