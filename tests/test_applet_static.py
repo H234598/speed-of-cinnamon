@@ -2197,10 +2197,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("cancellableToken = this._registerCancellable(cancellable);", block)
         self.assertIn("if (!this._unregisterProcess(processToken))", block)
         self.assertIn("this._terminateProcess(process);", block)
-        self.assertIn("if (!this._terminateProcess(process))", block)
         self.assertIn("this._trackOrphanedProcess(process, generation, options.resourceGroup);", block)
         self.assertIn("let processTerminated = this._terminateProcess(process);", block)
         self.assertLess(block.index("let processTerminated = this._terminateProcess(process);"), block.index("this._unregisterProcess(processToken)"))
+
+    def test_process_registration_failure_removes_successfully_terminated_orphans(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("let processToken;")
+        end = source.index("let cancellable = null;", start)
+        block = source[start:end]
+        self.assertIn("let processTerminated = this._terminateProcess(process);", block)
+        self.assertIn("if (processTerminated) {", block)
+        self.assertIn("let orphanTracked = this._trackOrphanedProcess(process, generation, options.resourceGroup, undefined, true);", block)
+        self.assertIn("let orphanCleanupSucceeded = orphanTracked && this._retryOrphanedProcesses();", block)
+        self.assertIn("this._scheduleProcessCleanupRetry();", block)
+        self.assertIn("} else {\n        this._trackOrphanedProcess(process, generation, options.resourceGroup);", block)
+        self.assertLess(block.index("let orphanTracked ="), block.index("this._trackOrphanedProcess(process, generation, options.resourceGroup);"))
 
     def test_orphaned_processes_are_retried_and_block_new_spawns(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -4714,6 +4727,24 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("for (let processGroupId of sessionGroupIds)", source)
         self.assertIn("let groupState = this._processGroupState(identity);", source)
         self.assertIn('"-" + processGroupId', source)
+
+    def test_process_group_cleanup_handles_disappearing_proc_entries(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        state_start = source.index("_processGroupState: function(identity)")
+        state_end = source.index("\n  _processSessionGroupIds:", state_start)
+        state_block = source[state_start:state_end]
+        self.assertIn("let leaderStillExists = false;", state_block)
+        self.assertIn("leaderStillExists = GLib.file_test(procPath, GLib.FileTest.EXISTS);", state_block)
+        self.assertIn("leaderPathExists = false;", state_block)
+
+        session_start = source.index("_processSessionGroupIds: function(identity)")
+        session_end = source.index("\n  _killProcessGroup:", session_start)
+        session_block = source[session_start:session_end]
+        self.assertIn('let memberStatPath = "/proc/" + memberPid + "/stat";', session_block)
+        self.assertIn("let memberStillExists = false;", session_block)
+        self.assertIn("memberStillExists = GLib.file_test(memberStatPath, GLib.FileTest.EXISTS);", session_block)
+        self.assertIn("if (!memberStillExists) {\n              continue;", session_block)
 
     def test_keyboard_group_cancel_notifies_active_insert_cleanup(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

@@ -2676,13 +2676,19 @@ MyApplet.prototype = {
         leaderPathExists = GLib.file_test(procPath, GLib.FileTest.EXISTS);
         leaderContents = GLib.file_get_contents(procPath);
       } catch (error) {
-        if (leaderPathExists) {
-          return "invalid";
-        }
         leaderContents = null;
       }
       if ((!leaderContents || leaderContents[0] !== true) && leaderPathExists) {
-        return "invalid";
+        let leaderStillExists = false;
+        try {
+          leaderStillExists = GLib.file_test(procPath, GLib.FileTest.EXISTS);
+        } catch (error) {
+          return "invalid";
+        }
+        if (leaderStillExists) {
+          return "invalid";
+        }
+        leaderPathExists = false;
       }
       if (leaderContents && leaderContents[0] === true) {
         let leaderStat = ByteArray.toString(leaderContents[1] || "");
@@ -2715,13 +2721,23 @@ MyApplet.prototype = {
           if (!/^[1-9][0-9]*$/.test(memberPid) || memberPid === groupPid) {
             continue;
           }
-          let contents;
+          let memberStatPath = "/proc/" + memberPid + "/stat";
+          let contents = null;
           try {
-            contents = GLib.file_get_contents("/proc/" + memberPid + "/stat");
+            contents = GLib.file_get_contents(memberStatPath);
           } catch (error) {
-            return "invalid";
+            contents = null;
           }
           if (!contents || contents[0] !== true) {
+            let memberStillExists = false;
+            try {
+              memberStillExists = GLib.file_test(memberStatPath, GLib.FileTest.EXISTS);
+            } catch (error) {
+              return "invalid";
+            }
+            if (!memberStillExists) {
+              continue;
+            }
             return "invalid";
           }
           let stat = ByteArray.toString(contents[1] || "");
@@ -2770,8 +2786,23 @@ MyApplet.prototype = {
           if (!/^[1-9][0-9]*$/.test(memberPid)) {
             continue;
           }
-          let contents = GLib.file_get_contents("/proc/" + memberPid + "/stat");
+          let memberStatPath = "/proc/" + memberPid + "/stat";
+          let contents = null;
+          try {
+            contents = GLib.file_get_contents(memberStatPath);
+          } catch (error) {
+            contents = null;
+          }
           if (!contents || contents[0] !== true) {
+            let memberStillExists = false;
+            try {
+              memberStillExists = GLib.file_test(memberStatPath, GLib.FileTest.EXISTS);
+            } catch (error) {
+              return null;
+            }
+            if (!memberStillExists) {
+              continue;
+            }
             return null;
           }
           let stat = ByteArray.toString(contents[1] || "");
@@ -10941,8 +10972,16 @@ MyApplet.prototype = {
     try {
       processToken = this._registerProcess(process, generation, options.resourceGroup);
     } catch (error) {
-      if (!this._terminateProcess(process)) {
+      let processTerminated = this._terminateProcess(process);
+      if (processTerminated) {
+        let orphanTracked = this._trackOrphanedProcess(process, generation, options.resourceGroup, undefined, true);
+        let orphanCleanupSucceeded = orphanTracked && this._retryOrphanedProcesses();
+        if (!orphanCleanupSucceeded) {
+          this._scheduleProcessCleanupRetry();
+        }
+      } else {
         this._trackOrphanedProcess(process, generation, options.resourceGroup);
+        this._scheduleProcessCleanupRetry();
       }
       throw error;
     }
