@@ -356,6 +356,16 @@ class PathsTest(unittest.TestCase):
         ):
             self.assertEqual(paths._xdg_path("XDG_CACHE_HOME", Path("/safe/fallback")), Path("/safe/fallback"))
 
+    def test_xdg_path_reserves_room_for_derived_app_paths(self) -> None:
+        custom = Path("/tmp/custom-xdg")
+        max_chars = len(str(custom)) + len(f"/{paths.APP_ID}/settings-export.json") - 1
+        with (
+            mock.patch("speed_of_cinnamon.paths.MAX_XDG_PATH_CHARS", max_chars),
+            mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")),
+        ):
+            with mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(custom)}):
+                self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
+
     def test_xdg_paths_reject_unencodable_roots(self) -> None:
         with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
             with mock.patch("speed_of_cinnamon.paths.os.environ.__getitem__", return_value="/tmp/root\ud800"):

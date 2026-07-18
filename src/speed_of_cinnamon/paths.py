@@ -17,6 +17,7 @@ APP_ID = "speed-of-cinnamon"
 APP_NAME = "Speed of Cinnamon"
 APPLET_UUID = "speed-of-cinnamon@H234598"
 MAX_XDG_PATH_CHARS = 4_096
+_MAX_XDG_DERIVED_SUFFIX = f"/{APP_ID}/settings-export.json"
 
 
 def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
@@ -78,6 +79,11 @@ def _xdg_path(environment_variable: str, default: Path | Callable[[], Path]) -> 
         return fallback()
     if len(candidate_text) > MAX_XDG_PATH_CHARS or _is_oversized_utf8_text(
         candidate_text, max_chars=MAX_XDG_PATH_CHARS
+    ):
+        return fallback()
+    if len(candidate_text) + len(_MAX_XDG_DERIVED_SUFFIX) > MAX_XDG_PATH_CHARS or _is_oversized_utf8_text(
+        candidate_text + _MAX_XDG_DERIVED_SUFFIX,
+        max_chars=MAX_XDG_PATH_CHARS,
     ):
         return fallback()
     if not candidate.is_absolute():
