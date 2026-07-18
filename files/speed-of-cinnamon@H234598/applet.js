@@ -9572,7 +9572,7 @@ MyApplet.prototype = {
 
   _installOllamaTextModel: function(model) {
     let flowToken = this.ollamaModelFlowToken;
-    if (this._hasActiveRecordingState()) {
+    if (this._hasActiveRecordingState() && this.status !== "processing") {
       this._clearOllamaModelFlow(flowToken);
       return;
     }

@@ -3995,6 +3995,10 @@ class AppletStaticTest(unittest.TestCase):
             block = source[start:end]
             self.assertIn("this._hasActiveRecordingState()", block)
             self.assertIn("return;", block)
+        install_start = source.index("_installOllamaTextModel: function(model)")
+        install_end = source.index("\n  _refreshHistory:", install_start)
+        install_block = source[install_start:install_end]
+        self.assertIn('if (this._hasActiveRecordingState() && this.status !== "processing")', install_block)
 
     def test_text_model_requests_preflight_urls_before_flow_tokens(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
