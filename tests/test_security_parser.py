@@ -391,6 +391,26 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(sanitized, "The [redacted blacklist item] is [redacted token]")
         self.assertEqual(count, 1)
 
+    def test_apply_security_mode_redacts_api_key_value_when_hyphenated_label_is_blacklisted(self) -> None:
+        sanitized, count = apply_security_mode("api-key: supersecret", ["api-key"])
+
+        self.assertEqual(sanitized, "[redacted token]")
+        self.assertEqual(count, 1)
+
+    def test_apply_security_mode_preserves_sensitive_label_synonyms_for_blacklist_redaction(self) -> None:
+        cases = (
+            ("full name", "Max Mustermann", "[redacted name]"),
+            ("social security number", "123456789", "[redacted id]"),
+            ("account number", "12345678", "[redacted bank data]"),
+        )
+
+        for label, value, expected in cases:
+            with self.subTest(label=label):
+                sanitized, count = apply_security_mode(f"{label}: {value}", [label])
+
+                self.assertEqual(sanitized, expected)
+                self.assertEqual(count, 1)
+
     def test_apply_security_mode_masks_blacklist_items_case_insensitive(self) -> None:
         text = "Das GeHeIm hier steht. Und noch GEHEIM."
         sanitized, count = apply_security_mode(text, ["geheim"])
