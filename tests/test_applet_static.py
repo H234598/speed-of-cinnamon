@@ -5722,7 +5722,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"audio_path_present"', artifact_block)
         self.assertIn('"process_identity_present"', artifact_block)
         self.assertIn("payload.audio_deleted === false", artifact_block)
+        self.assertIn("let cleanupFailurePresent = payload.audio_deleted === false ||", artifact_block)
+        self.assertIn("this.recordingArtifactsPresent = cleanupFailurePresent;", artifact_block)
         self.assertIn('if (status === "idle" || status === "done")', artifact_block)
+        self.assertLess(
+            artifact_block.index('if (status === "idle" || status === "done")'),
+            artifact_block.index("this.recordingArtifactsPresent = cleanupFailurePresent;")
+        )
 
         preserving_start = source.index("_setStatusPreservingRecording: function(status, message, transcript)")
         preserving_end = source.index("\n  _setStatus: function", preserving_start)

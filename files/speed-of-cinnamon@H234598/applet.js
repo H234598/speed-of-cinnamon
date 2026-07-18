@@ -6104,19 +6104,21 @@ MyApplet.prototype = {
         payload.process_identity_present === true
       );
     }
+    let cleanupFailurePresent = payload.audio_deleted === false ||
+      payload.log_deleted === false ||
+      payload.transcript_deleted === false;
+    if (status === "idle" || status === "done") {
+      this.recordingArtifactsPresent = cleanupFailurePresent;
+      return;
+    }
     if (
       payload.discarded_audio_path_present === true ||
-      payload.audio_deleted === false ||
-      payload.log_deleted === false ||
-      payload.transcript_deleted === false
+      cleanupFailurePresent
     ) {
       this.recordingArtifactsPresent = true;
     }
     if (status === "recording" || status === "recorded" || status === "processing") {
       this.recordingArtifactsPresent = true;
-    }
-    if (status === "idle" || status === "done") {
-      this.recordingArtifactsPresent = false;
     }
   },
 
