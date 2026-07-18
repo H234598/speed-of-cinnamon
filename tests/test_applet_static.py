@@ -759,7 +759,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn(': "";', source[source.index("safeLevel.detail = typeof safeLevel.detail"):source.index("safeLevel.detail = typeof safeLevel.detail") + 180])
         self.assertIn('_("Auto-Submit self-protection blocked a protected target")', source)
         self.assertNotIn('_("Auto-Submit self-protection blocked target: ") + detail', source)
-        self.assertIn('this._setStatusPreservingRecording("error", _("Could not open link"), this.lastTranscript);', source)
+        self.assertIn('setStatus("error", _("Could not open link"), this.lastTranscript);', source)
         self.assertNotIn('_("Could not open link: ") + err.message', source)
         self.assertIn('this._setStatusPreservingRecording("error", _("Could not restart applet"), this.lastTranscript);', source)
         self.assertNotIn('_("Could not restart applet: ") + String(err)', source)
@@ -5861,19 +5861,36 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn('this._setStatusPreservingRecording("error", _("Could not open folder"), this.lastTranscript);', source)
-        self.assertIn('this._setStatusPreservingRecording("error", _("Could not open file"), this.lastTranscript);', source)
+        self.assertIn('setStatus("error", _("Could not open file"), this.lastTranscript);', source)
         self.assertNotIn('_("Could not open folder: ") + err.message', source)
         self.assertNotIn('_("Could not open file: ") + err.message', source)
 
     def test_open_file_rejects_directories_and_symlinks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_openFile: function(path, successMessage)")
+        start = source.index("_openFile: function(path, successMessage, preserveRecording)")
         end = source.index("\n  _failSetupDiagnosticsAction:", start)
         block = source[start:end]
         self.assertIn("let file = Gio.File.new_for_path(path);", block)
         self.assertIn('file.query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)', block)
         self.assertIn("info.get_file_type() !== Gio.FileType.REGULAR", block)
+        self.assertIn("let setStatus = preserveRecording === false", block)
+        self.assertIn("this._openUri(GLib.filename_to_uri(path, null), successMessage, preserveRecording);", block)
         self.assertNotIn("GLib.FileTest.EXISTS", block)
+
+    def test_setup_file_open_clears_its_processing_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        setup_start = source.index("_openProfanityFilterList: function()")
+        setup_end = source.index("\n  _copySetupPlan:", setup_start)
+        setup_block = source[setup_start:setup_end]
+        self.assertIn('this._setStatus("processing",', setup_block)
+        self.assertIn('this._openFile(path, _("Opened profanity replacement list: ") + String(this._safePayloadCount(payload.entries)), false);', setup_block)
+
+        uri_start = source.index("_openUri: function(uri, successMessage, preserveRecording)")
+        uri_end = source.index("\n  _openFolder:", uri_start)
+        uri_block = source[uri_start:uri_end]
+        self.assertIn("let setStatus = preserveRecording === false", uri_block)
+        self.assertIn('setStatus("ready", successMessage, this.lastTranscript);', uri_block)
 
     def test_open_folder_rejects_symlinked_directories(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -5949,7 +5966,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('return [this._cliCommand(), "profanity-filter-document", "--json"];', source)
         self.assertIn("_openProfanityFilterList: function()", source)
         self.assertIn('let path = typeof payload.path === "string" ? payload.path.trim() : "";', source)
-        self.assertIn("this._openFile(path, _(\"Opened profanity replacement list: \") + String(this._safePayloadCount(payload.entries)));", source)
+        self.assertIn("this._openFile(path, _(\"Opened profanity replacement list: \") + String(this._safePayloadCount(payload.entries)), false);", source)
         self.assertIn("show-profanity-filter-list", schema["layout"]["output-section"]["keys"])
         self.assertEqual(schema["show-profanity-filter-list"]["type"], "button")
         self.assertEqual(schema["show-profanity-filter-list"]["description"], "Edit profanity replacement list")

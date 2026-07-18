@@ -6501,16 +6501,19 @@ MyApplet.prototype = {
     this._openUri(RUNBOOK_URL, _("Opened setup guide"));
   },
 
-  _openUri: function(uri, successMessage) {
+  _openUri: function(uri, successMessage, preserveRecording) {
+    let setStatus = preserveRecording === false
+      ? this._setStatus.bind(this)
+      : this._setStatusPreservingRecording.bind(this);
     try {
       let opened = Gio.AppInfo.launch_default_for_uri(uri, null);
       if (opened === false) {
         throw new Error("URI could not be opened");
       }
-      this._setStatusPreservingRecording("ready", successMessage, this.lastTranscript);
+      setStatus("ready", successMessage, this.lastTranscript);
     } catch (err) {
       this._safeLogError(err);
-      this._setStatusPreservingRecording("error", _("Could not open link"), this.lastTranscript);
+      setStatus("error", _("Could not open link"), this.lastTranscript);
     }
   },
 
@@ -6532,17 +6535,20 @@ MyApplet.prototype = {
     }
   },
 
-  _openFile: function(path, successMessage) {
+  _openFile: function(path, successMessage, preserveRecording) {
+    let setStatus = preserveRecording === false
+      ? this._setStatus.bind(this)
+      : this._setStatusPreservingRecording.bind(this);
     try {
       let file = Gio.File.new_for_path(path);
       let info = file.query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
       if (!info || info.get_file_type() !== Gio.FileType.REGULAR) {
         throw new Error("path is not a regular file");
       }
-      this._openUri(GLib.filename_to_uri(path, null), successMessage);
+      this._openUri(GLib.filename_to_uri(path, null), successMessage, preserveRecording);
     } catch (err) {
       this._safeLogError(err);
-      this._setStatusPreservingRecording("error", _("Could not open file"), this.lastTranscript);
+      setStatus("error", _("Could not open file"), this.lastTranscript);
     }
   },
 
@@ -6591,7 +6597,7 @@ MyApplet.prototype = {
           return;
         }
         this.setupDiagnosticsToken = null;
-        this._openFile(path, _("Opened profanity replacement list: ") + String(this._safePayloadCount(payload.entries)));
+        this._openFile(path, _("Opened profanity replacement list: ") + String(this._safePayloadCount(payload.entries)), false);
       } catch (error) {
         this._failSetupDiagnosticsAction(actionToken, error, _("Could not open profanity replacement list"));
       }
