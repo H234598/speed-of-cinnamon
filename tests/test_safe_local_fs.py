@@ -331,6 +331,53 @@ class SafeLocalFsTest(unittest.TestCase):
             self.assertIn("unsupported file type", result.stderr)
             self.assertFalse(target.exists())
 
+    def test_install_tree_preserves_target_replaced_before_backup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            target = base / "target"
+            raced_target = base / "raced-target"
+            source.mkdir()
+            (source / "new.txt").write_text("new\n", encoding="utf-8")
+            target.mkdir()
+            (target / "old.txt").write_text("old\n", encoding="utf-8")
+            injected = False
+            real_assert = SAFE_LOCAL_FS._assert_target_unchanged
+
+            def assert_then_replace_target(
+                parent_fd: int,
+                name: str,
+                expected_stat: os.stat_result | None,
+                *,
+                action: str,
+            ) -> None:
+                nonlocal injected
+                real_assert(parent_fd, name, expected_stat, action=action)
+                if name == target.name and not injected:
+                    injected = True
+                    target.rename(raced_target)
+                    target.mkdir()
+                    (target / "raced.txt").write_text("raced\n", encoding="utf-8")
+
+            args = SAFE_LOCAL_FS.argparse.Namespace(
+                action="test",
+                source=str(source),
+                target=str(target),
+                label="test tree",
+            )
+            with mock.patch.object(
+                SAFE_LOCAL_FS,
+                "_assert_target_unchanged",
+                side_effect=assert_then_replace_target,
+            ):
+                with self.assertRaisesRegex(SystemExit, "1"):
+                    SAFE_LOCAL_FS.cmd_install_tree(args)
+
+            self.assertEqual((target / "raced.txt").read_text(encoding="utf-8"), "raced\n")
+            self.assertEqual((raced_target / "old.txt").read_text(encoding="utf-8"), "old\n")
+            self.assertFalse((target / "new.txt").exists())
+            self.assertEqual(list(base.glob(".target.*.backup")), [])
+
 
 if __name__ == "__main__":
     unittest.main()

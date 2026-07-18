@@ -565,7 +565,7 @@ class InstallLocalTest(unittest.TestCase):
             (source / "payload.txt").write_text("new\n", encoding="utf-8")
             (target / "payload.txt").write_text("old\n", encoding="utf-8")
             real_fsync_directory_fd = module._fsync_directory_fd
-            real_replace = module.os.replace
+            real_no_replace = module._rename_without_replacing
             fsync_calls = 0
 
             def fail_after_activation(fd: int, *, action: str) -> None:
@@ -575,15 +575,21 @@ class InstallLocalTest(unittest.TestCase):
                     raise OSError("post-activation fsync failed")
                 real_fsync_directory_fd(fd, action=action)
 
-            def fail_backup_restore(src: str, dst: str, **kwargs: object) -> None:
+            def fail_backup_restore(
+                src: str,
+                dst: str,
+                *,
+                directory_fd: int,
+                action: str,
+            ) -> None:
                 if ".backup" in src:
                     raise OSError("backup restore failed")
-                real_replace(src, dst, **kwargs)
+                real_no_replace(src, dst, directory_fd=directory_fd, action=action)
 
             args = module.argparse.Namespace(action="install", source=str(source), target=str(target), label="tree")
             with (
                 mock.patch.object(module, "_fsync_directory_fd", side_effect=fail_after_activation),
-                mock.patch.object(module.os, "replace", side_effect=fail_backup_restore),
+                mock.patch.object(module, "_rename_without_replacing", side_effect=fail_backup_restore),
             ):
                 with self.assertRaisesRegex(OSError, "post-activation fsync failed"):
                     module.cmd_install_tree(args)

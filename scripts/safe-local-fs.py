@@ -714,6 +714,9 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
             os.replace(leaf, backup_name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
             backup_created = True
             _fsync_directory_fd(parent_fd, action=args.action)
+            backup_stat = _lstat_at(parent_fd, backup_name)
+            if backup_stat is None or not _same_identity(backup_stat, existing):
+                fail(f"destination changed during {args.action}: {target}")
         os.replace(f"{stage_name}/{leaf}", leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         activated_stat = _lstat_at(parent_fd, leaf)
         activated = True
@@ -735,7 +738,12 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
                 ):
                     _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
                     os.fsync(parent_fd)
-                    os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                    _rename_without_replacing(
+                        backup_name,
+                        leaf,
+                        directory_fd=parent_fd,
+                        action=f"{args.action} rollback",
+                    )
                     os.fsync(parent_fd)
                     backup_created = False
         elif activated and not backup_created and _lstat_at(parent_fd, leaf) is not None:
@@ -751,7 +759,12 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
                     os.fsync(parent_fd)
         elif backup_created and _lstat_at(parent_fd, backup_name) is not None and _lstat_at(parent_fd, leaf) is None:
             with context_suppress():
-                os.replace(backup_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+                _rename_without_replacing(
+                    backup_name,
+                    leaf,
+                    directory_fd=parent_fd,
+                    action=f"{args.action} rollback",
+                )
                 os.fsync(parent_fd)
                 backup_created = False
         raise
