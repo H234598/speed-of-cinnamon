@@ -5180,6 +5180,9 @@ MyApplet.prototype = {
         this._setStatusPreservingRecording("error", _("Could not open custom duration prompt"), this.lastTranscript);
         return;
       }
+      if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
+        return;
+      }
       let seconds = this._parseCustomRecordingLimit(output);
       if (seconds === null) {
         return;
@@ -5294,6 +5297,9 @@ MyApplet.prototype = {
       this.customLimitPromptToken = null;
       if (result && result.startupFailed === true) {
         this._setStatusPreservingRecording("error", _("Could not open custom transcript limit prompt"), this.lastTranscript);
+        return;
+      }
+      if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
         return;
       }
       let limit = this._parseCustomTranscriptLimit(output);
@@ -5627,6 +5633,9 @@ MyApplet.prototype = {
       this.autoPastePromptToken = null;
       if (result && result.startupFailed === true) {
         this._setStatusPreservingRecording("error", _("Could not open Auto-Submit prompt"), this.lastTranscript);
+        return;
+      }
+      if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
         return;
       }
       this._setAutoPasteTitles(this._autoPasteTitleValues(output));

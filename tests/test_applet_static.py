@@ -4556,7 +4556,21 @@ class AppletStaticTest(unittest.TestCase):
             block = source[start:end]
             self.assertIn(f"this._spawnText({args_name}, (output, result) => {{", block)
             self.assertIn("if (result && result.startupFailed === true)", block)
+            self.assertIn("if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge))", block)
             self.assertIn(f'this._setStatusPreservingRecording("error", _("{message}")', block)
+
+    def test_text_prompt_failures_do_not_apply_output(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, apply_marker in [
+            ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:", "this._parseCustomRecordingLimit(output)"),
+            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:", "this._parseCustomTranscriptLimit(output)"),
+            ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:", "this._setAutoPasteTitles(this._autoPasteTitleValues(output))"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            guard = "if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge))"
+            self.assertLess(block.index(guard), block.index(apply_marker))
 
     def test_process_group_cancellation_suppresses_stale_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
