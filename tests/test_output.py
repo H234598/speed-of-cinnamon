@@ -726,6 +726,44 @@ class OutputTest(unittest.TestCase):
                 pass
             process.communicate()
 
+    def test_live_process_cleanup_kills_same_session_child_process_group(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import os,time; child=os.fork(); (os.setpgid(0,0) if child == 0 else None); print(child if child else os.getpid(), flush=True); time.sleep(30)",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+
+        def child_is_live() -> bool:
+            try:
+                state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()[0]
+            except OSError:
+                return False
+            return state not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            self.assertTrue(output_module._terminate_output_process_group(process))
+            process.wait(timeout=2)
+            deadline = time.monotonic() + 2
+            while child_is_live() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+
     def test_output_process_is_reaped_when_wait_is_interrupted(self) -> None:
         for invoke in (
             lambda: _run_with_input(["cmd"], "input", resolved_command="/usr/bin/cmd"),
@@ -2755,12 +2793,12 @@ class OutputTest(unittest.TestCase):
         with mock.patch.object(output_module.Path, "read_text", side_effect=error):
             self.assertIsNone(output_module._process_group_has_live_descendants(1234))
 
-    def test_output_process_scan_fails_closed_for_same_session_different_group(self) -> None:
+    def test_output_process_scan_reports_live_same_session_different_group(self) -> None:
         with (
             mock.patch.object(output_module.Path, "iterdir", return_value=(Path("/proc/100"),)),
             mock.patch.object(output_module.Path, "read_text", return_value="100 (child) S 1 9999 1234"),
         ):
-            self.assertIsNone(output_module._process_group_has_live_descendants(1234))
+            self.assertTrue(output_module._process_group_has_live_descendants(1234))
 
     def test_clipboard_dedupe_lock_closes_fd_when_creation_stat_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

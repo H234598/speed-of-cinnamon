@@ -1341,6 +1341,44 @@ def _bounded_command_output_bytes(
     return completed_output
 
 
+def _same_session_process_group_ids(session_id: int) -> set[int] | None:
+    if not isinstance(session_id, int) or isinstance(session_id, bool) or session_id <= 0:
+        return None
+    try:
+        proc_entries = tuple(Path("/proc").iterdir())
+    except OSError:
+        return None
+    process_group_ids: set[int] = set()
+    scan_incomplete = False
+    for proc_entry in proc_entries:
+        if not proc_entry.name.isdecimal():
+            continue
+        try:
+            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError):
+            scan_incomplete = True
+            continue
+        try:
+            close = raw.rindex(")")
+            fields = raw[close + 2 :].split()
+            process_group = int(fields[2])
+            member_session_id = int(fields[3])
+        except (IndexError, ValueError):
+            scan_incomplete = True
+            continue
+        if member_session_id != session_id:
+            continue
+        if process_group <= 0:
+            scan_incomplete = True
+            continue
+        process_group_ids.add(process_group)
+    if scan_incomplete:
+        return None
+    return process_group_ids
+
+
 def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
     if not isinstance(process_group_id, int) or isinstance(process_group_id, bool) or process_group_id <= 0:
         return None
@@ -1349,7 +1387,6 @@ def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
     except OSError:
         return None
     scan_incomplete = False
-    same_session_different_group = False
     group_live = False
     for proc_entry in proc_entries:
         if not proc_entry.name.isdecimal():
@@ -1374,11 +1411,12 @@ def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
         if session_id != process_group_id:
             continue
         if process_group != process_group_id:
-            same_session_different_group = True
+            if process_state not in {"Z", "X", "x"}:
+                group_live = True
             continue
         if process_id != process_group_id and process_state not in {"Z", "X", "x"}:
             group_live = True
-    if scan_incomplete or same_session_different_group:
+    if scan_incomplete:
         return None
     return group_live
 
@@ -1405,17 +1443,29 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
                 return False
     except (OSError, ValueError):
         return False
+    session_group_ids = _same_session_process_group_ids(process.pid)
+    if session_group_ids is None:
+        return False
     try:
         os.killpg(process.pid, signal.SIGKILL)
-        return True
     except ProcessLookupError:
-        return True
+        pass
     except (OSError, ValueError):
         try:
             process.kill()
         except (OSError, ValueError):
             return False
         return False
+    for process_group_id in sorted(session_group_ids):
+        if process_group_id == process.pid:
+            continue
+        try:
+            os.killpg(process_group_id, signal.SIGKILL)
+        except ProcessLookupError:
+            continue
+        except (OSError, ValueError):
+            return False
+    return True
 
 
 def _reap_timed_out_output_process(process: subprocess.Popen[bytes]) -> bool:
