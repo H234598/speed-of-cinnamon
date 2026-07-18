@@ -32,6 +32,12 @@ from speed_of_cinnamon import settings_export as settings_export_module
 
 
 class SettingsExportTest(unittest.TestCase):
+    def test_build_export_rejects_non_object_settings(self) -> None:
+        for settings in (None, [], "bad", 1):
+            with self.subTest(settings=settings):
+                with self.assertRaisesRegex(SettingsExportError, "settings export settings must be an object"):
+                    build_export(settings)  # type: ignore[arg-type]
+
     def test_fsync_retries_interrupted_calls(self) -> None:
         with mock.patch.object(
             settings_export_module.os,

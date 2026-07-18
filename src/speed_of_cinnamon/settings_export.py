@@ -498,6 +498,8 @@ def normalize_setting(key: str, value: Any) -> Any:
 
 
 def normalize_settings(values: dict[str, Any]) -> dict[str, Any]:
+    if not isinstance(values, dict):
+        raise SettingsExportError("settings export settings must be an object")
     normalized: dict[str, Any] = {}
     for key, (_, default) in EXPORTABLE_SETTINGS.items():
         if key in values:
