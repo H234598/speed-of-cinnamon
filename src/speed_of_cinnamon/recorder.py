@@ -438,7 +438,8 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
                 continue
             except (OSError, ValueError):
                 return False
-    return not cleanup_incomplete
+    session_stopped = _wait_for_recorder_session_stop(process.pid)
+    return session_stopped and not cleanup_incomplete
 
 
 def _reap_timed_out_recorder_process(process: subprocess.Popen[bytes]) -> bool:
@@ -652,6 +653,17 @@ def _same_session_has_live_processes(session_id: int) -> bool | None:
     if process_group_states is None:
         return None
     return any(process_group_states.values())
+
+
+def _wait_for_recorder_session_stop(session_id: int, timeout_seconds: float = 1.0) -> bool:
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        session_live = _same_session_has_live_processes(session_id)
+        if session_live is False:
+            return True
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(0.01)
 
 
 def _recording_process_identity_for_pid(pid: int) -> str | None:
