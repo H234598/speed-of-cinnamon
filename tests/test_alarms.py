@@ -5,6 +5,7 @@ import fcntl
 import json
 import os
 import tempfile
+import time as time_module
 import unittest
 from contextlib import redirect_stdout
 from datetime import date, datetime, timedelta, timezone
@@ -320,6 +321,47 @@ class AlarmTest(unittest.TestCase):
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["due"][0]["scheduled_at"], "2026-06-01T09:00")
+
+    def test_due_check_skips_alarm_in_spring_forward_gap(self) -> None:
+        if not hasattr(time_module, "tzset"):
+            self.skipTest("timezone transition test requires time.tzset")
+        previous_tz = os.environ.get("TZ")
+        try:
+            os.environ["TZ"] = "Europe/Berlin"
+            time_module.tzset()
+            with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "alarms.json"
+                save_alarm_store(
+                    {
+                        "last_checked_at": "",
+                        "alarms": [
+                            {
+                                "id": "dst-gap",
+                                "name": "DST gap",
+                                "hour": 2,
+                                "minute": 30,
+                                "days": ["sun"],
+                                "enabled": True,
+                                "urgency": "normal",
+                            }
+                        ],
+                    },
+                    path,
+                )
+                payload = check_due_alarms(
+                    path=path,
+                    now=datetime(2026, 3, 29, 1, 30, tzinfo=timezone.utc),
+                    catch_up_minutes=120,
+                    mark=False,
+                )
+        finally:
+            if previous_tz is None:
+                os.environ.pop("TZ", None)
+            else:
+                os.environ["TZ"] = previous_tz
+            time_module.tzset()
+
+        self.assertEqual(payload["count"], 0)
 
     def test_due_check_handles_offset_last_checked_at(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

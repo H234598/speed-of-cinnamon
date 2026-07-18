@@ -659,13 +659,19 @@ def alarm_occurrence(alarm: dict[str, Any], day: date) -> datetime | None:
     code = DAY_CODES[day.weekday()]
     if code not in alarm_days(alarm):
         return None
-    return datetime.combine(
+    candidate = datetime.combine(
         day,
         time(
             _coerce_alarm_component(alarm.get("hour", 0), field_name="alarm hour"),
             _coerce_alarm_component(alarm.get("minute", 0), field_name="alarm minute"),
         ),
     )
+    try:
+        if datetime.fromtimestamp(candidate.timestamp()) != candidate:
+            return None
+    except (OSError, OverflowError, ValueError):
+        return None
+    return candidate
 
 
 def _coerce_required_bool(value: object, *, field_name: str) -> bool:
