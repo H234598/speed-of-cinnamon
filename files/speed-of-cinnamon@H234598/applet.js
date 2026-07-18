@@ -5824,7 +5824,8 @@ MyApplet.prototype = {
   },
 
   _hasActiveRecordingState: function() {
-    return this.status === "recording" || this.status === "recorded" || this.status === "processing";
+    return this.status === "recording" || this.status === "recorded" || this.status === "processing" ||
+      (this.status === "error" && this.recordingArtifactsPresent);
   },
 
   _setActiveLanguage: function(language, message) {

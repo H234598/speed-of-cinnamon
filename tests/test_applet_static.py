@@ -5724,6 +5724,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.cancelItem.setSensitive(this._hasCancelableRecordingWork());", source[preserving_start:preserving_end])
         self.assertIn("this.recordingArtifactsPresent = true;", source[apply_start:apply_end])
 
+        active_start = source.index("_hasActiveRecordingState: function()")
+        active_end = source.index("\n  _setActiveLanguage:", active_start)
+        active_block = source[active_start:active_end]
+        self.assertIn('(this.status === "error" && this.recordingArtifactsPresent)', active_block)
+
     def test_cancel_prepares_arguments_before_setting_busy_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_cancelRecording: function(statusOverride)")
