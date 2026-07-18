@@ -29,6 +29,13 @@ MAX_STATE_STRING_CHARS = 1_000_000
 MAX_STATE_PATH_CHARS = 4_096
 MAX_STATE_INT = 2_147_483_647
 VALID_STATE_STATUSES = frozenset({"idle", "recording", "recorded", "processing", "finalizing", "done", "error"})
+_STATE_READ_ERRORS = frozenset(
+    {
+        "state file could not be read",
+        "state file is malformed",
+        "state file is too large",
+    }
+)
 
 
 def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
@@ -396,6 +403,8 @@ class StateStore:
     def update(self, **values: Any) -> RecordingState:
         with self._locked():
             state = self._read_unlocked()
+            if state.error in _STATE_READ_ERRORS:
+                raise RuntimeError(state.error)
             state_fields = {state_field.name for state_field in fields(RecordingState)}
             for key, value in values.items():
                 if key in state_fields:

@@ -273,6 +273,19 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(loaded.pid, 123)
         self.assertEqual(loaded.language, "de")
 
+    def test_update_rejects_corrupt_state_without_clobbering_recovery_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            original = '{"status":"finalizing","audio_path":"/tmp/audio.wav","log_path":"/tmp/rec.log"'
+            path.write_text(original, encoding="utf-8")
+            path.chmod(0o600)
+            store = StateStore(path)
+
+            with self.assertRaisesRegex(RuntimeError, "^state file could not be read$"):
+                store.update(status="finalizing")
+
+            self.assertEqual(path.read_text(encoding="utf-8"), original)
+
     def test_update_reads_after_lock_to_avoid_lost_update(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
