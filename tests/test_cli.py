@@ -5511,6 +5511,31 @@ class CliTest(unittest.TestCase):
         self.assertNotIn(str(active_audio), encoded)
         self.assertNotIn(str(active_log), encoded)
 
+    def test_cleanup_protects_encrypted_sibling_when_state_audio_is_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            state_file = tmp_path / "state.json"
+            plaintext_audio = recordings / "active.wav"
+            encrypted_audio = Path(f"{plaintext_audio}.socenc")
+            encrypted_audio.write_bytes(b"encrypted audio")
+            os.utime(encrypted_audio, (100, 100))
+            state = RecordingState(status="error", audio_path=str(plaintext_audio))
+
+            with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}):
+                active_paths = cli.active_artifact_paths(state, state_path=state_file)
+                result = cli.prune_recording_groups(
+                    keep=0,
+                    active_paths=active_paths,
+                    dry_run=True,
+                    max_age_days=0,
+                )
+
+        self.assertIn(encrypted_audio, active_paths)
+        self.assertNotIn(str(encrypted_audio), result["planned_paths"])
+        self.assertIn(str(encrypted_audio), result["skipped_active_paths"])
+
     def test_cleanup_defaults_to_keeping_twenty_recording_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"

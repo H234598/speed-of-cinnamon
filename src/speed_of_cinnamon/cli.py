@@ -2971,8 +2971,12 @@ def active_artifact_paths(
         state_path=state_path,
         require_recordings_dir=True,
     )
-    if audio_path is not None and _recording_artifact_stat(audio_path) is None:
-        audio_path = None
+    audio_candidates: list[Path] = []
+    if audio_path is not None:
+        audio_candidates.append(audio_path)
+        sibling_path = _recording_sibling_path(audio_path)
+        if sibling_path is not None:
+            audio_candidates.append(sibling_path)
     log_path = _normalized_state_recording_artifact_path(
         state.log_path,
         suffix=".log",
@@ -2981,8 +2985,9 @@ def active_artifact_paths(
     )
     if log_path is not None and _recording_artifact_stat(log_path) is None:
         log_path = None
-    if audio_path:
-        paths.add(audio_path)
+    for candidate in audio_candidates:
+        if _recording_artifact_stat(candidate) is not None:
+            paths.add(candidate)
     if log_path:
         paths.add(log_path)
     path = _normalized_state_artifact_path(state.transcript_path, state_path=state_path)
