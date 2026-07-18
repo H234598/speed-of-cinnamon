@@ -200,7 +200,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._openAppletSettings();', source)
         self.assertIn('this._setStatusPreservingRecording("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);', source)
         self.assertIn("_selectStaticVoiceBackend: function(transcriber, message)", source)
-        self.assertIn("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage)", source)
+        self.assertIn("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording)", source)
         self.assertIn('"voice-static"', source)
         self.assertIn("_selectExternalApiVoiceBackend: function()", source)
         self.assertIn('"external-api-voice"', source)
@@ -327,7 +327,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (result === false)', target_block)
         self.assertIn("this.postProcessBackend = previousBackend;", target_block)
         self.assertIn("return false;", target_block)
-        voice_start = source.index("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage)")
+        voice_start = source.index("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording)")
         voice_end = source.index("\n  _ensureVoiceModelCompatibleWithPrimaryLanguage:", voice_start)
         voice_block = source[voice_start:voice_end]
         self.assertIn("let previousTranscriber = this.transcriber;", voice_block)
@@ -1543,10 +1543,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("backend === expectedBackend", usable_block)
         self.assertIn("this._modelPathFromPayload(model)", usable_block)
 
-        select_start = source.index("_selectVoiceModel: function(model)")
+        select_start = source.index("_selectVoiceModel: function(model, preserveRecording)")
         select_end = source.index("\n  _selectAutomaticVoiceBackend:", select_start)
         select_block = source[select_start:select_end]
         self.assertIn("let path = this._modelPathFromPayload(model);", select_block)
+        self.assertIn("let setStatus = preserveRecording === false", select_block)
+        self.assertIn("preserveRecording", select_block)
         self.assertIn("return false;", select_block)
         self.assertIn("return true;", select_block)
         self.assertNotIn("String(model.path || \"\")", select_block)
@@ -1567,6 +1569,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let name = model && typeof model.name === "string" ? model.name.trim() : "";', block)
         self.assertIn('if (name === "")', block)
         self.assertIn("name = this._starterVoiceModelName();", block)
+        self.assertIn("this._selectVoiceModel(payload, false);", block)
 
     def test_voice_model_download_ignores_stale_settings_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1635,7 +1638,7 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         for method, next_method, result in [
-            ("_selectVoiceModel: function(model)", "\n  _selectAutomaticVoiceBackend:", "return false;"),
+            ("_selectVoiceModel: function(model, preserveRecording)", "\n  _selectAutomaticVoiceBackend:", "return false;"),
             ("_selectAutomaticVoiceBackend: function()", "\n  _selectStaticVoiceBackend:", "return;"),
             ("_selectStaticVoiceBackend: function(transcriber, message)", "\n  _externalApiEnvPath:", "return;"),
             ("_selectExternalApiVoiceBackend: function()", "\n  _refreshTextModelMenu:", "return;"),
@@ -6518,6 +6521,10 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn('this._setStatus("done", _("Removed model: ") + name, this.lastTranscript);', source)
+        remove_start = source.index("_removeVoiceModel: function(model)")
+        remove_end = source.index("\n  _selectVoiceModel:", remove_start)
+        remove_block = source[remove_start:remove_end]
+        self.assertIn('_("Removed model, but voice settings could not be updated"),\n            false', remove_block)
         self.assertNotIn('payload.message || _("Removed model: ") + name', source)
 
     def test_auto_paste_matches_identity_markers_with_bounded_short_tokens(self) -> None:
@@ -6582,7 +6589,7 @@ class AppletStaticTest(unittest.TestCase):
             ("_selectArtifactEncryptionMode: function(mode)", "\n  _selectOutputMethod:"),
             ("_selectOutputMethod: function(method)", "\n  _optionLabel:"),
             ("_selectInputSource: function(name, label)", "\n  _selectDefaultInputSource:"),
-            ("_selectVoiceModel: function(model)", "\n  _selectAutomaticVoiceBackend:"),
+            ("_selectVoiceModel: function(model, preserveRecording)", "\n  _selectAutomaticVoiceBackend:"),
             ("_selectAutomaticVoiceBackend: function()", "\n  _selectStaticVoiceBackend:"),
             ("_selectStaticVoiceBackend: function(transcriber, message)", "\n  _externalApiEnvPath:"),
             ("_selectTextPolishingPreset: function(preset)", "\n  _populateTextPolishingSafetyMenu:"),

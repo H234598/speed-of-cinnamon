@@ -7967,7 +7967,10 @@ MyApplet.prototype = {
     return this._voiceModelSupportsLanguage("", model, language);
   },
 
-  _commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage) {
+  _commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording) {
+    let setStatus = preserveRecording === false
+      ? this._setStatus.bind(this)
+      : this._setStatusPreservingRecording.bind(this);
     let previousTranscriber = this.transcriber;
     let previousWhisperModel = this.whisperModel;
     let settingsWrites = [
@@ -7999,7 +8002,7 @@ MyApplet.prototype = {
       this.whisperModel = previousWhisperModel;
       this._recordLifecycleError(group || "voice-settings", err);
       if (errorMessage) {
-        this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
+        setStatus("error", errorMessage, this.lastTranscript);
       }
       return false;
     }
@@ -8081,7 +8084,7 @@ MyApplet.prototype = {
           this._refreshModelMenu();
           return;
         }
-        this._selectVoiceModel(payload);
+        this._selectVoiceModel(payload, false);
         this._refreshModelMenu();
       } catch (error) {
         this.isCommandRunning = false;
@@ -8142,7 +8145,8 @@ MyApplet.prototype = {
             "auto",
             "",
             "voice-model-remove",
-            _("Removed model, but voice settings could not be updated")
+            _("Removed model, but voice settings could not be updated"),
+            false
           )) {
             this._refreshModelMenu();
             return;
@@ -8161,7 +8165,10 @@ MyApplet.prototype = {
     }, { resourceGroup: "voice-model" });
   },
 
-  _selectVoiceModel: function(model) {
+  _selectVoiceModel: function(model, preserveRecording) {
+    let setStatus = preserveRecording === false
+      ? this._setStatus.bind(this)
+      : this._setStatusPreservingRecording.bind(this);
     if (this.voiceModelActionToken) {
       return false;
     }
@@ -8172,18 +8179,19 @@ MyApplet.prototype = {
       return false;
     }
     if (!this._voiceModelSupportsCurrentLanguage(model)) {
-      this._setStatusPreservingRecording("error", _("English-only model cannot transcribe primary language: ") + this._voiceModelLanguage(), this.lastTranscript);
+      setStatus("error", _("English-only model cannot transcribe primary language: ") + this._voiceModelLanguage(), this.lastTranscript);
       return false;
     }
     if (!this._commitVoiceBackendSettings(
       backend,
       path,
       "voice-model-select",
-      _("Voice model settings could not be saved")
+      _("Voice model settings could not be saved"),
+      preserveRecording
     )) {
       return false;
     }
-    this._setStatusPreservingRecording("ready", _("Voice model: ") + name, this.lastTranscript);
+    setStatus("ready", _("Voice model: ") + name, this.lastTranscript);
     return true;
   },
 
