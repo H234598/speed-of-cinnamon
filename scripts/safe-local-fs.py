@@ -115,6 +115,7 @@ def _rename_without_replacing(
     target_name: str,
     *,
     directory_fd: int,
+    target_directory_fd: int | None = None,
     action: str,
 ) -> None:
     try:
@@ -124,10 +125,11 @@ def _rename_without_replacing(
         raise OSError(errno.ENOTSUP, f"no-clobber rename is not supported during {action}") from exc
     renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
     renameat2.restype = ctypes.c_int
+    target_fd = directory_fd if target_directory_fd is None else target_directory_fd
     result = renameat2(
         directory_fd,
         os.fsencode(source_name),
-        directory_fd,
+        target_fd,
         os.fsencode(target_name),
         1,
     )
@@ -287,7 +289,16 @@ def cmd_replace(args: argparse.Namespace) -> None:
             fail(f"source changed during {args.action}: {src}")
         if src_signature is None and not _same_identity(src_stat, source_before_replace):
             fail(f"source changed during {args.action}: {src}")
-        os.replace(src_name, dst_name, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
+        if args.dst_must_not_exist:
+            _rename_without_replacing(
+                src_name,
+                dst_name,
+                directory_fd=src_fd,
+                target_directory_fd=dst_fd,
+                action=args.action,
+            )
+        else:
+            os.replace(src_name, dst_name, src_dir_fd=src_fd, dst_dir_fd=dst_fd)
         final_stat = _lstat_at(dst_fd, dst_name)
         if src_signature is not None and (final_stat is None or _source_file_signature(final_stat) != src_signature):
             fail(f"destination changed during {args.action}: {dst}")
