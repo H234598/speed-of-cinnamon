@@ -7489,14 +7489,12 @@ MyApplet.prototype = {
           ? payload.due.filter((alarm) => alarm && typeof alarm === "object")
           : [];
         let dueCount = due.length;
-        let dueWasTruncated = dueCount > MAX_ALARM_NOTIFICATIONS;
-        if (dueWasTruncated) {
-          due = due.slice(0, MAX_ALARM_NOTIFICATIONS);
+        let notifications = due.filter((alarm) => alarm.notify === true);
+        let notificationsWereTruncated = notifications.length > MAX_ALARM_NOTIFICATIONS;
+        if (notificationsWereTruncated) {
+          notifications = notifications.slice(0, MAX_ALARM_NOTIFICATIONS);
         }
-        for (let alarm of due) {
-          if (alarm.notify !== true) {
-            continue;
-          }
+        for (let alarm of notifications) {
           let body = typeof alarm.body === "string" ? alarm.body.trim() : "";
           let label = typeof alarm.label === "string" ? alarm.label.trim() : "";
           this._notify(_("Speed of Cinnamon alarm"), body || label || _("Alarm due"), alarm.critical === true);
@@ -7507,7 +7505,7 @@ MyApplet.prototype = {
             let firstLabel = typeof first.label === "string" ? first.label.trim() : "";
             let firstTime = typeof first.time === "string" ? first.time.trim() : "";
             let alarmStatusLabel = firstLabel || firstTime || String(dueCount);
-            if (dueWasTruncated) {
+            if (notificationsWereTruncated) {
               alarmStatusLabel += " (" + _("some notifications suppressed for safety") + ")";
             }
             this._setAlarmOptionStatus(_("Alarm: ") + alarmStatusLabel);

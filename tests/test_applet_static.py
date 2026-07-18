@@ -1518,7 +1518,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("section.ok === true ?", source)
         self.assertIn("let enabled = alarm.enabled === true;", source)
         self.assertIn("payload.removed === true", source)
-        self.assertIn("if (alarm.notify !== true)", source)
+        self.assertIn("let notifications = due.filter((alarm) => alarm.notify === true);", source)
         self.assertIn("alarm.critical === true", source)
         self.assertIn("let downloaded = model.downloaded === true;", source)
         self.assertIn('let modelFormat = typeof model.model_format === "string" ? model.model_format.trim().toLowerCase() : "";', source)
@@ -4322,8 +4322,13 @@ class AppletStaticTest(unittest.TestCase):
         check_end = source.index("\n  _refreshInputSourceMenu:", check_start)
         check_block = source[check_start:check_end]
         self.assertIn("let dueCount = due.length;", check_block)
-        self.assertIn("let dueWasTruncated = dueCount > MAX_ALARM_NOTIFICATIONS;", check_block)
-        self.assertIn("due = due.slice(0, MAX_ALARM_NOTIFICATIONS);", check_block)
+        self.assertIn("let notifications = due.filter((alarm) => alarm.notify === true);", check_block)
+        self.assertIn("let notificationsWereTruncated = notifications.length > MAX_ALARM_NOTIFICATIONS;", check_block)
+        self.assertIn("notifications = notifications.slice(0, MAX_ALARM_NOTIFICATIONS);", check_block)
+        self.assertLess(
+            check_block.index("let notifications = due.filter((alarm) => alarm.notify === true);"),
+            check_block.index("notifications = notifications.slice(0, MAX_ALARM_NOTIFICATIONS);"),
+        )
         self.assertIn('_("some notifications suppressed for safety")', check_block)
 
     def test_input_source_menu_fanout_is_bounded(self) -> None:
