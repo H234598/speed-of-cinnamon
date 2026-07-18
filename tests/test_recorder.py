@@ -145,7 +145,7 @@ class RecorderTest(unittest.TestCase):
             self.assertTrue(recorder_module._reap_timed_out_recorder_process(process))
 
         mocked_killpg.assert_not_called()
-        process.communicate.assert_called_once_with(timeout=None)
+        process.communicate.assert_called_once_with(timeout=1)
 
     def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:
         process = subprocess.Popen(
@@ -167,6 +167,40 @@ class RecorderTest(unittest.TestCase):
             deadline = time.monotonic() + 2
             while child_is_live() and time.monotonic() < deadline:
                 time.sleep(0.01)
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+
+    def test_reaped_process_cleanup_kills_child_that_created_new_session(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import os,time; read_fd,write_fd=os.pipe(); child=os.fork(); "
+                "(os.close(read_fd), os.setsid(), os.write(write_fd, str(os.getpid()).encode()), "
+                "os.close(write_fd), time.sleep(30)) if child == 0 else "
+                "(os.close(write_fd), print(os.read(read_fd, 32).decode(), flush=True), "
+                "os.close(read_fd), time.sleep(0.1))",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+        process.wait()
+
+        def child_is_live() -> bool:
+            stat_fields = recorder_module._recording_process_stat_fields(child_pid)
+            return stat_fields is not None and stat_fields[0] not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            self.assertTrue(recorder_module._terminate_recorder_process_group(process))
             self.assertFalse(child_is_live())
         finally:
             try:
@@ -265,6 +299,30 @@ class RecorderTest(unittest.TestCase):
                     os.kill(child_pid, 9)
                 except ProcessLookupError:
                     pass
+
+    def test_run_ffmpeg_cleans_reparented_new_session_child_with_pipe_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            child_pid_path = Path(tmp) / "child.pid"
+            code = (
+                "import os,time; child=os.fork(); "
+                f"(os.setsid(), open({str(child_pid_path)!r}, 'w').write(str(os.getpid())), time.sleep(30)) "
+                "if child == 0 else os._exit(0)"
+            )
+            with self.assertRaisesRegex(OSError, "bounded output capture failed"):
+                recorder_module._run_ffmpeg_bounded(
+                    ["/usr/bin/python3", "-c", code],
+                    timeout=2,
+                    pass_fds=(),
+                )
+
+            child_pid = int(child_pid_path.read_text(encoding="ascii"))
+            stat_fields = recorder_module._recording_process_stat_fields(child_pid)
+            self.assertTrue(stat_fields is None or stat_fields[0] in {"Z", "X", "x"})
+            try:
+                if stat_fields is not None and stat_fields[0] not in {"Z", "X", "x"}:
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
 
     def _write_wav(self, path: Path, samples: list[int]) -> None:
         with wave.open(str(path), "wb") as handle:
@@ -3299,6 +3357,43 @@ Source #13
         self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
         self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "-1234"])
         self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "-1234"])
+
+    def test_stop_process_kills_live_descendant_that_created_new_session(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import os,time; read_fd,write_fd=os.pipe(); child=os.fork(); "
+                "(os.close(read_fd), os.setsid(), os.write(write_fd, str(os.getpid()).encode()), "
+                "os.close(write_fd), time.sleep(30)) if child == 0 else "
+                "(os.close(write_fd), print(os.read(read_fd, 32).decode(), flush=True), "
+                "os.close(read_fd), time.sleep(30))",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+        identity = recorder_module._recording_process_identity_for_pid(process.pid)
+        self.assertIsNotNone(identity)
+
+        def child_is_live() -> bool:
+            stat_fields = recorder_module._recording_process_stat_fields(child_pid)
+            return stat_fields is not None and stat_fields[0] not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            self.assertTrue(stop_process(process.pid, timeout_seconds=1, expected_process_identity=identity))
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
 
 
 if __name__ == "__main__":

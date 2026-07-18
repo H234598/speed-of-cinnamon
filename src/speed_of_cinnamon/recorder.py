@@ -18,7 +18,16 @@ import wave
 from dataclasses import dataclass
 from pathlib import Path
 
-from .output import _BoundedOutputCapture, _finish_bounded_output_captures
+from .output import (
+    _BoundedOutputCapture,
+    _finish_bounded_output_captures,
+    _kill_output_process_tree,
+    _pipe_targets_for_process,
+    _process_pipe_holder_identities,
+    _process_tree_descendant_identities,
+    _process_tree_has_live_processes,
+    _wait_for_output_process_tree_stop,
+)
 from .paths import recordings_dir
 from .path_safety import (
     _rename_without_replacing,
@@ -403,8 +412,14 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
         group_live = process_group_has_live_processes(process.pid)
         session_group_ids = _same_session_process_group_ids(process.pid)
         cleanup_incomplete = group_live is None
+        pipe_holders: dict[int, str] = {}
         if process_finished:
-            if group_live is False:
+            pipe_scan = _process_pipe_holder_identities(process)
+            if pipe_scan is None:
+                cleanup_incomplete = True
+            else:
+                pipe_holders = pipe_scan
+            if group_live is False and not pipe_holders and not cleanup_incomplete:
                 return True
             try:
                 raw = Path(f"/proc/{process.pid}/stat").read_text(encoding="ascii").strip()
@@ -418,6 +433,7 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
                 return False
     except (OSError, ValueError):
         return False
+    pipe_tree_cleanup = _kill_output_process_tree(pipe_holders)
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -439,13 +455,14 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
             except (OSError, ValueError):
                 return False
     session_stopped = _wait_for_recorder_session_stop(process.pid)
-    return session_stopped and not cleanup_incomplete
+    pipe_tree_stopped = _wait_for_output_process_tree_stop(pipe_holders)
+    return session_stopped and pipe_tree_cleanup and pipe_tree_stopped and not cleanup_incomplete
 
 
 def _reap_timed_out_recorder_process(process: subprocess.Popen[bytes]) -> bool:
     terminated = _terminate_recorder_process_group(process)
     try:
-        process.communicate(timeout=None if terminated else 1)
+        process.communicate(timeout=1)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return False
     return terminated
@@ -519,6 +536,14 @@ def _run_ffmpeg_bounded(
                 shell=False,
                 start_new_session=True,
             )
+            try:
+                setattr(
+                    proc,
+                    "_soc_output_pipe_targets",
+                    _pipe_targets_for_process(proc, stdout_capture, stderr_capture),
+                )
+            except (AttributeError, TypeError):
+                pass
             _communicate_recorder_process_bounded(proc, timeout=timeout, process_name="ffmpeg")
             try:
                 _finish_bounded_output_captures(stdout_capture, stderr_capture)
@@ -1813,6 +1838,14 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
                         env=_filtered_environment(),
                         start_new_session=True,
                     )
+                    try:
+                        setattr(
+                            proc,
+                            "_soc_output_pipe_targets",
+                            _pipe_targets_for_process(proc, stdout_capture, stderr_capture),
+                        )
+                    except (AttributeError, TypeError):
+                        pass
                     _communicate_recorder_process_bounded(
                         proc,
                         timeout=MAX_PACTL_TIMEOUT_SECONDS,
@@ -2306,6 +2339,10 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             shell=False,
             env=_filtered_environment(),  # nosec B603
         )
+        try:
+            setattr(process, "_soc_output_pipe_targets", _pipe_targets_for_process(process, log_capture))
+        except (AttributeError, TypeError):
+            pass
         log_capture.close_writer()
         return process
     except (OSError, ValueError) as exc:
@@ -2360,6 +2397,7 @@ def stop_process(
     process_group_target: bool | None
     process_group_id: int | None = None
     process_session_id: int | None = None
+    descendant_identities: dict[int, str] = {}
     try:
         process_group_id = os.getpgid(pid)
         process_group_target = process_group_id == pid
@@ -2391,6 +2429,10 @@ def stop_process(
     def target_identity_still_safe() -> bool:
         if _recording_process_identity_matches(pid, expected_process_identity):
             return True
+        if process_group_target and expected_process_identity and _recording_process_is_absent(pid):
+            descendants_live = _process_tree_has_live_processes(descendant_identities)
+            if descendants_live is True:
+                return True
         session_present = (
             _process_group_has_recorder_session(process_session_id)
             if process_group_target and process_session_id is not None
@@ -2415,6 +2457,9 @@ def stop_process(
         return False
 
     def process_target_is_gone() -> bool:
+        descendants_live = _process_tree_has_live_processes(descendant_identities)
+        if descendants_live is not False:
+            return False
         if (
             process_group_target
             and process_group_id is not None
@@ -2426,6 +2471,11 @@ def stop_process(
 
     if not target_identity_still_safe():
         return False
+    if process_group_target:
+        descendant_scan = _process_tree_descendant_identities(pid)
+        if descendant_scan is None:
+            return False
+        descendant_identities = descendant_scan
 
     def signal_process_target(signal_name: str) -> None:
         _run_kill(["kill", signal_name, "--", process_target], check_exit=False)
@@ -2467,6 +2517,8 @@ def stop_process(
         signal_process_target("-KILL")
     except RecorderError as exc:
         raise RecorderError(f"failed to stop recorder process {pid}: {exc}") from exc
+    if not _kill_output_process_tree(descendant_identities):
+        return False
     time.sleep(0.1)
     if process_target_is_gone():
         return True
