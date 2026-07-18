@@ -5394,6 +5394,26 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "recording")
         mocked_choose.assert_not_called()
 
+    def test_start_locked_preserves_recording_state_without_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            audio = recordings / "active.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", audio_path=str(audio)))
+
+            result = cli._command_start_locked(argparse.Namespace(), store)
+            final_state = store.read()
+
+        self.assertEqual(result["status"], "recording")
+        self.assertIn("pid is missing", result["error"])
+        self.assertEqual(final_state.status, "recording")
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertFalse(final_state.inserted)
+
     def test_start_locked_does_not_promote_directory_to_recorded_audio(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

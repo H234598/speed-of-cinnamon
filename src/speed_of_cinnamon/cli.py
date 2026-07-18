@@ -4048,6 +4048,23 @@ def _command_start_locked(
                 error_text = "previous recorder could not be stopped safely; recording state preserved"
                 store.update(status="recording", error=error_text, inserted=False)
                 return {"status": "recording", "message": error_text, "error": error_text}
+        if current.audio_path and not current_audio_path:
+            store.update(
+                status="error",
+                pid=None,
+                process_identity="",
+                stopped_at=current.stopped_at or now_iso(),
+                error="recording state references an invalid artifact path",
+                inserted=False,
+            )
+            return {
+                "status": "error",
+                "message": "recording state references an invalid artifact path",
+            }
+        if current.pid is None:
+            error_text = "recording process pid is missing; recording state preserved"
+            store.update(status="recording", error=error_text, inserted=False)
+            return {"status": "recording", "message": error_text, "error": error_text}
         current_audio_stat = _recording_artifact_stat(current_audio_path) if current_audio_path else None
         if current_audio_stat is not None and current_audio_stat.st_size > 0:
             recorded = store.update(
@@ -4063,19 +4080,6 @@ def _command_start_locked(
                 "message": "previous recording has exited; run stop or toggle to transcribe",
                 "audio_path_present": bool(recorded.audio_path),
                 "language": recorded.language,
-            }
-        if current.audio_path and not current_audio_path:
-            store.update(
-                status="error",
-                pid=None,
-                process_identity="",
-                stopped_at=current.stopped_at or now_iso(),
-                error="recording state references an invalid artifact path",
-                inserted=False,
-            )
-            return {
-                "status": "error",
-                "message": "recording state references an invalid artifact path",
             }
         store.update(
             status="error",
