@@ -809,6 +809,24 @@ class SettingsExportTest(unittest.TestCase):
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
 
+    def test_write_export_removes_its_recovery_symlink_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("old export\n", encoding="utf-8")
+            replacement = Path(tmp) / "replacement.json"
+            replacement.write_text("foreign export\n", encoding="utf-8")
+
+            def link_as_symlink(_source: object, target: object, **_kwargs: object) -> None:
+                (Path(tmp) / str(target)).symlink_to(replacement)
+
+            with mock.patch.object(settings_export_module.os, "link", side_effect=link_as_symlink):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "de"})
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "old export\n")
+            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
+            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
+
     def test_write_export_closes_temporary_fd_when_fdopen_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

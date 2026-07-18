@@ -833,9 +833,11 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                     raise OSError("settings export path disappeared before backup activation") from None
                 except FileExistsError:
                     continue
+                candidate_stat_at_creation: os.stat_result | None = None
                 try:
                     backup_name = candidate_name
-                    backup_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                    candidate_stat_at_creation = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                    backup_stat = candidate_stat_at_creation
                     current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                     if (
                         not stat_module.S_ISREG(backup_stat.st_mode)
@@ -865,7 +867,10 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                         else:
                             try:
                                 candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
-                                if _same_leaf_inode(candidate_stat, existing_stat):
+                                if (
+                                    candidate_stat_at_creation is not None
+                                    and _same_leaf_inode(candidate_stat, candidate_stat_at_creation)
+                                ):
                                     if _unlink_leaf_safely(
                                         candidate_name,
                                         candidate_stat,
