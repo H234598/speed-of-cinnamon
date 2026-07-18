@@ -781,6 +781,34 @@ class SettingsExportTest(unittest.TestCase):
             self.assertFalse((Path(tmp) / ".settings-export.json.free.bak").exists())
             self.assertEqual(read_export(path)["settings"]["language"], "de")
 
+    def test_write_export_restores_target_when_it_disappears_during_backup_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("old export\n", encoding="utf-8")
+            real_stat = settings_export_module.os.stat
+            target_removed = False
+
+            def stat_then_remove_target(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal target_removed
+                result = real_stat(name, *args, **kwargs)
+                if isinstance(name, str) and name.endswith(".bak") and not target_removed:
+                    path.unlink()
+                    target_removed = True
+                return result
+
+            with mock.patch.object(settings_export_module.os, "stat", side_effect=stat_then_remove_target):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "de"})
+
+            self.assertTrue(target_removed)
+            self.assertEqual(path.read_text(encoding="utf-8"), "old export\n")
+            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
+            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
+
     def test_write_export_closes_temporary_fd_when_fdopen_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

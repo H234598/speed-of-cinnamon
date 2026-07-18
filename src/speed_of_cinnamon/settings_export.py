@@ -834,6 +834,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 except FileExistsError:
                     continue
                 try:
+                    backup_name = candidate_name
                     backup_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
                     current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
                     if (
@@ -844,7 +845,6 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                         or not _same_leaf_inode(current_target_stat, existing_stat)
                     ):
                         raise OSError("settings export path changed during backup activation")
-                    backup_name = candidate_name
                     if not _unlink_leaf_safely(
                         path.name,
                         current_target_stat,
