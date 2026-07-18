@@ -2315,7 +2315,20 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
     log_path = validate_recording_path(log_path, suffix=".log")
     log_file, created_log = _open_recorder_log_file(log_path)
     log_capture: _RecorderLogCapture | None = None
+    process: subprocess.Popen[bytes] | None = None
     opened_stat: os.stat_result | None = None
+
+    def cleanup_started_process(primary: BaseException) -> None:
+        if process is None:
+            return
+        try:
+            terminated = _terminate_recorder_process_group(process)
+        except BaseException as cleanup_error:
+            primary.add_note(f"recorder process cleanup failed: {cleanup_error}")
+        else:
+            if not terminated:
+                primary.add_note("recorder process cleanup was incomplete")
+
     try:
         try:
             os.fchmod(log_file.fileno(), 0o600)
@@ -2346,14 +2359,17 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         log_capture.close_writer()
         return process
     except (OSError, ValueError) as exc:
+        cleanup_started_process(exc)
         _finish_recorder_log_capture(log_capture, exc)
         _cleanup_created_recorder_log(log_path, log_file, created_log, expected_stat=opened_stat)
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
     except RecorderError as exc:
+        cleanup_started_process(exc)
         _finish_recorder_log_capture(log_capture, exc)
         _cleanup_created_recorder_log(log_path, log_file, created_log, expected_stat=opened_stat)
         raise
     except BaseException as exc:
+        cleanup_started_process(exc)
         _finish_recorder_log_capture(log_capture, exc)
         try:
             _cleanup_created_recorder_log(log_path, log_file, created_log, expected_stat=opened_stat)

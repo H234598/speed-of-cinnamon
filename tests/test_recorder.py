@@ -2029,6 +2029,30 @@ class RecorderTest(unittest.TestCase):
 
         log_file.close.assert_called_once()
 
+    def test_start_recorder_terminates_process_when_capture_writer_close_fails(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch.object(
+                    recorder_module._RecorderLogCapture,
+                    "close_writer",
+                    side_effect=OSError("writer close failed"),
+                ),
+                mock.patch.object(
+                    recorder_module,
+                    "_terminate_recorder_process_group",
+                    return_value=True,
+                ) as mocked_terminate,
+            ):
+                with self.assertRaisesRegex(RecorderError, "failed to start noop"):
+                    start_recorder(command, Path(tmp) / "session.log")
+
+        mocked_terminate.assert_called_once_with(process)
+
     def test_read_recording_level_closes_descriptor_when_fdopen_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "sample.wav"
