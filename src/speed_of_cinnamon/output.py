@@ -1133,6 +1133,40 @@ class _BoundedOutputCapture:
                 pass
 
 
+def _pipe_target_for_fd(fd: object) -> str | None:
+    if isinstance(fd, bool) or not isinstance(fd, int) or fd < 0:
+        return None
+    try:
+        target = os.readlink(f"/proc/self/fd/{fd}")
+    except (OSError, ValueError):
+        return None
+    if target.startswith("pipe:[") and target.endswith("]"):
+        return target
+    return None
+
+
+def _pipe_targets_for_process(process: object, *captures: object) -> tuple[str, ...]:
+    fds: set[int] = set()
+    for stream_name in ("stdin", "stdout", "stderr"):
+        stream = getattr(process, stream_name, None)
+        fileno = getattr(stream, "fileno", None)
+        if not callable(fileno):
+            continue
+        try:
+            fd = fileno()
+        except (OSError, ValueError, TypeError):
+            continue
+        if isinstance(fd, int) and not isinstance(fd, bool) and fd >= 0:
+            fds.add(fd)
+    for capture in captures:
+        for fd_name in ("_read_fd", "_write_fd"):
+            fd = getattr(capture, fd_name, None)
+            if isinstance(fd, int) and not isinstance(fd, bool) and fd >= 0:
+                fds.add(fd)
+    targets = [target for fd in fds if (target := _pipe_target_for_fd(fd)) is not None]
+    return tuple(sorted(targets))
+
+
 def _finish_bounded_output_captures(
     *captures: _BoundedOutputCapture | None,
 ) -> None:
@@ -1214,6 +1248,11 @@ def _run_with_input(
                 shell=False,
                 env=_filtered_environment(),
                 start_new_session=True,
+            )
+            setattr(
+                proc,
+                "_soc_output_pipe_targets",
+                _pipe_targets_for_process(proc, stdout_capture, stderr_capture),
             )
             proc.communicate(input=input_bytes, timeout=timeout)
         except FileNotFoundError as exc:
@@ -1424,6 +1463,65 @@ def _process_tree_descendant_identities(process_id: int) -> dict[int, str] | Non
     return descendants
 
 
+def _process_pipe_holder_identities(process: subprocess.Popen[bytes]) -> dict[int, str] | None:
+    pipe_inodes = set(_pipe_targets_for_process(process))
+    stored_targets = getattr(process, "_soc_output_pipe_targets", ())
+    if isinstance(stored_targets, (list, tuple, set)):
+        pipe_inodes.update(
+            target
+            for target in stored_targets
+            if isinstance(target, str) and target.startswith("pipe:[") and target.endswith("]")
+        )
+    if not pipe_inodes:
+        return {}
+    try:
+        proc_entries = tuple(Path("/proc").iterdir())
+    except OSError:
+        return None
+    current_uid = os.getuid() if hasattr(os, "getuid") else None
+    holders: dict[int, str] = {}
+    for proc_entry in proc_entries:
+        if not proc_entry.name.isdecimal():
+            continue
+        process_id = int(proc_entry.name)
+        if process_id == os.getpid():
+            continue
+        if current_uid is not None:
+            try:
+                if proc_entry.stat().st_uid != current_uid:
+                    continue
+            except FileNotFoundError:
+                continue
+            except OSError:
+                continue
+        try:
+            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+            close = raw.rindex(")")
+            fields = raw[close + 2 :].split()
+            start_time = fields[19]
+        except FileNotFoundError:
+            continue
+        except (OSError, UnicodeDecodeError, IndexError, ValueError):
+            continue
+        try:
+            fd_entries = tuple(proc_entry.joinpath("fd").iterdir())
+        except FileNotFoundError:
+            continue
+        except OSError:
+            continue
+        for fd_entry in fd_entries:
+            try:
+                target = os.readlink(fd_entry)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                continue
+            if target in pipe_inodes:
+                holders[process_id] = start_time
+                break
+    return holders
+
+
 def _process_tree_has_live_processes(process_identities: dict[int, str]) -> bool | None:
     for process_id, expected_start_time in process_identities.items():
         try:
@@ -1542,13 +1640,18 @@ def _wait_for_output_process_group_stop(process_group_id: int, timeout_seconds: 
 def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     if not process or not isinstance(process.pid, int) or process.pid <= 0:
         return False
+    pipe_holders: dict[int, str] = {}
     try:
         descendants = _process_group_has_live_descendants(process.pid)
         if descendants is None:
             return False
         if process.returncode is not None:
+            pipe_holders = _process_pipe_holder_identities(process)
+            if pipe_holders is None:
+                return False
             if descendants is not True:
-                return descendants is False
+                if not pipe_holders:
+                    return descendants is False
             try:
                 raw = Path(f"/proc/{process.pid}/stat").read_text(encoding="ascii").strip()
                 close = raw.rindex(")")
@@ -1568,6 +1671,7 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     process_tree_scan_incomplete = process_tree is None
     if process_tree is None:
         process_tree = {}
+    process_tree.update(pipe_holders)
     process_tree_cleanup = _kill_output_process_tree(process_tree)
     try:
         os.killpg(process.pid, signal.SIGKILL)
@@ -1601,7 +1705,7 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
 def _reap_timed_out_output_process(process: subprocess.Popen[bytes]) -> bool:
     terminated = _terminate_output_process_group(process)
     try:
-        process.communicate(timeout=None if terminated else 1)
+        process.communicate(timeout=1)
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return False
     return terminated
@@ -1658,6 +1762,11 @@ def _run_bounded_stdout_command(
                 shell=False,
                 env=_filtered_environment(),
                 start_new_session=True,
+            )
+            setattr(
+                proc,
+                "_soc_output_pipe_targets",
+                _pipe_targets_for_process(proc, stdout_capture, stderr_capture),
             )
             completed_stdout, completed_stderr = proc.communicate(input=b"", timeout=timeout)
         except subprocess.TimeoutExpired as exc:

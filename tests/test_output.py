@@ -668,7 +668,7 @@ class OutputTest(unittest.TestCase):
             self.assertTrue(output_module._reap_timed_out_output_process(process))
 
         mocked_killpg.assert_not_called()
-        process.communicate.assert_called_once_with(timeout=None)
+        process.communicate.assert_called_once_with(timeout=1)
 
     def test_reap_kills_unreaped_process_group_before_waiting(self) -> None:
         process = mock.Mock()
@@ -680,7 +680,7 @@ class OutputTest(unittest.TestCase):
             self.assertTrue(output_module._reap_timed_out_output_process(process))
 
         mocked_killpg.assert_called_once_with(1234, output_module.signal.SIGKILL)
-        process.communicate.assert_called_once_with(timeout=None)
+        process.communicate.assert_called_once_with(timeout=1)
 
     def test_live_process_cleanup_fails_closed_when_group_scan_is_incomplete(self) -> None:
         process = mock.Mock()
@@ -718,6 +718,43 @@ class OutputTest(unittest.TestCase):
             deadline = time.monotonic() + 2
             while child_is_live() and time.monotonic() < deadline:
                 time.sleep(0.01)
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            process.communicate()
+
+    def test_reaped_process_cleanup_kills_child_that_created_new_session(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import os,time; read_fd,write_fd=os.pipe(); child=os.fork(); "
+                "(os.close(read_fd), os.setsid(), os.write(write_fd, str(os.getpid()).encode()), "
+                "os.close(write_fd), time.sleep(30)) if child == 0 else "
+                "(os.close(write_fd), print(os.read(read_fd, 32).decode(), flush=True), "
+                "os.close(read_fd), time.sleep(0.1))",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        child_pid = int(process.stdout.readline())
+        process.wait()
+
+        def child_is_live() -> bool:
+            try:
+                state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()[0]
+            except OSError:
+                return False
+            return state not in {"Z", "X", "x"}
+
+        try:
+            self.assertTrue(child_is_live())
+            self.assertTrue(output_module._terminate_output_process_group(process))
             self.assertFalse(child_is_live())
         finally:
             try:
@@ -982,6 +1019,39 @@ class OutputTest(unittest.TestCase):
                             os.kill(child_pid, 9)
                         except ProcessLookupError:
                             pass
+
+    def test_output_capture_cleanup_kills_reparented_new_session_child(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "child.pid"
+            code = (
+                "import os,time; child=os.fork(); "
+                f"(os.setsid(), open({str(marker)!r}, 'w').write(str(os.getpid())), time.sleep(30)) "
+                "if child == 0 else os._exit(0)"
+            )
+            self.assertIsNone(
+                output_module._run_bounded_stdout_command(
+                    ["python3", "-c", code],
+                    timeout=2,
+                    runtime_command="/usr/bin/python3",
+                )
+            )
+            child_pid = int(marker.read_text(encoding="ascii"))
+
+            def child_is_live() -> bool:
+                try:
+                    state = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii").rsplit(")", 1)[1].split()[0]
+                except OSError:
+                    return False
+                return state not in {"Z", "X", "x"}
+
+            try:
+                self.assertFalse(child_is_live())
+            finally:
+                try:
+                    if child_is_live():
+                        os.kill(child_pid, 9)
+                except ProcessLookupError:
+                    pass
 
     def test_run_with_input_limits_output_size(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
