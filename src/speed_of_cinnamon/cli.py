@@ -5152,7 +5152,12 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
             error_text = "recording process pid is missing; recording state preserved"
             store.update(status="recording", error=error_text, inserted=False)
             return {"status": "recording", "message": error_text, "error": error_text}
-        process_verified_alive = _recording_process_verified_alive(state)
+        try:
+            process_verified_alive = _recording_process_verified_alive(state)
+        except RuntimeError as exc:
+            error_text = f"{exc}; recording state preserved"
+            store.update(status="recording", error=error_text, inserted=False)
+            return {"status": "recording", "message": error_text, "error": error_text}
         current_process_identity = None
         if (
             not str(state.process_identity or "").strip()
@@ -5228,7 +5233,12 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 error_text = "recording process pid is missing; recording state preserved"
                 store.update(status="recording", error=error_text, inserted=False)
                 return {"status": "recording", "message": error_text, "error": error_text}
-            process_verified_alive = _recording_process_verified_alive(state)
+            try:
+                process_verified_alive = _recording_process_verified_alive(state)
+            except RuntimeError as exc:
+                error_text = f"{exc}; recording state preserved"
+                store.update(status="recording", error=error_text, inserted=False)
+                return {"status": "recording", "message": error_text, "error": error_text}
             if (
                 not str(state.process_identity or "").strip()
                 and _recording_process_group_is_active(state.pid)
@@ -5508,7 +5518,12 @@ def command_toggle(args: argparse.Namespace) -> dict[str, object]:
         args.confirm_plaintext_output = True
         return command_stop(args)
     if state.status == "recording":
-        if _recording_process_verified_active(state):
+        try:
+            recording_active = _recording_process_verified_active(state)
+        except RuntimeError:
+            args.confirm_plaintext_output = True
+            return command_stop(args)
+        if recording_active:
             args.confirm_plaintext_output = True
             return command_stop(args)
         if state.audio_path:

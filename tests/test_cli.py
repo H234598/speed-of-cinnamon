@@ -12642,6 +12642,42 @@ class CliTest(unittest.TestCase):
         self.assertIsNone(final_state.pid)
         self.assertFalse(final_state.process_identity)
 
+    @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
+    def test_lifecycle_commands_preserve_live_recording_without_process_identity(
+        self,
+        mocked_alive: mock.Mock,
+    ) -> None:
+        for command_name in ("stop", "cancel", "toggle"):
+            with tempfile.TemporaryDirectory() as tmp:
+                state_file = Path(tmp) / "state.json"
+                store = StateStore(state_file)
+                store.write(
+                    RecordingState(
+                        status="recording",
+                        pid=1234,
+                        inserted=True,
+                    )
+                )
+                args = self._build_finalize_args(insert_method="none")
+                args.state_file = str(state_file)
+                with mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}):
+                    if command_name == "stop":
+                        result = cli.command_stop(args)
+                    elif command_name == "cancel":
+                        result = cli.command_cancel(args)
+                    else:
+                        result = cli.command_toggle(args)
+                final_state = store.read()
+
+            self.assertEqual(result["status"], "recording")
+            self.assertIn("identity", result["error"])
+            self.assertIn("state preserved", result["error"])
+            self.assertEqual(final_state.status, "recording")
+            self.assertFalse(final_state.inserted)
+            self.assertEqual(final_state.error, result["error"])
+
+        mocked_alive.assert_called()
+
     @mock.patch("speed_of_cinnamon.cli.finalize_recording", return_value={"status": "done"})
     @mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False)
     @mock.patch("speed_of_cinnamon.cli.process_is_alive", return_value=True)
