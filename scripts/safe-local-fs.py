@@ -756,11 +756,23 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
 
 def cmd_remove(args: argparse.Namespace) -> None:
     path = _validate_absolute(args.path, "remove path")
+    expected_identity = getattr(args, "expected_identity", None)
     parent_fd, leaf = _open_parent(path, action=args.action, missing_ok=True)
     if parent_fd is None:
+        if expected_identity not in {None, "missing"}:
+            raise OSError(f"destination changed during {args.action}: {path}")
         return
     try:
         stat_result = _lstat_at(parent_fd, leaf)
+        if expected_identity is not None:
+            _assert_expected_identity(
+                parent_fd,
+                leaf,
+                expected_identity,
+                action=args.action,
+                path=path,
+            )
+            stat_result = _lstat_at(parent_fd, leaf)
         if stat_result is None:
             return
         if stat_is_symlink_no_follow(stat_result.st_mode):
@@ -783,14 +795,14 @@ def cmd_remove(args: argparse.Namespace) -> None:
 
 def cmd_remove_leaf(args: argparse.Namespace) -> None:
     path = _validate_absolute(args.path, "path")
+    expected_identity = getattr(args, "expected_identity", None)
     parent_fd, leaf = _open_parent(path, action=args.action, missing_ok=True)
     if parent_fd is None:
+        if expected_identity not in {None, "missing"}:
+            raise OSError(f"destination changed during {args.action}: {path}")
         return
     try:
         stat_result = _lstat_at(parent_fd, leaf)
-        if stat_result is None:
-            return
-        expected_identity = getattr(args, "expected_identity", None)
         if expected_identity is not None:
             _assert_expected_identity(
                 parent_fd,
@@ -799,6 +811,9 @@ def cmd_remove_leaf(args: argparse.Namespace) -> None:
                 action=args.action,
                 path=path,
             )
+            stat_result = _lstat_at(parent_fd, leaf)
+        if stat_result is None:
+            return
         mode = stat_result.st_mode
         if stat_is_dir_no_follow(mode):
             _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
@@ -811,11 +826,23 @@ def cmd_remove_leaf(args: argparse.Namespace) -> None:
 
 def cmd_rmdir(args: argparse.Namespace) -> None:
     path = _validate_absolute(args.path, "directory path")
+    expected_identity = getattr(args, "expected_identity", None)
     parent_fd, leaf = _open_parent(path, action=args.action, missing_ok=True)
     if parent_fd is None:
+        if expected_identity not in {None, "missing"}:
+            raise OSError(f"destination changed during {args.action}: {path}")
         return
     try:
         stat_result = _lstat_at(parent_fd, leaf)
+        if expected_identity is not None:
+            _assert_expected_identity(
+                parent_fd,
+                leaf,
+                expected_identity,
+                action=args.action,
+                path=path,
+            )
+            stat_result = _lstat_at(parent_fd, leaf)
         if stat_result is None:
             return
         if stat_is_symlink_no_follow(stat_result.st_mode):
@@ -889,6 +916,7 @@ def build_parser() -> argparse.ArgumentParser:
     remove.add_argument("action")
     remove.add_argument("path")
     remove.add_argument("--kind", choices=("file", "dir"), required=True)
+    remove.add_argument("--expected-identity")
     remove.set_defaults(func=cmd_remove)
 
     remove_leaf = subparsers.add_parser("remove-leaf")
@@ -901,6 +929,7 @@ def build_parser() -> argparse.ArgumentParser:
     rmdir.add_argument("action")
     rmdir.add_argument("path")
     rmdir.add_argument("--ignore-non-empty", action="store_true")
+    rmdir.add_argument("--expected-identity")
     rmdir.set_defaults(func=cmd_rmdir)
     return parser
 

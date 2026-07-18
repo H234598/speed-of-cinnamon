@@ -67,6 +67,26 @@ safe_fs() {
   "${python3_path}" "${repo_dir}/scripts/safe-local-fs.py" "$@"
 }
 
+snapshot_identity() {
+  local target="$1"
+  local kind="$2"
+
+  if [[ -e "${target}" || -L "${target}" ]]; then
+    safe_fs identity uninstall "${target}" --kind "${kind}"
+  else
+    printf 'missing\n'
+  fi
+}
+
+remove_installed_target() {
+  local target="$1"
+  local kind="$2"
+  local expected_identity
+
+  expected_identity="$(snapshot_identity "${target}" "${kind}")"
+  safe_fs remove uninstall "${target}" --kind "${kind}" --expected-identity "${expected_identity}"
+}
+
 if [[ "${HOME}" == "/" ]]; then
   printf 'Refusing to run uninstall from root home directory.\n' >&2
   exit 1
@@ -102,10 +122,11 @@ if [[ "${applet_dir}" == "${HOME}" || "${bin_path}" == "${HOME}" || "${man_dir}"
   exit 1
 fi
 
-safe_fs remove uninstall "${applet_dir}" --kind dir
-safe_fs remove uninstall "${bin_path}" --kind file
-safe_fs remove uninstall "${man_dir}/speed-of-cinnamon.1" --kind file
-safe_fs remove uninstall "${man_dir}/speed-of-cinnamon-alarms.1" --kind file
-safe_fs remove uninstall "${python_dir}" --kind dir
-safe_fs rmdir uninstall "${app_data}" --ignore-non-empty
+app_data_identity="$(snapshot_identity "${app_data}" dir)"
+remove_installed_target "${applet_dir}" dir
+remove_installed_target "${bin_path}" file
+remove_installed_target "${man_dir}/speed-of-cinnamon.1" file
+remove_installed_target "${man_dir}/speed-of-cinnamon-alarms.1" file
+remove_installed_target "${python_dir}" dir
+safe_fs rmdir uninstall "${app_data}" --ignore-non-empty --expected-identity "${app_data_identity}"
 printf 'Removed %s applet, backend wrapper, local Python package, and local man pages.\n' "${uuid}"

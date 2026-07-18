@@ -1024,6 +1024,48 @@ class InstallLocalTest(unittest.TestCase):
             self.assertTrue(models_dir.exists())
             self.assertTrue(alarm_file.exists())
 
+    def test_uninstall_local_preserves_target_replaced_after_identity_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            home = tmp_path / "home"
+            home.mkdir()
+            applet_target = home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598"
+            applet_target.mkdir(parents=True)
+            (applet_target / "old.txt").write_text("old\n", encoding="utf-8")
+            trigger = tmp_path / "race-triggered"
+            raced_target = tmp_path / "raced-applet"
+
+            real_helper = repo_root / "scripts" / "safe-local-fs-real.py"
+            shutil.copy2(repo_root / "scripts" / "safe-local-fs.py", real_helper)
+            shutil.copy2(REPO_ROOT / "scripts" / "uninstall-local.sh", repo_root / "scripts" / "uninstall-local.sh")
+            helper = repo_root / "scripts" / "safe-local-fs.py"
+            helper.write_text(
+                "from pathlib import Path\n"
+                "import subprocess\n"
+                "import sys\n"
+                f"real_helper = Path({str(real_helper)!r})\n"
+                "result = subprocess.run([sys.executable, str(real_helper), *sys.argv[1:]], check=False)\n"
+                "if result.returncode:\n"
+                "    raise SystemExit(result.returncode)\n"
+                f"target = Path({str(applet_target)!r})\n"
+                f"trigger = Path({str(trigger)!r})\n"
+                f"raced_target = Path({str(raced_target)!r})\n"
+                "if len(sys.argv) > 3 and sys.argv[1] == 'identity' and sys.argv[3] == str(target) and not trigger.exists():\n"
+                "    target.rename(raced_target)\n"
+                "    target.mkdir()\n"
+                "    (target / 'foreign.txt').write_text('foreign\\n', encoding='utf-8')\n"
+                "    trigger.write_text('1', encoding='utf-8')\n",
+                encoding="utf-8",
+            )
+
+            result = self._run_uninstall_local(repo_root, home)
+
+            self.assertNotEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertTrue(trigger.exists(), msg=result.stdout + result.stderr)
+            self.assertEqual((applet_target / "foreign.txt").read_text(encoding="utf-8"), "foreign\n")
+            self.assertEqual((raced_target / "old.txt").read_text(encoding="utf-8"), "old\n")
+
     def test_uninstall_local_refuses_symlinked_home_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
