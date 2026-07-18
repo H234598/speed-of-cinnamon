@@ -3473,12 +3473,14 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("this._completeKeyboardInsertFailure(", block)
         self.assertIn('_("Clipboard could not be verified before automatic paste")', block)
+        self.assertIn('if (!this.clipboard || !this.clipboard.get_text)', block)
         self.assertNotIn("global.logError(err);", block)
         self.assertLess(block.index("try {"), block.index("this.clipboard.get_text"))
 
         args_start = source.index("_spawnKeyboardArgs: function(")
         args_end = source.index("\n  _finishAppletTextInsert:", args_start)
         args_block = source[args_start:args_end]
+        self.assertIn('this._completeKeyboardInsertFailure(completionCallback, _("Clipboard could not be verified before automatic paste"));', args_block)
         self.assertLess(args_block.index("try {"), args_block.index("this.clipboard.get_text"))
 
     def test_timer_reschedule_aborts_when_previous_timer_cannot_be_removed(self) -> None:

@@ -13281,7 +13281,7 @@ MyApplet.prototype = {
     let expected = String(expectedClipboardText);
     try {
       if (!this.clipboard || !this.clipboard.get_text) {
-        if (typeof completionCallback === "function") completionCallback(false);
+        this._completeKeyboardInsertFailure(completionCallback, _("Clipboard could not be verified before automatic paste"));
         return;
       }
       this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardStateCallback("clipboard-read", (clipboard, clipboardText) => {
@@ -13389,7 +13389,7 @@ MyApplet.prototype = {
       let expected = String(expectedClipboardText);
       try {
         if (!this.clipboard || !this.clipboard.get_text) {
-          if (typeof completionCallback === "function") completionCallback(false);
+          this._completeKeyboardInsertFailure(completionCallback, _("Clipboard could not be verified before automatic paste"));
           return;
         }
         this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardStateCallback("clipboard-read", (clipboard, clipboardText) => {
