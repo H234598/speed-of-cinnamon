@@ -71,6 +71,38 @@ class SafeLocalFsTest(unittest.TestCase):
             self.assertTrue(source_flags[0] & getattr(SAFE_LOCAL_FS.os, "O_NONBLOCK", 0))
             self.assertEqual(target.read_text(encoding="utf-8"), "safe\n")
 
+    def test_copy_file_does_not_clobber_raced_destination(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.txt"
+            target = root / "target.txt"
+            source.write_text("source\n", encoding="utf-8")
+            args = SAFE_LOCAL_FS.argparse.Namespace(
+                action="test",
+                src=str(source),
+                dst=str(target),
+                mode="0600",
+                dst_must_not_exist=True,
+            )
+            real_no_replace = SAFE_LOCAL_FS._rename_without_replacing
+
+            def create_raced_destination(
+                source_name: str,
+                target_name: str,
+                *,
+                directory_fd: int,
+                action: str,
+            ) -> None:
+                raced_target = Path(f"/proc/self/fd/{directory_fd}") / target_name
+                raced_target.write_text("raced\n", encoding="utf-8")
+                real_no_replace(source_name, target_name, directory_fd=directory_fd, action=action)
+
+            with mock.patch.object(SAFE_LOCAL_FS, "_rename_without_replacing", side_effect=create_raced_destination):
+                with self.assertRaises(FileExistsError):
+                    SAFE_LOCAL_FS.cmd_copy_file(args)
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "raced\n")
+
     def test_remove_leaf_unlinks_symlink_leaf_without_following_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

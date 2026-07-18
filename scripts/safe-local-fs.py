@@ -422,7 +422,10 @@ def _copy_file_atomically_from_checked_source(
         if staged_stat is None or not _same_identity(staged_stat, tmp_stat):
             raise OSError(f"temporary file changed during {action}: {dst}")
         _assert_target_unchanged(parent_fd, leaf, target_stat, action=action)
-        os.replace(tmp_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        if dst_must_not_exist:
+            _rename_without_replacing(tmp_name, leaf, directory_fd=parent_fd, action=action)
+        else:
+            os.replace(tmp_name, leaf, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
         if not _same_identity(tmp_stat, _lstat_at(parent_fd, leaf)):
             fail(f"destination changed during {action}: {dst}")
         _check_leaf(parent_fd, leaf, dst, action=action, kind="file", must_exist=True)
