@@ -580,6 +580,69 @@ def _recording_process_stat_fields(pid: int) -> list[str] | None:
         return None
 
 
+def _same_session_process_group_states(session_id: int) -> dict[int, bool] | None:
+    if session_id <= 0:
+        return None
+    try:
+        proc_entries = tuple(Path("/proc").iterdir())
+    except OSError:
+        return None
+    process_group_states: dict[int, bool] = {}
+    scan_incomplete = False
+    for proc_entry in proc_entries:
+        if not proc_entry.name.isdecimal():
+            continue
+        proc_pid = int(proc_entry.name)
+        stat_fields = _recording_process_stat_fields(proc_pid)
+        if stat_fields is None or len(stat_fields) < 4:
+            try:
+                member_session_id = os.getsid(proc_pid)
+                member_group_id = os.getpgid(proc_pid)
+            except ProcessLookupError:
+                continue
+            except (OSError, OverflowError, ValueError):
+                scan_incomplete = True
+                continue
+            if member_session_id != session_id:
+                continue
+            if member_group_id <= 0:
+                scan_incomplete = True
+                continue
+            scan_incomplete = True
+            continue
+        try:
+            member_group_id = int(stat_fields[2])
+            member_session_id = int(stat_fields[3])
+        except ValueError:
+            scan_incomplete = True
+            continue
+        if member_session_id != session_id:
+            continue
+        if member_group_id <= 0:
+            scan_incomplete = True
+            continue
+        process_group_states[member_group_id] = process_group_states.get(member_group_id, False) or (
+            stat_fields[0] not in {"Z", "X", "x"}
+        )
+    if scan_incomplete:
+        return None
+    return process_group_states
+
+
+def _same_session_process_group_ids(session_id: int) -> set[int] | None:
+    process_group_states = _same_session_process_group_states(session_id)
+    if process_group_states is None:
+        return None
+    return set(process_group_states)
+
+
+def _same_session_has_live_processes(session_id: int) -> bool | None:
+    process_group_states = _same_session_process_group_states(session_id)
+    if process_group_states is None:
+        return None
+    return any(process_group_states.values())
+
+
 def _recording_process_identity_for_pid(pid: int) -> str | None:
     rest = _recording_process_stat_fields(pid)
     if rest is None or len(rest) < 20:
@@ -1867,7 +1930,8 @@ def process_group_has_live_processes(process_group_id: int) -> bool | None:
         if member_session_id != process_group_id:
             continue
         if member_group_id != process_group_id:
-            same_session_different_group = True
+            if stat_fields[0] not in {"Z", "X", "x"}:
+                same_session_different_group = True
             continue
         if stat_fields[0] not in {"Z", "X", "x"}:
             group_live = True
@@ -1945,6 +2009,9 @@ def _process_group_exists(process_group_id: int) -> bool | None:
     if session_present is True:
         return True
     if session_present is None:
+        session_group_ids = _same_session_process_group_ids(process_group_id)
+        if session_group_ids:
+            return True
         return None
     try:
         os.kill(-process_group_id, 0)
@@ -2268,9 +2335,21 @@ def stop_process(
     if expected_process_identity is None and not allow_unverified_process:
         raise RecorderError("expected_process_identity is required to stop recorder process")
     process_group_target: bool | None
+    process_group_id: int | None = None
+    process_session_id: int | None = None
     try:
-        process_group_target = os.getpgid(pid) == pid
-        process_target = f"-{pid}" if process_group_target else str(pid)
+        process_group_id = os.getpgid(pid)
+        process_group_target = process_group_id == pid
+        if process_group_target:
+            process_session_id = pid
+        else:
+            try:
+                process_session_id = os.getsid(pid)
+            except (ProcessLookupError, OSError, OverflowError, ValueError):
+                process_session_id = None
+            else:
+                process_group_target = process_session_id == pid
+        process_target = f"-{process_group_id}" if process_group_target else str(pid)
     except ProcessLookupError:
         # start_recorder() creates a new session, so its leader PID is also the
         # process-group ID. The leader can be reaped by another process before
@@ -2280,6 +2359,8 @@ def stop_process(
             return True
         if process_group_target is not True:
             return False
+        process_group_id = pid
+        process_session_id = pid
         process_target = f"-{pid}"
     except (OSError, OverflowError, ValueError) as exc:
         raise RecorderError(f"failed to inspect recorder process {pid}: {exc}") from exc
@@ -2287,48 +2368,85 @@ def stop_process(
     def target_identity_still_safe() -> bool:
         if _recording_process_identity_matches(pid, expected_process_identity):
             return True
+        session_present = (
+            _process_group_has_recorder_session(process_session_id)
+            if process_group_target and process_session_id is not None
+            else False
+        )
+        if session_present is None:
+            session_group_ids = (
+                _same_session_process_group_ids(process_session_id)
+                if process_session_id is not None
+                else None
+            )
+            session_present = bool(session_group_ids) if session_group_ids is not None else None
         if (
             process_group_target
             and expected_process_identity
             and _recording_process_is_absent(pid)
-            and _process_group_exists(pid)
-            and _process_group_has_recorder_session(pid) is True
+            and process_session_id is not None
+            and _process_group_exists(process_session_id)
+            and session_present is True
         ):
             return _recording_process_identity_for_pid(pid) is None
         return False
 
+    def process_target_is_gone() -> bool:
+        if (
+            process_group_target
+            and process_group_id is not None
+            and process_session_id is not None
+            and process_group_id != process_session_id
+        ):
+            return _same_session_has_live_processes(process_session_id) is False
+        return _process_is_gone(process_target)
+
     if not target_identity_still_safe():
         return False
 
-    _run_kill(["kill", "-INT", "--", process_target], check_exit=False)
+    def signal_process_target(signal_name: str) -> None:
+        _run_kill(["kill", signal_name, "--", process_target], check_exit=False)
+        if not process_group_target:
+            return
+        if process_group_id is None or process_session_id is None:
+            return
+        session_group_ids = _same_session_process_group_ids(process_session_id)
+        if session_group_ids is None:
+            return
+        for session_group_id in sorted(session_group_ids):
+            if session_group_id == process_group_id:
+                continue
+            _run_kill(["kill", signal_name, "--", f"-{session_group_id}"], check_exit=False)
+
+    signal_process_target("-INT")
 
     deadline = time.monotonic() + timeout_seconds
     while time.monotonic() < deadline:
-        if _process_is_gone(process_target):
+        if process_target_is_gone():
             return True
         if not target_identity_still_safe():
             return False
         time.sleep(0.1)
 
-    if _process_is_gone(process_target):
+    if process_target_is_gone():
         return True
     if not target_identity_still_safe():
         return False
-    _run_kill(["kill", "-TERM", "--", process_target], check_exit=False)
+    signal_process_target("-TERM")
 
     time.sleep(0.5)
-    if _process_is_gone(process_target):
+    if process_target_is_gone():
         return True
     if not target_identity_still_safe():
         return False
 
     try:
-        _run_kill(["kill", "-KILL", "--", process_target], check_exit=False)
+        signal_process_target("-KILL")
     except RecorderError as exc:
         raise RecorderError(f"failed to stop recorder process {pid}: {exc}") from exc
     time.sleep(0.1)
-    if _process_is_gone(process_target):
+    if process_target_is_gone():
         return True
     if not target_identity_still_safe():
         return False
-    return _process_is_gone(process_target)
+    return process_target_is_gone()

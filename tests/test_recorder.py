@@ -3070,6 +3070,36 @@ Source #13
             self.assertIsNone(recorder_module.process_group_has_live_processes(1234))
             self.assertIsNone(recorder_module._process_group_has_recorder_session(1234))
 
+    def test_stop_process_signals_live_same_session_process_groups(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=4321),
+            mock.patch("speed_of_cinnamon.recorder.os.getsid", return_value=1234),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
+            mock.patch(
+                "speed_of_cinnamon.recorder._same_session_process_group_ids",
+                return_value={1234, 4321},
+            ),
+            mock.patch("speed_of_cinnamon.recorder._same_session_has_live_processes", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+
+        self.assertFalse(result)
+        self.assertEqual(
+            [call.args[0] for call in mocked_kill.call_args_list],
+            [
+                ["kill", "-INT", "--", "-4321"],
+                ["kill", "-INT", "--", "-1234"],
+                ["kill", "-TERM", "--", "-4321"],
+                ["kill", "-TERM", "--", "-1234"],
+                ["kill", "-KILL", "--", "-4321"],
+                ["kill", "-KILL", "--", "-1234"],
+            ],
+        )
+
     def test_recording_process_stat_decode_errors_fail_closed(self) -> None:
         error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid process name")
         with mock.patch.object(recorder_module.Path, "read_text", side_effect=error):
