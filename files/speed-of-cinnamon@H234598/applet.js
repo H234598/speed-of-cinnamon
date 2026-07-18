@@ -702,7 +702,10 @@ MyApplet.prototype = {
     }
   },
 
-  _commitSettingsBatch: function(writes, group, errorMessage) {
+  _commitSettingsBatch: function(writes, group, errorMessage, preserveRecording) {
+    let setStatus = preserveRecording === false
+      ? this._setStatus.bind(this)
+      : this._setStatusPreservingRecording.bind(this);
     if (!Array.isArray(writes)) {
       return false;
     }
@@ -723,7 +726,7 @@ MyApplet.prototype = {
       this._rollbackSettingsBatch(attemptedWrites);
       this._recordLifecycleError(group || "settings-batch", err);
       if (errorMessage) {
-        this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
+        setStatus("error", errorMessage, this.lastTranscript);
       }
       return false;
     }
@@ -9115,13 +9118,16 @@ MyApplet.prototype = {
     this._setStatusPreservingRecording("ready", label + ": " + (this[propertyName] ? _("enabled") : _("disabled")), this.lastTranscript);
   },
 
-  _selectTextModelBackend: function(backend, model, message) {
+  _selectTextModelBackend: function(backend, model, message, preserveRecording) {
+    let setStatus = preserveRecording === false
+      ? this._setStatus.bind(this)
+      : this._setStatusPreservingRecording.bind(this);
     let safeModel;
     try {
       safeModel = this._coerceCliTextArg(model === undefined || model === null ? "" : model, "text model");
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
-      this._setStatusPreservingRecording("error", _("Text model is invalid: ") + safeError, this.lastTranscript);
+      setStatus("error", _("Text model is invalid: ") + safeError, this.lastTranscript);
       return false;
     }
     let nextBackend = String(backend || "none");
@@ -9135,7 +9141,7 @@ MyApplet.prototype = {
     if (nextBackend === "openai-compatible") {
       settingsWrites.push(["openai-compatible-text-model", safeModel, previousExternalTextModel]);
     }
-    if (!this._commitSettingsBatch(settingsWrites, "settings-text-model", _("Text model settings could not be saved"))) {
+    if (!this._commitSettingsBatch(settingsWrites, "settings-text-model", _("Text model settings could not be saved"), preserveRecording)) {
       return false;
     }
     let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
@@ -9145,7 +9151,7 @@ MyApplet.prototype = {
       this.postProcessBackend = previousBackend;
       this.ollamaModel = previousOllamaModel;
       this.openaiCompatibleTextModel = previousExternalTextModel;
-      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      setStatus("error", _("Ollama operation could not be stopped"), this.lastTranscript);
       return false;
     }
     this.postProcessBackend = nextBackend;
@@ -9164,7 +9170,7 @@ MyApplet.prototype = {
       }
     }
     this._refreshTextModelMenu();
-    this._setStatusPreservingRecording("ready", message, this.lastTranscript);
+    setStatus("ready", message, this.lastTranscript);
     return true;
   },
 
@@ -9478,7 +9484,7 @@ MyApplet.prototype = {
         if (this._clearOllamaModelFlow(flowToken)) {
           return true;
         }
-        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+        this._setStatus("error", _("Ollama operation could not be stopped"), this.lastTranscript);
         return false;
       };
       let finish = (message) => {
@@ -9524,7 +9530,7 @@ MyApplet.prototype = {
           if (!clearFlow()) {
             return;
           }
-          this._selectTextModelBackend("ollama", model, _("Text model: ") + model);
+          this._selectTextModelBackend("ollama", model, _("Text model: ") + model, false);
           return;
         }
       }
@@ -9540,7 +9546,7 @@ MyApplet.prototype = {
     } catch (error) {
       this._clearOllamaModelFlow(flowToken);
       this._recordLifecycleError("ollama-flow", error);
-      this._setStatusPreservingRecording("error", _("Could not prepare Ollama model prompt"), this.lastTranscript);
+      this._setStatus("error", _("Could not prepare Ollama model prompt"), this.lastTranscript);
       return;
     }
     if (!zenity) {
@@ -9565,7 +9571,7 @@ MyApplet.prototype = {
       }
       if (result && result.startupFailed === true) {
         if (!this._clearOllamaModelFlow(flowToken)) {
-          this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+          this._setStatus("error", _("Ollama operation could not be stopped"), this.lastTranscript);
           return;
         }
         this._setStatus("error", _("Could not open Ollama model prompt"), this.lastTranscript);
@@ -9574,7 +9580,7 @@ MyApplet.prototype = {
       let model = String(output || "").trim();
       if (model === "") {
         if (!this._clearOllamaModelFlow(flowToken)) {
-          this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+          this._setStatus("error", _("Ollama operation could not be stopped"), this.lastTranscript);
           return;
         }
         this._setStatus("ready", _("Ollama model installation cancelled"), this.lastTranscript);
@@ -9639,7 +9645,7 @@ MyApplet.prototype = {
         }
         let message = _("Ollama model installed: ") + installedModel;
         this._clearOllamaModelFlow(flowToken);
-        if (!this._selectTextModelBackend("ollama", installedModel, message)) {
+        if (!this._selectTextModelBackend("ollama", installedModel, message, false)) {
           this._refreshTextModelMenu();
           return;
         }
@@ -11728,7 +11734,7 @@ MyApplet.prototype = {
   _watchOllamaInstallThenChoose: function() {
     if (this._cancelOllamaInstallWatch() === false) {
       this._clearOllamaModelFlow();
-      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      this._setStatus("error", _("Ollama operation could not be stopped"), this.lastTranscript);
       return false;
     }
     let watchToken = {};
@@ -11788,7 +11794,7 @@ MyApplet.prototype = {
           this.ollamaInstallWatchToken = null;
           this._clearOllamaModelFlow();
           let safeError = this._sanitizeErrorMessage(err);
-          this._setStatusPreservingRecording("error", _("Ollama status check failed: ") + safeError, this.lastTranscript);
+          this._setStatus("error", _("Ollama status check failed: ") + safeError, this.lastTranscript);
         }
       }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS, resourceGroup: "ollama" });
       return false;
@@ -11796,7 +11802,7 @@ MyApplet.prototype = {
     if (!timerId && this.ollamaInstallWatchToken === watchToken) {
       this.ollamaInstallWatchToken = null;
       this._clearOllamaModelFlow();
-      this._setStatusPreservingRecording("error", _("Ollama installation watch could not be scheduled"), this.lastTranscript);
+      this._setStatus("error", _("Ollama installation watch could not be scheduled"), this.lastTranscript);
     }
   },
 

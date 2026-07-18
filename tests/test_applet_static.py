@@ -131,7 +131,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._commitSettingValue("postProcessPreset", "post-process-preset"', source)
         self.assertIn("this._commitSettingValue(propertyName, settingKey, nextValue", source)
         self.assertIn("_rollbackSettingsBatch: function(writes)", source)
-        self.assertIn("_commitSettingsBatch: function(writes, group, errorMessage)", source)
+        self.assertIn("_commitSettingsBatch: function(writes, group, errorMessage, preserveRecording)", source)
         self.assertIn('this._commitSettingsBatch(settingsWrites, "settings-text-model"', source)
         self.assertIn('this._commitSettingsBatch(settingsWrites, "settings-text-polishing"', source)
         self.assertIn("_refreshTextModelMenuForBackend: function(backendOverride)", source)
@@ -2047,7 +2047,7 @@ class AppletStaticTest(unittest.TestCase):
         watch_block = source[watch_start:watch_end]
         self.assertIn("if (this._cancelOllamaInstallWatch() === false)", watch_block)
         self.assertIn("this._clearOllamaModelFlow();", watch_block)
-        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', watch_block)
+        self.assertIn('this._setStatus("error", _("Ollama operation could not be stopped")', watch_block)
         self.assertIn("return false;", watch_block)
         self.assertIn("return true;", watch_block)
         self.assertIn("let watchToken = {};", watch_block)
@@ -2055,7 +2055,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.ollamaInstallWatchToken !== watchToken", watch_block)
         self.assertIn("this._scheduleOllamaInstallWatchPoll(watchToken);", watch_block)
         self.assertIn("this.ollamaInstallWatchToken = null;", watch_block)
-        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama status check failed: ") + safeError, this.lastTranscript);', watch_block)
+        self.assertIn('this._setStatus("error", _("Ollama status check failed: ") + safeError, this.lastTranscript);', watch_block)
 
     def test_recording_artifact_retention_is_optional(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3970,7 +3970,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('finish(_("Ollama model selection was invalid"));', source)
         self.assertIn("let knownModel = false;", source)
         self.assertIn('this._coerceCliTextArg(candidate.name.trim(), "ollama model")', source)
-        self.assertIn('this._selectTextModelBackend("ollama", model, _("Text model: ") + model);', source)
+        self.assertIn('this._selectTextModelBackend("ollama", model, _("Text model: ") + model, false);', source)
         self.assertIn("_promptInstallOllamaTextModel: function(flowToken)", source)
         self.assertIn("_ollamaModelPromptArgs: function()", source)
         self.assertIn("--entry-text=llama3.2:3b", source)
@@ -3979,7 +3979,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof payload.model === "string" && payload.model.trim() !== ""', source)
         self.assertIn('let installedModel = payload && typeof payload.model === "string"', source)
         self.assertIn('String(model || "").trim()', source)
-        self.assertIn('if (!this._selectTextModelBackend("ollama", installedModel, message))', source)
+        self.assertIn('if (!this._selectTextModelBackend("ollama", installedModel, message, false))', source)
         self.assertIn('this._notify(_("Ollama model installation failed"), safeError, true)', source)
         self.assertIn('this._notify(_("Could not check Ollama"), safeError, true)', source)
         self.assertIn('this._notify(_("Could not load Ollama models"), safeError, true)', source)
@@ -4042,7 +4042,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.ollamaInstallWatchToken = null;", watch_block)
         self.assertIn("let timerId = this._scheduleTrackedTimer", watch_block)
         self.assertIn("if (!timerId && this.ollamaInstallWatchToken === watchToken)", watch_block)
-        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama installation watch could not be scheduled")', watch_block)
+        self.assertIn('this._setStatus("error", _("Ollama installation watch could not be scheduled")', watch_block)
         self.assertIn("return false;", watch_block)
 
     def test_ollama_model_dialogs_ignore_stale_callbacks(self) -> None:
@@ -4074,9 +4074,9 @@ class AppletStaticTest(unittest.TestCase):
         choose_block = source[choose_start:choose_end]
         self.assertIn("let clearFlow = () =>", choose_block)
         self.assertIn("if (this._clearOllamaModelFlow(flowToken))", choose_block)
-        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', choose_block)
+        self.assertIn('this._setStatus("error", _("Ollama operation could not be stopped")', choose_block)
         self.assertLess(
-            choose_block.index('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")'),
+            choose_block.index('this._setStatus("error", _("Ollama operation could not be stopped")'),
             choose_block.index('this._setStatus("ready", message')
         )
 
@@ -4087,7 +4087,7 @@ class AppletStaticTest(unittest.TestCase):
         cleanup = install_block.index("if (!this._clearOllamaModelFlow(flowToken))", cancelled)
         ready = install_block.index('this._setStatus("ready", _("Ollama model installation cancelled")', cancelled)
         self.assertLess(cleanup, ready)
-        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', install_block)
+        self.assertIn('this._setStatus("error", _("Ollama operation could not be stopped")', install_block)
 
     def test_stale_ollama_install_callback_cannot_clear_new_command_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -4411,7 +4411,7 @@ class AppletStaticTest(unittest.TestCase):
     def test_text_backend_choices_invalidate_stale_ollama_flows(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method in [
-            ("_selectTextModelBackend: function(backend, model, message)", "\n  _activateOllamaTextModelFlow:"),
+            ("_selectTextModelBackend: function(backend, model, message, preserveRecording)", "\n  _activateOllamaTextModelFlow:"),
             ("_openExternalApiEnvEditor: function(target)", "\n  _applyExternalApiEnvTarget:"),
             ("_applyExternalApiEnvTarget: function(target)", "\n  _selectTextModelBackend:"),
         ]:
@@ -4419,7 +4419,7 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             if method in [
-                "_selectTextModelBackend: function(backend, model, message)",
+                "_selectTextModelBackend: function(backend, model, message, preserveRecording)",
                 "_openExternalApiEnvEditor: function(target)",
                 "_applyExternalApiEnvTarget: function(target)",
             ]:
@@ -4430,7 +4430,7 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_text_backend_changes_abort_when_ollama_cleanup_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_selectTextModelBackend: function(backend, model, message)")
+        start = source.index("_selectTextModelBackend: function(backend, model, message, preserveRecording)")
         end = source.index("\n  _activateOllamaTextModelFlow:", start)
         block = source[start:end]
         self.assertIn("let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;", block)
@@ -4440,7 +4440,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.postProcessBackend = previousBackend;", block)
         self.assertIn("this.ollamaModel = previousOllamaModel;", block)
         self.assertIn("this.openaiCompatibleTextModel = previousExternalTextModel;", block)
-        self.assertIn('this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped")', block)
+        self.assertIn('setStatus("error", _("Ollama operation could not be stopped")', block)
         self.assertIn("return false;", block)
 
         settings_start = source.index("_onTextModelSettingsChanged: function()")
@@ -4457,12 +4457,12 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_text_backend_persistence_validates_model_names(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_selectTextModelBackend: function(backend, model, message)")
+        start = source.index("_selectTextModelBackend: function(backend, model, message, preserveRecording)")
         end = source.index("\n  _activateOllamaTextModelFlow:", start)
         block = source[start:end]
         self.assertIn("let safeModel;", block)
         self.assertIn('safeModel = this._coerceCliTextArg(model === undefined || model === null ? "" : model, "text model");', block)
-        self.assertIn('this._setStatusPreservingRecording("error", _("Text model is invalid: ") + safeError', block)
+        self.assertIn("let setStatus = preserveRecording === false", block)
         self.assertIn("return false;", block)
         self.assertIn("this.ollamaModel = safeModel;", block)
         self.assertIn("this.openaiCompatibleTextModel = safeModel;", block)
@@ -4471,7 +4471,7 @@ class AppletStaticTest(unittest.TestCase):
         install_start = source.index("_installOllamaTextModel: function(model)")
         install_end = source.index("\n  _refreshHistory:", install_start)
         install_block = source[install_start:install_end]
-        self.assertIn('if (!this._selectTextModelBackend("ollama", installedModel, message))', install_block)
+        self.assertIn('if (!this._selectTextModelBackend("ollama", installedModel, message, false))', install_block)
         self.assertIn('this._notify(_("Ollama model installed"), installedModel, false);', install_block)
 
     def test_custom_limit_dialogs_ignore_stale_callbacks(self) -> None:
@@ -6594,7 +6594,7 @@ class AppletStaticTest(unittest.TestCase):
             ("_selectStaticVoiceBackend: function(transcriber, message)", "\n  _externalApiEnvPath:"),
             ("_selectTextPolishingPreset: function(preset)", "\n  _populateTextPolishingSafetyMenu:"),
             ("_toggleTextPolishingSafetyFlag: function(settingKey, propertyName, label)", "\n  _selectTextModelBackend:"),
-            ("_selectTextModelBackend: function(backend, model, message)", "\n  _activateOllamaTextModelFlow:"),
+            ("_selectTextModelBackend: function(backend, model, message, preserveRecording)", "\n  _activateOllamaTextModelFlow:"),
             ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:"),
             ("_parseCustomRecordingLimit: function(value)", "\n  _transcriptStorageLabel:"),
             ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:"),
