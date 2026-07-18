@@ -5682,7 +5682,11 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn("let completed = false;", block)
-            self.assertIn("let completeOnce = (value) =>", block)
+            if method == "_clipboardTargetList: function(":
+                self.assertIn("let completeOnce = (value, resolvedProgram) =>", block)
+                self.assertIn("complete(value, resolvedProgram);", block)
+            else:
+                self.assertIn("let completeOnce = (value) =>", block)
             if method == "_clipboardTargetList: function(":
                 self.assertIn("let subprocessCallbackDelivered = false;", block)
                 self.assertIn("let fallbackStarted = false;", block)
@@ -6104,6 +6108,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_clipboardPayloadSnapshot: function()", source)
         self.assertIn("_clipboardPayloadSnapshotAsync: function(completionCallback)", source)
         self.assertIn("_clipboardPayloadFingerprintFromTargetsAsync: function(spec, targets, completionCallback, deadlineMs)", source)
+        target_list_start = source.index("_clipboardTargetList: function(program, args, completionCallback, timeoutMs, attemptedPrograms, deadlineMs)")
+        target_list_end = source.index("\n  _clipboardNonTextPayloadTargets:", target_list_start)
+        target_list_block = source[target_list_start:target_list_end]
+        self.assertIn("let completeOnce = (value, resolvedProgram) =>", target_list_block)
+        self.assertIn("complete(value, resolvedProgram);", target_list_block)
+        self.assertIn('completeOnce(String(stdout || ""), program);', target_list_block)
         self.assertIn("const CLIPBOARD_COMMAND_TIMEOUT_MS = 1500;", source)
         self.assertIn("const CLIPBOARD_MAX_TARGETS = 16;", source)
         self.assertIn("maxStdoutBytes: MAX_CLIPBOARD_TARGET_OUTPUT_BYTES", source)
@@ -6112,6 +6122,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (result && result.cancelled) {", source)
         self.assertIn("let remainingMs = commandDeadlineMs - Date.now();", source)
         self.assertIn("this._clipboardTargetList(\n          fallback.program,", source)
+        snapshot_start = source.index("_clipboardPayloadSnapshotAsync: function(completionCallback)")
+        snapshot_end = source.index("\n  _clipboardPayloadFingerprintFromTargetsAsync:", snapshot_start)
+        snapshot_block = source[snapshot_start:snapshot_end]
+        self.assertIn("(targets, resolvedProgram) =>", snapshot_block)
+        self.assertIn("let resolvedSpec = spec;", snapshot_block)
+        self.assertIn("this._clipboardPayloadFingerprintFromTargetsAsync(resolvedSpec, targetText", snapshot_block)
         self.assertIn("let nonTextTargets = [];", source)
         self.assertIn("_clipboardPayloadDescriptionFromTargets: function(targets)", source)
         self.assertIn("nonTextTargets.slice(0, 6).join(\", \")", source)
@@ -6220,7 +6236,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_clipboardPayloadFingerprintFromTargetsAsync: function(spec, targets, completionCallback, deadlineMs)", source)
         self.assertIn("_clipboardPayloadFingerprintFromText: function(payload, targetLabel)", source)
         self.assertIn("_clipboardPayloadSignaturesMatch: function(snapshotA, snapshotB)", source)
-        self.assertIn("this._clipboardPayloadFingerprintFromTargetsAsync(spec, targetText", source)
+        self.assertIn("this._clipboardPayloadFingerprintFromTargetsAsync(resolvedSpec, targetText", source)
         self.assertIn("payloadFingerprint: \"unknown\",", source)
         self.assertIn('if (snapshotA.payloadFingerprint === "unknown" || snapshotB.payloadFingerprint === "unknown") {', source)
         self.assertIn("let sortedTargets;", source)

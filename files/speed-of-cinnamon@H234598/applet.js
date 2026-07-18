@@ -12365,12 +12365,12 @@ MyApplet.prototype = {
     let helper = this._findTrustedProgramInPath(program);
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
     let completed = false;
-    let completeOnce = (value) => {
+    let completeOnce = (value, resolvedProgram) => {
       if (completed) {
         return;
       }
       completed = true;
-      complete(value);
+      complete(value, resolvedProgram);
     };
     let subprocessCallbackDelivered = false;
     let fallbackStarted = false;
@@ -12452,7 +12452,7 @@ MyApplet.prototype = {
           completeOnce(null);
           return;
         }
-        completeOnce(String(stdout || ""));
+        completeOnce(String(stdout || ""), program);
       });
       if (!handle && !subprocessCallbackDelivered) {
         if (tryFallback()) {
@@ -12559,11 +12559,21 @@ MyApplet.prototype = {
     }
     let deadlineMs = Date.now() + CLIPBOARD_COMMAND_TIMEOUT_MS;
     try {
-      this._clipboardTargetList(spec.program, spec.targetArgs, (targets) => {
+      this._clipboardTargetList(spec.program, spec.targetArgs, (targets, resolvedProgram) => {
         try {
           if (targets === null || targets === undefined) {
             unknown();
             return;
+          }
+          let resolvedSpec = spec;
+          if (typeof resolvedProgram === "string" && resolvedProgram !== spec.program) {
+            let availableSpecs = this._clipboardProgramSpecs();
+            for (let i = 0; i < availableSpecs.length; i++) {
+              if (availableSpecs[i] && availableSpecs[i].program === resolvedProgram) {
+                resolvedSpec = availableSpecs[i];
+                break;
+              }
+            }
           }
           let targetText = String(targets || "");
           let targetLines = targetText.split("\n").filter((line) => String(line || "").trim() !== "");
@@ -12576,7 +12586,7 @@ MyApplet.prototype = {
             unknown();
             return;
           }
-          this._clipboardPayloadFingerprintFromTargetsAsync(spec, targetText, (payloadFingerprint) => {
+          this._clipboardPayloadFingerprintFromTargetsAsync(resolvedSpec, targetText, (payloadFingerprint) => {
             try {
               if (payloadFingerprint === "unknown") {
                 unknown();
