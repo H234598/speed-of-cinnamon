@@ -7033,8 +7033,13 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not prepare benchmark audio selection"), this.lastTranscript);
       return;
     }
-    this._spawnText(audioDialogArgs, (output) => {
+    this._spawnText(audioDialogArgs, (output, result) => {
       if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+        return;
+      }
+      if (result && result.startupFailed === true) {
+        this.benchmarkFlowToken = null;
+        this._setStatus("error", _("Could not open benchmark audio selection"), this.lastTranscript);
         return;
       }
       let audioPath = String(output || "").trim();

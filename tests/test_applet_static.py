@@ -3661,6 +3661,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let flowToken = {};", select_block)
         self.assertIn("this.benchmarkFlowToken = flowToken;", select_block)
         self.assertIn("this.benchmarkFlowToken !== flowToken", select_block)
+        self.assertIn('this._spawnText(audioDialogArgs, (output, result) => {', select_block)
+        self.assertIn("result.startupFailed === true", select_block)
+        self.assertIn('this._setStatus("error", _("Could not open benchmark audio selection")', select_block)
         self.assertIn("this._benchmarkDownloadedModels(audioPath, flowToken);", select_block)
         self.assertIn('resourceGroup: "benchmark"', select_block)
 
