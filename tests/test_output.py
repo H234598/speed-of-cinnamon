@@ -694,6 +694,22 @@ class OutputTest(unittest.TestCase):
 
         mocked_killpg.assert_not_called()
 
+    def test_process_cleanup_fails_closed_when_pid_identity_changes(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.returncode = None
+        process._soc_process_identity = "owner-identity"
+
+        with (
+            mock.patch("speed_of_cinnamon.output._clipboard_lock_identity_for_pid", return_value="foreign-identity"),
+            mock.patch("speed_of_cinnamon.output._process_group_has_live_descendants") as mocked_group_scan,
+            mock.patch("speed_of_cinnamon.output.os.killpg") as mocked_killpg,
+        ):
+            self.assertFalse(output_module._terminate_output_process_group(process))
+
+        mocked_group_scan.assert_not_called()
+        mocked_killpg.assert_not_called()
+
     def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:
         process = subprocess.Popen(
             ["/bin/sh", "-c", "sleep 30 & child=$!; echo $child; exit 0"],

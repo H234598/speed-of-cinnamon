@@ -1249,6 +1249,7 @@ def _run_with_input(
                 env=_filtered_environment(),
                 start_new_session=True,
             )
+            setattr(proc, "_soc_process_identity", _clipboard_lock_identity_for_pid(proc.pid) or "")
             setattr(
                 proc,
                 "_soc_output_pipe_targets",
@@ -1522,6 +1523,18 @@ def _process_pipe_holder_identities(process: subprocess.Popen[bytes]) -> dict[in
     return holders
 
 
+def _output_process_identity_is_current(process: subprocess.Popen[bytes]) -> bool:
+    expected_identity = vars(process).get("_soc_process_identity")
+    if expected_identity is None:
+        return True
+    if not isinstance(expected_identity, str) or not expected_identity:
+        return False
+    current_identity = _clipboard_lock_identity_for_pid(process.pid)
+    if current_identity is None:
+        return process.returncode is not None
+    return current_identity == expected_identity
+
+
 def _process_tree_has_live_processes(process_identities: dict[int, str]) -> bool | None:
     for process_id, expected_start_time in process_identities.items():
         try:
@@ -1640,6 +1653,8 @@ def _wait_for_output_process_group_stop(process_group_id: int, timeout_seconds: 
 def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     if not process or not isinstance(process.pid, int) or process.pid <= 0:
         return False
+    if not _output_process_identity_is_current(process):
+        return False
     pipe_holders: dict[int, str] = {}
     try:
         descendants = _process_group_has_live_descendants(process.pid)
@@ -1672,7 +1687,11 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     if process_tree is None:
         process_tree = {}
     process_tree.update(pipe_holders)
+    if not _output_process_identity_is_current(process):
+        return False
     process_tree_cleanup = _kill_output_process_tree(process_tree)
+    if not _output_process_identity_is_current(process):
+        return False
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -1686,6 +1705,8 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     for process_group_id in sorted(session_group_ids):
         if process_group_id == process.pid:
             continue
+        if not _output_process_identity_is_current(process):
+            return False
         try:
             os.killpg(process_group_id, signal.SIGKILL)
         except ProcessLookupError:
@@ -1763,6 +1784,7 @@ def _run_bounded_stdout_command(
                 env=_filtered_environment(),
                 start_new_session=True,
             )
+            setattr(proc, "_soc_process_identity", _clipboard_lock_identity_for_pid(proc.pid) or "")
             setattr(
                 proc,
                 "_soc_output_pipe_targets",
