@@ -3123,11 +3123,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let failToOpen = () => {", block)
         self.assertIn('let closed = this._dialogClose(dialog, "transcript-list");', block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);', block)
-        self.assertIn('if (!closed) {\n              releasePrompt = false;', block)
+        self.assertNotIn("releasePrompt", block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed")', block)
         show_index = block.index('label: _("Show transcripts")')
         show_block = block[show_index:]
-        self.assertIn('if (!this._dialogClose(dialog, "transcript-list"))', show_block)
+        self.assertIn('let closed = this._dialogClose(dialog, "transcript-list");', show_block)
+        self.assertIn('if (!closed)', show_block)
+        self.assertIn('complete(false);', show_block)
         self.assertIn('return;\n          }\n          complete(true);', show_block)
 
     def test_dialog_teardown_untracks_only_after_close_and_destroy(self) -> None:
@@ -4429,6 +4431,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("try {", helper_block)
         self.assertIn("this._applyPayload(payload, statusRefreshToken);", helper_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Backend response handling failed: ") + safeError', helper_block)
+        self.assertIn('if (!this.isCommandRunning && (this.status === "recording" || this.status === "processing"))', helper_block)
+        self.assertIn("this._scheduleStatusPoll();", helper_block)
         for marker in [
             "this._applyPayloadSafely(payload);",
             "this._applyPayloadSafely(nextPayload, undefined, true);",
@@ -5383,7 +5387,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.transcriptListPromptDialog === dialog", prompt_block)
         self.assertIn("this.transcriptListPromptDialog = null;", prompt_block)
         self.assertIn('let closed = this._dialogClose(dialog, "transcript-list");', prompt_block)
-        self.assertIn("releasePrompt = false;", prompt_block)
+        self.assertNotIn("releasePrompt", prompt_block)
         self.assertIn("} finally {\n            complete(false);", prompt_block)
         cancel_status = prompt_block.index('this._setStatusPreservingRecording("ready", _("Transcript list cancelled")')
         self.assertIn("if (this.transcriptListPromptToken === promptToken)", prompt_block[cancel_status - 90:cancel_status])
@@ -6905,11 +6909,20 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let failToOpen = () => {", block)
         self.assertIn('let closed = this._dialogClose(dialog, "transcript-list");', block)
-        self.assertIn("releasePrompt = false;", block)
+        self.assertNotIn("releasePrompt", block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);', block)
         self.assertIn("failToOpen();", block)
         open_failure = block.index('if (!this._dialogOpen(dialog, "transcript-list"))')
         self.assertLess(block.index("complete(false);", block.index("let failToOpen")), open_failure)
+
+    def test_transcript_list_prompt_releases_token_when_close_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index('label: _(\"Show transcripts\"),')
+        end = source.index("\n        }.bind(this),", start)
+        block = source[start:end]
+        self.assertIn('let closed = this._dialogClose(dialog, "transcript-list");', block)
+        close_failure = block.index("if (!closed)")
+        self.assertLess(block.index("complete(false);", close_failure), block.index("return;", close_failure))
 
     def test_text_insert_releases_token_on_sync_snapshot_failure(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

@@ -9833,13 +9833,12 @@ MyApplet.prototype = {
     let dialog = this._newSafeDialog("transcript-list");
     this.transcriptListPromptDialog = dialog;
     let completed = false;
-    let releasePrompt = true;
     let complete = (result) => {
       if (completed) {
         return;
       }
       completed = true;
-      if (releasePrompt && this.transcriptListPromptToken === promptToken) {
+      if (this.transcriptListPromptToken === promptToken) {
         this.transcriptListPromptToken = null;
         if (this.transcriptListPromptDialog === dialog) {
           this.transcriptListPromptDialog = null;
@@ -9852,7 +9851,6 @@ MyApplet.prototype = {
     let failToOpen = () => {
       let closed = this._dialogClose(dialog, "transcript-list");
       if (!closed) {
-        releasePrompt = false;
         this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed"), this.lastTranscript);
       } else {
         this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
@@ -9876,7 +9874,6 @@ MyApplet.prototype = {
           try {
             let closed = this._dialogClose(dialog, "transcript-list");
             if (!closed) {
-              releasePrompt = false;
               this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed"), this.lastTranscript);
               return;
             }
@@ -9891,8 +9888,10 @@ MyApplet.prototype = {
       {
         label: _("Show transcripts"),
         action: function() {
-          if (!this._dialogClose(dialog, "transcript-list")) {
+          let closed = this._dialogClose(dialog, "transcript-list");
+          if (!closed) {
             this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed"), this.lastTranscript);
+            complete(false);
             return;
           }
           complete(true);
@@ -11511,6 +11510,9 @@ MyApplet.prototype = {
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatusPreservingRecording("error", _("Backend response handling failed: ") + safeError, this.lastTranscript);
+      if (!this.isCommandRunning && (this.status === "recording" || this.status === "processing")) {
+        this._scheduleStatusPoll();
+      }
     }
   },
 
