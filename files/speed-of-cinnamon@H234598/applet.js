@@ -11765,6 +11765,7 @@ MyApplet.prototype = {
       if (!textModelArgs) {
         this.ollamaInstallWatchToken = null;
         this._clearOllamaModelFlow();
+        this._setStatus("error", _("Could not continue Ollama installation watch"), this.lastTranscript);
         return false;
       }
       this._spawnJson(textModelArgs, (payload) => {
