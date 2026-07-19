@@ -298,6 +298,9 @@ def _scrub_temp_settings_export_file(
             or file_stat.st_ino != expected_stat.st_ino
             or file_stat.st_mode != expected_stat.st_mode
             or getattr(file_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+            or file_stat.st_size != expected_stat.st_size
+            or file_stat.st_mtime_ns != expected_stat.st_mtime_ns
+            or file_stat.st_ctime_ns != expected_stat.st_ctime_ns
         ):
             raise SettingsExportError("settings export temp file changed before scrubbing")
         remaining = int(file_stat.st_size)
@@ -642,10 +645,7 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             except (OSError, ValueError) as exc:
                 raise OSError("settings export temporary file identity is unavailable") from exc
         current_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
-        if (
-            not _same_leaf_inode(current_stat, temporary_stat)
-            or getattr(current_stat, "st_nlink", 1) != getattr(temporary_stat, "st_nlink", 1)
-        ):
+        if not _same_leaf_snapshot(current_stat, temporary_stat):
             raise OSError("settings export temporary file changed before cleanup")
         os.unlink(temp_name, dir_fd=parent_fd)
         _fsync_fd(parent_fd)
@@ -787,10 +787,14 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
                 os.fchmod(handle.fileno(), 0o600)
             except OSError:
                 pass
+            try:
+                temporary_stat = os.fstat(handle.fileno())
+            except (OSError, ValueError) as exc:
+                raise OSError("failed to inspect settings export temporary file") from exc
             handle.write(rendered)
             handle.flush()
-            _fsync_fd(handle.fileno())
             temporary_stat = os.fstat(handle.fileno())
+            _fsync_fd(handle.fileno())
         except BaseException as exc:
             handle_primary_error = exc
             raise

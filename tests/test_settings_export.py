@@ -936,6 +936,46 @@ class SettingsExportTest(unittest.TestCase):
             self.assertIsNotNone(temp_path)
             self.assertEqual(temp_path.read_bytes(), b"replacement")
 
+    def test_write_export_does_not_remove_in_place_changed_temp_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            temp_path: Path | None = None
+            temp_fd: int | None = None
+            real_create = settings_export_module._create_private_temp_file
+
+            def create_temp_file(parent_fd: int, final_name: str) -> tuple[int, str]:
+                nonlocal temp_path, temp_fd
+                temp_fd, temp_name = real_create(parent_fd, final_name)
+                temp_path = Path(tmp) / temp_name
+                return temp_fd, temp_name
+
+            class _Handle:
+                def fileno(self) -> int:
+                    assert temp_fd is not None
+                    return temp_fd
+
+                def write(self, _payload: str) -> int:
+                    assert temp_fd is not None
+                    os.write(temp_fd, b"in-place replacement")
+                    raise OSError("write failed")
+
+                def flush(self) -> None:
+                    return None
+
+                def close(self) -> None:
+                    if temp_fd is not None:
+                        os.close(temp_fd)
+
+            with (
+                mock.patch.object(settings_export_module, "_create_private_temp_file", side_effect=create_temp_file),
+                mock.patch.object(settings_export_module.os, "fdopen", return_value=_Handle()),
+            ):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "en"})
+
+            self.assertIsNotNone(temp_path)
+            self.assertEqual(temp_path.read_bytes(), b"in-place replacement")
+
     def test_write_export_preserves_fdopen_error_when_temp_fd_close_is_interrupted(self) -> None:
         def close(fd: int) -> None:
             if fd == 123:
