@@ -2123,11 +2123,24 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
     except UnicodeEncodeError as exc:
         raise RuntimeError("failed to write transcript file: transcript text is not valid UTF-8") from exc
     if mode == ARTIFACT_ENCRYPTION_OFF:
-        _write_text_atomic(path, text)
         encrypted_sibling = _transcript_sibling_path(path)
+        encrypted_sibling_present = bool(
+            encrypted_sibling is not None and _path_exists_or_is_symlink(encrypted_sibling)
+        )
+        encrypted_sibling_stat = (
+            _recording_artifact_stat(encrypted_sibling)
+            if encrypted_sibling_present and encrypted_sibling is not None
+            else None
+        )
+        _write_text_atomic(path, text)
         if encrypted_sibling is not None and (encrypted_sibling.exists() or encrypted_sibling.is_symlink()):
             try:
-                if not _remove_transcript_file(encrypted_sibling):
+                if not encrypted_sibling_present:
+                    raise RuntimeError(f"encrypted transcript sibling appeared during plaintext storage: {encrypted_sibling}")
+                if encrypted_sibling_stat is None or not _remove_transcript_file(
+                    encrypted_sibling,
+                    expected_stat=encrypted_sibling_stat,
+                ):
                     raise RuntimeError(f"encrypted transcript sibling is missing: {encrypted_sibling}")
             except RuntimeError as exc:
                 try:
@@ -2142,6 +2155,8 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
                 ) from exc
         return path, ARTIFACT_ENCRYPTION_OFF
     encrypted_target_existed = False
+    plaintext_present = _path_exists_or_is_symlink(path)
+    plaintext_stat = _recording_artifact_stat(path) if plaintext_present else None
     try:
         encrypted_target_existed = _path_exists_or_is_symlink(encrypted_path_for(path))
         encrypted_path, effective_mode = write_encrypted_bytes_atomically(
@@ -2154,7 +2169,16 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
     except ArtifactCryptoError as exc:
         raise RuntimeError(str(exc)) from exc
     try:
-        _remove_plaintext_transcript_sibling_after_encryption(path, encrypted_path)
+        if plaintext_present:
+            if plaintext_stat is None:
+                raise RuntimeError(f"plaintext transcript file is not a safe regular file: {path}")
+        elif _path_exists_or_is_symlink(path):
+            raise RuntimeError(f"plaintext transcript file appeared during encryption: {path}")
+        _remove_plaintext_transcript_sibling_after_encryption(
+            path,
+            encrypted_path,
+            expected_stat=plaintext_stat,
+        )
     except RuntimeError as exc:
         if not encrypted_target_existed:
             try:
@@ -2168,7 +2192,12 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
     return encrypted_path, effective_mode
 
 
-def _remove_plaintext_transcript_sibling_after_encryption(storage_path: Path, encrypted_path: Path) -> None:
+def _remove_plaintext_transcript_sibling_after_encryption(
+    storage_path: Path,
+    encrypted_path: Path,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> None:
     if encrypted_path == storage_path or not is_encrypted_path(encrypted_path):
         return
     plaintext_path = encrypted_path.with_name(encrypted_path.name[:-len(".socenc")])
@@ -2176,7 +2205,7 @@ def _remove_plaintext_transcript_sibling_after_encryption(storage_path: Path, en
         raise RuntimeError(f"unexpected encrypted transcript sibling path: {encrypted_path}")
     if not plaintext_path.exists() and not plaintext_path.is_symlink():
         return
-    if not _remove_transcript_file(plaintext_path):
+    if not _remove_transcript_file(plaintext_path, expected_stat=expected_stat):
         raise RuntimeError(f"failed to remove plaintext transcript artifact after encryption: {plaintext_path}")
 
 
@@ -2187,17 +2216,33 @@ def _rollback_plaintext_transcript_after_sibling_cleanup_failure(path: Path) -> 
         raise RuntimeError(f"failed to roll back plaintext transcript artifact: {path}")
 
 
-def _remove_plaintext_export_sibling_after_encryption(storage_path: Path, encrypted_path: Path) -> None:
+def _remove_plaintext_export_sibling_after_encryption(
+    storage_path: Path,
+    encrypted_path: Path,
+    *,
+    expected_stat: os.stat_result | None = None,
+    expected_present: bool = True,
+) -> None:
     if encrypted_path == storage_path or not is_encrypted_path(encrypted_path):
         return
     plaintext_path = encrypted_path.with_name(encrypted_path.name[:-len(".socenc")])
     if plaintext_path != storage_path:
         raise RuntimeError(f"unexpected encrypted transcript export sibling path: {encrypted_path}")
+    if not expected_present:
+        if plaintext_path.exists() or plaintext_path.is_symlink():
+            raise RuntimeError(f"transcript export appeared during encryption: {plaintext_path}")
+        return
     if not plaintext_path.exists() and not plaintext_path.is_symlink():
         return
+    if expected_stat is None:
+        raise RuntimeError(f"transcript export is not a safe regular file: {plaintext_path}")
     try:
         assert_no_symlink_ancestors(plaintext_path, field_name="transcript export")
-        if not _unlink_regular_leaf_with_parent_fsync(plaintext_path, field_name="transcript export"):
+        if not _unlink_regular_leaf_with_parent_fsync(
+            plaintext_path,
+            field_name="transcript export",
+            expected_stat=expected_stat,
+        ):
             return
     except RuntimeError as exc:
         raise RuntimeError(f"failed to remove plaintext transcript export after encryption: {plaintext_path}") from exc
@@ -2212,7 +2257,7 @@ def _plaintext_recording_sibling_for_encrypted_path(path: Path) -> Path | None:
     return plaintext_path
 
 
-def _remove_plaintext_recording_sibling_after_encryption(original_path: Path, encrypted_path: Path) -> None:
+def _plaintext_recording_cleanup_candidates(original_path: Path, encrypted_path: Path) -> list[Path]:
     candidates: list[Path] = []
     if encrypted_path != original_path:
         candidates.append(original_path)
@@ -2221,16 +2266,33 @@ def _remove_plaintext_recording_sibling_after_encryption(original_path: Path, en
         candidates.append(plaintext_sibling)
 
     seen: set[Path] = set()
+    unique_candidates: list[Path] = []
     for candidate in candidates:
         if candidate in seen or candidate == encrypted_path:
             continue
         seen.add(candidate)
+        unique_candidates.append(candidate)
+    return unique_candidates
+
+
+def _remove_plaintext_recording_sibling_after_encryption(
+    original_path: Path,
+    encrypted_path: Path,
+    *,
+    expected_stats: dict[Path, os.stat_result | None] | None = None,
+) -> None:
+    for candidate in _plaintext_recording_cleanup_candidates(original_path, encrypted_path):
+        expected_stat = expected_stats.get(candidate) if expected_stats is not None else None
+        if expected_stats is not None and candidate in expected_stats and expected_stat is None:
+            if candidate.exists() or candidate.is_symlink():
+                raise RuntimeError(f"plaintext recording artifact changed before cleanup: {candidate}")
+            continue
         if not candidate.exists() and not candidate.is_symlink():
             continue
         suffix = candidate.suffix.lower()
         if suffix not in {".flac", ".wav"}:
             raise RuntimeError(f"refusing to remove unexpected plaintext recording artifact: {candidate}")
-        if not remove_file(str(candidate), suffix=suffix):
+        if not remove_file(str(candidate), suffix=suffix, expected_stat=expected_stat):
             raise RuntimeError(f"failed to remove plaintext recording artifact after encryption: {candidate}")
 
 
@@ -2259,6 +2321,9 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
             plaintext_path = _plaintext_recording_sibling_for_encrypted_path(path)
             if plaintext_path is None:
                 raise RuntimeError(f"encrypted recording artifact has no safe plaintext sibling: {path}")
+            source_stat = _recording_artifact_stat(path)
+            if source_stat is None:
+                raise RuntimeError(f"encrypted recording artifact is not a safe regular file: {path}")
             try:
                 payload = read_decrypted_bytes_from_file(
                     path,
@@ -2273,12 +2338,17 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
                     kind="recording",
                     field_name="recording audio file",
                 )
+                plaintext_stat = _recording_artifact_stat(plaintext_path)
+                if plaintext_stat is None:
+                    raise RuntimeError(f"plaintext recording artifact is not a safe regular file: {plaintext_path}")
             except ArtifactCryptoError as exc:
                 raise RuntimeError(str(exc)) from exc
-            if not remove_file(str(path), suffix=".socenc"):
+            if not remove_file(str(path), suffix=".socenc", expected_stat=source_stat):
                 try:
                     if (plaintext_path.exists() or plaintext_path.is_symlink()) and not remove_file(
-                        str(plaintext_path), suffix=plaintext_path.suffix.lower()
+                        str(plaintext_path),
+                        suffix=plaintext_path.suffix.lower(),
+                        expected_stat=plaintext_stat,
                     ):
                         raise RuntimeError(f"failed to roll back plaintext recording artifact: {plaintext_path}")
                 except RuntimeError as cleanup_exc:
@@ -2288,15 +2358,29 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
                 raise RuntimeError(f"failed to remove encrypted recording artifact after plaintext storage: {path}")
             return plaintext_path, ARTIFACT_ENCRYPTION_OFF
         encrypted_sibling = encrypted_path_for(path)
-        if encrypted_sibling.exists() or encrypted_sibling.is_symlink():
-            if not remove_file(str(encrypted_sibling), suffix=".socenc"):
+        encrypted_sibling_present = _path_exists_or_is_symlink(encrypted_sibling)
+        encrypted_sibling_stat = (
+            _recording_artifact_stat(encrypted_sibling) if encrypted_sibling_present else None
+        )
+        if encrypted_sibling_present:
+            if encrypted_sibling_stat is None or not remove_file(
+                str(encrypted_sibling),
+                suffix=".socenc",
+                expected_stat=encrypted_sibling_stat,
+            ):
                 raise RuntimeError(
                     f"failed to remove encrypted recording sibling after plaintext storage: {encrypted_sibling}"
                 )
         return path, ARTIFACT_ENCRYPTION_OFF
     encrypted_target_existed = False
+    plaintext_cleanup_expected_stats: dict[Path, os.stat_result | None] = {}
     try:
-        encrypted_target_existed = _path_exists_or_is_symlink(encrypted_path_for(path))
+        encrypted_target_path = encrypted_path_for(path)
+        encrypted_target_existed = _path_exists_or_is_symlink(encrypted_target_path)
+        plaintext_cleanup_expected_stats = {
+            candidate: _recording_artifact_stat(candidate)
+            for candidate in _plaintext_recording_cleanup_candidates(path, encrypted_target_path)
+        }
         payload = read_decrypted_bytes_from_file(
             path,
             kind="recording",
@@ -2319,7 +2403,11 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
     except ArtifactCryptoError as exc:
         raise RuntimeError(str(exc)) from exc
     try:
-        _remove_plaintext_recording_sibling_after_encryption(path, encrypted_path)
+        _remove_plaintext_recording_sibling_after_encryption(
+            path,
+            encrypted_path,
+            expected_stats=plaintext_cleanup_expected_stats,
+        )
     except RuntimeError as exc:
         if not encrypted_target_existed:
             try:
@@ -2500,6 +2588,8 @@ def write_transcripts_export(
     if plaintext:
         _write_text_atomic(output_path, content)
         return output_path, count, ARTIFACT_ENCRYPTION_OFF
+    plaintext_present = _path_exists_or_is_symlink(output_path)
+    plaintext_stat = _recording_artifact_stat(output_path) if plaintext_present else None
     encrypted_target_existed = _path_exists_or_is_symlink(encrypted_path_for(output_path))
     encrypted_path, used_mode = write_encrypted_bytes_atomically(
         output_path,
@@ -2509,7 +2599,12 @@ def write_transcripts_export(
         field_name="transcript export",
     )
     try:
-        _remove_plaintext_export_sibling_after_encryption(output_path, encrypted_path)
+        _remove_plaintext_export_sibling_after_encryption(
+            output_path,
+            encrypted_path,
+            expected_stat=plaintext_stat,
+            expected_present=plaintext_present,
+        )
     except RuntimeError as exc:
         if not encrypted_target_existed:
             try:
@@ -2735,7 +2830,7 @@ def _allocate_recording_artifacts() -> tuple[Path, Path]:
     raise RuntimeError("failed to allocate collision-free recording artifacts")
 
 
-def _remove_transcript_file(path: Path) -> bool:
+def _remove_transcript_file(path: Path, *, expected_stat: os.stat_result | None = None) -> bool:
     if not isinstance(path, Path) or not _is_transcript_artifact(path):
         raise RuntimeError("transcript path must be a .txt or .txt.socenc path")
     try:
@@ -2758,7 +2853,7 @@ def _remove_transcript_file(path: Path) -> bool:
         return _unlink_regular_leaf_with_parent_fsync(
             path,
             field_name="transcript file",
-            expected_stat=file_stat,
+            expected_stat=expected_stat or file_stat,
         )
     except FileNotFoundError:
         return False
@@ -4383,9 +4478,11 @@ def finalize_recording(
     silent_transcript_state_cleared = False
     inserted = False
     cleanup_rollback_backups: list[tuple[Path, Path, os.stat_result, os.stat_result]] = []
+    cleanup_source_stats: dict[Path, os.stat_result] = {}
     cleanup_backup_restore_failed = False
     preserve_recording_artifacts_after_cleanup_failure = False
     preserved_encrypted_audio_path: Path | None = None
+    original_audio_stat: os.stat_result | None = None
     persisted_audio_path: str | None = None
     persisted_log_path: str | None = None
 
@@ -4437,6 +4534,7 @@ def finalize_recording(
                 exc.add_note(f"cleanup backup restore failed: {restore_exc}")
             raise
         cleanup_rollback_backups.append((source, backup, source_stat, backup_stat))
+        cleanup_source_stats[source] = source_stat
         return backup
 
     def _restore_cleanup_backups() -> None:
@@ -4499,6 +4597,7 @@ def finalize_recording(
             raise
         else:
             cleanup_rollback_backups.clear()
+            cleanup_source_stats.clear()
 
     def _raise_error_state_update_failure(
         update_error: BaseException,
@@ -4535,6 +4634,15 @@ def finalize_recording(
                 expected_stat=expected_backup_stat,
             )
         cleanup_rollback_backups.clear()
+        cleanup_source_stats.clear()
+
+    def _remove_backed_up_cleanup_file(path_text: str | None, *, suffix: str) -> bool:
+        if not path_text:
+            return False
+        expected_stat = cleanup_source_stats.get(Path(path_text))
+        if expected_stat is None:
+            return False
+        return remove_file(path_text, suffix=suffix, expected_stat=expected_stat)
 
     def _remove_recording_artifact_if_present(path: Path, *, suffix: str) -> bool:
         if remove_file(str(path), suffix=suffix):
@@ -4617,7 +4725,8 @@ def finalize_recording(
         except FileNotFoundError:
             pass
         else:
-            if _recording_artifact_stat(audio_path) is None:
+            original_audio_stat = _recording_artifact_stat(audio_path)
+            if original_audio_stat is None:
                 store.update(
                     status="error",
                     pid=None,
@@ -4688,9 +4797,11 @@ def finalize_recording(
             if not keep_recording_artifacts:
                 audio_backup = _backup_cleanup_file(str(audio_path), suffix=audio_suffix)
                 log_backup = _backup_cleanup_file(cleanup_log_path, suffix=".log")
-                audio_deleted = audio_backup is None or remove_file(str(audio_path), suffix=audio_suffix)
+                audio_deleted = audio_backup is None or _remove_backed_up_cleanup_file(
+                    str(audio_path), suffix=audio_suffix
+                )
                 log_deleted = (
-                    log_backup is None or remove_file(cleanup_log_path, suffix=".log")
+                    log_backup is None or _remove_backed_up_cleanup_file(cleanup_log_path, suffix=".log")
                     if cleanup_log_path
                     else False
                 )
@@ -4700,7 +4811,7 @@ def finalize_recording(
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
             elif artifact_encryption != ARTIFACT_ENCRYPTION_OFF and cleanup_log_path:
                 log_backup = _backup_cleanup_file(cleanup_log_path, suffix=".log")
-                log_deleted = log_backup is None or remove_file(cleanup_log_path, suffix=".log")
+                log_deleted = log_backup is None or _remove_backed_up_cleanup_file(cleanup_log_path, suffix=".log")
                 if not log_deleted:
                     cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
             if cleanup_failures:
@@ -4888,12 +4999,14 @@ def finalize_recording(
         cleanup_failures: list[tuple[str, str, str]] = []
         if cleanup_audio_path is not None:
             audio_backup = _backup_cleanup_file(str(cleanup_audio_path), suffix=audio_suffix)
-            audio_deleted = audio_backup is None or remove_file(str(cleanup_audio_path), suffix=audio_suffix)
+            audio_deleted = audio_backup is None or _remove_backed_up_cleanup_file(
+                str(cleanup_audio_path), suffix=audio_suffix
+            )
             if not audio_deleted:
                 cleanup_failures.append(("audio_path", str(cleanup_audio_path), "recording audio artifact"))
         if cleanup_log_path:
             log_backup = _backup_cleanup_file(cleanup_log_path, suffix=".log")
-            log_deleted = log_backup is None or remove_file(cleanup_log_path, suffix=".log")
+            log_deleted = log_backup is None or _remove_backed_up_cleanup_file(cleanup_log_path, suffix=".log")
             if not log_deleted:
                 cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
         if cleanup_failures:
@@ -4960,8 +5073,8 @@ def finalize_recording(
             )
             preserve_written_text_on_error = True
             post_done_cleanup_failures: list[tuple[str, str, str]] = []
-            if remove_original_after_state_update:
-                if not remove_file(str(audio_path), suffix=audio_suffix):
+            if remove_original_after_state_update and original_audio_stat is not None:
+                if not remove_file(str(audio_path), suffix=audio_suffix, expected_stat=original_audio_stat):
                     preserve_recording_artifacts_after_cleanup_failure = True
                     preserved_audio_path = stabilized_audio_path or audio_path
                     post_done_cleanup_failures.append(
@@ -5136,7 +5249,13 @@ def finalize_recording(
         _release_finalization_lock(lock_path)
 
 
-def remove_file(path_value: str | None, *, suffix: str | None = None, recordings_root: Path | None = None) -> bool:
+def remove_file(
+    path_value: str | None,
+    *,
+    suffix: str | None = None,
+    recordings_root: Path | None = None,
+    expected_stat: os.stat_result | None = None,
+) -> bool:
     if not path_value:
         return False
     try:
@@ -5158,11 +5277,13 @@ def remove_file(path_value: str | None, *, suffix: str | None = None, recordings
     file_stat = _recording_artifact_stat(path)
     if file_stat is None:
         return False
+    if expected_stat is not None and not _same_leaf_identity(file_stat, expected_stat):
+        return False
     try:
         return _unlink_regular_leaf_with_parent_fsync(
             path,
             field_name="recording artifact",
-            expected_stat=file_stat,
+            expected_stat=expected_stat or file_stat,
         )
     except RuntimeError:
         return False
