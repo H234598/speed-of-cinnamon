@@ -288,6 +288,24 @@ class PathSafetyTest(unittest.TestCase):
             self.assertFalse((Path(tmp) / ".settings.json.free.bak").exists())
             self.assertEqual(target.read_text(encoding="utf-8"), "new")
 
+    def test_atomic_write_removes_its_recovery_symlink_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "settings.json"
+            target.write_text("old", encoding="utf-8")
+            replacement = Path(tmp) / "replacement.json"
+            replacement.write_text("foreign", encoding="utf-8")
+
+            def link_as_symlink(_source: object, destination: object, **_kwargs: object) -> None:
+                (Path(tmp) / str(destination)).symlink_to(replacement)
+
+            with mock.patch.object(path_safety.os, "link", side_effect=link_as_symlink):
+                with self.assertRaisesRegex(OSError, "path changed during backup activation"):
+                    path_safety.write_text_atomically_without_following_symlinks(target, "new")
+
+            self.assertEqual(target.read_text(encoding="utf-8"), "old")
+            self.assertFalse(list(Path(tmp).glob(".settings.json.*.bak")))
+            self.assertFalse(list(Path(tmp).glob(".settings.json.*.tmp")))
+
     def test_atomic_write_restores_existing_target_when_activation_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
