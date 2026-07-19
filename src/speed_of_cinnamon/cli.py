@@ -4503,6 +4503,8 @@ def finalize_recording(
     preserve_recording_artifacts_after_cleanup_failure = False
     preserved_encrypted_audio_path: Path | None = None
     original_audio_stat: os.stat_result | None = None
+    trimmed_audio_stat: os.stat_result | None = None
+    stabilized_audio_stat: os.stat_result | None = None
     persisted_audio_path: str | None = None
     persisted_log_path: str | None = None
 
@@ -4664,8 +4666,13 @@ def finalize_recording(
             return False
         return remove_file(path_text, suffix=suffix, expected_stat=expected_stat)
 
-    def _remove_recording_artifact_if_present(path: Path, *, suffix: str) -> bool:
-        if remove_file(str(path), suffix=suffix):
+    def _remove_recording_artifact_if_present(
+        path: Path,
+        *,
+        suffix: str,
+        expected_stat: os.stat_result | None,
+    ) -> bool:
+        if expected_stat is not None and remove_file(str(path), suffix=suffix, expected_stat=expected_stat):
             return True
         return _recording_artifact_missing_but_safe(
             str(path),
@@ -4911,6 +4918,8 @@ def finalize_recording(
         try:
             trimmed_audio_path = trim_recording_silence(audio_path)
             transcript_audio_path = trimmed_audio_path
+            if trimmed_audio_path is not None and trimmed_audio_path != audio_path:
+                trimmed_audio_stat = _recording_artifact_stat(trimmed_audio_path)
         except RecorderError:
             transcript_audio_path = audio_path
         transcription_error: BaseException | None = None
@@ -4940,6 +4949,7 @@ def finalize_recording(
                     if not _remove_recording_artifact_if_present(
                         trimmed_audio_path,
                         suffix=trimmed_audio_path.suffix.lower(),
+                        expected_stat=trimmed_audio_stat,
                     ):
                         raise RuntimeError(f"failed to delete transient trimmed recording artifact: {trimmed_audio_path}")
             except BaseException as cleanup_exc:
@@ -4978,6 +4988,7 @@ def finalize_recording(
                 trimmed_audio_path,
                 replace_existing_path=audio_path,
             )
+            stabilized_audio_stat = _recording_artifact_stat(stabilized_audio_path)
             done_audio_path = str(stabilized_audio_path)
             if done_audio_path != str(audio_path):
                 remove_original_after_state_update = True
@@ -4992,6 +5003,7 @@ def finalize_recording(
                         converted_audio_path,
                         replace_existing_path=audio_path,
                     )
+                    stabilized_audio_stat = _recording_artifact_stat(stabilized_audio_path)
                     done_audio_path = str(stabilized_audio_path)
                     if done_audio_path != str(audio_path):
                         remove_original_after_state_update = True
@@ -5010,6 +5022,7 @@ def finalize_recording(
             if encrypted_audio_path != plaintext_done_audio_path:
                 done_audio_path = str(encrypted_audio_path)
                 stabilized_audio_path = encrypted_audio_path
+                stabilized_audio_stat = _recording_artifact_stat(stabilized_audio_path)
                 if plaintext_done_audio_path == audio_path:
                     remove_original_after_state_update = False
             if artifact_encryption != ARTIFACT_ENCRYPTION_OFF and done_log_path:
@@ -5145,6 +5158,7 @@ def finalize_recording(
                     trimmed_audio_deleted = _remove_recording_artifact_if_present(
                         trimmed_audio_path,
                         suffix=trimmed_audio_path.suffix.lower(),
+                        expected_stat=trimmed_audio_stat,
                     )
                 except BaseException as cleanup_exc:
                     cleanup_error = _redact_error_for_user(str(cleanup_exc))
@@ -5163,6 +5177,7 @@ def finalize_recording(
                     stabilized_audio_deleted = _remove_recording_artifact_if_present(
                         stabilized_audio_path,
                         suffix=stabilized_audio_path.suffix.lower(),
+                        expected_stat=stabilized_audio_stat,
                     )
                 except BaseException as cleanup_exc:
                     cleanup_error = _redact_error_for_user(str(cleanup_exc))
@@ -5221,7 +5236,7 @@ def finalize_recording(
                     error_update["transcript"] = ""
                     error_update["transcript_path"] = ""
             final_error_text = str(error_update.get("error", error_text))
-            cleanup_targets: list[tuple[str, str, str]] = []
+            cleanup_targets: list[tuple[str, str, str, os.stat_result | None]] = []
             cleanup_clear_update: dict[str, object] = {}
             cleanup_plaintext_recording_artifacts = (
                 keep_recording_artifacts
@@ -5234,14 +5249,23 @@ def finalize_recording(
                 if (
                     audio_suffix
                     and not audio_deleted
-                    and _recording_artifact_stat(audio_path) is not None
                     and (not cleanup_plaintext_recording_artifacts or audio_suffix in {".wav", ".flac"})
                 ):
-                    cleanup_clear_update["audio_path"] = ""
-                    cleanup_targets.append(("audio_path", str(audio_path), audio_suffix))
+                    audio_cleanup_stat = _recording_artifact_stat(audio_path)
+                    if audio_cleanup_stat is not None:
+                        cleanup_clear_update["audio_path"] = ""
+                        cleanup_targets.append(("audio_path", str(audio_path), audio_suffix, audio_cleanup_stat))
                 if state.log_path and not log_deleted:
+                    log_cleanup_stat = _recording_artifact_stat(log_path) if log_path is not None else None
                     cleanup_clear_update["log_path"] = ""
-                    cleanup_targets.append(("log_path", str(log_path) if log_path else state.log_path, ".log"))
+                    cleanup_targets.append(
+                        (
+                            "log_path",
+                            str(log_path) if log_path else state.log_path,
+                            ".log",
+                            log_cleanup_stat,
+                        )
+                    )
             try:
                 store.update(**error_update)
             except BaseException as update_exc:
@@ -5252,8 +5276,12 @@ def finalize_recording(
                 except BaseException as update_exc:
                     _raise_error_state_update_failure(update_exc, final_error_text, "error cleanup state")
                 cleanup_restore_update: dict[str, object] = {}
-                for cleanup_field, cleanup_path, cleanup_suffix in cleanup_targets:
-                    if not remove_file(cleanup_path, suffix=cleanup_suffix):
+                for cleanup_field, cleanup_path, cleanup_suffix, cleanup_stat in cleanup_targets:
+                    if cleanup_stat is None or not remove_file(
+                        cleanup_path,
+                        suffix=cleanup_suffix,
+                        expected_stat=cleanup_stat,
+                    ):
                         cleanup_restore_update[cleanup_field] = cleanup_path
                 if cleanup_restore_update:
                     try:

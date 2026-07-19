@@ -13921,6 +13921,55 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.audio_path, "")
         self.assertEqual(final_state.log_path, "")
 
+    def test_finalize_error_cleanup_preserves_audio_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            audio = recordings / "recording.wav"
+            log = recordings / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=False)
+            real_remove = cli.remove_file
+            replaced = False
+
+            def replace_then_remove(path_value: str | None, **kwargs: object) -> bool:
+                nonlocal replaced
+                if path_value == str(audio) and not replaced:
+                    replacement = audio.with_name("foreign-recording.wav")
+                    replacement.write_bytes(b"foreign audio")
+                    audio.unlink()
+                    replacement.replace(audio)
+                    replaced = True
+                return real_remove(path_value, **kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("trim failed")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=RuntimeError("transcribe failed")),
+                mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=replace_then_remove),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "transcribe failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            preserved_audio = audio.read_bytes()
+            log_exists = log.exists()
+
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertEqual(preserved_audio, b"foreign audio")
+        self.assertFalse(log_exists)
+
     def test_finalize_persists_error_state_when_transcription_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -14286,6 +14335,60 @@ class CliTest(unittest.TestCase):
         self.assertFalse(trimmed_exists)
         self.assertTrue(log_exists)
 
+    def test_finalize_preserves_replaced_trimmed_artifact_on_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            original = recordings_root / "recording.wav"
+            trimmed = recordings_root / "recording.trimmed-error.flac"
+            log = recordings_root / "recording.log"
+            original.write_bytes(b"audio")
+            trimmed.write_bytes(b"trimmed-audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(original), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            real_remove = cli.remove_file
+            replaced = False
+
+            def replace_then_remove(path_value: str | None, **kwargs: object) -> bool:
+                nonlocal replaced
+                if path_value == str(trimmed) and not replaced:
+                    replacement = recordings_root / "foreign-trimmed.flac"
+                    replacement.write_bytes(b"foreign trimmed audio")
+                    trimmed.unlink()
+                    replacement.replace(trimmed)
+                    replaced = True
+                return real_remove(path_value, **kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=original),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=trimmed),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
+                mock.patch("speed_of_cinnamon.cli.post_process_text", side_effect=RuntimeError("post failed")),
+                mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=replace_then_remove),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "post failed"):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            preserved_trimmed = trimmed.read_bytes()
+            original_exists = original.exists()
+            log_exists = log.exists()
+
+        self.assertEqual(final_state.status, "error")
+        self.assertIn("transient trimmed recording artifact", final_state.error)
+        self.assertEqual(preserved_trimmed, b"foreign trimmed audio")
+        self.assertTrue(original_exists)
+        self.assertTrue(log_exists)
+
     def test_finalize_reports_unstabilized_trimmed_cleanup_failure_on_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -14382,6 +14485,19 @@ class CliTest(unittest.TestCase):
                     raise RuntimeError("done state write failed")
                 return real_update(**kwargs)
 
+            real_remove = cli.remove_file
+            replaced = False
+
+            def replace_then_remove(path_value: str | None, **kwargs: object) -> bool:
+                nonlocal replaced
+                if path_value == str(stable) and not replaced:
+                    replacement = recordings_root / "foreign-stable.flac"
+                    replacement.write_bytes(b"foreign stable audio")
+                    stable.unlink()
+                    replacement.replace(stable)
+                    replaced = True
+                return real_remove(path_value, **kwargs)
+
             with (
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
                 mock.patch.object(store, "update", side_effect=fail_done_update),
@@ -14395,15 +14511,17 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="transcript"),
                 mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="transcript"),
                 mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True),
-                mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False),
+                mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=replace_then_remove),
             ):
                 with self.assertRaisesRegex(RuntimeError, "done state write failed"):
                     cli.finalize_recording(args, store, store.read())
 
             final_state = store.read()
+            stable_contents = stable.read_bytes()
             self.assertEqual(final_state.status, "error")
             self.assertIn("stabilized recording artifact", final_state.error)
             self.assertTrue(stable.exists())
+            self.assertEqual(stable_contents, b"foreign stable audio")
 
     def test_finalize_rejects_transcript_write_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
