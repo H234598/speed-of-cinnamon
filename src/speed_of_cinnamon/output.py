@@ -1531,7 +1531,13 @@ def _output_process_identity_is_current(process: subprocess.Popen[bytes]) -> boo
         return False
     current_identity = _clipboard_lock_identity_for_pid(process.pid)
     if current_identity is None:
-        return process.returncode is not None
+        try:
+            os.stat(f"/proc/{process.pid}")
+        except FileNotFoundError:
+            return process.returncode is not None
+        except OSError:
+            return False
+        return False
     return current_identity == expected_identity
 
 

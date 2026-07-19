@@ -710,6 +710,24 @@ class OutputTest(unittest.TestCase):
         mocked_group_scan.assert_not_called()
         mocked_killpg.assert_not_called()
 
+    def test_process_cleanup_fails_closed_when_pid_identity_is_unreadable(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 0
+        process.returncode = 0
+        process._soc_process_identity = "owner-identity"
+
+        with (
+            mock.patch("speed_of_cinnamon.output._clipboard_lock_identity_for_pid", return_value=None),
+            mock.patch("speed_of_cinnamon.output.os.stat", return_value=mock.Mock()),
+            mock.patch("speed_of_cinnamon.output._process_group_has_live_descendants") as mocked_group_scan,
+            mock.patch("speed_of_cinnamon.output.os.killpg") as mocked_killpg,
+        ):
+            self.assertFalse(output_module._terminate_output_process_group(process))
+
+        mocked_group_scan.assert_not_called()
+        mocked_killpg.assert_not_called()
+
     def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:
         process = subprocess.Popen(
             ["/bin/sh", "-c", "sleep 30 & child=$!; echo $child; exit 0"],
