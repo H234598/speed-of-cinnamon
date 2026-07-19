@@ -1417,6 +1417,36 @@ class SettingsExportTest(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), "replacement export\n")
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
 
+    def test_write_export_rejects_target_replacement_during_activation_inspection(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            replacement = Path(tmp) / "replacement.json"
+            path.write_text("old export\n", encoding="utf-8")
+            replacement.write_text("replacement export\n", encoding="utf-8")
+            real_stat = settings_export_module.os.stat
+            target_stats = 0
+
+            def stat_then_swap(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal target_stats
+                result = real_stat(name, *args, **kwargs)
+                if name == path.name and kwargs.get("dir_fd") is not None:
+                    target_stats += 1
+                    if target_stats == 5:
+                        replacement.replace(path)
+                        return real_stat(name, *args, **kwargs)
+                return result
+
+            with mock.patch.object(settings_export_module.os, "stat", side_effect=stat_then_swap):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "de"})
+
+            self.assertEqual(path.read_text(encoding="utf-8"), "replacement export\n")
+            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
+
     def test_write_export_preserves_in_place_target_change_after_activation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

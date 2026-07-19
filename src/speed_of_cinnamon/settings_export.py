@@ -896,9 +896,12 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
         )
         temp_name = ""
         try:
-            activation_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            activated_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except OSError as stat_error:
             raise OSError("settings export could not be inspected after activation") from stat_error
+        if temporary_stat is None or not _same_leaf_identity(activated_stat, temporary_stat):
+            raise OSError("settings export changed after activation")
+        activation_stat = activated_stat
         _fsync_fd(parent_fd)
         transaction_active = False
         if backup_moved:
