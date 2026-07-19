@@ -1892,11 +1892,17 @@ class RecorderTest(unittest.TestCase):
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
                 mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
                 mock.patch("speed_of_cinnamon.recorder.subprocess.Popen") as mocked_popen,
+                mock.patch(
+                    "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                    return_value="owner-identity",
+                ),
             ):
                 mocked_process = mock.Mock()
+                mocked_process.pid = 1234
                 mocked_popen.return_value = mocked_process
                 result = start_recorder(command, Path(tmp) / "session.log")
         self.assertIs(result, mocked_process)
+        self.assertEqual(mocked_process._soc_process_identity, "owner-identity")
         self.assertEqual(mocked_popen.call_args.args[0][0], "/usr/bin/true")
         self.assertIsInstance(mocked_popen.call_args.kwargs["stdout"], recorder_module._RecorderLogCapture)
         self.assertEqual(mocked_popen.call_args.kwargs["stderr"], subprocess.STDOUT)
