@@ -175,6 +175,35 @@ class CliTest(unittest.TestCase):
 
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
+    def test_temporary_benchmark_path_preserves_replacement_when_fstat_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real_mkstemp = tempfile.mkstemp
+            created_path: Path | None = None
+
+            def create_temp_file(*, prefix: str, suffix: str, dir: str) -> tuple[int, str]:
+                nonlocal created_path
+                fd, path_text = real_mkstemp(prefix=prefix, suffix=suffix, dir=tmp)
+                created_path = Path(path_text)
+                return fd, path_text
+
+            def fail_fstat(_fd: int) -> os.stat_result:
+                assert created_path is not None
+                replacement = created_path.with_name("foreign-benchmark.tmp.txt")
+                replacement.write_text("foreign benchmark\n", encoding="utf-8")
+                created_path.unlink()
+                replacement.replace(created_path)
+                raise OSError("fstat failed")
+
+            with (
+                mock.patch.object(cli.tempfile, "mkstemp", side_effect=create_temp_file),
+                mock.patch.object(cli.os, "fstat", side_effect=fail_fstat),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "fstat failed"):
+                    cli._temporary_benchmark_transcript_path()
+
+            assert created_path is not None
+            self.assertEqual(created_path.read_text(encoding="utf-8"), "foreign benchmark\n")
+
     def test_temporary_benchmark_path_preserves_fstat_interrupt_when_cleanup_fails(self) -> None:
         with (
             mock.patch.object(cli.tempfile, "mkstemp", return_value=(42, "/tmp/.benchmark-test.tmp.txt")),
@@ -184,6 +213,7 @@ class CliTest(unittest.TestCase):
                 "_unlink_regular_leaf_with_parent_fsync",
                 side_effect=KeyboardInterrupt("cleanup interrupted"),
             ),
+            mock.patch.object(cli, "_recording_artifact_stat", return_value=os.stat(__file__)),
             mock.patch.object(cli.os, "close"),
         ):
             with self.assertRaisesRegex(KeyboardInterrupt, "fstat interrupted") as caught:
@@ -705,6 +735,51 @@ class CliTest(unittest.TestCase):
 
             mocked_owner.assert_called_once_with(path)
             self.assertFalse(path.exists())
+
+    def test_remove_transient_transcript_preserves_replaced_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            path.write_text("temporary transcript\n", encoding="utf-8")
+            owner_path = cli._transient_transcript_owner_path(path)
+            with mock.patch.object(cli, "transcript_dir", return_value=root):
+                owner_stat = cli._write_transient_transcript_owner(path)
+                real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+                replaced = False
+
+                def replace_owner_before_unlink(
+                    candidate: Path,
+                    *,
+                    field_name: str,
+                    expected_stat: os.stat_result | None = None,
+                ) -> bool:
+                    nonlocal replaced
+                    if field_name == "transient transcript owner" and not replaced:
+                        replacement = owner_path.with_name("foreign-owner").resolve()
+                        replacement.write_text("foreign owner\n", encoding="utf-8")
+                        owner_path.unlink()
+                        replacement.replace(owner_path)
+                        replaced = True
+                    return real_unlink(candidate, field_name=field_name, expected_stat=expected_stat)
+
+                with mock.patch.object(
+                    cli,
+                    "_unlink_regular_leaf_with_parent_fsync",
+                    side_effect=replace_owner_before_unlink,
+                ):
+                    with self.assertRaisesRegex(RuntimeError, "failed to delete transient transcript file"):
+                        cli._remove_transient_transcript_path(
+                            path,
+                            storage_path,
+                            expected_stat=path.stat(),
+                            expected_owner_stat=owner_stat,
+                        )
+
+                owner_contents = owner_path.read_text(encoding="utf-8")
+
+        self.assertFalse(path.exists())
+        self.assertEqual(owner_contents, "foreign owner\n")
 
     def test_ensure_transcript_export_dir_preserves_success_when_fd_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5351,6 +5426,48 @@ class CliTest(unittest.TestCase):
         self.assertFalse(stale_exists)
         self.assertFalse(stale_owner_exists)
         self.assertTrue(fresh_exists)
+
+    def test_cleanup_preserves_replaced_stale_transient_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_dir.mkdir(parents=True)
+            stale = transcript_dir / ".old.abcd.tmp.txt"
+            owner = cli._transient_transcript_owner_path(stale)
+            stale.write_text("old plaintext\n", encoding="utf-8")
+            owner.write_text("999999999\n", encoding="ascii")
+            owner.chmod(0o600)
+            old_mtime = time.time() - cli.TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS - 60
+            os.utime(stale, (old_mtime, old_mtime))
+            real_remove_owner = cli._remove_transient_transcript_owner
+            replaced = False
+
+            def replace_owner_then_remove(path: Path, **kwargs: object) -> bool:
+                nonlocal replaced
+                if not replaced:
+                    replacement = owner.with_name("foreign-owner")
+                    replacement.write_text("foreign owner\n", encoding="utf-8")
+                    owner.unlink()
+                    replacement.replace(owner)
+                    replaced = True
+                return real_remove_owner(path, **kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(
+                    cli,
+                    "_remove_transient_transcript_owner",
+                    side_effect=replace_owner_then_remove,
+                ),
+            ):
+                result = cli.prune_stale_transient_transcripts()
+
+            owner_contents = owner.read_text(encoding="utf-8")
+            stale_exists = stale.exists()
+
+        self.assertEqual(result["deleted_paths"], [str(stale)])
+        self.assertEqual(result["failed_paths"], [str(owner)])
+        self.assertFalse(stale_exists)
+        self.assertEqual(owner_contents, "foreign owner\n")
 
     def test_cleanup_reports_unsafe_transient_transcript_owner_sidecar(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
