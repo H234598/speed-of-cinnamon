@@ -4565,6 +4565,7 @@ def finalize_recording(
     preserve_written_text_on_error = False
     silent_transcript_state_cleared = False
     inserted = False
+    written_text_stat: os.stat_result | None = None
     cleanup_rollback_backups: list[tuple[Path, Path, os.stat_result, os.stat_result]] = []
     cleanup_source_stats: dict[Path, os.stat_result] = {}
     cleanup_backup_restore_failed = False
@@ -5034,6 +5035,7 @@ def finalize_recording(
             text, security_post_processing = _process_transcript(text, args, language)
         stored_text_path, transcript_encryption = _write_stored_transcript(text_path, text.strip() + "\n", args)
         written_text_path = stored_text_path
+        written_text_stat = _recording_artifact_stat(stored_text_path)
         stored_transcript_text = text
         append_space = _coerce_bool(args.append_space, field_name="append_space")
         sanitize_special_chars = _coerce_bool(
@@ -5296,7 +5298,9 @@ def finalize_recording(
                 error_update["transcript_path"] = str(written_text_path)
             elif written_text_path is not None and not preserve_written_text_on_error:
                 try:
-                    _remove_transcript_file(written_text_path)
+                    if written_text_stat is None:
+                        raise RuntimeError(f"transcript file identity is unavailable: {written_text_path}")
+                    _remove_transcript_file(written_text_path, expected_stat=written_text_stat)
                 except BaseException as cleanup_exc:
                     cleanup_error = _redact_error_for_user(str(cleanup_exc))
                     error_update["error"] = f"{error_text}; {cleanup_error}"
