@@ -409,6 +409,8 @@ def _decode_ffmpeg_output(payload: object) -> str:
 def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
     try:
         process_finished = process.poll() is not None
+        if not _recording_process_identity_is_current(process):
+            return False
         group_live = process_group_has_live_processes(process.pid)
         session_group_ids = _same_session_process_group_ids(process.pid)
         cleanup_incomplete = group_live is None
@@ -432,6 +434,8 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
             if process_state not in {"Z", "X", "x", "gone"}:
                 return False
     except (OSError, ValueError):
+        return False
+    if not _recording_process_identity_is_current(process):
         return False
     pipe_tree_cleanup = _kill_output_process_tree(pipe_holders)
     try:
@@ -716,6 +720,27 @@ def _recording_process_identity_matches(pid: int, expected_process_identity: str
     if current_identity is None:
         return False
     return current_identity == expected_process_identity
+
+
+def _recording_process_identity_is_current(process: subprocess.Popen[bytes]) -> bool:
+    expected_identity = vars(process).get("_soc_process_identity")
+    if expected_identity is None:
+        return True
+    if not isinstance(expected_identity, str) or not expected_identity:
+        return False
+    pid = getattr(process, "pid", None)
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return False
+    current_identity = _recording_process_identity_for_pid(pid)
+    if current_identity is not None:
+        return current_identity == expected_identity
+    try:
+        os.stat(f"/proc/{pid}")
+    except FileNotFoundError:
+        return process.returncode is not None
+    except OSError:
+        return False
+    return False
 
 
 def _create_recording_temp_file(audio_path: Path, *, marker: str, suffix: str) -> tuple[int, Path]:
@@ -2368,6 +2393,12 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             shell=False,
             env=_filtered_environment(),  # nosec B603
         )
+        process_pid = getattr(process, "pid", None)
+        if isinstance(process_pid, int) and not isinstance(process_pid, bool) and process_pid > 0:
+            try:
+                setattr(process, "_soc_process_identity", _recording_process_identity_for_pid(process_pid) or "")
+            except (AttributeError, TypeError):
+                pass
         try:
             setattr(process, "_soc_output_pipe_targets", _pipe_targets_for_process(process, log_capture))
         except (AttributeError, TypeError):

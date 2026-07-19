@@ -147,6 +147,24 @@ class RecorderTest(unittest.TestCase):
         mocked_killpg.assert_not_called()
         process.communicate.assert_called_once_with(timeout=1)
 
+    def test_recorder_process_cleanup_fails_closed_when_pid_identity_changes(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = None
+        process._soc_process_identity = "owner-identity"
+        with (
+            mock.patch(
+                "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                return_value="foreign-identity",
+            ),
+            mock.patch("speed_of_cinnamon.recorder.process_group_has_live_processes") as mocked_group_scan,
+            mock.patch("speed_of_cinnamon.recorder.os.killpg") as mocked_killpg,
+        ):
+            self.assertFalse(recorder_module._terminate_recorder_process_group(process))
+
+        mocked_group_scan.assert_not_called()
+        mocked_killpg.assert_not_called()
+
     def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:
         process = subprocess.Popen(
             ["/bin/sh", "-c", "sleep 30 & child=$!; echo $child; exit 0"],
