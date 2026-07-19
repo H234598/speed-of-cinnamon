@@ -1139,7 +1139,7 @@ class CliTest(unittest.TestCase):
                 attempts += 1
                 path.write_bytes(b"partial")
                 if attempts == 1:
-                    raise cli._PrivateFilePrepareError("prepare failed", created=True)
+                    raise cli._PrivateFilePrepareError("prepare failed", created=True, created_stat=path.stat())
 
             with (
                 mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=root),
@@ -1181,6 +1181,45 @@ class CliTest(unittest.TestCase):
             self.assertEqual(race_path.read_bytes(), b"foreign")
             self.assertEqual(audio_path.name, "20260101-000000-000000-01.wav")
             self.assertEqual(log_path.name, "20260101-000000-000000-01.log")
+
+    def test_allocate_recording_artifacts_preserves_replacement_during_partial_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            root.mkdir(parents=True)
+            real_remove = cli.remove_file
+            replaced = False
+
+            def fake_prepare(path: Path, *, field_name: str, exclusive: bool = True) -> None:
+                path.write_bytes(b"partial")
+                raise cli._PrivateFilePrepareError(
+                    "prepare failed",
+                    created=True,
+                    created_stat=path.stat(),
+                )
+
+            def replace_then_remove(path_value: str | None, **kwargs: object) -> bool:
+                nonlocal replaced
+                if path_value and not replaced:
+                    path = Path(path_value)
+                    replacement = path.with_name("foreign-recording.wav")
+                    replacement.write_bytes(b"foreign audio")
+                    path.unlink()
+                    replacement.replace(path)
+                    replaced = True
+                return real_remove(path_value, **kwargs)
+
+            with (
+                mock.patch("speed_of_cinnamon.cli.recordings_dir", return_value=root),
+                mock.patch("speed_of_cinnamon.cli.timestamp", return_value="20260101-000000-000000"),
+                mock.patch("speed_of_cinnamon.cli._prepare_private_file", side_effect=fake_prepare),
+                mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=replace_then_remove),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "failed to clean partial recording audio file"):
+                    cli._allocate_recording_artifacts()
+
+            preserved = list(root.glob("*.wav"))
+            self.assertEqual(len(preserved), 1)
+            self.assertEqual(preserved[0].read_bytes(), b"foreign audio")
 
     def test_allocate_recording_artifacts_fails_if_partial_audio_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -11165,11 +11204,11 @@ class CliTest(unittest.TestCase):
             observed_state: dict[str, object] = {}
             original_remove_recording_artifact = cli._remove_recording_artifact
 
-            def fake_remove_recording_artifact(path_value: str | None) -> bool:
+            def fake_remove_recording_artifact(path_value: str | None, **kwargs: object) -> bool:
                 current = store.read()
                 observed_state["status"] = current.status
                 observed_state["error"] = current.error
-                return original_remove_recording_artifact(path_value)
+                return original_remove_recording_artifact(path_value, **kwargs)
 
             stdout = io.StringIO()
             with (
@@ -12331,6 +12370,40 @@ class CliTest(unittest.TestCase):
         mocked_stop.assert_not_called()
         self.assertTrue(artifacts)
 
+    def test_start_preserves_replacement_during_startup_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            stdout = io.StringIO()
+            real_remove = cli.remove_file
+            replaced = False
+
+            def replace_audio_then_remove(path_value: str | None, **kwargs: object) -> bool:
+                nonlocal replaced
+                if path_value and path_value.endswith(".wav") and not replaced:
+                    path = Path(path_value)
+                    replacement = path.with_name("foreign-recording.wav")
+                    replacement.write_bytes(b"foreign audio")
+                    path.unlink()
+                    replacement.replace(path)
+                    replaced = True
+                return real_remove(path_value, **kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.choose_recorder", side_effect=RuntimeError("choose failed")),
+                mock.patch("speed_of_cinnamon.cli.remove_file", side_effect=replace_audio_then_remove),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["start", "--recorder", "pw-record", "--state-file", str(state_file), "--json"])
+
+            payload = json.loads(stdout.getvalue())
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            preserved = [path.read_bytes() for path in recordings.glob("*.wav")]
+
+        self.assertEqual(code, 1)
+        self.assertIn("failed to clean recording artifacts", payload["error"])
+        self.assertEqual(preserved, [b"foreign audio"])
+
     def test_start_reports_post_delete_artifact_cleanup_failure(self) -> None:
         proc = mock.Mock()
         proc.pid = 23456
@@ -12717,6 +12790,43 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.status, "idle")
         self.assertEqual(final_state.audio_path, "")
 
+    def test_cancel_preserves_audio_replacement_after_presence_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recorded.wav"
+            audio.write_bytes(b"audio")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recorded", audio_path=str(audio)))
+            real_remove = cli._remove_recording_artifact
+            replaced = False
+
+            def replace_audio_then_remove(path_value: str | None, **kwargs: object) -> bool:
+                nonlocal replaced
+                if path_value == str(audio) and not replaced:
+                    replacement = recordings_root / "replacement.wav"
+                    replacement.write_bytes(b"foreign audio")
+                    audio.unlink()
+                    replacement.replace(audio)
+                    replaced = True
+                return real_remove(path_value, **kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch.object(cli, "_remove_recording_artifact", side_effect=replace_audio_then_remove),
+            ):
+                result = cli.command_cancel(argparse.Namespace(state_file=str(state_file)))
+
+            final_state = store.read()
+            replacement_contents = audio.read_bytes()
+
+        self.assertEqual(result["status"], "error")
+        self.assertFalse(result["audio_deleted"])
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(replacement_contents, b"foreign audio")
+
     def test_cancel_cleanup_failure_preserves_transcript_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -12750,6 +12860,43 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.transcript, "already inserted")
         self.assertEqual(final_state.transcript_path, str(transcript))
         self.assertTrue(final_state.inserted)
+
+    def test_cancel_preserves_transcript_replacement_after_presence_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            transcripts_root = tmp_path / "speed-of-cinnamon" / "transcripts"
+            transcripts_root.mkdir(parents=True)
+            transcript = transcripts_root / "recorded.txt"
+            transcript.write_text("transcript", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="error", transcript_path=str(transcript)))
+            real_remove = cli._remove_transcript_file
+            replaced = False
+
+            def replace_transcript_then_remove(path: Path, **kwargs: object) -> bool:
+                nonlocal replaced
+                if path == transcript and not replaced:
+                    replacement = transcripts_root / "replacement.txt"
+                    replacement.write_text("foreign transcript", encoding="utf-8")
+                    transcript.unlink()
+                    replacement.replace(transcript)
+                    replaced = True
+                return real_remove(path, **kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                mock.patch.object(cli, "_remove_transcript_file", side_effect=replace_transcript_then_remove),
+            ):
+                result = cli.command_cancel(argparse.Namespace(state_file=str(state_file)))
+
+            final_state = store.read()
+            replacement_contents = transcript.read_text(encoding="utf-8")
+
+        self.assertEqual(result["status"], "error")
+        self.assertFalse(result["transcript_deleted"])
+        self.assertEqual(final_state.status, "error")
+        self.assertEqual(replacement_contents, "foreign transcript")
 
     def test_cancel_persists_redacted_error_state_when_final_idle_write_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -13106,10 +13253,10 @@ class CliTest(unittest.TestCase):
             )
             real_remove = cli._remove_recording_artifact
 
-            def fail_trimmed_cleanup(path_value: str | None) -> bool:
+            def fail_trimmed_cleanup(path_value: str | None, **kwargs: object) -> bool:
                 if path_value == str(trimmed):
                     return False
-                return real_remove(path_value)
+                return real_remove(path_value, **kwargs)
 
             stdout = io.StringIO()
             with (

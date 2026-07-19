@@ -2817,7 +2817,12 @@ def _allocate_recording_artifacts() -> tuple[Path, Path]:
                 _prepare_private_file(audio_path, field_name="recording audio file")
             except _PrivateFilePrepareError as exc:
                 if exc.created:
-                    if not remove_file(str(audio_path), suffix=".wav", recordings_root=root):
+                    if exc.created_stat is None or not remove_file(
+                        str(audio_path),
+                        suffix=".wav",
+                        recordings_root=root,
+                        expected_stat=exc.created_stat,
+                    ):
                         raise RuntimeError(f"failed to clean partial recording audio file: {audio_path}") from None
                     if _recording_artifact_stat(audio_path) is not None:
                         continue
@@ -3286,7 +3291,11 @@ def _recording_sibling_path(path: Path | None) -> Path | None:
         return None
 
 
-def _remove_recording_artifact(path_value: str | None) -> bool:
+def _remove_recording_artifact(
+    path_value: str | None,
+    *,
+    expected_stats: dict[Path, os.stat_result | None] | None = None,
+) -> bool:
     if not path_value:
         return False
     path = Path(str(path_value))
@@ -3296,14 +3305,22 @@ def _remove_recording_artifact(path_value: str | None) -> bool:
         primary_suffix = path.suffix.lower()
     else:
         return False
+
+    def remove_candidate(candidate: Path, candidate_value: str, suffix: str) -> bool:
+        if expected_stats is None:
+            return remove_file(candidate_value, suffix=suffix)
+        if candidate not in expected_stats or expected_stats[candidate] is None:
+            return False
+        return remove_file(candidate_value, suffix=suffix, expected_stat=expected_stats[candidate])
+
     primary_exists = path.exists() or path.is_symlink()
-    if primary_exists and not remove_file(path_value, suffix=primary_suffix):
+    if primary_exists and not remove_candidate(path, path_value, primary_suffix):
         return False
     sibling_path = _recording_sibling_path(path)
     sibling_exists = sibling_path is not None and (sibling_path.exists() or sibling_path.is_symlink())
     if sibling_exists:
         sibling_suffix = ".socenc" if is_encrypted_path(sibling_path) else sibling_path.suffix.lower()
-        if not remove_file(str(sibling_path), suffix=sibling_suffix):
+        if not remove_candidate(sibling_path, str(sibling_path), sibling_suffix):
             return False
     return primary_exists or sibling_exists
 
@@ -4200,7 +4217,10 @@ def _command_start_locked(
             return True
         except OSError:
             return False
-        return remove_file(str(path), suffix=suffix)
+        file_stat = _recording_artifact_stat(path)
+        if file_stat is None:
+            return False
+        return remove_file(str(path), suffix=suffix, expected_stat=file_stat)
 
     def cleanup_started_artifacts() -> bool:
         audio_deleted = remove_started_artifact(audio_path, ".wav")
@@ -5497,20 +5517,29 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             if discarded_audio_path is not None
             else set()
         )
+
+        def snapshot_recording_artifact_paths(path: Path | None) -> dict[Path, os.stat_result | None]:
+            if path is None:
+                return {}
+            candidates = [path]
+            sibling_path = _recording_sibling_path(path)
+            if sibling_path is not None:
+                candidates.append(sibling_path)
+            return {candidate: _recording_artifact_stat(candidate) for candidate in candidates}
+
+        discarded_audio_expected_stats = snapshot_recording_artifact_paths(discarded_audio_path)
         discarded_audio_present_before = False
-        if discarded_audio_path is not None:
-            audio_candidates = [discarded_audio_path]
-            audio_sibling = _recording_sibling_path(discarded_audio_path)
-            if audio_sibling is not None:
-                audio_candidates.append(audio_sibling)
-            discarded_audio_present_before = any(
-                _recording_artifact_stat(path) is not None for path in audio_candidates
-            )
-        discarded_log_present_before = (
-            discarded_log_path is not None and _recording_artifact_stat(discarded_log_path) is not None
+        discarded_audio_present_before = any(
+            file_stat is not None for file_stat in discarded_audio_expected_stats.values()
         )
+        discarded_log_stat = _recording_artifact_stat(discarded_log_path) if discarded_log_path else None
+        discarded_log_present_before = discarded_log_stat is not None
+        discarded_inflight_expected_stats = {
+            path: snapshot_recording_artifact_paths(path) for path in discarded_inflight_paths
+        }
         discarded_inflight_present_before = {
-            path: _recording_artifact_stat(path) is not None for path in discarded_inflight_paths
+            path: any(file_stat is not None for file_stat in expected_stats.values())
+            for path, expected_stats in discarded_inflight_expected_stats.items()
         }
         has_artifacts = bool(state.audio_path or state.log_path or state.transcript_path)
         has_recording_state = state.status in {"recording", "recorded", "processing", "finalizing", "error"}
@@ -5534,8 +5563,15 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             )
         )
 
-        audio_deleted = _remove_recording_artifact(str(discarded_audio_path) if discarded_audio_path else None)
-        log_deleted = remove_file(str(discarded_log_path) if discarded_log_path else None, suffix=".log")
+        audio_deleted = _remove_recording_artifact(
+            str(discarded_audio_path) if discarded_audio_path else None,
+            expected_stats=discarded_audio_expected_stats,
+        )
+        log_deleted = (
+            remove_file(str(discarded_log_path), suffix=".log", expected_stat=discarded_log_stat)
+            if discarded_log_path and discarded_log_present_before
+            else False
+        )
         if not audio_deleted and discarded_audio_path and not discarded_audio_present_before:
             if Path(str(discarded_audio_path)).name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES):
                 audio_deleted = _recording_artifact_missing_but_safe(
@@ -5553,7 +5589,10 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             log_deleted = _recording_artifact_missing_but_safe(str(discarded_log_path), suffix=".log", state_path=store.path)
         inflight_deleted = True
         for inflight_path in sorted(discarded_inflight_paths, key=lambda path: str(path)):
-            deleted = _remove_recording_artifact(str(inflight_path))
+            deleted = _remove_recording_artifact(
+                str(inflight_path),
+                expected_stats=discarded_inflight_expected_stats[inflight_path],
+            )
             if not deleted and not discarded_inflight_present_before[inflight_path]:
                 suffix = ".socenc" if _is_encrypted_recording_artifact(inflight_path) else inflight_path.suffix.lower()
                 deleted = _recording_artifact_missing_but_safe(
@@ -5569,6 +5608,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             transcript_sibling_path: Path | None = None
             transcript_present_before = False
             transcript_sibling_present_before = False
+            transcript_expected_stat: os.stat_result | None = None
+            transcript_sibling_expected_stat: os.stat_result | None = None
             try:
                 transcript_path = _normalized_state_artifact_path(
                     _assert_clean_text(state.transcript_path, field_name="transcript path", max_chars=MAX_PATH_CHARS),
@@ -5577,15 +5618,32 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 transcript_present_before = transcript_path is not None and (
                     transcript_path.exists() or transcript_path.is_symlink()
                 )
+                if transcript_present_before and transcript_path is not None:
+                    transcript_expected_stat = _recording_artifact_stat(transcript_path)
                 transcript_sibling_path = _transcript_sibling_path(transcript_path)
                 transcript_sibling_present_before = transcript_sibling_path is not None and (
                     transcript_sibling_path.exists() or transcript_sibling_path.is_symlink()
                 )
-                transcript_deleted = _remove_transcript_file(transcript_path)
+                if transcript_present_before:
+                    if transcript_expected_stat is None:
+                        raise RuntimeError(f"transcript file is not a safe regular file: {transcript_path}")
+                    transcript_deleted = _remove_transcript_file(
+                        transcript_path,
+                        expected_stat=transcript_expected_stat,
+                    )
+                else:
+                    transcript_deleted = False
+                if transcript_sibling_present_before and transcript_sibling_path is not None:
+                    transcript_sibling_expected_stat = _recording_artifact_stat(transcript_sibling_path)
                 if not transcript_deleted and not transcript_present_before:
                     transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
                 if transcript_sibling_path is not None and transcript_sibling_present_before:
-                    if not _remove_transcript_file(transcript_sibling_path):
+                    if transcript_sibling_expected_stat is None:
+                        raise RuntimeError(f"transcript sibling is not a safe regular file: {transcript_sibling_path}")
+                    if not _remove_transcript_file(
+                        transcript_sibling_path,
+                        expected_stat=transcript_sibling_expected_stat,
+                    ):
                         raise RuntimeError(f"transcript sibling is missing: {transcript_sibling_path}")
             except RuntimeError:
                 transcript_deleted = False
