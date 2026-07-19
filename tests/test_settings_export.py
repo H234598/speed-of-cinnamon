@@ -1417,6 +1417,36 @@ class SettingsExportTest(unittest.TestCase):
             self.assertEqual(path.read_text(encoding="utf-8"), "replacement export\n")
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
 
+    def test_write_export_preserves_in_place_target_change_after_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text("old export\n", encoding="utf-8")
+            real_stat = settings_export_module.os.stat
+            target_stats = 0
+
+            def mutate_before_post_activation_stat(
+                name: object,
+                *args: object,
+                **kwargs: object,
+            ) -> os.stat_result:
+                nonlocal target_stats
+                if name == path.name and kwargs.get("dir_fd") is not None:
+                    target_stats += 1
+                    if target_stats == 5:
+                        payload = path.read_bytes()
+                        path.write_bytes(b"X" * len(payload))
+                        raise OSError("post-activation inspection failed")
+                return real_stat(name, *args, **kwargs)
+
+            with mock.patch.object(settings_export_module.os, "stat", side_effect=mutate_before_post_activation_stat):
+                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                    write_export(path, {"language": "de"})
+
+            payload = path.read_bytes()
+            self.assertEqual(payload, b"X" * len(payload))
+            self.assertTrue(list(Path(tmp).glob(".settings-export.json.*.bak")))
+            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
+
     def test_write_export_removes_temp_file_when_file_fsync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

@@ -617,12 +617,14 @@ def write_export(path: Path, settings: dict[str, Any], alarm_store: dict[str, An
             first.st_mode,
             getattr(first, "st_nlink", 1),
             first.st_size,
+            first.st_mtime_ns,
         ) == (
             second.st_dev,
             second.st_ino,
             second.st_mode,
             getattr(second, "st_nlink", 1),
             second.st_size,
+            second.st_mtime_ns,
         )
 
     def _same_leaf_inode(first: os.stat_result, second: os.stat_result) -> bool:

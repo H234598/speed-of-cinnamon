@@ -798,7 +798,7 @@ def _write_atomically_without_following_symlinks(
                         if activation_stat is not None:
                             same_activation = _same_leaf_snapshot
                         elif activation_completed:
-                            same_activation = _same_leaf_inode
+                            same_activation = _same_leaf_identity
                         else:
                             same_activation = _same_leaf_identity
                         if expected_activation_stat is None or not same_activation(current_target_stat, expected_activation_stat):
