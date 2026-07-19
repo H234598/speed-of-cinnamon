@@ -1779,17 +1779,36 @@ class CliTest(unittest.TestCase):
                 "XDG_STATE_HOME": tmp,
                 artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
             }
+            real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+            replaced = False
+
+            def replace_encrypted_then_unlink(path: Path, *args: object, **kwargs: object) -> bool:
+                nonlocal replaced
+                if path == encrypted_transcript and not replaced:
+                    replacement = encrypted_transcript.with_name("foreign.txt.socenc")
+                    replacement.write_bytes(b"foreign encrypted transcript")
+                    encrypted_transcript.unlink()
+                    replacement.replace(encrypted_transcript)
+                    replaced = True
+                return real_unlink(path, *args, **kwargs)
+
             with (
                 mock.patch.dict(os.environ, env, clear=False),
                 mock.patch("speed_of_cinnamon.cli._remove_transcript_file", return_value=False),
+                mock.patch(
+                    "speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync",
+                    side_effect=replace_encrypted_then_unlink,
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "failed to remove plaintext transcript artifact"):
                     cli._write_stored_transcript(transcript, "secret transcript\n", args)
             plaintext_exists = transcript.exists()
             encrypted_exists = encrypted_transcript.exists()
+            encrypted_contents = encrypted_transcript.read_bytes() if encrypted_exists else b""
 
         self.assertTrue(plaintext_exists)
-        self.assertFalse(encrypted_exists)
+        self.assertTrue(encrypted_exists)
+        self.assertEqual(encrypted_contents, b"foreign encrypted transcript")
 
     def test_stored_transcript_keeps_new_encrypted_file_when_plaintext_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1921,24 +1940,37 @@ class CliTest(unittest.TestCase):
             encrypted_transcript.write_bytes(b"old encrypted transcript")
             args = argparse.Namespace(artifact_encryption="off")
             real_remove_transcript = cli._remove_transcript_file
+            replaced = False
 
-            def fail_encrypted_sibling_cleanup(path: Path, **_kwargs: object) -> bool:
+            def fail_encrypted_sibling_cleanup(path: Path, **kwargs: object) -> bool:
+                nonlocal replaced
                 if path == encrypted_transcript:
                     return False
-                return real_remove_transcript(path, **_kwargs)
+                if path == transcript and not replaced:
+                    replacement = transcript.with_name("foreign.txt")
+                    replacement.write_text("foreign plaintext\n", encoding="utf-8")
+                    transcript.unlink()
+                    replacement.replace(transcript)
+                    replaced = True
+                return real_remove_transcript(path, **kwargs)
 
             with (
                 mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}, clear=False),
                 mock.patch.object(cli, "_remove_transcript_file", side_effect=fail_encrypted_sibling_cleanup),
             ):
-                with self.assertRaisesRegex(RuntimeError, "failed to remove encrypted transcript sibling"):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "failed to remove encrypted transcript sibling|encrypted transcript sibling is missing",
+                ):
                     cli._write_stored_transcript(transcript, "new plaintext\n", args)
 
             plaintext_exists = transcript.exists()
             encrypted_exists = encrypted_transcript.exists()
+            plaintext_contents = transcript.read_text(encoding="utf-8") if plaintext_exists else ""
 
-        self.assertFalse(plaintext_exists)
+        self.assertTrue(plaintext_exists)
         self.assertTrue(encrypted_exists)
+        self.assertEqual(plaintext_contents, "foreign plaintext\n")
 
     def test_stored_plaintext_transcript_preserves_sibling_replacement(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2440,17 +2472,36 @@ class CliTest(unittest.TestCase):
                 "XDG_STATE_HOME": tmp,
                 artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
             }
+            real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+            replaced = False
+
+            def replace_encrypted_then_unlink(path: Path, *args: object, **kwargs: object) -> bool:
+                nonlocal replaced
+                if path == encrypted_recording and not replaced:
+                    replacement = encrypted_recording.with_name("foreign-recording.flac.socenc")
+                    replacement.write_bytes(b"foreign encrypted audio")
+                    encrypted_recording.unlink()
+                    replacement.replace(encrypted_recording)
+                    replaced = True
+                return real_unlink(path, *args, **kwargs)
+
             with (
                 mock.patch.dict(os.environ, env, clear=False),
                 mock.patch("speed_of_cinnamon.cli.remove_file", return_value=False),
+                mock.patch(
+                    "speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync",
+                    side_effect=replace_encrypted_then_unlink,
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "failed to remove plaintext recording artifact"):
                     cli._encrypt_kept_recording_artifact(recording, args)
             plaintext_exists = recording.exists()
             encrypted_exists = encrypted_recording.exists()
+            encrypted_contents = encrypted_recording.read_bytes() if encrypted_exists else b""
 
         self.assertTrue(plaintext_exists)
-        self.assertFalse(encrypted_exists)
+        self.assertTrue(encrypted_exists)
+        self.assertEqual(encrypted_contents, b"foreign encrypted audio")
 
     def test_encrypt_kept_recording_preserves_plaintext_replacement(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -4948,10 +4999,18 @@ class CliTest(unittest.TestCase):
                 artifact_crypto.PASSPHRASE_FILE_ENV: "",
             }
             real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+            replaced = False
 
             def fail_plaintext_cleanup(path: Path, *args: object, **kwargs: object) -> bool:
+                nonlocal replaced
                 if path == stale_export:
                     raise RuntimeError("blocked plaintext cleanup")
+                if path == encrypted_export and not replaced:
+                    replacement = encrypted_export.with_name("foreign-export.txt.socenc")
+                    replacement.write_bytes(b"foreign encrypted export")
+                    encrypted_export.unlink()
+                    replacement.replace(encrypted_export)
+                    replaced = True
                 return real_unlink(path, *args, **kwargs)
 
             with (
@@ -4964,11 +5023,13 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
             plaintext_exists = stale_export.exists()
             encrypted_exists = encrypted_export.exists()
+            encrypted_contents = encrypted_export.read_bytes() if encrypted_exists else b""
 
         self.assertNotEqual(code, 0)
         self.assertIn("failed to remove plaintext transcript export", payload["error"])
         self.assertTrue(plaintext_exists)
-        self.assertFalse(encrypted_exists)
+        self.assertTrue(encrypted_exists)
+        self.assertEqual(encrypted_contents, b"foreign encrypted export")
 
     def test_transcripts_export_preserves_plaintext_replacement(self) -> None:
         strong_passphrase = artifact_crypto._b64encode(bytes(range(32)))
