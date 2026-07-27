@@ -13252,13 +13252,21 @@ MyApplet.prototype = {
     if (!this._lifecycleAllowsWork()) {
       return;
     }
-    let key = "self-protection\n" + String(windowClass || "");
-    let now = Date.now();
-    if (key === this.selfProtectionNoticeKey && now - this.selfProtectionNoticeAtMs < SELF_PROTECTION_NOTICE_COOLDOWN_MS) {
-      return;
+    let activeInsertToken = this.textInsertToken;
+    if (activeInsertToken) {
+      if (activeInsertToken.selfProtectionNoticeShown === true) {
+        return;
+      }
+      activeInsertToken.selfProtectionNoticeShown = true;
+    } else {
+      let key = "self-protection\n" + String(windowClass || "");
+      let now = Date.now();
+      if (key === this.selfProtectionNoticeKey && now - this.selfProtectionNoticeAtMs < SELF_PROTECTION_NOTICE_COOLDOWN_MS) {
+        return;
+      }
+      this.selfProtectionNoticeKey = key;
+      this.selfProtectionNoticeAtMs = now;
     }
-    this.selfProtectionNoticeKey = key;
-    this.selfProtectionNoticeAtMs = now;
     let message = _("Auto-Submit self-protection blocked a protected target");
     this.lastMessage = message;
     this._updatePanel();

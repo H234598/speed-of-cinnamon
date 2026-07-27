@@ -7977,6 +7977,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertEqual(snapshot_block.count("complete(result);"), 2)
         self.assertNotIn("if (result !== null) {\n                release();", snapshot_block)
 
+    def test_self_protection_popup_is_deduped_per_insert_token_only(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_notifySelfProtectionBlocked: function(title, windowClass)")
+        end = source.index("\n  _windowIdentityMatchesAutoPaste:", start)
+        block = source[start:end]
+        self.assertIn("let activeInsertToken = this.textInsertToken;", block)
+        self.assertIn("if (activeInsertToken) {", block)
+        self.assertIn("if (activeInsertToken.selfProtectionNoticeShown === true) {", block)
+        self.assertIn("activeInsertToken.selfProtectionNoticeShown = true;", block)
+        self.assertIn('} else {\n      let key = "self-protection\\n" + String(windowClass || "");', block)
+        self.assertIn('let key = "self-protection\\n" + String(windowClass || "");', block)
+        self.assertIn("if (key === this.selfProtectionNoticeKey && now - this.selfProtectionNoticeAtMs < SELF_PROTECTION_NOTICE_COOLDOWN_MS) {", block)
+
     def test_text_insert_cancellation_invalidates_x11_target_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_cancelTextInsertForSettingsChange: function()")
