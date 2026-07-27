@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+# pylint: disable=import-error
 
 import os
 

@@ -1508,7 +1508,7 @@ def transcribe_with_whisper_cpp(
 
 def faster_whisper_available() -> bool:
     try:
-        import faster_whisper  # noqa: F401
+        import faster_whisper  # noqa: F401  # pylint: disable=import-error
     except Exception:
         return False
     return True

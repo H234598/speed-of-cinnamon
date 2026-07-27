@@ -38,7 +38,7 @@ jobs:
             printf 'scan ref contains control characters: %s\n' "${scan_ref}" >&2
             exit 1
           fi
-          if [[ "${scan_ref}" == -* || "${scan_ref}" == *..* || "${scan_ref}" == *//* || "${scan_ref}" == *@{* || "${scan_ref}" == *\\* || "${scan_ref}" == *.lock || "${scan_ref}" == */ || "${scan_ref}" == *. ]]; then
+          if [[ "${scan_ref}" == -* || "${scan_ref}" == *..* || "${scan_ref}" == *//* || "${scan_ref}" == *"@{"* || "${scan_ref}" == *\\* || "${scan_ref}" == *.lock || "${scan_ref}" == */ || "${scan_ref}" == *. ]]; then
             printf 'scan ref is not safe: %s\n' "${scan_ref}" >&2
             exit 1
           fi

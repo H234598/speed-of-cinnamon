@@ -2185,6 +2185,8 @@ class RecorderTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "sample.wav"
             parent_fd = real_open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            fd: int | None = None
+            temp_path: Path | None = None
             try:
                 with (
                     mock.patch.object(
@@ -2201,8 +2203,10 @@ class RecorderTest(unittest.TestCase):
                     )
                 self.assertTrue(temp_path.exists())
             finally:
-                real_close(fd)
-                temp_path.unlink()
+                if fd is not None:
+                    real_close(fd)
+                if temp_path is not None:
+                    temp_path.unlink()
                 real_close(parent_fd)
 
     def test_start_recorder_opens_log_file_without_following_symlinks(self) -> None:

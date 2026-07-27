@@ -123,6 +123,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_snap && '1' || '0') }}
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
+      QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -202,7 +203,7 @@ jobs:
       - name: Generate coverage report
         run: make coverage
       - name: Upload coverage to QLTY
-        if: ${{ github.event_name == 'push' && secrets.QLTY_COVERAGE_TOKEN != '' }}
+        if: ${{ github.event_name == 'push' && env.QLTY_COVERAGE_TOKEN != '' }}
         uses: qltysh/qlty-action/coverage@fd52dc852530a708d68c3b7342f8d33d1df4cd55 # v2.2.1
         with:
           token: ${{ secrets.QLTY_COVERAGE_TOKEN }}
