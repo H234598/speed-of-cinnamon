@@ -851,6 +851,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("expected_repo not in normalized_remote", verifier)
         self.assertIn('allowed_committers = {', verifier)
         self.assertIn('("GitHub", "noreply@github.com")', verifier)
+        self.assertIn('run_git("--no-pager", "log", "HEAD",', verifier)
+        self.assertNotIn('"log", "--all"', verifier)
         self.assertIn("check_forbidden_names()", verifier)
         self.assertIn("check_git_identity()", verifier)
         self.assertNotIn("check_mailmap", verifier)

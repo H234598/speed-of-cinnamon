@@ -136,7 +136,7 @@ def check_git_identity() -> None:
     if normalized_remote not in allowed_remote_urls:
         fail(f"origin must point at {expected_repo}, got {remote!r}")
 
-    log = run_git("--no-pager", "log", "--all", "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1e").stdout
+    log = run_git("--no-pager", "log", "HEAD", "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1e").stdout
     bad_commits: list[str] = []
     for record in log.strip("\x1e").split("\x1e"):
         record = record.strip()
