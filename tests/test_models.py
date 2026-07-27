@@ -1510,7 +1510,7 @@ class ModelsTest(unittest.TestCase):
             sha1=hashlib.sha1(b"expected").hexdigest(),
             description="test checksum cleanup",
         )
-        cleanup_calls: list[tuple[Path, Path, str]] = []
+        cleanup_calls: list[tuple[Path, Path, str, bool]] = []
         original_unlink = models._unlink_model_file_leaf
 
         def record_unlink(
@@ -2192,9 +2192,16 @@ class ModelsTest(unittest.TestCase):
             *,
             field_name: str = "model directory",
             expected_stat: os.stat_result | None = None,
+            expected_snapshot: bool = False,
         ) -> bool:
-            cleanup_calls.append((path, root, field_name))
-            return original_remove_directory(path, root, field_name=field_name, expected_stat=expected_stat)
+            cleanup_calls.append((path, root, field_name, expected_snapshot))
+            return original_remove_directory(
+                path,
+                root,
+                field_name=field_name,
+                expected_stat=expected_stat,
+                expected_snapshot=expected_snapshot,
+            )
 
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -2206,9 +2213,10 @@ class ModelsTest(unittest.TestCase):
                 models.download_model("ct2-directory-cleanup-safe")
 
         self.assertEqual(len(cleanup_calls), 1)
-        cleanup_path, cleanup_root, field_name = cleanup_calls[0]
+        cleanup_path, cleanup_root, field_name, expected_snapshot = cleanup_calls[0]
         self.assertEqual(cleanup_root, cleanup_path.parent)
         self.assertEqual(field_name, "model temporary directory")
+        self.assertFalse(expected_snapshot)
 
     def test_download_directory_model_does_not_remove_replaced_temporary_directory(self) -> None:
         data = b"small model file"

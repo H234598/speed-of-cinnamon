@@ -2808,6 +2808,42 @@ def _normalized_state_recording_artifact_path(
         return None
 
 
+def _protected_unverified_state_recording_artifact_path(
+    path_value: str | None,
+    *,
+    suffix: str | tuple[str, ...],
+    state_path: Path | None = None,
+    require_recordings_dir: bool = True,
+) -> Path | None:
+    if (
+        not path_value
+        or isinstance(path_value, bool)
+        or not isinstance(path_value, str)
+        or _contains_escaped_null(path_value)
+        or _contains_http_header_control_chars(path_value)
+    ):
+        return None
+    try:
+        path = Path(path_value).expanduser()
+        base_dir = state_path.parent if state_path is not None else Path.cwd()
+        was_relative = not path.is_absolute()
+        normalized = Path(os.path.abspath(os.fspath(path if not was_relative else base_dir / path)))
+        allowed_suffixes = (suffix,) if isinstance(suffix, str) else suffix
+        if not normalized.name.lower().endswith(tuple(item.lower() for item in allowed_suffixes)):
+            return None
+        if was_relative and state_path is not None:
+            normalized_base = Path(os.path.abspath(os.fspath(base_dir)))
+            if not normalized.is_relative_to(normalized_base):
+                return None
+        if require_recordings_dir:
+            normalized_recordings_dir = Path(os.path.abspath(os.fspath(recordings_dir())))
+            if not normalized.is_relative_to(normalized_recordings_dir):
+                return None
+        return normalized
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return None
+
+
 def _assert_json_payload_size(payload: dict[str, object], *, max_bytes: int) -> None:
     try:
         rendered = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
@@ -3240,6 +3276,13 @@ def active_artifact_paths(
         state_path=state_path,
         require_recordings_dir=True,
     )
+    if audio_path is None:
+        audio_path = _protected_unverified_state_recording_artifact_path(
+            state.audio_path,
+            suffix=(".wav", ".flac", ".socenc"),
+            state_path=state_path,
+            require_recordings_dir=True,
+        )
     audio_candidates: list[Path] = []
     if audio_path is not None:
         audio_candidates.append(audio_path)
@@ -3252,6 +3295,13 @@ def active_artifact_paths(
         state_path=state_path,
         require_recordings_dir=True,
     )
+    if log_path is None:
+        log_path = _protected_unverified_state_recording_artifact_path(
+            state.log_path,
+            suffix=".log",
+            state_path=state_path,
+            require_recordings_dir=True,
+        )
     for candidate in audio_candidates:
         paths.add(candidate)
     if log_path:

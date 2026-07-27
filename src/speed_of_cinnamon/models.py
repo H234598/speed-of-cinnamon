@@ -2016,6 +2016,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
     _assert_model_path_for_atomic_replace(path, root, field_name="model path")
     tmp_dir: Path | None = None
     tmp_dir_stat: os.stat_result | None = None
+    tmp_dir_snapshot_stable = False
     try:
         try:
             tmp_dir = path.parent / _create_temporary_directory_in_parent_directory(
@@ -2112,6 +2113,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         if tmp_dir_stat is None or not _same_model_directory_identity(current_tmp_dir_stat, tmp_dir_stat):
             raise ModelError(f"model temporary directory changed during download: {tmp_dir}")
         tmp_dir_stat = current_tmp_dir_stat
+        tmp_dir_snapshot_stable = True
         if path.exists() and path.is_dir():
             _assert_safe_model_directory(path)
         backup_dir: Path | None = None
@@ -2227,6 +2229,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                     root,
                     field_name="model temporary directory",
                     expected_stat=tmp_dir_stat,
+                    expected_snapshot=tmp_dir_snapshot_stable,
                 )
         raise
     finally:
