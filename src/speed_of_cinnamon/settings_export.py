@@ -195,7 +195,7 @@ def _contains_escaped_null(text: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
-def _contains_http_header_control_chars(text: str) -> bool:
+def _contains_http_header_control_chars(text: str, *, allow_newline: bool = False) -> bool:
     if isinstance(text, bool) or not isinstance(text, str):
         raise SettingsExportError("value must be text")
     lowered = (text or "").lower()
@@ -206,6 +206,8 @@ def _contains_http_header_control_chars(text: str) -> bool:
         return True
     for char in lowered:
         codepoint = ord(char)
+        if allow_newline and codepoint == 0x0A:
+            continue
         if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
@@ -399,6 +401,7 @@ def _sanitize_text_field(
     *,
     field_name: str,
     max_chars: int | None = None,
+    allow_newline: bool = False,
 ) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise SettingsExportError(f"{field_name} must be text")
@@ -407,7 +410,7 @@ def _sanitize_text_field(
     text = str(value or "")
     if _contains_escaped_null(text):
         raise SettingsExportError(f"{field_name} contains invalid null byte")
-    if _contains_http_header_control_chars(text):
+    if _contains_http_header_control_chars(text, allow_newline=allow_newline):
         raise SettingsExportError(f"{field_name} contains invalid control character")
     text = text.strip()
     if len(text) > max_chars:
@@ -492,7 +495,12 @@ def normalize_setting(key: str, value: Any) -> Any:
         "ollama-url": MAX_SETTINGS_URL_CHARS,
         "openai-compatible-url": MAX_SETTINGS_URL_CHARS,
     }.get(key, MAX_SETTINGS_TEXT_CHARS)
-    text = _sanitize_text_field(value, field_name=f"setting {key}", max_chars=text_max_chars)
+    text = _sanitize_text_field(
+        value,
+        field_name=f"setting {key}",
+        max_chars=text_max_chars,
+        allow_newline=key in {"personal-context", "vocabulary"},
+    )
     _reject_secret_bearing_url_setting(key, text)
     allowed_values = _ALLOWED_SETTING_TEXT_VALUES.get(key)
     if allowed_values is not None and text not in allowed_values:

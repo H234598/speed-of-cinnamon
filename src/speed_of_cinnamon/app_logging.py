@@ -298,9 +298,12 @@ class SizeCappedJsonFileHandler(logging.Handler):
                         _note_cleanup_failure(parent_error, cleanup_error)
                     else:
                         raise
+            open_flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND
+            if expected_stat is None:
+                open_flags |= os.O_EXCL
             fd = open_file_without_following_symlinks(
                 self.path,
-                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                open_flags,
                 0o600,
                 field_name="log file",
             )

@@ -31,6 +31,7 @@ from .postprocessor import (
 )
 from .path_safety import (
     assert_fd_is_regular_private_file,
+    assert_safe_path_components,
     assert_no_symlink_ancestors,
     ensure_directory_without_following_symlinks,
     open_directory_without_following_symlinks,
@@ -231,7 +232,7 @@ def _model_path_exists(path: str) -> bool:
         return False
     try:
         return _local_model_path_kind(Path(path).expanduser(), field_name="whisper model path") is not None
-    except (OSError, ValueError, TranscriptionError):
+    except (OSError, RuntimeError, ValueError, TranscriptionError):
         return False
 
 
@@ -286,11 +287,12 @@ def _validate_local_model_path(value: str, *, field_name: str, directory: bool) 
         raise TranscriptionError(f"{field_name} is required")
     try:
         path = Path(raw).expanduser()
+    except (OSError, RuntimeError, ValueError) as exc:
+        raise TranscriptionError(f"{field_name} is invalid") from exc
+    try:
         assert_no_symlink_ancestors(path, field_name=field_name)
     except RuntimeError as exc:
         raise TranscriptionError(str(exc)) from exc
-    except (OSError, ValueError) as exc:
-        raise TranscriptionError(f"{field_name} is invalid") from exc
     path_kind = _local_model_path_kind(path, field_name=field_name)
     if path_kind is None:
         raise TranscriptionError(f"{field_name} is missing")
@@ -614,7 +616,10 @@ def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int =
         except FileNotFoundError as exc:
             raise TranscriptionError(f"{executable} is not available") from exc
         except CommandChainError as exc:
-            raise TranscriptionError(str(exc)) from exc
+            message = str(exc)
+            if "command not found" in message.lower() or "command execution failed" in message.lower():
+                message = _sanitize_local_command_error(message)
+            raise TranscriptionError(message) from exc
         if proc.returncode != 0:
             raise TranscriptionError(f"transcriber command failed: exit code {proc.returncode}")
     except subprocess.TimeoutExpired as exc:
@@ -642,7 +647,7 @@ def _normalize_transcript_path(path: Path) -> Path:
         normalized = path.expanduser()
         if not normalized.is_absolute():
             normalized = Path.cwd() / normalized
-    except OSError as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         raise TranscriptionError("text path is invalid") from exc
     return normalized
 
@@ -659,17 +664,18 @@ def _validate_audio_path_shape(path: Path) -> Path:
         raise TranscriptionError("audio path contains invalid null byte")
     if _contains_http_header_control_chars(path_text):
         raise TranscriptionError("audio path contains invalid control character")
-    normalized = path.expanduser()
     try:
+        normalized = path.expanduser()
         if not normalized.is_absolute():
             normalized = Path.cwd() / normalized
-    except OSError as exc:
+    except (OSError, RuntimeError, ValueError) as exc:
         raise TranscriptionError("audio path is invalid") from exc
     try:
         str(normalized).encode("utf-8")
     except UnicodeEncodeError as exc:
         raise TranscriptionError("audio path contains invalid UTF-8") from exc
     try:
+        assert_safe_path_components(normalized, field_name="audio path")
         assert_no_symlink_ancestors(normalized, field_name="audio path")
     except RuntimeError as exc:
         raise TranscriptionError(str(exc)) from exc
@@ -1082,6 +1088,12 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
     return value
 
 
+def _validate_write_transcript(value: bool) -> bool:
+    if not isinstance(value, bool):
+        raise TranscriptionError("write_transcript must be a boolean")
+    return value
+
+
 def _reject_placeholder_transcript(text: str, language: str) -> None:
     normalized = " ".join(text.strip().lower().split())
     if normalized in PLACEHOLDER_TRANSCRIPTS:
@@ -1105,6 +1117,10 @@ def render_command_template(
     personal_context: str = "",
     vocabulary: str = "",
 ) -> str:
+    if isinstance(template, bool) or not isinstance(template, str):
+        raise TranscriptionError("template must be text")
+    if not isinstance(text_path, Path):
+        raise TranscriptionError("text path must be a Path")
     language = _validate_language_code(language)
     try:
         output_base = text_path.with_suffix("")
@@ -1133,34 +1149,39 @@ def transcribe_with_template(
 ) -> str:
     if isinstance(template, bool) or not isinstance(template, str):
         raise TranscriptionError("template must be text")
+    text_path = _normalize_transcript_path(text_path)
     audio_path = validate_audio_file(audio_path)
-    should_read_text_file = "{text}" in template
-    if should_read_text_file:
-        text_path = _normalize_transcript_path(text_path)
+    generated_path: Path | None = None
+    if "{text}" in template or "{output_base}" in template:
+        generated_path = text_path
+    elif "{output_dir}" in template:
+        # OpenAI Whisper writes <audio stem>.txt when only --output_dir is supplied.
+        generated_path = text_path.parent / f"{audio_path.stem}.txt"
+    generated_field_name = "transcript path" if generated_path == text_path else "generated transcript path"
+    if generated_path is not None:
         try:
-            assert_no_symlink_ancestors(text_path, field_name="transcript path")
+            assert_no_symlink_ancestors(generated_path, field_name=generated_field_name)
         except RuntimeError as exc:
             raise TranscriptionError(str(exc)) from exc
         try:
-            parent_fd = ensure_directory_without_following_symlinks(text_path.parent, field_name="transcript directory")
+            parent_fd = ensure_directory_without_following_symlinks(
+                generated_path.parent,
+                field_name=f"{generated_field_name} directory",
+            )
         except OSError as exc:
             raise TranscriptionError("failed to prepare transcript directory") from exc
         else:
             os.close(parent_fd)
-    existing_state = _file_state(text_path) if should_read_text_file else None
-    existing_snapshot = (
-        _snapshot_existing_file(text_path)
-        if should_read_text_file and text_path.exists()
-        else None
-    )
+    existing_state = _file_state(generated_path) if generated_path is not None else None
+    existing_snapshot = _snapshot_existing_file(generated_path) if generated_path is not None else None
     command = render_command_template(template, audio_path, language, text_path, personal_context, vocabulary)
     def restore_text_path() -> None:
-        if not should_read_text_file:
+        if generated_path is None:
             return
         if existing_snapshot is not None:
-            _restore_existing_file_snapshot(text_path, existing_snapshot)
+            _restore_existing_file_snapshot(generated_path, existing_snapshot)
             return
-        _remove_generated_transcript_file(text_path, field_name="transcript path")
+        _remove_generated_transcript_file(generated_path, field_name=generated_field_name)
 
     try:
         segments = split_command_chain(command, label="transcriber")
@@ -1184,15 +1205,18 @@ def transcribe_with_template(
         raise TranscriptionError(_sanitize_local_command_error(str(exc))) from exc
 
     try:
-        if should_read_text_file:
-            current_state = _file_state(text_path)
+        if generated_path is not None:
+            current_state = _file_state(generated_path)
             if current_state is not None:
                 if existing_state is not None and current_state == existing_state:
                     raise TranscriptionError("transcriber completed but did not update the transcript file")
-                output = _read_text_file(text_path, size_field_name="transcript file text")
-                return _assert_text_length(output.strip(), field_name="transcript file text")
+                output = _read_text_file(generated_path, size_field_name="transcript file text")
+                output = _assert_text_length(output.strip(), field_name="transcript file text")
+                if generated_path != text_path:
+                    _restore_or_remove_generated_transcript(generated_path, existing_snapshot)
+                return output
             if existing_snapshot is not None:
-                _restore_existing_file_snapshot(text_path, existing_snapshot)
+                _restore_existing_file_snapshot(generated_path, existing_snapshot)
         return _assert_text_length(output, field_name="transcript")
     except Exception as exc:
         try:
@@ -1209,6 +1233,7 @@ def transcribe_with_openai_whisper(
     text_path: Path,
     write_transcript: bool = True,
 ) -> str:
+    write_transcript = _validate_write_transcript(write_transcript)
     language = _validate_language_code(language)
     audio_path = validate_audio_file(audio_path)
     text_path = _normalize_transcript_path(text_path)
@@ -1250,7 +1275,7 @@ def transcribe_with_openai_whisper(
                 ],
             )
         except Exception:
-            if existing_snapshot is not None or generated.exists():
+            if existing_snapshot is not None or _file_state(generated) is not None:
                 _restore_or_remove_generated_transcript(generated, existing_snapshot)
             raise
         if generated.exists():
@@ -1353,6 +1378,7 @@ def transcribe_with_whisper_cpp(
     model_path: str,
     write_transcript: bool = True,
 ) -> str:
+    write_transcript = _validate_write_transcript(write_transcript)
     language = _validate_language_code(language)
     audio_path = validate_audio_file(audio_path)
     text_path = _normalize_transcript_path(text_path)
@@ -1397,20 +1423,46 @@ def transcribe_with_whisper_cpp(
         generated_states: dict[Path, tuple[int, int, int, int, int, int] | None] = {}
         for candidate in generated_candidates:
             generated_states[candidate] = _file_state(candidate)
-            if candidate.exists():
-                snapshots[candidate] = _snapshot_existing_file(candidate)
+            snapshots[candidate] = _snapshot_existing_file(candidate)
+
+        def cleanup_generated_candidates(
+            *,
+            exclude: Path | None = None,
+            preserve_text_path_errors: bool = False,
+        ) -> None:
+            cleanup_errors: list[TranscriptionError] = []
+            for candidate in generated_candidates:
+                if exclude is not None and candidate == exclude:
+                    continue
+                try:
+                    snapshot = snapshots.get(candidate)
+                    if preserve_text_path_errors and candidate == text_path and snapshot is None:
+                        _remove_generated_transcript_file(candidate, field_name="generated sidecar")
+                    else:
+                        _restore_or_remove_generated_transcript(candidate, snapshot)
+                except TranscriptionError as exc:
+                    cleanup_errors.append(exc)
+            if cleanup_errors:
+                primary_error = cleanup_errors[0]
+                for cleanup_error in cleanup_errors[1:]:
+                    if hasattr(primary_error, "add_note"):
+                        primary_error.add_note(f"additional transcript cleanup failed: {cleanup_error}")
+                raise primary_error
+
         try:
             _run_limited_process(invocation)
-        except Exception:
-            for candidate in generated_candidates:
-                if snapshots.get(candidate) is not None or candidate.exists():
-                    _restore_or_remove_generated_transcript(candidate, snapshots.get(candidate))
+        except Exception as exc:
+            try:
+                cleanup_generated_candidates()
+            except TranscriptionError as cleanup_error:
+                if hasattr(exc, "add_note"):
+                    exc.add_note(f"transcript cleanup failed: {cleanup_error}")
             raise
         active_generated_path = next(
             (
                 candidate
                 for candidate in generated_candidates
-                if candidate.exists()
+                if _file_state(candidate) is not None
                 and (
                     generated_states[candidate] is None
                     or _file_state(candidate) != generated_states[candidate]
@@ -1419,23 +1471,18 @@ def transcribe_with_whisper_cpp(
             None,
         )
         if active_generated_path is not None:
-            existing_snapshot = snapshots.get(active_generated_path)
             generated_path = active_generated_path
             if generated_path == text_path:
                 try:
                     text = _read_text_file(generated_path, size_field_name="transcript").strip()
                     _assert_text_length(text, field_name="transcript")
                 except Exception:
-                    if existing_snapshot is not None:
-                        _restore_existing_file_snapshot(generated_path, existing_snapshot)
-                    else:
-                        _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
+                    cleanup_generated_candidates(preserve_text_path_errors=True)
                     raise
-                if not write_transcript:
-                    if existing_snapshot is not None:
-                        _restore_existing_file_snapshot(generated_path, existing_snapshot)
-                    else:
-                        _remove_generated_transcript_file(generated_path, field_name="generated sidecar")
+                cleanup_generated_candidates(
+                    exclude=generated_path if write_transcript else None,
+                    preserve_text_path_errors=True,
+                )
                 return text
             primary_error: BaseException | None = None
             try:
@@ -1448,14 +1495,14 @@ def transcribe_with_whisper_cpp(
                 raise
             finally:
                 try:
-                    _restore_or_remove_generated_transcript(generated_path, existing_snapshot)
-                except TranscriptionError as exc:
+                    cleanup_generated_candidates()
+                except TranscriptionError as cleanup_error:
                     if primary_error is None:
                         raise
+                    if hasattr(primary_error, "add_note"):
+                        primary_error.add_note(f"transcript cleanup failed: {cleanup_error}")
             return text
-        for candidate in generated_candidates:
-            if snapshots.get(candidate) is not None or candidate.exists():
-                _restore_or_remove_generated_transcript(candidate, snapshots.get(candidate))
+        cleanup_generated_candidates()
         raise TranscriptionError("whisper.cpp completed but did not produce a transcript")
 
 
@@ -1474,6 +1521,7 @@ def transcribe_with_faster_whisper(
     model_path: str,
     write_transcript: bool = True,
 ) -> str:
+    write_transcript = _validate_write_transcript(write_transcript)
     language = _validate_language_code(language)
     audio_path = validate_audio_file(audio_path)
     text_path = _normalize_transcript_path(text_path)
@@ -1489,6 +1537,12 @@ def transcribe_with_faster_whisper(
     except Exception as exc:
         raise TranscriptionError("faster-whisper could not be loaded") from exc
 
+    deadline = time.monotonic() + TRANSCRIBE_COMMAND_TIMEOUT_SECONDS
+
+    def ensure_deadline() -> None:
+        if time.monotonic() >= deadline:
+            raise TranscriptionError("faster-whisper timed out")
+
     audio_snapshot = _snapshot_private_file(
         audio_path,
         field_name="audio file for backend",
@@ -1496,18 +1550,19 @@ def transcribe_with_faster_whisper(
     )
     with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
         try:
+            ensure_deadline()
             model = WhisperModel(model_path, device="cpu", compute_type="int8")
+            ensure_deadline()
             segments, _info = model.transcribe(
                 str(staged_audio_path),
                 language=language or None,
                 task="transcribe",
                 beam_size=5,
             )
-            deadline = time.monotonic() + TRANSCRIBE_COMMAND_TIMEOUT_SECONDS
+            ensure_deadline()
             text_parts: list[str] = []
             for segment in segments:
-                if time.monotonic() > deadline:
-                    raise TranscriptionError("faster-whisper timed out")
+                ensure_deadline()
                 segment_text = str(segment.text or "").strip()
                 if not segment_text:
                     continue
@@ -1650,12 +1705,14 @@ def _sanitize_local_command_error(message: str) -> str:
         return f"transcriber command failed: exit code {exit_code}; command output redacted"
     if "command timed out" in lowered:
         return "transcriber command timed out: [redacted command output]"
+    if "command not found" in lowered:
+        return "transcriber command not found"
+    if "command execution failed" in lowered:
+        return "transcriber command execution failed"
     if (
         "command output exceeded" in lowered
         or "command output contains invalid null byte" in lowered
         or "command contains invalid null byte" in lowered
-        or "command not found" in lowered
-        or "command execution failed" in lowered
         or "command input exceeded" in lowered
         or "command input contains invalid null byte" in lowered
         or "personal context is too large" in lowered
@@ -1684,6 +1741,15 @@ def _multipart_form_data(
     | tuple[int, int, int, int, int, int, str]
     | None = None,
 ) -> tuple[bytearray, str]:
+    if isinstance(file_field, bool) or not isinstance(file_field, str):
+        raise TranscriptionError("multipart file field must be text")
+    if _contains_multipart_control_chars(file_field):
+        raise TranscriptionError("multipart file field contains invalid control character")
+    try:
+        file_field.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise TranscriptionError("multipart file field contains invalid UTF-8") from exc
+    file_field = file_field.replace("\\", "\\\\").replace('"', '\\"')
     boundary = "speed-of-cinnamon-" + uuid.uuid4().hex
     body = bytearray()
     file_name = file_path.name
@@ -1738,6 +1804,7 @@ def transcribe_with_openai_compatible_api(
     write_transcript: bool = True,
     openai_compatible_service_tier_fallback: bool = False,
 ) -> str:
+    write_transcript = _validate_write_transcript(write_transcript)
     audio_path, audio_snapshot = _validate_audio_file_for_upload(audio_path)
     text_path = _normalize_transcript_path(text_path)
     if _contains_escaped_null(model):
@@ -1922,6 +1989,9 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
     if configured_model:
         try:
             configured_model_path = Path(configured_model).expanduser()
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise TranscriptionError("configured whisper model path is invalid") from exc
+        try:
             assert_no_symlink_ancestors(configured_model_path, field_name="configured whisper model path")
             configured_model_kind = _local_model_path_kind(configured_model_path, field_name="configured whisper model path")
             configured_model_exists = configured_model_kind is not None
@@ -2011,39 +2081,7 @@ def transcribe(
         raise TranscriptionError("personal context must be text")
     if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
         raise TranscriptionError("vocabulary must be text")
-    if not isinstance(openai_compatible_model, str) or isinstance(openai_compatible_model, bool):
-        raise TranscriptionError("OpenAI-compatible speech model must be text")
-    if not isinstance(openai_compatible_url, str) or isinstance(openai_compatible_url, bool):
-        raise TranscriptionError("OpenAI-compatible API URL must be text")
-    if not isinstance(openai_compatible_api_key, str) or isinstance(openai_compatible_api_key, bool):
-        raise TranscriptionError("OpenAI-compatible API key must be text")
-    if not openai_compatible_api_key.strip():
-        openai_compatible_api_key = _coerce_environment_value("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY") or ""
-    if not isinstance(openai_compatible_flex_processing, bool):
-        raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
-    if not isinstance(openai_compatible_service_tier_fallback, bool):
-        raise TranscriptionError("OpenAI-compatible service tier fallback must be a boolean")
-    if _contains_escaped_null(openai_compatible_model):
-        raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
-    if _contains_escaped_null(openai_compatible_api_key):
-        raise TranscriptionError("OpenAI-compatible API key contains invalid null byte")
-    if _contains_http_header_control_chars(openai_compatible_api_key):
-        raise TranscriptionError("openai-compatible API key contains invalid control character")
-    if _contains_http_header_control_chars(openai_compatible_model):
-        raise TranscriptionError("multipart form field contains invalid control character")
-
     command_template = _assert_text_length(command_template, field_name="command template", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
-    openai_compatible_model = _assert_text_length(
-        openai_compatible_model,
-        field_name="OpenAI-compatible speech model",
-        max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
-    ).strip()
-    openai_compatible_url = _assert_text_length(openai_compatible_url, field_name="OpenAI-compatible API URL", max_chars=MAX_OPENAI_URL_CHARS)
-    openai_compatible_api_key = _assert_text_length(
-        openai_compatible_api_key,
-        field_name="OpenAI-compatible API key",
-        max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
-    ).strip()
     audio_path = validate_audio_file(audio_path)
 
     config = TranscriberConfig(
@@ -2053,6 +2091,42 @@ def transcribe(
         language=language,
     )
     resolved_backend = resolve_transcriber(config)
+    if resolved_backend == "openai-compatible":
+        if not isinstance(openai_compatible_model, str) or isinstance(openai_compatible_model, bool):
+            raise TranscriptionError("OpenAI-compatible speech model must be text")
+        if not isinstance(openai_compatible_url, str) or isinstance(openai_compatible_url, bool):
+            raise TranscriptionError("OpenAI-compatible API URL must be text")
+        if not isinstance(openai_compatible_api_key, str) or isinstance(openai_compatible_api_key, bool):
+            raise TranscriptionError("OpenAI-compatible API key must be text")
+        if not openai_compatible_api_key.strip():
+            openai_compatible_api_key = _coerce_environment_value("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY") or ""
+        if not isinstance(openai_compatible_flex_processing, bool):
+            raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
+        if not isinstance(openai_compatible_service_tier_fallback, bool):
+            raise TranscriptionError("OpenAI-compatible service tier fallback must be a boolean")
+        if _contains_escaped_null(openai_compatible_model):
+            raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
+        if _contains_escaped_null(openai_compatible_api_key):
+            raise TranscriptionError("OpenAI-compatible API key contains invalid null byte")
+        if _contains_http_header_control_chars(openai_compatible_api_key):
+            raise TranscriptionError("openai-compatible API key contains invalid control character")
+        if _contains_http_header_control_chars(openai_compatible_model):
+            raise TranscriptionError("multipart form field contains invalid control character")
+        openai_compatible_model = _assert_text_length(
+            openai_compatible_model,
+            field_name="OpenAI-compatible speech model",
+            max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+        ).strip()
+        openai_compatible_url = _assert_text_length(
+            openai_compatible_url,
+            field_name="OpenAI-compatible API URL",
+            max_chars=MAX_OPENAI_URL_CHARS,
+        )
+        openai_compatible_api_key = _assert_text_length(
+            openai_compatible_api_key,
+            field_name="OpenAI-compatible API key",
+            max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+        ).strip()
     if resolved_backend == "openai-compatible" and (
         "\r" in audio_path.name or "\n" in audio_path.name
     ):

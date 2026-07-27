@@ -73,6 +73,12 @@ class CommandChainTest(unittest.TestCase):
         with self.assertRaisesRegex(CommandChainError, "contains control characters"):
             split_command_chain("printf hello\nworld")
 
+    def test_split_command_chain_allows_newline_inside_quoted_argument(self) -> None:
+        self.assertEqual(
+            split_command_chain("printf 'hello\nworld'"),
+            [["printf", "hello\nworld"]],
+        )
+
     def test_split_command_chain_rejects_escaped_control_characters(self) -> None:
         for command in ("printf hello\\r\\nworld", "printf hello\\x1bworld", "printf hello\\u001bworld", "printf hello\\x85world"):
             with self.subTest(command=command):

@@ -2912,6 +2912,60 @@ class ModelsTest(unittest.TestCase):
             self.assertFalse(models.model_path(spec).exists())
             self.assertFalse(list(models.model_path(spec).parent.glob(f".{spec.filename}.*")))
 
+    def test_download_model_rejects_multifile_directory_swap_before_activation(self) -> None:
+        data = b"trusted model file"
+        spec = models.ModelSpec(
+            name="ct2-directory-swap-before-activation",
+            filename="ct2-directory-swap-before-activation",
+            size="2 KiB",
+            sha1="",
+            description="ct2 directory swap before activation",
+            backend="faster-whisper",
+            model_format="ctranslate2",
+            repo_id="example/ct2-directory-swap-before-activation",
+            files=("config.json",),
+            file_sha1s=file_sha1s_for(("config.json",), data),
+        )
+        real_replace = models._replace_model_sibling_path
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
+        ):
+            path = models.model_path(spec)
+
+            def replace_after_directory_swap(
+                source: Path,
+                target: Path,
+                root: Path,
+                *,
+                field_name: str = "model path",
+                expected_source_stat: os.stat_result | None = None,
+            ) -> None:
+                if target == path and source.parent == path.parent and source.name.startswith(f".{spec.filename}."):
+                    shutil.rmtree(source)
+                    source.mkdir(mode=0o700)
+                    (source / "VICTIM").write_bytes(b"foreign directory")
+                real_replace(
+                    source,
+                    target,
+                    root,
+                    field_name=field_name,
+                    expected_source_stat=expected_source_stat,
+                )
+
+            with mock.patch.object(models, "_replace_model_sibling_path", side_effect=replace_after_directory_swap):
+                with self.assertRaisesRegex(models.ModelError, "failed to persist downloaded model directory") as caught:
+                    models.download_model(spec.name)
+
+            self.assertIn("source changed before activation", str(caught.exception.__cause__))
+            self.assertFalse(path.exists())
+            swapped = list(path.parent.glob(f".{spec.filename}.*"))
+            self.assertEqual(len(swapped), 1)
+            self.assertTrue((swapped[0] / "VICTIM").is_file())
+
     def test_download_model_preserves_target_changed_before_single_file_backup(self) -> None:
         old_data = b"old model"
         new_data = b"new model"

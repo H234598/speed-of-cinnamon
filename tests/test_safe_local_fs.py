@@ -224,6 +224,8 @@ class SafeLocalFsTest(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertIn("destination changed", result.stderr)
             self.assertEqual(target.read_text(encoding="utf-8"), "foreign\n")
 
     def test_atomic_write_preserves_replaced_temp_during_cleanup(self) -> None:

@@ -1031,6 +1031,31 @@ class DoctorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
             doctor.parse_settings_json('{"language":"\\ud800"}')
 
+    def test_parse_settings_json_accepts_formatted_multiline_personalization(self) -> None:
+        raw = json.dumps(
+            {
+                "personal-context": "Use project terminology.\nKeep code unchanged.",
+                "vocabulary": "PipeWire\nCinnamon",
+            },
+            indent=2,
+        )
+
+        self.assertEqual(
+            doctor.parse_settings_json(raw),
+            {
+                "personal-context": "Use project terminology.\nKeep code unchanged.",
+                "vocabulary": "PipeWire\nCinnamon",
+            },
+        )
+
+    def test_parse_settings_json_rejects_multiline_non_personalization(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid control character"):
+            doctor.parse_settings_json(json.dumps({"language": "en\nunsafe"}))
+
+    def test_parse_settings_json_rejects_control_character_in_object_key(self) -> None:
+        with self.assertRaisesRegex(ValueError, "contains invalid object key"):
+            doctor.parse_settings_json(json.dumps({"language\nunsafe": "en"}))
+
     def test_validate_remote_http_url_rejects_leading_control_character(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid control character"):
             doctor._validate_remote_http_url("\x85https://api.example.test/v1", field_name="remote endpoint URL")

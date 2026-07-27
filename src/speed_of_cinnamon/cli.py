@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import errno
 import glob
+import hashlib
 import heapq
 import io
 import json
@@ -123,6 +124,7 @@ from .setup_plan import build_setup_plan
 from .state import RecordingState, StateStore, is_state_read_error, now_iso, process_is_alive
 from .text_utils import sanitize_special_chars
 from .transcriber import (
+    MAX_AUDIO_FILE_BYTES,
     MAX_AUDIO_PATH_CHARS,
     MAX_LANGUAGE_CODE_CHARS,
     normalize_backend,
@@ -1550,10 +1552,17 @@ def _is_transcript_artifact(path: Path) -> bool:
     return name.endswith(".txt") or name.endswith(ENCRYPTED_TRANSCRIPT_SUFFIX)
 
 
-def _safe_transcript_artifact_files() -> list[Path]:
+def _safe_transcript_artifact_files(
+    expected_stats: dict[Path, os.stat_result] | None = None,
+) -> list[Path]:
     return [
         path
-        for path in _safe_regular_child_files(transcript_dir(), TRANSCRIPT_ARTIFACT_SUFFIXES, field_name="transcript directory")
+        for path in _safe_regular_child_files(
+            transcript_dir(),
+            TRANSCRIPT_ARTIFACT_SUFFIXES,
+            field_name="transcript directory",
+            expected_stats=expected_stats,
+        )
         if _is_transcript_artifact(path)
     ]
 
@@ -1600,8 +1609,6 @@ def _remove_transient_transcript_owner(
             expected_stat=expected_stat,
         )
     except FileNotFoundError:
-        return False
-    except RuntimeError:
         return False
 
 
@@ -1653,7 +1660,10 @@ def _transient_transcript_owner_is_active(path: Path) -> bool:
     return current_identity is None or current_identity == owner_identity
 
 
-def _safe_stale_transient_transcript_files(max_age_seconds: int = TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS) -> list[Path]:
+def _safe_stale_transient_transcript_files(
+    max_age_seconds: int = TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS,
+    expected_stats: dict[Path, os.stat_result] | None = None,
+) -> list[Path]:
     if not isinstance(max_age_seconds, int) or isinstance(max_age_seconds, bool):
         raise RuntimeError("transient transcript max age must be an integer")
     cutoff = time.time() - max(max_age_seconds, 0)
@@ -1669,13 +1679,16 @@ def _safe_stale_transient_transcript_files(max_age_seconds: int = TRANSIENT_TRAN
             continue
         if _transient_transcript_owner_is_active(path):
             continue
+        if expected_stats is not None:
+            expected_stats[path] = file_stat
         files.append(path)
     return files
 
 
 def prune_stale_transient_transcripts(dry_run: bool = False) -> dict[str, object]:
+    file_stats: dict[Path, os.stat_result] = {}
     try:
-        files = _safe_stale_transient_transcript_files()
+        files = _safe_stale_transient_transcript_files(expected_stats=file_stats)
     except DirectoryScanError as exc:
         return {
             "planned_paths": [],
@@ -1687,24 +1700,49 @@ def prune_stale_transient_transcripts(dry_run: bool = False) -> dict[str, object
         path: _recording_artifact_stat(_transient_transcript_owner_path(path))
         for path in files
     }
-    result = prune_files_by_mtime(files, 0, active_paths=set(), dry_run=dry_run)
-    if dry_run:
-        for planned_path in list(result["planned_paths"]):
-            owner_path = _transient_transcript_owner_path(Path(planned_path))
-            if not _transient_transcript_owner_cleanup_is_safe(Path(planned_path)):
-                result["failed_paths"].append(str(owner_path))
-        return result
-    for deleted_path in list(result["deleted_paths"]):
-        path = Path(deleted_path)
+    eligible_files: list[Path] = []
+    failed_paths: list[str] = []
+    for path in files:
         owner_path = _transient_transcript_owner_path(path)
         expected_owner_stat = owner_stats.get(path)
         if expected_owner_stat is None:
-            if owner_path.exists() or owner_path.is_symlink():
-                result["failed_paths"].append(str(owner_path))
-            continue
-        _remove_transient_transcript_owner(path, expected_stat=expected_owner_stat)
-        if owner_path.exists() or owner_path.is_symlink():
-            result["failed_paths"].append(str(owner_path))
+            owner_presence = _safe_leaf_presence(owner_path)
+            if owner_presence is None or owner_presence:
+                failed_paths.append(str(owner_path))
+                continue
+        elif dry_run:
+            owner_presence = _safe_leaf_presence(owner_path)
+            current_owner_stat = _recording_artifact_stat(owner_path) if owner_presence else None
+            if (
+                owner_presence is None
+                or not owner_presence
+                or current_owner_stat is None
+                or not _same_leaf_identity(current_owner_stat, expected_owner_stat)
+                or not _transient_transcript_owner_cleanup_is_safe(path)
+            ):
+                failed_paths.append(str(owner_path))
+                continue
+        else:
+            try:
+                owner_removed = _remove_transient_transcript_owner(path, expected_stat=expected_owner_stat)
+            except RuntimeError:
+                owner_removed = False
+            if not owner_removed:
+                failed_paths.append(str(owner_path))
+                continue
+            owner_presence = _safe_leaf_presence(owner_path)
+            if owner_presence is None or owner_presence:
+                failed_paths.append(str(owner_path))
+                continue
+        eligible_files.append(path)
+    result = prune_files_by_mtime(
+        eligible_files,
+        0,
+        active_paths=set(),
+        dry_run=dry_run,
+        expected_stats=file_stats,
+    )
+    result["failed_paths"] = failed_paths + result["failed_paths"]
     return result
 
 
@@ -2102,7 +2140,8 @@ def _remove_transient_transcript_path(
         else:
             _remove_transient_transcript_owner(path, expected_stat=expected_owner_stat)
         owner_path = _transient_transcript_owner_path(path)
-        if owner_path.exists() or owner_path.is_symlink():
+        owner_presence = _safe_leaf_presence(owner_path)
+        if owner_presence is None or owner_presence:
             raise RuntimeError(f"failed to delete transient transcript owner: {owner_path}")
         return True
     except FileNotFoundError:
@@ -2163,11 +2202,17 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
         payload = text.encode("utf-8")
     except UnicodeEncodeError as exc:
         raise RuntimeError("failed to write transcript file: transcript text is not valid UTF-8") from exc
+    if len(payload) > MAX_STORED_TRANSCRIPT_BYTES:
+        raise RuntimeError("transcript file is too large")
     if mode == ARTIFACT_ENCRYPTION_OFF:
         encrypted_sibling = _transcript_sibling_path(path)
         encrypted_sibling_present = bool(
             encrypted_sibling is not None and _path_exists_or_is_symlink(encrypted_sibling)
         )
+        if encrypted_sibling_present and _path_exists_or_is_symlink(path):
+            raise RuntimeError(
+                f"refusing to overwrite existing plaintext transcript while encrypted sibling is present: {path}"
+            )
         encrypted_sibling_stat = (
             _recording_artifact_stat(encrypted_sibling)
             if encrypted_sibling_present and encrypted_sibling is not None
@@ -2175,7 +2220,7 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
         )
         _write_text_atomic(path, text)
         plaintext_stat = _recording_artifact_stat(path)
-        if encrypted_sibling is not None and (encrypted_sibling.exists() or encrypted_sibling.is_symlink()):
+        if encrypted_sibling is not None and _path_exists_or_is_symlink(encrypted_sibling):
             try:
                 if not encrypted_sibling_present:
                     raise RuntimeError(f"encrypted transcript sibling appeared during plaintext storage: {encrypted_sibling}")
@@ -2250,7 +2295,10 @@ def _remove_plaintext_transcript_sibling_after_encryption(
     plaintext_path = encrypted_path.with_name(encrypted_path.name[:-len(".socenc")])
     if plaintext_path != storage_path:
         raise RuntimeError(f"unexpected encrypted transcript sibling path: {encrypted_path}")
-    if not plaintext_path.exists() and not plaintext_path.is_symlink():
+    plaintext_presence = _safe_leaf_presence(plaintext_path)
+    if plaintext_presence is None:
+        raise RuntimeError(f"failed to inspect plaintext transcript artifact: {plaintext_path}")
+    if not plaintext_presence:
         return
     if not _remove_transcript_file(plaintext_path, expected_stat=expected_stat):
         raise RuntimeError(f"failed to remove plaintext transcript artifact after encryption: {plaintext_path}")
@@ -2261,12 +2309,17 @@ def _rollback_plaintext_transcript_after_sibling_cleanup_failure(
     *,
     expected_stat: os.stat_result | None,
 ) -> None:
-    if not path.exists() and not path.is_symlink():
+    path_presence = _safe_leaf_presence(path)
+    if path_presence is None:
+        raise RuntimeError(f"failed to inspect plaintext transcript artifact: {path}")
+    if not path_presence:
         return
     if expected_stat is None:
         raise RuntimeError(f"failed to roll back plaintext transcript artifact: {path}")
-    if not _remove_transcript_file(path, expected_stat=expected_stat) and (path.exists() or path.is_symlink()):
-        raise RuntimeError(f"failed to roll back plaintext transcript artifact: {path}")
+    if not _remove_transcript_file(path, expected_stat=expected_stat):
+        path_presence = _safe_leaf_presence(path)
+        if path_presence is None or path_presence:
+            raise RuntimeError(f"failed to roll back plaintext transcript artifact: {path}")
 
 
 def _remove_plaintext_export_sibling_after_encryption(
@@ -2281,11 +2334,14 @@ def _remove_plaintext_export_sibling_after_encryption(
     plaintext_path = encrypted_path.with_name(encrypted_path.name[:-len(".socenc")])
     if plaintext_path != storage_path:
         raise RuntimeError(f"unexpected encrypted transcript export sibling path: {encrypted_path}")
+    plaintext_presence = _safe_leaf_presence(plaintext_path)
     if not expected_present:
-        if plaintext_path.exists() or plaintext_path.is_symlink():
+        if plaintext_presence is None or plaintext_presence:
             raise RuntimeError(f"transcript export appeared during encryption: {plaintext_path}")
         return
-    if not plaintext_path.exists() and not plaintext_path.is_symlink():
+    if plaintext_presence is None:
+        raise RuntimeError(f"failed to inspect plaintext transcript export: {plaintext_path}")
+    if not plaintext_presence:
         return
     if expected_stat is None:
         raise RuntimeError(f"transcript export is not a safe regular file: {plaintext_path}")
@@ -2336,11 +2392,14 @@ def _remove_plaintext_recording_sibling_after_encryption(
 ) -> None:
     for candidate in _plaintext_recording_cleanup_candidates(original_path, encrypted_path):
         expected_stat = expected_stats.get(candidate) if expected_stats is not None else None
+        candidate_presence = _safe_leaf_presence(candidate)
         if expected_stats is not None and candidate in expected_stats and expected_stat is None:
-            if candidate.exists() or candidate.is_symlink():
+            if candidate_presence is None or candidate_presence:
                 raise RuntimeError(f"plaintext recording artifact changed before cleanup: {candidate}")
             continue
-        if not candidate.exists() and not candidate.is_symlink():
+        if candidate_presence is None:
+            raise RuntimeError(f"failed to inspect plaintext recording artifact: {candidate}")
+        if not candidate_presence:
             continue
         suffix = candidate.suffix.lower()
         if suffix not in {".flac", ".wav"}:
@@ -2357,7 +2416,10 @@ def _rollback_encrypted_artifact_after_plaintext_cleanup_failure(
 ) -> None:
     if not is_encrypted_path(encrypted_path):
         return
-    if not encrypted_path.exists() and not encrypted_path.is_symlink():
+    encrypted_presence = _safe_leaf_presence(encrypted_path)
+    if encrypted_presence is None:
+        raise RuntimeError(f"failed to inspect {field_name}: {encrypted_path}")
+    if not encrypted_presence:
         return
     try:
         if expected_stat is None:
@@ -2385,6 +2447,10 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
             plaintext_path = _plaintext_recording_sibling_for_encrypted_path(path)
             if plaintext_path is None:
                 raise RuntimeError(f"encrypted recording artifact has no safe plaintext sibling: {path}")
+            if _path_exists_or_is_symlink(plaintext_path):
+                raise RuntimeError(
+                    f"refusing to overwrite existing plaintext recording artifact during downgrade: {plaintext_path}"
+                )
             source_stat = _recording_artifact_stat(path)
             if source_stat is None:
                 raise RuntimeError(f"encrypted recording artifact is not a safe regular file: {path}")
@@ -2409,7 +2475,10 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
                 raise RuntimeError(str(exc)) from exc
             if not remove_file(str(path), suffix=".socenc", expected_stat=source_stat):
                 try:
-                    if (plaintext_path.exists() or plaintext_path.is_symlink()) and not remove_file(
+                    plaintext_presence = _safe_leaf_presence(plaintext_path)
+                    if plaintext_presence is None:
+                        raise RuntimeError(f"failed to inspect plaintext recording artifact: {plaintext_path}")
+                    if plaintext_presence and not remove_file(
                         str(plaintext_path),
                         suffix=plaintext_path.suffix.lower(),
                         expected_stat=plaintext_stat,
@@ -2964,7 +3033,8 @@ def _settings_json_path_limit(path_value: str) -> int:
 
 
 def _parse_cli_settings_json(raw: str) -> dict[str, object]:
-    _assert_clean_text(raw, field_name="settings JSON", max_chars=MAX_SETTINGS_JSON_CHARS)
+    if isinstance(raw, bool) or not isinstance(raw, str):
+        raise RuntimeError("settings JSON must be text")
     if len(raw) > MAX_SETTINGS_JSON_CHARS:
         raise RuntimeError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
     try:
@@ -3182,11 +3252,8 @@ def active_artifact_paths(
         state_path=state_path,
         require_recordings_dir=True,
     )
-    if log_path is not None and _recording_artifact_stat(log_path) is None:
-        log_path = None
     for candidate in audio_candidates:
-        if _recording_artifact_stat(candidate) is not None:
-            paths.add(candidate)
+        paths.add(candidate)
     if log_path:
         paths.add(log_path)
     path = _normalized_state_artifact_path(state.transcript_path, state_path=state_path)
@@ -3209,8 +3276,9 @@ def _enforce_recording_artifact_cap(
     if state is None:
         return {"planned_paths": [], "deleted_paths": [], "failed_paths": [], "skipped_active_paths": []}
     active_paths = set(active_artifact_paths(state, state_path=state_path)) | (active_paths or set())
+    artifact_stats: dict[Path, os.stat_result] = {}
     try:
-        artifact_files = recording_artifact_files()
+        artifact_files = recording_artifact_files(expected_stats=artifact_stats)
     except DirectoryScanError as exc:
         return {
             "planned_paths": [],
@@ -3223,6 +3291,7 @@ def _enforce_recording_artifact_cap(
         MAX_TEMP_RECORDING_FILES,
         active_paths,
         dry_run=False,
+        expected_stats=artifact_stats,
     )
 
 
@@ -3381,11 +3450,27 @@ def _remove_recording_artifact(
             return False
         return remove_file(candidate_value, suffix=suffix, expected_stat=expected_stats[candidate])
 
-    primary_exists = path.exists() or path.is_symlink()
-    if primary_exists and not remove_candidate(path, path_value, primary_suffix):
+    primary_exists = _safe_leaf_presence(path)
+    if primary_exists is None:
         return False
     sibling_path = _recording_sibling_path(path)
-    sibling_exists = sibling_path is not None and (sibling_path.exists() or sibling_path.is_symlink())
+    sibling_exists = False
+    if sibling_path is not None:
+        sibling_presence = _safe_leaf_presence(sibling_path)
+        if sibling_presence is None:
+            return False
+        sibling_exists = sibling_presence
+    candidates = ((path, primary_exists), (sibling_path, sibling_exists))
+    for candidate, candidate_exists in candidates:
+        if candidate is None or not candidate_exists:
+            continue
+        if expected_stats is not None:
+            if candidate not in expected_stats or expected_stats[candidate] is None:
+                return False
+        elif _recording_artifact_stat(candidate) is None:
+            return False
+    if primary_exists and not remove_candidate(path, path_value, primary_suffix):
+        return False
     if sibling_exists:
         sibling_suffix = ".socenc" if is_encrypted_path(sibling_path) else sibling_path.suffix.lower()
         if not remove_candidate(sibling_path, str(sibling_path), sibling_suffix):
@@ -3452,12 +3537,16 @@ def _transcript_sibling_path(path: Path | None) -> Path | None:
 
 
 def _path_exists_or_is_symlink(path: Path) -> bool:
+    return _safe_leaf_presence(path) is not False
+
+
+def _safe_leaf_presence(path: Path) -> bool | None:
     try:
         path.lstat()
     except FileNotFoundError:
         return False
     except OSError:
-        return True
+        return None
     return True
 
 
@@ -3700,10 +3789,43 @@ def _stabilize_recording_artifact_path(
         except FileNotFoundError:
             target_stat = None
         if target_stat is not None:
-            if not stat_module.S_ISREG(target_stat.st_mode) or getattr(target_stat, "st_nlink", 1) != 1:
+            if not stat_module.S_ISREG(target_stat.st_mode):
                 raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
             if replace_existing_path != stable_path:
+                if getattr(target_stat, "st_nlink", 1) != 1:
+                    raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
                 raise RuntimeError(f"stable recording artifact already exists: {stable_path}")
+            stale_backup_removed = False
+            try:
+                candidate_names = os.listdir(parent_fd)
+            except OSError as exc:
+                raise RuntimeError(f"failed to scan stable recording artifact backups: {stable_path}") from exc
+            backup_prefix = f".{stable_path.name}."
+            for candidate_name in candidate_names:
+                if not isinstance(candidate_name, str) or not (
+                    candidate_name.startswith(backup_prefix) and candidate_name.endswith(".bak")
+                ):
+                    continue
+                try:
+                    candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    continue
+                if not stat_module.S_ISREG(candidate_stat.st_mode):
+                    continue
+                if not same_artifact_identity(candidate_stat, target_stat):
+                    continue
+                if not unlink_artifact_leaf_safely(
+                    candidate_name,
+                    candidate_stat,
+                    field_name="stale stable recording artifact backup",
+                ):
+                    raise RuntimeError(f"stable recording artifact backup disappeared during cleanup: {stable_path}")
+                stale_backup_removed = True
+            if stale_backup_removed:
+                _fsync_fd(parent_fd)
+                target_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+            if getattr(target_stat, "st_nlink", 1) != 1:
+                raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
             for _ in range(100):
                 candidate_name = f".{stable_path.name}.{secrets.token_hex(8)}.bak"
                 try:
@@ -3827,8 +3949,10 @@ def _safe_directory_entries(directory: Path, *, field_name: str) -> list[tuple[P
                 continue
             try:
                 file_stat = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
-            except OSError:
+            except FileNotFoundError:
                 continue
+            except OSError as exc:
+                raise DirectoryScanError(directory, field_name=field_name) from exc
             entries.append((directory / name, file_stat))
         return entries
     finally:
@@ -3838,7 +3962,13 @@ def _safe_directory_entries(directory: Path, *, field_name: str) -> list[tuple[P
             pass
 
 
-def _safe_regular_child_files(directory: Path, suffixes: tuple[str, ...], *, field_name: str) -> list[Path]:
+def _safe_regular_child_files(
+    directory: Path,
+    suffixes: tuple[str, ...],
+    *,
+    field_name: str,
+    expected_stats: dict[Path, os.stat_result] | None = None,
+) -> list[Path]:
     files: list[Path] = []
     for path, file_stat in _safe_directory_entries(directory, field_name=field_name):
         if suffixes and path.suffix.lower() not in suffixes:
@@ -3847,6 +3977,8 @@ def _safe_regular_child_files(directory: Path, suffixes: tuple[str, ...], *, fie
             continue
         if getattr(file_stat, "st_nlink", 1) != 1:
             continue
+        if expected_stats is not None:
+            expected_stats[path] = file_stat
         files.append(path)
     return files
 
@@ -3894,8 +4026,6 @@ def _inflight_recording_artifact_paths(audio_path: Path) -> set[Path]:
 
 
 def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState) -> set[Path]:
-    if not _is_finalization_lock_active(state_path):
-        return set()
     if state.status != "finalizing":
         return set()
 
@@ -3907,6 +4037,27 @@ def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState)
         require_recordings_dir=True,
     )
     if audio_path is None:
+        try:
+            raw_audio_value = _assert_clean_text(
+                state.audio_path,
+                field_name="state recording artifact path",
+                max_chars=MAX_PATH_CHARS,
+            )
+            raw_audio_path = Path(raw_audio_value).expanduser()
+            if not raw_audio_path.is_absolute():
+                raw_audio_path = state_path.parent / raw_audio_path
+            assert_safe_path_components(raw_audio_path, field_name="state recording artifact path")
+            assert_no_symlink_ancestors(raw_audio_path.parent, field_name="state recording artifact directory")
+            raw_audio_path.parent.resolve(strict=False).relative_to(recordings_dir().resolve(strict=False))
+            if not (
+                raw_audio_path.suffix.lower() in {".wav", ".flac"}
+                or _is_encrypted_recording_artifact(raw_audio_path)
+            ):
+                return set()
+            audio_path = raw_audio_path
+        except (OSError, RuntimeError, TypeError, ValueError):
+            return set()
+    if not _is_finalization_lock_active(state_path) and _recording_artifact_stat(audio_path) is not None:
         return set()
     if _is_encrypted_recording_artifact(audio_path):
         audio_path = _plaintext_recording_sibling_for_encrypted_path(audio_path)
@@ -3916,6 +4067,12 @@ def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState)
         transcript_path = transcript_dir() / f"{audio_path.stem}.txt"
         in_flight_paths.add(transcript_path)
         in_flight_paths.add(encrypted_path_for(transcript_path))
+        if audio_path.suffix.lower() == ".wav":
+            # Re-encoding activates sibling .flac before final state commit.
+            # Keep it recoverable if process dies in that window.
+            recovery_audio_path = audio_path.with_suffix(".flac")
+            in_flight_paths.add(recovery_audio_path)
+            in_flight_paths.add(encrypted_path_for(recovery_audio_path))
     in_flight_paths.update(_inflight_recording_artifact_paths(audio_path))
     return in_flight_paths
 
@@ -3955,38 +4112,66 @@ def _is_inflight_recording_artifact(path: Path) -> bool:
     return ".trimmed-" in stem or ".encoded-" in stem
 
 
-def sorted_files(paths: list[Path]) -> list[Path]:
+def sorted_files(
+    paths: list[Path],
+    expected_stats: dict[Path, os.stat_result] | None = None,
+) -> list[Path]:
     entries: list[tuple[float, str, Path]] = []
     for path in paths:
-        file_stat = _recording_artifact_stat(path)
-        if file_stat is None:
+        try:
+            file_stat = path.lstat()
+        except FileNotFoundError:
             continue
+        except OSError as exc:
+            raise DirectoryScanError(path.parent, field_name="recording artifacts") from exc
+        if not stat_module.S_ISREG(file_stat.st_mode) or getattr(file_stat, "st_nlink", 1) != 1:
+            continue
+        if expected_stats is not None:
+            expected_stats[path] = file_stat
         entries.append((file_stat.st_mtime, path.name, path))
     return [path for _, _, path in sorted(entries, reverse=True)]
 
 
-def delete_artifact(path: Path) -> bool:
+def delete_artifact(path: Path, *, expected_stat: os.stat_result | None = None) -> bool:
     file_stat = _recording_artifact_stat(path)
     if file_stat is None:
+        return False
+    if expected_stat is not None and not _same_leaf_identity(file_stat, expected_stat):
         return False
     try:
         return _unlink_regular_leaf_with_parent_fsync(
             path,
             field_name="recording artifact",
-            expected_stat=file_stat,
+            expected_stat=expected_stat or file_stat,
         )
     except RuntimeError:
         return False
 
 
-def prune_files_by_mtime(paths: list[Path], keep: int, active_paths: set[Path], dry_run: bool) -> dict[str, object]:
+def prune_files_by_mtime(
+    paths: list[Path],
+    keep: int,
+    active_paths: set[Path],
+    dry_run: bool,
+    expected_stats: dict[Path, os.stat_result] | None = None,
+) -> dict[str, object]:
     planned_paths: list[str] = []
     deleted_paths: list[str] = []
     failed_paths: list[str] = []
     skipped_active: list[str] = []
     inactive_paths: list[Path] = []
     normalized_active_paths = {path.resolve(strict=False) for path in active_paths}
-    for path in sorted_files(paths):
+    scan_stats: dict[Path, os.stat_result] = {}
+    try:
+        sorted_paths = sorted_files(paths, scan_stats)
+    except DirectoryScanError as exc:
+        return {
+            "planned_paths": [],
+            "deleted_paths": [],
+            "failed_paths": [str(exc.directory)],
+            "skipped_active_paths": [],
+        }
+    for path in sorted_paths:
         normalized = path.resolve(strict=False)
         if normalized in normalized_active_paths:
             skipped_active.append(str(path))
@@ -3997,7 +4182,10 @@ def prune_files_by_mtime(paths: list[Path], keep: int, active_paths: set[Path], 
         if dry_run:
             planned_paths.append(str(path))
             continue
-        if delete_artifact(path):
+        expected_stat = scan_stats.get(path)
+        if expected_stats is not None:
+            expected_stat = expected_stats.get(path, expected_stat)
+        if delete_artifact(path, expected_stat=expected_stat):
             deleted_paths.append(str(path))
         else:
             failed_paths.append(str(path))
@@ -4020,21 +4208,30 @@ def recording_groups() -> list[dict[str, object]]:
         if getattr(file_stat, "st_nlink", 1) != 1:
             continue
         group_stem = _recording_group_stem(path)
-        group = groups.setdefault(group_stem, {"stem": group_stem, "mtime": 0.0, "files": []})
+        group = groups.setdefault(
+            group_stem,
+            {"stem": group_stem, "mtime": 0.0, "files": [], "file_stats": {}},
+        )
         group["mtime"] = max(float(group["mtime"]), file_stat.st_mtime)
         group_files = group["files"]
         if isinstance(group_files, list):
             group_files.append(path)
+        group_stats = group["file_stats"]
+        if isinstance(group_stats, dict):
+            group_stats[path] = file_stat
     return sorted(groups.values(), key=lambda group: (float(group["mtime"]), str(group["stem"])), reverse=True)
 
 
-def recording_artifact_files() -> list[Path]:
+def recording_artifact_files(
+    expected_stats: dict[Path, os.stat_result] | None = None,
+) -> list[Path]:
     return [
         path
         for path in _safe_regular_child_files(
             recordings_dir(),
             RECORDING_ARTIFACT_EXTENSIONS,
             field_name="recordings directory",
+            expected_stats=expected_stats,
         )
         if _is_recording_artifact(path)
     ]
@@ -4072,6 +4269,7 @@ def prune_recording_groups(
     skipped_active_paths: list[str] = []
     skipped_group_paths: list[Path] = []
     normalized_active_paths = {path.resolve(strict=False) for path in active_paths}
+    grouped_artifact_stats: dict[Path, os.stat_result] = {}
     cutoff = time.time() - max(0, max_age_days) * 24 * 60 * 60
     try:
         groups = recording_groups()
@@ -4089,8 +4287,13 @@ def prune_recording_groups(
     grouped_artifacts: list[Path] = []
     for index, group in enumerate(groups):
         files = group.get("files", [])
+        file_stats = group.get("file_stats", {})
         if isinstance(files, list):
             grouped_artifacts.extend(path for path in files if isinstance(path, Path))
+            if isinstance(file_stats, dict):
+                for path in files:
+                    if isinstance(path, Path) and isinstance(file_stats.get(path), os.stat_result):
+                        grouped_artifact_stats[path] = file_stats[path]
         if index < max(keep, 0) and float(group.get("mtime", 0.0)) >= cutoff:
             continue
         if not isinstance(files, list):
@@ -4109,7 +4312,7 @@ def prune_recording_groups(
                 elif suffix == ".log":
                     planned_logs += 1
                 continue
-            if delete_artifact(path):
+            if delete_artifact(path, expected_stat=grouped_artifact_stats.get(path)):
                 deleted_paths.append(str(path))
                 suffix = path.suffix.lower()
                 if _is_recording_audio_artifact(path):
@@ -4142,6 +4345,7 @@ def prune_recording_groups(
         MAX_TEMP_RECORDING_FILES,
         normalized_active_paths,
         dry_run,
+        expected_stats=grouped_artifact_stats,
     )
     cap_planned = list(file_cap_result["planned_paths"])
     cap_deleted = list(file_cap_result["deleted_paths"])
@@ -4547,6 +4751,11 @@ def _finalize_non_recording_state_with_lock(args: argparse.Namespace, store: Sta
         _release_finalization_lock(lock_path)
 
 
+def _cleanup_backup_prefix(path: Path) -> str:
+    digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:16]
+    return f".cleanup.{digest}."
+
+
 def finalize_recording(
     args: argparse.Namespace,
     store: StateStore,
@@ -4576,6 +4785,13 @@ def finalize_recording(
     stabilized_audio_stat: os.stat_result | None = None
     persisted_audio_path: str | None = None
     persisted_log_path: str | None = None
+    audio_deleted = False
+    log_deleted = False
+    audio_suffix = ""
+    keep_recording_artifacts = False
+    trimmed_audio_path: Path | None = None
+    stabilized_audio_path: Path | None = None
+    transcript_encryption = ARTIFACT_ENCRYPTION_OFF
 
     def _backup_cleanup_file(path_text: str | None, *, suffix: str) -> Path | None:
         nonlocal audio_deleted, log_deleted, preserve_recording_artifacts_after_cleanup_failure
@@ -4583,7 +4799,7 @@ def finalize_recording(
         if not path_text:
             return None
         source = Path(path_text)
-        backup = source.with_name(f".cleanup.{secrets.token_hex(8)}.bak")
+        backup = source.with_name(f"{_cleanup_backup_prefix(source)}{secrets.token_hex(8)}.bak")
         try:
             source_stat = _recording_artifact_stat(source)
             if source_stat is None:
@@ -4708,6 +4924,7 @@ def finalize_recording(
         raise update_error.with_traceback(update_error.__traceback__)
 
     def _discard_cleanup_backups() -> None:
+        nonlocal cleanup_backup_restore_failed
         if cleanup_backup_restore_failed:
             return
         for _, backup_path, _expected_original_stat, expected_backup_stat in cleanup_rollback_backups:
@@ -4715,15 +4932,23 @@ def finalize_recording(
                 current_backup_stat = backup_path.lstat()
             except FileNotFoundError:
                 continue
-            except OSError:
-                continue
+            except OSError as exc:
+                cleanup_backup_restore_failed = True
+                raise RuntimeError(f"failed to inspect recording cleanup backup: {backup_path}") from exc
             if not _same_leaf_identity(current_backup_stat, expected_backup_stat):
                 continue
-            _unlink_regular_leaf_with_parent_fsync(
-                backup_path,
-                field_name="recording cleanup backup",
-                expected_stat=expected_backup_stat,
-            )
+            try:
+                removed = _unlink_regular_leaf_with_parent_fsync(
+                    backup_path,
+                    field_name="recording cleanup backup",
+                    expected_stat=expected_backup_stat,
+                )
+            except BaseException:
+                cleanup_backup_restore_failed = True
+                raise
+            if not removed:
+                cleanup_backup_restore_failed = True
+                raise RuntimeError(f"recording cleanup backup disappeared during discard: {backup_path}")
         cleanup_rollback_backups.clear()
         cleanup_source_stats.clear()
 
@@ -4748,6 +4973,78 @@ def finalize_recording(
             suffix=suffix,
             state_path=store.path,
         )
+
+    def _restore_cleanup_backup_if_needed(path: Path | None) -> None:
+        if path is None:
+            return
+        presence = _safe_leaf_presence(path)
+        if presence is None:
+            raise RuntimeError(f"failed to inspect recording cleanup source: {path}")
+        if presence:
+            if _recording_artifact_stat(path) is None:
+                raise RuntimeError(f"recording cleanup source is not a safe regular file: {path}")
+        prefix = _cleanup_backup_prefix(path)
+        try:
+            entries = _safe_directory_entries(path.parent, field_name="recording cleanup directory")
+        except DirectoryScanError as exc:
+            raise RuntimeError(f"failed to scan recording cleanup directory: {path.parent}") from exc
+        backups = [
+            (candidate, file_stat)
+            for candidate, file_stat in entries
+            if candidate.name.startswith(prefix)
+            and candidate.name.endswith(".bak")
+            and stat_module.S_ISREG(file_stat.st_mode)
+            and getattr(file_stat, "st_nlink", 1) == 1
+        ]
+        if not backups:
+            return
+        if not presence and len(backups) != 1:
+            raise RuntimeError(f"recording cleanup backup is ambiguous: {path}")
+        parent_fd = ensure_directory_without_following_symlinks(
+            path.parent,
+            field_name="recording cleanup restore directory",
+        )
+        try:
+            if presence:
+                for backup, expected_backup_stat in backups:
+                    if not _unlink_regular_leaf_with_parent_fsync(
+                        backup,
+                        field_name="recording cleanup backup",
+                        expected_stat=expected_backup_stat,
+                    ):
+                        raise RuntimeError(f"recording cleanup backup disappeared: {backup}")
+                return
+            backup, expected_backup_stat = backups[0]
+            try:
+                os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                raise RuntimeError(f"recording cleanup source appeared during restore: {path}")
+            try:
+                current_backup_stat = os.stat(
+                    backup.name,
+                    dir_fd=parent_fd,
+                    follow_symlinks=False,
+                )
+            except FileNotFoundError as exc:
+                raise RuntimeError(f"recording cleanup backup disappeared: {backup}") from exc
+            if not _same_leaf_identity(current_backup_stat, expected_backup_stat):
+                raise RuntimeError(f"recording cleanup backup changed: {backup}")
+            _rename_without_replacing(
+                backup.name,
+                path.name,
+                directory_fd=parent_fd,
+                field_name="recording cleanup restore artifact",
+            )
+            _fsync_fd(parent_fd)
+        except OSError as exc:
+            raise RuntimeError(f"failed to restore recording cleanup backup: {path}") from exc
+        finally:
+            try:
+                os.close(parent_fd)
+            except BaseException:
+                pass
 
     try:
         state = store.read()
@@ -4807,6 +5104,9 @@ def finalize_recording(
             state_path=store.path,
             require_recordings_dir=True,
         )
+        if state.status == "finalizing":
+            _restore_cleanup_backup_if_needed(audio_path)
+            _restore_cleanup_backup_if_needed(log_path)
         if not audio_path:
             store.update(
                 status="error",
@@ -4831,6 +5131,15 @@ def finalize_recording(
                     error="recording audio path is not a safe regular file",
                 )
                 raise RuntimeError("recording audio path is not a safe regular file")
+
+        if state.status == "finalizing" and original_audio_stat is None and audio_path.suffix.lower() == ".wav":
+            recovered_audio_path = audio_path.with_suffix(".flac")
+            recovered_audio_stat = _recording_artifact_stat(recovered_audio_path)
+            if recovered_audio_stat is not None:
+                audio_path = recovered_audio_path
+                original_audio_stat = recovered_audio_stat
+                persisted_audio_path = str(recovered_audio_path)
+                state = store.update(audio_path=str(recovered_audio_path))
 
         chosen_language = state.language or args.language or "en"
         language = _validate_pipeline_text_args(args, language=chosen_language)
@@ -4857,6 +5166,73 @@ def finalize_recording(
                 state = store.update(pid=None, process_identity="")
             inserted = bool(state.inserted)
             state_marked_finalizing = True
+        if state.status == "finalizing":
+            encrypted_recovery_path: Path | None = None
+            if is_encrypted_path(audio_path):
+                encrypted_recovery_path = audio_path
+            elif original_audio_stat is None and audio_path.suffix.lower() == ".wav":
+                recovery_audio_path = audio_path.with_suffix(".flac")
+                if _recording_artifact_stat(recovery_audio_path) is None:
+                    candidate_path = encrypted_path_for(recovery_audio_path)
+                    if _recording_artifact_stat(candidate_path) is not None:
+                        encrypted_recovery_path = candidate_path
+            if encrypted_recovery_path is not None:
+                persisted_audio_path = str(encrypted_recovery_path)
+                preserved_encrypted_audio_path = encrypted_recovery_path
+                plaintext_recovery_path = _plaintext_recording_sibling_for_encrypted_path(
+                    encrypted_recovery_path
+                )
+                if plaintext_recovery_path is None:
+                    raise RuntimeError(f"encrypted recording artifact has no safe plaintext sibling: {encrypted_recovery_path}")
+                plaintext_presence = _safe_leaf_presence(plaintext_recovery_path)
+                if plaintext_presence is None:
+                    raise RuntimeError(f"failed to inspect plaintext recording recovery path: {plaintext_recovery_path}")
+                if plaintext_presence:
+                    recovered_plaintext_stat = _recording_artifact_stat(plaintext_recovery_path)
+                    if recovered_plaintext_stat is None:
+                        raise RuntimeError(f"plaintext recording recovery path is not a safe regular file: {plaintext_recovery_path}")
+                else:
+                    encrypted_source_stat = _recording_artifact_stat(encrypted_recovery_path)
+                    if encrypted_source_stat is None:
+                        raise RuntimeError(f"encrypted recording artifact is not a safe regular file: {encrypted_recovery_path}")
+                    try:
+                        recovered_payload = read_decrypted_bytes_from_file(
+                            encrypted_recovery_path,
+                            kind="recording",
+                            field_name="recording audio recovery artifact",
+                        )
+                        if len(recovered_payload) > MAX_AUDIO_FILE_BYTES:
+                            raise RuntimeError(
+                                f"recovered recording artifact is too large: {len(recovered_payload)} bytes"
+                            )
+                        write_encrypted_bytes_atomically(
+                            plaintext_recovery_path,
+                            recovered_payload,
+                            ARTIFACT_ENCRYPTION_OFF,
+                            kind="recording",
+                            field_name="recording audio recovery artifact",
+                        )
+                    except ArtifactCryptoError as exc:
+                        raise RuntimeError(str(exc)) from exc
+                    recovered_plaintext_stat = _recording_artifact_stat(plaintext_recovery_path)
+                    if recovered_plaintext_stat is None:
+                        raise RuntimeError(f"recovered plaintext recording artifact is not a safe regular file: {plaintext_recovery_path}")
+                    current_encrypted_stat = _recording_artifact_stat(encrypted_recovery_path)
+                    if current_encrypted_stat is None or not _same_leaf_identity(
+                        current_encrypted_stat,
+                        encrypted_source_stat,
+                    ):
+                        _remove_recording_artifact_if_present(
+                            plaintext_recovery_path,
+                            suffix=plaintext_recovery_path.suffix.lower(),
+                            expected_stat=recovered_plaintext_stat,
+                        )
+                        raise RuntimeError(f"encrypted recording artifact changed during recovery: {encrypted_recovery_path}")
+                audio_path = plaintext_recovery_path
+                original_audio_stat = recovered_plaintext_stat
+                persisted_audio_path = str(encrypted_recovery_path)
+                if str(state.audio_path or "") != str(encrypted_recovery_path):
+                    state = store.update(audio_path=str(encrypted_recovery_path))
         audio_deleted = False
         log_deleted = False
         done_audio_path = str(audio_path)
@@ -4901,6 +5277,23 @@ def finalize_recording(
                     if cleanup_log_path
                     else False
                 )
+                if preserved_encrypted_audio_path is not None:
+                    encrypted_audio_backup = _backup_cleanup_file(
+                        str(preserved_encrypted_audio_path),
+                        suffix=".socenc",
+                    )
+                    encrypted_audio_deleted = encrypted_audio_backup is None or _remove_backed_up_cleanup_file(
+                        str(preserved_encrypted_audio_path),
+                        suffix=".socenc",
+                    )
+                    if not encrypted_audio_deleted:
+                        cleanup_failures.append(
+                            (
+                                "audio_path",
+                                str(preserved_encrypted_audio_path),
+                                "encrypted recording artifact",
+                            )
+                        )
                 if not audio_deleted:
                     cleanup_failures.append(("audio_path", str(audio_path), "recording audio artifact"))
                 if cleanup_log_path and not log_deleted:
@@ -5046,15 +5439,25 @@ def finalize_recording(
         if text.strip():
             text_to_insert = prepare_output_text(text, append_space, sanitize_special_chars)
         typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
-        inserted = bool(text_to_insert) and bool(insert_text(text_to_insert, args.insert_method, typing_delay_ms))
+        if text_to_insert and not inserted:
+            # Paste has no transaction boundary. Persist intent first so a crash after
+            # the external side effect cannot cause a duplicate paste on resume.
+            store.update(inserted=True)
+            inserted = True
+            inserted = bool(insert_text(text_to_insert, args.insert_method, typing_delay_ms))
+            if not inserted:
+                store.update(inserted=False)
         if inserted:
             preserve_written_text_on_error = True
 
         cleanup_audio_path: Path | None = None
         cleanup_log_path: str | None = None
+        cleanup_encrypted_audio_path: Path | None = None
         if not keep_recording_artifacts:
             cleanup_audio_path = audio_path
             cleanup_log_path = str(log_path) if log_path else None
+            if preserved_encrypted_audio_path is not None:
+                cleanup_encrypted_audio_path = preserved_encrypted_audio_path
             done_audio_path = ""
             done_log_path = ""
         elif trimmed_audio_path is not None:
@@ -5111,6 +5514,19 @@ def finalize_recording(
             )
             if not audio_deleted:
                 cleanup_failures.append(("audio_path", str(cleanup_audio_path), "recording audio artifact"))
+        if cleanup_encrypted_audio_path is not None:
+            encrypted_audio_backup = _backup_cleanup_file(
+                str(cleanup_encrypted_audio_path),
+                suffix=".socenc",
+            )
+            encrypted_audio_deleted = encrypted_audio_backup is None or _remove_backed_up_cleanup_file(
+                str(cleanup_encrypted_audio_path),
+                suffix=".socenc",
+            )
+            if not encrypted_audio_deleted:
+                cleanup_failures.append(
+                    ("audio_path", str(cleanup_encrypted_audio_path), "encrypted recording artifact")
+                )
         if cleanup_log_path:
             log_backup = _backup_cleanup_file(cleanup_log_path, suffix=".log")
             log_deleted = log_backup is None or _remove_backed_up_cleanup_file(cleanup_log_path, suffix=".log")
@@ -5147,11 +5563,14 @@ def finalize_recording(
             field_name="keep-transcripts",
             max_value=MAX_KEEP_TRANSCRIPTS,
         )
+        transcript_stats: dict[Path, os.stat_result] = {}
+        transcript_files = _safe_transcript_artifact_files(expected_stats=transcript_stats)
         transcript_cleanup = prune_files_by_mtime(
-            _safe_transcript_artifact_files(),
+            transcript_files,
             keep_transcripts,
             active_artifact_paths(done_candidate, state_path=store.path),
             False,
+            expected_stats=transcript_stats,
         )
         transient_transcript_cleanup = prune_stale_transient_transcripts(False)
         cleanup_failed_paths = _cleanup_failed_paths(
@@ -5331,6 +5750,18 @@ def finalize_recording(
                     if audio_cleanup_stat is not None:
                         cleanup_clear_update["audio_path"] = ""
                         cleanup_targets.append(("audio_path", str(audio_path), audio_suffix, audio_cleanup_stat))
+                if not keep_recording_artifacts and preserved_encrypted_audio_path is not None:
+                    encrypted_cleanup_stat = _recording_artifact_stat(preserved_encrypted_audio_path)
+                    if encrypted_cleanup_stat is not None:
+                        cleanup_clear_update["audio_path"] = ""
+                        cleanup_targets.append(
+                            (
+                                "audio_path",
+                                str(preserved_encrypted_audio_path),
+                                ".socenc",
+                                encrypted_cleanup_stat,
+                            )
+                        )
                 if state.log_path and not log_deleted:
                     log_cleanup_stat = _recording_artifact_stat(log_path) if log_path is not None else None
                     cleanup_clear_update["log_path"] = ""
@@ -5364,7 +5795,10 @@ def finalize_recording(
                         store.update(**cleanup_restore_update)
                     except BaseException as update_exc:
                         _raise_error_state_update_failure(update_exc, final_error_text, "error cleanup state")
-            _discard_cleanup_backups()
+            try:
+                _discard_cleanup_backups()
+            except BaseException as cleanup_exc:
+                exc.add_note(f"cleanup backup discard failed: {cleanup_exc}")
         final_error = str(error_update.get("error", error_text)) if state_marked_finalizing else error_text
         if isinstance(exc, Exception):
             raise RuntimeError(final_error)
@@ -5616,10 +6050,43 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             suffix=".log",
             state_path=store.path,
         )
+        discarded_finalizing_paths = _finalizing_inflight_artifact_paths(store.path, state)
+        discarded_finalizing_transcript_paths = {
+            path for path in discarded_finalizing_paths if _is_transcript_artifact(path)
+        }
         discarded_inflight_paths = (
-            _inflight_recording_artifact_paths(discarded_audio_path)
-            if discarded_audio_path is not None
-            else set()
+            (
+                _inflight_recording_artifact_paths(discarded_audio_path)
+                if discarded_audio_path is not None
+                else set()
+            )
+            | {
+                path
+                for path in discarded_finalizing_paths
+                if _is_recording_artifact(path)
+            }
+        )
+
+        def cleanup_backup_paths(path: Path | None) -> dict[Path, os.stat_result]:
+            if path is None:
+                return {}
+            prefix = _cleanup_backup_prefix(path)
+            try:
+                entries = _safe_directory_entries(path.parent, field_name="recording cleanup directory")
+            except DirectoryScanError as exc:
+                raise RuntimeError(f"failed to scan recording cleanup directory: {path.parent}") from exc
+            return {
+                candidate: file_stat
+                for candidate, file_stat in entries
+                if candidate.name.startswith(prefix)
+                and candidate.name.endswith(".bak")
+                and stat_module.S_ISREG(file_stat.st_mode)
+                and getattr(file_stat, "st_nlink", 1) == 1
+            }
+
+        discarded_cleanup_backups = (
+            cleanup_backup_paths(discarded_audio_path)
+            | cleanup_backup_paths(discarded_log_path)
         )
 
         def snapshot_recording_artifact_paths(path: Path | None) -> dict[Path, os.stat_result | None]:
@@ -5640,10 +6107,6 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         discarded_log_present_before = discarded_log_stat is not None
         discarded_inflight_expected_stats = {
             path: snapshot_recording_artifact_paths(path) for path in discarded_inflight_paths
-        }
-        discarded_inflight_present_before = {
-            path: any(file_stat is not None for file_stat in expected_stats.values())
-            for path, expected_stats in discarded_inflight_expected_stats.items()
         }
         has_artifacts = bool(state.audio_path or state.log_path or state.transcript_path)
         has_recording_state = state.status in {"recording", "recorded", "processing", "finalizing", "error"}
@@ -5697,7 +6160,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 str(inflight_path),
                 expected_stats=discarded_inflight_expected_stats[inflight_path],
             )
-            if not deleted and not discarded_inflight_present_before[inflight_path]:
+            if not deleted:
                 suffix = ".socenc" if _is_encrypted_recording_artifact(inflight_path) else inflight_path.suffix.lower()
                 deleted = _recording_artifact_missing_but_safe(
                     str(inflight_path),
@@ -5706,10 +6169,25 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 )
             if not deleted:
                 inflight_deleted = False
+        cleanup_backups_deleted = True
+        for cleanup_backup, cleanup_backup_stat in sorted(
+            discarded_cleanup_backups.items(),
+            key=lambda item: str(item[0]),
+        ):
+            try:
+                deleted = _unlink_regular_leaf_with_parent_fsync(
+                    cleanup_backup,
+                    field_name="recording cleanup backup",
+                    expected_stat=cleanup_backup_stat,
+                )
+            except RuntimeError:
+                deleted = False
+            if not deleted:
+                cleanup_backups_deleted = False
+        transcript_path: Path | None = None
+        transcript_sibling_path: Path | None = None
         transcript_deleted = True
         if state.transcript_path:
-            transcript_path: Path | None = None
-            transcript_sibling_path: Path | None = None
             transcript_present_before = False
             transcript_sibling_present_before = False
             transcript_expected_stat: os.stat_result | None = None
@@ -5719,15 +6197,21 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     _assert_clean_text(state.transcript_path, field_name="transcript path", max_chars=MAX_PATH_CHARS),
                     state_path=store.path,
                 )
-                transcript_present_before = transcript_path is not None and (
-                    transcript_path.exists() or transcript_path.is_symlink()
-                )
+                transcript_presence = _safe_leaf_presence(transcript_path) if transcript_path is not None else False
+                if transcript_presence is None:
+                    raise RuntimeError(f"transcript file presence could not be verified: {transcript_path}")
+                transcript_present_before = transcript_presence
                 if transcript_present_before and transcript_path is not None:
                     transcript_expected_stat = _recording_artifact_stat(transcript_path)
                 transcript_sibling_path = _transcript_sibling_path(transcript_path)
-                transcript_sibling_present_before = transcript_sibling_path is not None and (
-                    transcript_sibling_path.exists() or transcript_sibling_path.is_symlink()
+                transcript_sibling_presence = (
+                    _safe_leaf_presence(transcript_sibling_path) if transcript_sibling_path is not None else False
                 )
+                if transcript_sibling_presence is None:
+                    raise RuntimeError(
+                        f"transcript sibling presence could not be verified: {transcript_sibling_path}"
+                    )
+                transcript_sibling_present_before = transcript_sibling_presence
                 if transcript_present_before:
                     if transcript_expected_stat is None:
                         raise RuntimeError(f"transcript file is not a safe regular file: {transcript_path}")
@@ -5742,6 +6226,10 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 if not transcript_deleted and not transcript_present_before:
                     transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
                 if transcript_sibling_path is not None and transcript_sibling_present_before:
+                    if transcript_present_before and not transcript_deleted:
+                        raise RuntimeError(f"transcript file could not be deleted: {transcript_path}")
+                    if not transcript_present_before and not transcript_deleted:
+                        raise RuntimeError(f"transcript file presence could not be verified: {transcript_path}")
                     if transcript_sibling_expected_stat is None:
                         raise RuntimeError(f"transcript sibling is not a safe regular file: {transcript_sibling_path}")
                     if not _remove_transcript_file(
@@ -5749,6 +6237,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         expected_stat=transcript_sibling_expected_stat,
                     ):
                         raise RuntimeError(f"transcript sibling is missing: {transcript_sibling_path}")
+                    if not transcript_present_before:
+                        transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
             except RuntimeError:
                 transcript_deleted = False
             if (
@@ -5760,20 +6250,53 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
                 if transcript_deleted:
                     transcript_deleted = _transcript_sibling_missing_but_safe(transcript_path)
+        finalizing_transcript_cleanup_failed_path: Path | None = None
+        for inflight_transcript_path in sorted(
+            discarded_finalizing_transcript_paths,
+            key=lambda path: str(path),
+            reverse=True,
+        ):
+            if inflight_transcript_path in {transcript_path, transcript_sibling_path}:
+                continue
+            expected_stat = _recording_artifact_stat(inflight_transcript_path)
+            if expected_stat is None:
+                deleted = _transcript_artifact_missing_but_safe(inflight_transcript_path)
+            else:
+                try:
+                    deleted = _remove_transcript_file(
+                        inflight_transcript_path,
+                        expected_stat=expected_stat,
+                    )
+                except RuntimeError:
+                    deleted = False
+            if not deleted:
+                transcript_deleted = False
+                if finalizing_transcript_cleanup_failed_path is None:
+                    finalizing_transcript_cleanup_failed_path = inflight_transcript_path
         if (
             (state.audio_path and not audio_deleted)
             or (state.log_path and not log_deleted)
             or (discarded_inflight_paths and not inflight_deleted)
+            or (discarded_cleanup_backups and not cleanup_backups_deleted)
             or (state.transcript_path and not transcript_deleted)
+            or (discarded_finalizing_transcript_paths and not transcript_deleted)
         ):
             error_message = "failed to discard recording artifacts"
             store.write(
                 RecordingState(
                     status="error",
-                    audio_path=state.audio_path if (not audio_deleted or not inflight_deleted) else "",
-                    log_path=state.log_path if not log_deleted else "",
+                    audio_path=state.audio_path
+                    if (not audio_deleted or not inflight_deleted or not cleanup_backups_deleted)
+                    else "",
+                    log_path=state.log_path
+                    if (not log_deleted or (discarded_cleanup_backups and not cleanup_backups_deleted))
+                    else "",
                     transcript=state.transcript,
-                    transcript_path=state.transcript_path if not transcript_deleted else "",
+                    transcript_path=(
+                        state.transcript_path
+                        if state.transcript_path and not transcript_deleted
+                        else str(finalizing_transcript_cleanup_failed_path or "")
+                    ),
                     inserted=state.inserted,
                     stopped_at=now_iso(),
                     language=state.language,
@@ -5791,6 +6314,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "log_deleted": log_deleted,
                 "inflight_artifact_count": len(discarded_inflight_paths),
                 "inflight_artifacts_deleted": inflight_deleted,
+                "cleanup_backups_deleted": cleanup_backups_deleted,
                 "transcript_deleted": transcript_deleted,
             }
             if initial_status == "finalizing":
@@ -5841,6 +6365,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             "log_deleted": log_deleted,
             "inflight_artifact_count": len(discarded_inflight_paths),
             "inflight_artifacts_deleted": inflight_deleted,
+            "cleanup_backups_deleted": cleanup_backups_deleted,
             "transcript_deleted": transcript_deleted,
         }
     finally:
@@ -6118,19 +6643,23 @@ def _benchmark_targets(model_names: list[str] | None, language: str) -> list[Mod
     return [model for model in CATALOG if bool(model_status(model, verify=False).get("downloaded"))]
 
 
-def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result]:
-    fd, path_text = tempfile.mkstemp(prefix=".benchmark-", suffix=".tmp.txt", dir=state_dir())
+def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result, os.stat_result]:
+    fd, path_text = tempfile.mkstemp(prefix=".benchmark-", suffix=".tmp.txt", dir=transcript_dir())
     path = Path(path_text)
     created_stat = _recording_artifact_stat(path)
+    file_stat: os.stat_result | None = None
+    owner_stat: os.stat_result | None = None
     try:
         file_stat = os.fstat(fd)
+        owner_stat = _write_transient_transcript_owner(path)
     except BaseException as exc:
         try:
             if created_stat is not None:
-                _unlink_regular_leaf_with_parent_fsync(
+                _remove_transient_transcript_path(
                     path,
-                    field_name="benchmark transcript file",
-                    expected_stat=created_stat,
+                    transcript_dir() / ".benchmark-storage.txt",
+                    expected_stat=file_stat or created_stat,
+                    expected_owner_stat=owner_stat,
                 )
         except BaseException as cleanup_exc:
             if not isinstance(exc, Exception):
@@ -6143,7 +6672,9 @@ def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result]:
             os.close(fd)
         except BaseException:
             pass
-    return path, file_stat
+    if file_stat is None or owner_stat is None:
+        raise RuntimeError("benchmark transcript file identity is unavailable")
+    return path, file_stat, owner_stat
 
 
 def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[str, object]:
@@ -6169,7 +6700,7 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
         return result
 
     started = time.perf_counter()
-    text_path, text_path_stat = _temporary_benchmark_transcript_path()
+    text_path, text_path_stat, text_owner_stat = _temporary_benchmark_transcript_path()
     cleanup_error = ""
     transcribe_error = ""
     base_transcribe_error: BaseException | None = None
@@ -6195,10 +6726,11 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
         raise
     finally:
         try:
-            _unlink_regular_leaf_with_parent_fsync(
+            _remove_transient_transcript_path(
                 text_path,
-                field_name="benchmark transcript file",
+                transcript_dir() / ".benchmark-storage.txt",
                 expected_stat=text_path_stat,
+                expected_owner_stat=text_owner_stat,
             )
         except BaseException as exc:
             if base_transcribe_error is not None:
@@ -6348,10 +6880,21 @@ def _command_cleanup_locked(
     dry_run = _coerce_bool(args.dry_run, field_name="dry-run")
     state = store.read()
     _raise_if_state_unreadable(state)
+    include_finalizing_inflight = lifecycle_lock_active
+    if not include_finalizing_inflight and state.status == "finalizing":
+        state_audio_path = _normalized_state_recording_artifact_path(
+            state.audio_path,
+            suffix=(".wav", ".flac", ".socenc"),
+            state_path=store.path,
+            require_recordings_dir=True,
+        )
+        include_finalizing_inflight = (
+            state_audio_path is None or _recording_artifact_stat(state_audio_path) is None
+        )
     active_paths = active_artifact_paths(
         state,
         state_path=store.path,
-        include_finalizing_inflight=lifecycle_lock_active,
+        include_finalizing_inflight=include_finalizing_inflight,
     )
     if lifecycle_lock_active and not any(
         path.suffix.lower() == ".log" or _is_recording_audio_artifact(path)
@@ -6365,8 +6908,9 @@ def _command_cleanup_locked(
             active_paths.update(_safe_transcript_artifact_files())
         except DirectoryScanError:
             pass
+    transcript_stats: dict[Path, os.stat_result] = {}
     try:
-        transcript_files = _safe_transcript_artifact_files()
+        transcript_files = _safe_transcript_artifact_files(expected_stats=transcript_stats)
     except DirectoryScanError as exc:
         transcript_result = {
             "planned_paths": [],
@@ -6380,6 +6924,7 @@ def _command_cleanup_locked(
             keep_transcripts,
             active_paths,
             dry_run,
+            expected_stats=transcript_stats,
         )
     transient_transcript_result = prune_stale_transient_transcripts(dry_run)
     recording_result = prune_recording_groups(keep_recordings, active_paths, dry_run, recording_max_age_days)
@@ -6781,11 +7326,14 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         field_name="keep-transcripts",
         max_value=MAX_KEEP_TRANSCRIPTS,
     )
+    transcript_stats: dict[Path, os.stat_result] = {}
+    transcript_files = _safe_transcript_artifact_files(expected_stats=transcript_stats)
     transcript_cleanup = prune_files_by_mtime(
-        _safe_transcript_artifact_files(),
+        transcript_files,
         keep_transcripts,
         {stored_text_path},
         False,
+        expected_stats=transcript_stats,
     )
     transient_transcript_cleanup = prune_stale_transient_transcripts(False)
     cleanup_failed_paths = _cleanup_failed_paths(transcript_cleanup, transient_transcript_cleanup)

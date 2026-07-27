@@ -2147,7 +2147,13 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 raise
             _assert_safe_model_directory(path)
         try:
-            _replace_model_sibling_path(tmp_dir, path, root, field_name="model path")
+            _replace_model_sibling_path(
+                tmp_dir,
+                path,
+                root,
+                field_name="model path",
+                expected_source_stat=tmp_dir_stat,
+            )
         except BaseException as exc:
             if backup_dir is not None:
                 try:

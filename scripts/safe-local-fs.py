@@ -961,7 +961,11 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main() -> int:
     args = build_parser().parse_args()
-    args.func(args)
+    try:
+        args.func(args)
+    except Exception as exc:
+        print(f"{getattr(args, 'action', 'safe-local-fs')}: {exc}", file=sys.stderr)
+        return 1
     return 0
 
 

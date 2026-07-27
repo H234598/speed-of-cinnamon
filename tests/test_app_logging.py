@@ -479,6 +479,26 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(active.read_text(encoding="utf-8"), "replacement\n")
             handler.close()
 
+    def test_file_handler_rejects_file_created_after_missing_path_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            real_open = app_logging.open_file_without_following_symlinks
+
+            def open_after_create(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+                if path == active and not active.exists():
+                    active.write_text("foreign\n", encoding="utf-8")
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(app_logging, "open_file_without_following_symlinks", side_effect=open_after_create):
+                with self.assertRaises(FileExistsError):
+                    handler._open()
+
+            self.assertIsNone(handler.stream)
+            self.assertEqual(active.read_text(encoding="utf-8"), "foreign\n")
+            handler.close()
+
     def test_file_handler_preserves_validation_error_when_fd_close_is_interrupted(self) -> None:
         handler = app_logging.SizeCappedJsonFileHandler(Path("/probe.log"), Path("/probe"))
 

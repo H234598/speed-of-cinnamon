@@ -481,6 +481,23 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(payload["alarms"]["alarms"][0]["name"], "Standup")
         self.assertEqual(payload["alarms"]["alarms"][0]["days"], ["mon", "wed", "fri"])
 
+    def test_settings_export_round_trips_multiline_personalization(self) -> None:
+        settings = {
+            "personal-context": "Project terminology\nKeep code unchanged",
+            "vocabulary": "PipeWire\nCinnamon",
+        }
+
+        normalized = build_export(settings)["settings"]
+        self.assertEqual(normalized["personal-context"], settings["personal-context"])
+        self.assertEqual(normalized["vocabulary"], settings["vocabulary"])
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            write_export(path, settings)
+            payload = read_export(path)
+        self.assertEqual(payload["settings"]["personal-context"], settings["personal-context"])
+        self.assertEqual(payload["settings"]["vocabulary"], settings["vocabulary"])
+
     def test_read_export_uses_schema_aligned_show_panel_label_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

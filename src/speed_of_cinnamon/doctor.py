@@ -752,7 +752,7 @@ def _contains_escaped_null(value: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
-def _contains_http_header_control_chars(value: str) -> bool:
+def _contains_http_header_control_chars(value: str, *, allow_newline: bool = False) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError("value must be text")
     lowered = (value or "").lower()
@@ -763,6 +763,8 @@ def _contains_http_header_control_chars(value: str) -> bool:
         return True
     for char in lowered:
         codepoint = ord(char)
+        if allow_newline and codepoint == 0x0A:
+            continue
         if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
@@ -779,8 +781,6 @@ def parse_settings_json(value: str) -> dict[str, object]:
         raise ValueError("settings JSON contains invalid UTF-8") from exc
     if _contains_escaped_null(value):
         raise ValueError("settings JSON contains invalid null byte")
-    if _contains_http_header_control_chars(value):
-        raise ValueError("settings JSON contains invalid control character")
     if len(value) > MAX_SETTINGS_JSON_CHARS:
         raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
     if len(value.encode("utf-8")) > MAX_SETTINGS_JSON_CHARS:
@@ -791,6 +791,7 @@ def parse_settings_json(value: str) -> dict[str, object]:
         raise ValueError(f"settings JSON could not be parsed: {exc}") from exc
     try:
         _validate_json_string_encoding(parsed, field_name="settings JSON")
+        _validate_json_string_safety(parsed, field_name="settings JSON")
     except (RecursionError, MemoryError) as exc:
         raise ValueError(f"settings JSON could not be parsed: {exc}") from exc
     if not isinstance(parsed, dict):
@@ -819,3 +820,28 @@ def _validate_json_string_encoding(value: object, *, field_name: str) -> None:
                 raise ValueError(f"{field_name} contains invalid object key")
             _validate_json_string_encoding(child, field_name=field_name)
     return
+
+
+def _validate_json_string_safety(value: object, *, field_name: str, allow_newline: bool = False) -> None:
+    if isinstance(value, str):
+        if _contains_escaped_null(value):
+            raise ValueError(f"{field_name} contains invalid null byte")
+        if _contains_http_header_control_chars(value, allow_newline=allow_newline):
+            raise ValueError(f"{field_name} contains invalid control character")
+        return
+    if isinstance(value, list):
+        for item in value:
+            _validate_json_string_safety(item, field_name=field_name)
+        return
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if not isinstance(key, str):
+                raise ValueError(f"{field_name} contains invalid object key")
+            if _contains_escaped_null(key) or _contains_http_header_control_chars(key):
+                raise ValueError(f"{field_name} contains invalid object key")
+            child_allows_newline = key in {"personal-context", "vocabulary"}
+            _validate_json_string_safety(
+                child,
+                field_name=f"{field_name} field {key}",
+                allow_newline=child_allows_newline,
+            )

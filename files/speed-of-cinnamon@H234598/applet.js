@@ -476,6 +476,7 @@ MyApplet.prototype = {
     this._recordingCommandToken = null;
     this.processCleanupRetryTimer = 0;
     this._externalApiEnvMonitorCancelSucceeded = false;
+    this.maintenanceCleanupFailed = false;
   },
 
   _lifecycleAllowsWork: function() {
@@ -633,7 +634,6 @@ MyApplet.prototype = {
     this._initFailed = true;
     this._recordLifecycleError("init", error);
     this.lifecycleState = LIFECYCLE_DEGRADED;
-    this._runTeardownGuarded("init-teardown", () => this.on_applet_removed_from_panel());
     try {
       if (this.set_applet_label) {
         this.set_applet_label("ERR");
@@ -644,6 +644,7 @@ MyApplet.prototype = {
     } catch (ignored) {
       // A partially initialized applet may not have an actor yet.
     }
+    this._runTeardownGuarded("init-teardown", () => this.on_applet_removed_from_panel());
   },
 
   _beginTeardown: function() {
@@ -663,16 +664,30 @@ MyApplet.prototype = {
 
   _bindSetting: function(direction, key, propertyName, callback, callbackThis) {
     let safeCallback = callback ? this._guardStateCallback("settings", callback, undefined) : null;
-    return this.settings.bindProperty(direction, key, propertyName, safeCallback, callbackThis);
+    let bound = this.settings.bindProperty(direction, key, propertyName, safeCallback, callbackThis);
+    if (bound !== true) {
+      throw new Error("Setting binding failed: " + String(key || "unknown"));
+    }
+    return true;
+  },
+
+  _setSettingValueOrThrow: function(key, value, errorMessage) {
+    let settingKey = String(key || "");
+    let settingsData = this.settings && this.settings.settingsData;
+    if (!settingsData || !Object.prototype.hasOwnProperty.call(settingsData, settingKey)) {
+      throw new Error(errorMessage || ("Setting is unavailable: " + (settingKey || "unknown")));
+    }
+    let result = this.settings.setValue(settingKey, value);
+    if (result === false) {
+      throw new Error(errorMessage || "Setting could not be saved");
+    }
+    return true;
   },
 
   _commitSettingValue: function(propertyName, key, value, group, errorMessage) {
     let previous = this[propertyName];
     try {
-      let result = this.settings.setValue(key, value);
-      if (result === false) {
-        throw new Error("Setting could not be saved");
-      }
+      this._setSettingValueOrThrow(key, value, "Setting could not be saved");
       this[propertyName] = value;
       return true;
     } catch (err) {
@@ -692,10 +707,7 @@ MyApplet.prototype = {
     for (let index = writes.length - 1; index >= 0; index--) {
       let setting = writes[index];
       try {
-        let result = this.settings.setValue(setting[0], setting[2]);
-        if (result === false) {
-          throw new Error("Setting rollback failed");
-        }
+        this._setSettingValueOrThrow(setting[0], setting[2], "Setting rollback failed");
       } catch (err) {
         this._safeLogError(err);
       }
@@ -716,10 +728,7 @@ MyApplet.prototype = {
           throw new Error("Setting batch is invalid");
         }
         attemptedWrites.push(setting);
-        let result = this.settings.setValue(setting[0], setting[1]);
-        if (result === false) {
-          throw new Error("Setting batch could not be saved");
-        }
+        this._setSettingValueOrThrow(setting[0], setting[1], "Setting batch could not be saved");
       }
       return true;
     } catch (err) {
@@ -849,6 +858,9 @@ MyApplet.prototype = {
         if (this._orphanedSignals.indexOf(entry) < 0) {
           throw new Error("Signal orphan entry could not be tracked");
         }
+      }
+      if (this._lifecycleAllowsWork() && !this.processCleanupRetryTimer) {
+        this._scheduleProcessCleanupRetry();
       }
       return true;
     } catch (error) {
@@ -1054,11 +1066,92 @@ MyApplet.prototype = {
     }
   },
 
+  _closeNestedMenusSafely: function(menu) {
+    if (!menu || typeof menu._getMenuItems !== "function") {
+      return true;
+    }
+    let nestedMenus = [];
+    let visited = [];
+    let collect = (current) => {
+      if (!current || visited.indexOf(current) >= 0) {
+        return;
+      }
+      visited.push(current);
+      let items = current._getMenuItems();
+      if (!Array.isArray(items)) {
+        throw new Error("Nested menu enumeration is unavailable");
+      }
+      for (let item of items) {
+        let childMenu = item && item.menu;
+        if (!childMenu) {
+          continue;
+        }
+        if (nestedMenus.indexOf(childMenu) < 0) {
+          nestedMenus.push(childMenu);
+        }
+        collect(childMenu);
+      }
+    };
+    collect(menu);
+    for (let index = nestedMenus.length - 1; index >= 0; index--) {
+      if (!this._closeMenuSafely(nestedMenus[index], false, false)) {
+        throw new Error("Nested menu could not be closed");
+      }
+    }
+    return true;
+  },
+
+  _closeMenuSafely: function(menu, animate, requireGlobalMenuStack) {
+    if (!menu || typeof menu.close !== "function") {
+      throw new Error("Menu close operation is unavailable");
+    }
+    let actor = menu.actor;
+    if (!actor || (typeof actor.is_finalized === "function" && actor.is_finalized())) {
+      throw new Error("Menu actor is already finalized");
+    }
+    if (requireGlobalMenuStack === true && menu.isOpen === true) {
+      let stack = typeof global !== "undefined" && global ? global.menuStack : null;
+      let firstIndex = Array.isArray(stack) ? stack.indexOf(menu) : -1;
+      if (!Array.isArray(stack) || firstIndex < 0 || firstIndex !== stack.lastIndexOf(menu)) {
+        throw new Error("Open menu is missing or duplicated in Cinnamon menu stack");
+      }
+      this._closeNestedMenusSafely(menu);
+      stack = typeof global !== "undefined" && global ? global.menuStack : null;
+      firstIndex = Array.isArray(stack) ? stack.indexOf(menu) : -1;
+      if (!Array.isArray(stack) || firstIndex !== stack.length - 1 || firstIndex !== stack.lastIndexOf(menu)) {
+        throw new Error("Open menu is not topmost in Cinnamon menu stack");
+      }
+    } else if (requireGlobalMenuStack === true) {
+      let stack = typeof global !== "undefined" && global ? global.menuStack : null;
+      if (Array.isArray(stack) && stack.indexOf(menu) >= 0) {
+        throw new Error("Closed menu remains in Cinnamon menu stack");
+      }
+    }
+    if (requireGlobalMenuStack === true && menu.isOpen !== true) {
+      this._closeNestedMenusSafely(menu);
+    }
+    let result = menu.close(animate);
+    if (result === false) {
+      throw new Error("Menu could not be closed");
+    }
+    return true;
+  },
+
   _clearMenuItems: function(menu) {
     if (!menu) {
       return false;
     }
+    try {
+      let actor = menu.actor;
+      if (!actor || (typeof actor.is_finalized === "function" && actor.is_finalized())) {
+        throw new Error("Menu actor is unavailable or finalized");
+      }
+    } catch (error) {
+      this._recordLifecycleError("menu-items", error);
+      return false;
+    }
     let targets = [];
+    let nestedMenus = [];
     let visited = [];
     let collectionSucceeded = true;
     let addTarget = (target) => {
@@ -1087,6 +1180,9 @@ MyApplet.prototype = {
           addTarget(item);
           if (item && item.menu) {
             addTarget(item.menu);
+            if (nestedMenus.indexOf(item.menu) < 0) {
+              nestedMenus.push(item.menu);
+            }
             collect(item.menu);
           }
         }
@@ -1106,6 +1202,18 @@ MyApplet.prototype = {
       }
     }
     if (!signalsCleanupSucceeded) {
+      return false;
+    }
+    let nestedMenuCleanupSucceeded = true;
+    for (let index = nestedMenus.length - 1; index >= 0; index--) {
+      let nestedMenu = nestedMenus[index];
+      if (this._runStateGuarded("menu-items", () => {
+        return this._closeMenuSafely(nestedMenu, false, false);
+      }, false) !== true) {
+        nestedMenuCleanupSucceeded = false;
+      }
+    }
+    if (!nestedMenuCleanupSucceeded) {
       return false;
     }
     return this._runStateGuarded("menu-items", () => {
@@ -1189,6 +1297,59 @@ MyApplet.prototype = {
     }
   },
 
+  _clearDialogReferences: function(dialog) {
+    if (!dialog) {
+      return;
+    }
+    if (this.clipboardOverwriteDialog === dialog) {
+      this.clipboardOverwriteDialog = null;
+      this._clearClipboardOverwriteApproval();
+      let hadInsertToken = Boolean(this.textInsertToken);
+      this.textInsertToken = null;
+      let pendingInsertFingerprint = String(this.autoInsertPendingFingerprint || "");
+      if (pendingInsertFingerprint !== "") {
+        let fingerprintCleanupSucceeded = this._forgetAutoInsertFingerprint(pendingInsertFingerprint) !== false;
+        if (fingerprintCleanupSucceeded && this.autoInsertPendingFingerprint === pendingInsertFingerprint) {
+          this.autoInsertPendingFingerprint = "";
+        }
+        if (!fingerprintCleanupSucceeded) {
+          this.textInsertCancellationFailed = true;
+        }
+      }
+      if (hadInsertToken && this.autoRelistenPending) {
+        this.autoRelistenPending = false;
+        this.autoRelistenPendingToken = "";
+        this.autoRelistenPendingLanguage = "";
+        this.autoRelistenManualStopRequested = true;
+      }
+    }
+    if (this.cleanupPreviewDialog === dialog) {
+      this.cleanupPreviewDialog = null;
+      this.cleanupPreviewDialogToken = null;
+    }
+    if (this.transcriptListPromptDialog === dialog) {
+      this.transcriptListPromptDialog = null;
+      this.transcriptListPromptToken = null;
+    }
+  },
+
+  _dialogCloseState: function(dialog) {
+    try {
+      if (!ModalDialog || !ModalDialog.State) {
+        return null;
+      }
+      if (dialog.state === ModalDialog.State.CLOSED || dialog.state === ModalDialog.State.FADED_OUT) {
+        return "closed";
+      }
+      if (dialog.state === ModalDialog.State.CLOSING) {
+        return "closing";
+      }
+    } catch (error) {
+      this._recordLifecycleError("dialog-state", error);
+    }
+    return null;
+  },
+
   _trackOrphanedDialog: function(dialog, group, closeSucceeded, destroySucceeded) {
     try {
       if (!dialog) {
@@ -1197,25 +1358,35 @@ MyApplet.prototype = {
       if (!Array.isArray(this._orphanedDialogs)) {
         this._orphanedDialogs = [];
       }
+      let normalizedCloseSucceeded = closeSucceeded === true;
+      let normalizedDestroySucceeded = destroySucceeded === true;
+      if (normalizedCloseSucceeded && !normalizedDestroySucceeded && this._dialogCloseState(dialog) === null) {
+        normalizedCloseSucceeded = false;
+      }
       let knownEntry = this._orphanedDialogs.find((entry) => entry && entry.dialog === dialog);
       if (knownEntry) {
-        if (closeSucceeded === true) {
+        if (normalizedCloseSucceeded) {
           knownEntry.closeSucceeded = true;
+        } else if (!normalizedDestroySucceeded) {
+          knownEntry.closeSucceeded = false;
         }
-        if (destroySucceeded === true) {
+        if (normalizedDestroySucceeded) {
           knownEntry.destroySucceeded = true;
         }
       } else {
         let entry = {
           dialog: dialog,
           group: String(group || "dialog"),
-          closeSucceeded: closeSucceeded === true,
-          destroySucceeded: destroySucceeded === true,
+          closeSucceeded: normalizedCloseSucceeded,
+          destroySucceeded: normalizedDestroySucceeded,
         };
         this._orphanedDialogs.push(entry);
         if (this._orphanedDialogs.indexOf(entry) < 0) {
           throw new Error("Dialog orphan entry could not be tracked");
         }
+      }
+      if (this._lifecycleAllowsWork() && !this.processCleanupRetryTimer) {
+        this._scheduleProcessCleanupRetry();
       }
       return true;
     } catch (error) {
@@ -1302,6 +1473,10 @@ MyApplet.prototype = {
     for (let index = pendingDialogs.length - 1; index >= 0; index--) {
       let entry = pendingDialogs[index];
       let closeSucceeded = entry.closeSucceeded === true;
+      if (closeSucceeded && this._dialogCloseState(entry.dialog) === null) {
+        closeSucceeded = false;
+        entry.closeSucceeded = false;
+      }
       if (!closeSucceeded) {
         closeSucceeded = this._runTeardownOperation(
           "teardown-orphaned-dialogs",
@@ -1314,11 +1489,7 @@ MyApplet.prototype = {
       }
       let destroySucceeded = entry.destroySucceeded === true;
       if (closeSucceeded && !destroySucceeded) {
-        destroySucceeded = this._runTeardownOperation(
-          "teardown-orphaned-dialogs",
-          entry.dialog,
-          "destroy"
-        );
+        destroySucceeded = this._destroyDialogAfterClose(entry.dialog, "teardown-orphaned-dialogs");
         if (destroySucceeded) {
           entry.destroySucceeded = true;
         }
@@ -1333,9 +1504,31 @@ MyApplet.prototype = {
       }
       if (!this._untrackOrphanedDialog(entry.dialog)) {
         success = false;
+      } else {
+        this._clearDialogReferences(entry.dialog);
       }
     }
     return success;
+  },
+
+  _destroyDialogAfterClose: function(dialog, group) {
+    if (!dialog) {
+      return true;
+    }
+    try {
+      let closeState = this._dialogCloseState(dialog);
+      if (closeState === "closed") {
+        return this._runTeardownOperation(group || "teardown-dialog-destroy", dialog, "destroy");
+      }
+      if (closeState === "closing") {
+        // Cinnamon ModalDialog destroys itself after asynchronous close animation.
+        return true;
+      }
+      throw new Error("Dialog did not enter a safe closing state");
+    } catch (error) {
+      this._recordLifecycleError("dialog-state", error);
+      return false;
+    }
   },
 
   _newSafeDialog: function(group) {
@@ -1361,7 +1554,7 @@ MyApplet.prototype = {
       if (dialog) {
         let cleanupGroup = "dialog-" + String(group || "create") + "-cleanup";
         let closeSucceeded = this._runTeardownOperation(cleanupGroup, dialog, "close");
-        let destroySucceeded = this._runTeardownOperation(cleanupGroup, dialog, "destroy");
+        let destroySucceeded = closeSucceeded && this._destroyDialogAfterClose(dialog, cleanupGroup);
         if (closeSucceeded && destroySucceeded) {
           if (!this._untrackDialog(dialog)) {
             this._trackOrphanedDialog(dialog, group, true, true);
@@ -1448,19 +1641,22 @@ MyApplet.prototype = {
       this._recordLifecycleError("dialog-close", error);
       return false;
     }
-    let closed = false;
-    this._runTeardownGuarded("dialog-" + String(group || "close"), () => {
-      if (typeof dialog.close !== "function") {
-        throw new Error("Dialog close operation is unavailable");
-      }
-      let result = dialog.close();
-      if (result === false) {
-        throw new Error("Dialog close operation failed");
-      }
-      closed = true;
-    });
-    if (!closed) {
+    let closeSucceeded = this._runTeardownOperation(
+      "dialog-" + String(group || "close"),
+      dialog,
+      "close"
+    );
+    if (!closeSucceeded) {
       this._trackOrphanedDialog(dialog, group, false, false);
+      return false;
+    }
+    let destroySucceeded = this._destroyDialogAfterClose(
+      dialog,
+      "dialog-" + String(group || "destroy")
+    );
+    if (!destroySucceeded) {
+      let closeStateSafe = this._dialogCloseState(dialog) !== null;
+      this._trackOrphanedDialog(dialog, group, closeStateSafe, false);
       return false;
     }
     let untracked = this._untrackDialog(dialog);
@@ -1495,7 +1691,7 @@ MyApplet.prototype = {
       for (let index = dialogs.length - 1; index >= 0; index--) {
         let dialog = dialogs[index];
         let closeSucceeded = !dialog || this._runTeardownOperation("teardown-dialog-close", dialog, "close");
-        let destroySucceeded = !dialog || this._runTeardownOperation("teardown-dialog-destroy", dialog, "destroy");
+        let destroySucceeded = !dialog || (closeSucceeded && this._destroyDialogAfterClose(dialog, "teardown-dialog-destroy"));
         if (closeSucceeded && destroySucceeded) {
           if (dialog) {
             let untracked = this._untrackDialog(dialog);
@@ -1533,9 +1729,9 @@ MyApplet.prototype = {
       if (!menu) {
         return true;
       }
-      let signalsSucceeded = this._runTeardownOperation("teardown-" + group + "-signals", menu, "disconnectAllSignals", [], true);
-      let closeSucceeded = this._runTeardownOperation("teardown-" + group + "-close", menu, "close", [false]);
-      let destroySucceeded = this._runTeardownOperation("teardown-" + group + "-destroy", menu, "destroy");
+      let closeSucceeded = this._runTeardownOperation("teardown-" + group + "-close", this, "_closeMenuSafely", [menu, false, true]);
+      let signalsSucceeded = closeSucceeded && this._runTeardownOperation("teardown-" + group + "-signals", menu, "disconnectAllSignals", [], true);
+      let destroySucceeded = closeSucceeded && signalsSucceeded && this._runTeardownOperation("teardown-" + group + "-destroy", menu, "destroy");
       if (signalsSucceeded && closeSucceeded && destroySucceeded) {
         if (!this._untrackOrphanedMenu(menu)) {
           if (!this._trackOrphanedMenu(menu, propertyName, group, true, true, true, true)) {
@@ -1578,9 +1774,12 @@ MyApplet.prototype = {
       if (!manager) {
         return true;
       }
-      let signalsSucceeded = this._runTeardownOperation("teardown-" + group + "-signals", manager, "disconnectAllSignals", [], true);
-      let destroySucceeded = this._runTeardownOperation("teardown-" + group + "-destroy", manager, "destroy");
-      if (signalsSucceeded && destroySucceeded) {
+      let ungrabSucceeded = manager.grabbed === true
+        ? this._runTeardownOperation("teardown-" + group + "-ungrab", manager, "_ungrab")
+        : true;
+      let signalsSucceeded = ungrabSucceeded && this._runTeardownOperation("teardown-" + group + "-signals", manager, "disconnectAllSignals", [], true);
+      let destroySucceeded = ungrabSucceeded && signalsSucceeded && this._runTeardownOperation("teardown-" + group + "-destroy", manager, "destroy");
+      if (ungrabSucceeded && signalsSucceeded && destroySucceeded) {
         if (!this._untrackOrphanedMenu(manager)) {
           if (!this._trackOrphanedMenu(manager, propertyName, group, false, true, true, true)) {
             success = false;
@@ -1590,7 +1789,7 @@ MyApplet.prototype = {
         }
         return true;
       }
-      if (!this._trackOrphanedMenu(manager, propertyName, group, false, signalsSucceeded, true, destroySucceeded)) {
+      if (!this._trackOrphanedMenu(manager, propertyName, group, false, ungrabSucceeded && signalsSucceeded, true, destroySucceeded)) {
         success = false;
       }
       success = false;
@@ -1712,7 +1911,7 @@ MyApplet.prototype = {
         if (propertyName && !knownEntry.propertyName) {
           knownEntry.propertyName = propertyName;
         }
-        if (needsClose === true) {
+        if (needsClose === true || typeof menu.close === "function") {
           knownEntry.needsClose = true;
         }
         if (signalsSucceeded === true) {
@@ -1730,7 +1929,7 @@ MyApplet.prototype = {
         menu: menu,
         propertyName: String(propertyName || ""),
         group: String(group || "menu"),
-        needsClose: needsClose === true,
+        needsClose: needsClose === true || typeof menu.close === "function",
         signalsSucceeded: signalsSucceeded === true,
         closeSucceeded: closeSucceeded === true,
         destroySucceeded: destroySucceeded === true,
@@ -1771,21 +1970,30 @@ MyApplet.prototype = {
     let success = !invalidOrphanEntry;
     for (let index = pendingMenus.length - 1; index >= 0; index--) {
       let entry = pendingMenus[index];
-      let signalsSucceeded = entry.signalsSucceeded === true;
-      if (!signalsSucceeded) {
-        signalsSucceeded = this._runTeardownOperation("teardown-orphaned-menus", entry.menu, "disconnectAllSignals", [], true);
-        if (signalsSucceeded) {
-          entry.signalsSucceeded = true;
-        }
-      }
       let closeSucceeded = entry.closeSucceeded === true;
-      if (entry.needsClose && !closeSucceeded && signalsSucceeded) {
-        closeSucceeded = this._runTeardownOperation("teardown-orphaned-menus", entry.menu, "close", [false]);
+      if (entry.needsClose && !closeSucceeded) {
+        closeSucceeded = this._runTeardownOperation(
+          "teardown-orphaned-menus",
+          this,
+          "_closeMenuSafely",
+          [entry.menu, false, true]
+        );
         if (closeSucceeded) {
           entry.closeSucceeded = true;
         }
       } else if (!entry.needsClose) {
         closeSucceeded = true;
+      }
+      let ungrabSucceeded = true;
+      if (!entry.needsClose && entry.menu.grabbed === true) {
+        ungrabSucceeded = this._runTeardownOperation("teardown-orphaned-menus", entry.menu, "_ungrab");
+      }
+      let signalsSucceeded = entry.signalsSucceeded === true;
+      if (!signalsSucceeded && closeSucceeded && ungrabSucceeded) {
+        signalsSucceeded = this._runTeardownOperation("teardown-orphaned-menus", entry.menu, "disconnectAllSignals", [], true);
+        if (signalsSucceeded) {
+          entry.signalsSucceeded = true;
+        }
       }
       let destroySucceeded = entry.destroySucceeded === true;
       if (signalsSucceeded && closeSucceeded && !destroySucceeded) {
@@ -1794,7 +2002,7 @@ MyApplet.prototype = {
           entry.destroySucceeded = true;
         }
       }
-      if (!signalsSucceeded || !closeSucceeded || !destroySucceeded) {
+      if (!ungrabSucceeded || !signalsSucceeded || !closeSucceeded || !destroySucceeded) {
         success = false;
         continue;
       }
@@ -1949,6 +2157,9 @@ MyApplet.prototype = {
           throw new Error("Monitor orphan entry could not be tracked");
         }
       }
+      if (this._lifecycleAllowsWork() && !this.processCleanupRetryTimer) {
+        this._scheduleProcessCleanupRetry();
+      }
       return true;
     } catch (error) {
       this._recordLifecycleError("monitor-orphan", error);
@@ -1979,7 +2190,11 @@ MyApplet.prototype = {
     return success;
   },
 
-  _retryOrphanedMonitors: function() {
+  _retryOrphanedMonitors: function(includeTracked) {
+    let inTeardown = this.appletRemoved ||
+      this.lifecycleState === LIFECYCLE_REMOVING ||
+      this.lifecycleState === LIFECYCLE_REMOVED;
+    let includeTrackedMonitors = includeTracked === true || inTeardown;
     let pendingMonitors = [];
     let addPendingMonitor = (monitor, cancelSucceeded) => {
       if (!monitor) {
@@ -2010,7 +2225,7 @@ MyApplet.prototype = {
       this._recordLifecycleError("monitor-state", new Error("Monitor orphan registry is unavailable"));
     }
     let monitors = this._resourceRegistry && this._resourceRegistry.monitors;
-    if (Array.isArray(monitors)) {
+    if (includeTrackedMonitors && Array.isArray(monitors)) {
       for (let monitor of monitors) {
         if (!monitor) {
           invalidOrphanEntry = true;
@@ -2019,7 +2234,9 @@ MyApplet.prototype = {
         addPendingMonitor(monitor, false);
       }
     }
-    addPendingMonitor(this.externalApiEnvMonitor, this._externalApiEnvMonitorCancelSucceeded === true);
+    if (includeTrackedMonitors) {
+      addPendingMonitor(this.externalApiEnvMonitor, this._externalApiEnvMonitorCancelSucceeded === true);
+    }
     if (pendingMonitors.length === 0) {
       return !invalidOrphanEntry && Array.isArray(this._orphanedMonitors);
     }
@@ -2118,18 +2335,26 @@ MyApplet.prototype = {
       }
       if (rollbackFailed) {
         this._trackOrphanedCancellable(token, false);
+        try {
+          if (!error || (typeof error !== "object" && typeof error !== "function")) {
+            error = new Error(String(error || "Cancellable registration failed"));
+          }
+          error.cancellableToken = token;
+        } catch (tokenError) {
+          this._recordLifecycleError("cancellable-registration-token", tokenError);
+        }
       }
       throw error;
     }
   },
 
   _unregisterCancellable: function(token) {
-    if (!this._resourceRegistry || !token) {
+    if (!token) {
       return true;
     }
     try {
-      if (!this._resourceRegistry.cancellables) {
-        return true;
+      if (!this._resourceRegistry || !this._resourceRegistry.cancellables) {
+        throw new Error("Cancellable registry is unavailable");
       }
       if (!Object.prototype.hasOwnProperty.call(this._resourceRegistry.cancellables, token)) {
         return true;
@@ -2322,18 +2547,26 @@ MyApplet.prototype = {
       }
       if (rollbackFailed) {
         this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false);
+        try {
+          if (!error || (typeof error !== "object" && typeof error !== "function")) {
+            error = new Error(String(error || "Process registration failed"));
+          }
+          error.processToken = token;
+        } catch (tokenError) {
+          this._recordLifecycleError("process-registration-token", tokenError);
+        }
       }
       throw error;
     }
   },
 
   _unregisterProcess: function(token) {
-    if (!this._resourceRegistry || !token) {
+    if (!token) {
       return true;
     }
     try {
-      if (!this._resourceRegistry.processes) {
-        return true;
+      if (!this._resourceRegistry || !this._resourceRegistry.processes) {
+        throw new Error("Process registry is unavailable");
       }
       if (!Object.prototype.hasOwnProperty.call(this._resourceRegistry.processes, token)) {
         return true;
@@ -2358,7 +2591,17 @@ MyApplet.prototype = {
         this._orphanedProcesses = [];
       }
       let key = registryToken ? String(registryToken) : "";
-      let processGroupIdentity = this._readProcessGroupIdentity(process);
+      let processGroupIdentity = null;
+      if (key) {
+        let registry = this._resourceRegistry && this._resourceRegistry.processes;
+        let registryEntry = registry && registry[key];
+        if (registryEntry && registryEntry.process === process && registryEntry.processGroupIdentity) {
+          processGroupIdentity = registryEntry.processGroupIdentity;
+        }
+      }
+      if (!processGroupIdentity) {
+        processGroupIdentity = this._readProcessGroupIdentity(process);
+      }
       let knownEntry = this._orphanedProcesses.find((entry) => entry && entry.process === process);
       if (knownEntry) {
         if (key && !knownEntry.registryToken) {
@@ -2414,7 +2657,8 @@ MyApplet.prototype = {
     return success;
   },
 
-  _retryOrphanedProcesses: function() {
+  _retryOrphanedProcesses: function(group) {
+    let wantedGroup = group === undefined ? null : String(group || "process");
     let success = true;
     let inTeardown = this.appletRemoved ||
       this.lifecycleState === LIFECYCLE_REMOVING ||
@@ -2438,6 +2682,9 @@ MyApplet.prototype = {
             success = false;
             continue;
           }
+          if (wantedGroup !== null && String(entry.group || "process") !== wantedGroup) {
+            continue;
+          }
           if (!this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false)) {
             success = false;
           }
@@ -2449,12 +2696,25 @@ MyApplet.prototype = {
     }
     for (let index = this._orphanedProcesses.length - 1; index >= 0; index--) {
       let entry = this._orphanedProcesses[index];
+      if (wantedGroup !== null && entry && String(entry.group || "process") !== wantedGroup) {
+        continue;
+      }
       if (!entry || !entry.process) {
         this._recordLifecycleError("process-orphan", new Error("Process orphan entry is invalid"));
         success = false;
         continue;
       }
       let terminationSucceeded = entry.terminationSucceeded === true;
+      if (terminationSucceeded && entry.processGroupIdentity) {
+        let groupState = this._processGroupState(entry.processGroupIdentity);
+        if (groupState === "live") {
+          terminationSucceeded = false;
+          entry.terminationSucceeded = false;
+        } else if (groupState !== "stopped") {
+          success = false;
+          continue;
+        }
+      }
       if (!terminationSucceeded) {
         if (!this._terminateProcess(entry.process)) {
           success = false;
@@ -2485,7 +2745,11 @@ MyApplet.prototype = {
   _processCleanupStillPending: function() {
     return !Array.isArray(this._orphanedProcesses) || this._orphanedProcesses.length > 0 ||
       !Array.isArray(this._orphanedCancellables) || this._orphanedCancellables.length > 0 ||
-      !Array.isArray(this._orphanedTimers) || this._orphanedTimers.length > 0;
+      !Array.isArray(this._orphanedSignals) || this._orphanedSignals.length > 0 ||
+      !Array.isArray(this._orphanedMonitors) || this._orphanedMonitors.length > 0 ||
+      !Array.isArray(this._orphanedHotkeys) || this._orphanedHotkeys.length > 0 ||
+      !Array.isArray(this._orphanedTimers) || this._orphanedTimers.length > 0 ||
+      !Array.isArray(this._orphanedDialogs) || this._orphanedDialogs.length > 0;
   },
 
   _releaseBusyStateAfterProcessCleanup: function(group, marker, releaseRequested) {
@@ -2509,7 +2773,8 @@ MyApplet.prototype = {
     if (marker) {
       this[marker] = false;
     }
-    if (wanted === "ollama" && !this.ollamaModelFlowToken && !this.ollamaModelInstallToken) {
+    if (wanted === "ollama" && !this.ollamaModelFlowToken) {
+      this.ollamaModelInstallToken = null;
       this.ollamaModelInstallRunning = false;
     }
     let anotherCommandRunning = Boolean(
@@ -2518,7 +2783,8 @@ MyApplet.prototype = {
       this.voiceModelActionToken ||
       this.benchmarkFlowToken ||
       this.ollamaModelFlowToken ||
-      this.ollamaModelInstallToken
+      this.ollamaModelInstallToken ||
+      this._hasLocalProcessingWorkflow()
     );
     if (!anotherCommandRunning) {
       this.isCommandRunning = false;
@@ -2537,19 +2803,40 @@ MyApplet.prototype = {
       return true;
     }
     let timerId = this._scheduleTrackedTimer("process-cleanup-retry", 1000, () => {
-      let processCleanupSucceeded = this._retryOrphanedProcesses();
-      let cancellableCleanupSucceeded = this._retryOrphanedCancellables();
-      let timerCleanupSucceeded = this._retryOrphanedTimers();
-      if (!processCleanupSucceeded || !cancellableCleanupSucceeded || !timerCleanupSucceeded || this._processCleanupStillPending()) {
+      try {
+        let processCleanupSucceeded = this._retryOrphanedProcesses();
+        let cancellableCleanupSucceeded = this._retryOrphanedCancellables();
+        let signalCleanupSucceeded = this._disconnectOrphanedSignals();
+        let monitorCleanupSucceeded = this._retryOrphanedMonitors();
+        let hotkeyCleanupSucceeded = this._retryOrphanedHotkeys();
+        let timerCleanupSucceeded = this._retryOrphanedTimers();
+        let dialogCleanupSucceeded = this._retryOrphanedDialogs();
+        if (!processCleanupSucceeded || !cancellableCleanupSucceeded || !timerCleanupSucceeded ||
+            !signalCleanupSucceeded || !monitorCleanupSucceeded || !hotkeyCleanupSucceeded ||
+            !dialogCleanupSucceeded ||
+            this._processCleanupStillPending()) {
+          return true;
+        }
+        this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");
+        this._releaseBusyStateAfterProcessCleanup("benchmark", "benchmarkCleanupFailed");
+        this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed");
+        this._releaseBusyStateAfterProcessCleanup("maintenance", "maintenanceCleanupFailed");
+        if (this._doctorCommandRunning && !this.doctorCommandToken && !this._hasTrackedProcessGroup("doctor")) {
+          this._doctorCommandRunning = false;
+        }
+        if (this.terminalWorkflowRunning && !this.terminalWorkflowToken &&
+            !this._hasTrackedProcessGroup("terminal") && !this._hasTrackedProcessGroup("ollama")) {
+          this.terminalWorkflowRunning = false;
+        }
+        if ((this.status === "recording" || this.status === "processing") &&
+            !this.isCommandRunning && !this._statusCommandRunning && !this._hasLocalProcessingWorkflow()) {
+          this._scheduleStatusPoll();
+        }
+        return false;
+      } catch (error) {
+        this._recordLifecycleError("process-cleanup-retry", error);
         return true;
       }
-      this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");
-      this._releaseBusyStateAfterProcessCleanup("benchmark", "benchmarkCleanupFailed");
-      this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed");
-      if (this._doctorCommandRunning && !this.doctorCommandToken && !this._hasTrackedProcessGroup("doctor")) {
-        this._doctorCommandRunning = false;
-      }
-      return false;
     }, false, "processCleanupRetryTimer");
     return Boolean(timerId);
   },
@@ -2701,7 +2988,9 @@ MyApplet.prototype = {
             leaderFields[19] !== String(identity.startTime)) {
           return "invalid";
         }
-        return "live";
+        if (leaderFields[0] !== "Z" && leaderFields[0] !== "X" && leaderFields[0] !== "x") {
+          return "live";
+        }
       }
 
       let procDirectory = Gio.File.new_for_path("/proc");
@@ -2811,11 +3100,14 @@ MyApplet.prototype = {
             return null;
           }
           let fields = stat.slice(commandEnd + 2).trim().split(/\s+/);
-          if (fields.length <= 19 || !/^[1-9][0-9]*$/.test(fields[2])) {
+          if (fields.length <= 19) {
             return null;
           }
           if (fields[3] !== groupPid) {
             continue;
+          }
+          if (!/^[1-9][0-9]*$/.test(fields[2])) {
+            return null;
           }
           if (memberPid === groupPid) {
             if (fields[2] !== groupPid || fields[19] !== String(identity.startTime)) {
@@ -2856,7 +3148,8 @@ MyApplet.prototype = {
           return false;
         }
       }
-      return true;
+      let finalGroupState = this._processGroupState(identity);
+      return finalGroupState === "stopped";
     } catch (error) {
       this._recordLifecycleError("process-group-kill", error);
       return false;
@@ -2973,7 +3266,18 @@ MyApplet.prototype = {
       allSucceeded = false;
       this._recordLifecycleError("process-cancel", error);
     }
-    if (!allSucceeded) {
+    let orphanCleanupSucceeded = this._retryOrphanedProcesses(wanted);
+    if (!orphanCleanupSucceeded) {
+      allSucceeded = false;
+    }
+    if (!Array.isArray(this._orphanedProcesses)) {
+      allSucceeded = false;
+    } else if (this._orphanedProcesses.some(
+      (entry) => entry && String(entry.group || "process") === wanted
+    )) {
+      allSucceeded = false;
+    }
+    if (!allSucceeded || this._processCleanupStillPending()) {
       this._scheduleProcessCleanupRetry();
     }
     return allSucceeded;
@@ -3107,7 +3411,9 @@ MyApplet.prototype = {
         this._orphanedTimers = [];
       }
       let key = String(name || propertyName || "timer");
-      let knownEntry = this._orphanedTimers.find((entry) => entry && entry.sourceId === sourceId);
+      let knownEntry = this._orphanedTimers.find(
+        (entry) => entry && entry.sourceId === sourceId && entry.name === key
+      );
       if (knownEntry) {
         if (sourceRemoved === true) {
           knownEntry.sourceRemoved = true;
@@ -3126,6 +3432,9 @@ MyApplet.prototype = {
         if (this._orphanedTimers.indexOf(entry) < 0) {
           throw new Error("Timer orphan entry could not be tracked");
         }
+      }
+      if (key !== "process-cleanup-retry" && this._lifecycleAllowsWork() && !this.processCleanupRetryTimer) {
+        this._scheduleProcessCleanupRetry();
       }
       return true;
     } catch (error) {
@@ -3160,11 +3469,30 @@ MyApplet.prototype = {
 
   _retryOrphanedTimers: function() {
     let pendingTimers = [];
+    let timers = this._resourceRegistry && this._resourceRegistry.timers;
+    let sourceIdWasReusedForDifferentTimer = (name, sourceId) => {
+      if (!timers || (typeof timers !== "object" && typeof timers !== "function")) {
+        return false;
+      }
+      let key = String(name || "");
+      for (let currentName in timers) {
+        if (!Object.prototype.hasOwnProperty.call(timers, currentName) || String(currentName) === key) {
+          continue;
+        }
+        if (timers[currentName] === sourceId) {
+          return true;
+        }
+      }
+      return false;
+    };
     let addPendingTimer = (name, sourceId, propertyName, sourceRemoved) => {
       if (!sourceId) {
         return;
       }
-      let knownEntry = pendingTimers.find((entry) => entry && entry.sourceId === sourceId);
+      let key = String(name || propertyName || "timer");
+      let knownEntry = pendingTimers.find(
+        (entry) => entry && entry.sourceId === sourceId && entry.name === key
+      );
       if (knownEntry) {
         if (propertyName && !knownEntry.propertyName) {
           knownEntry.propertyName = propertyName;
@@ -3175,7 +3503,7 @@ MyApplet.prototype = {
         return;
       }
       pendingTimers.push({
-        name: String(name || propertyName || "timer"),
+        name: key,
         sourceId: sourceId,
         propertyName: propertyName || "",
         sourceRemoved: sourceRemoved === true,
@@ -3188,12 +3516,17 @@ MyApplet.prototype = {
           invalidOrphanEntry = true;
           continue;
         }
-        addPendingTimer(entry.name, entry.sourceId, entry.propertyName, entry.sourceRemoved);
+        let sourceIdWasReused = sourceIdWasReusedForDifferentTimer(entry.name, entry.sourceId);
+        addPendingTimer(
+          entry.name,
+          entry.sourceId,
+          sourceIdWasReused ? "" : entry.propertyName,
+          entry.sourceRemoved === true || sourceIdWasReused
+        );
       }
     } else {
       this._recordLifecycleError("timer-state", new Error("Timer orphan registry is unavailable"));
     }
-    let timers = this._resourceRegistry && this._resourceRegistry.timers;
     let inTeardown = this.appletRemoved ||
       this.lifecycleState === LIFECYCLE_REMOVING ||
       this.lifecycleState === LIFECYCLE_REMOVED;
@@ -3256,11 +3589,21 @@ MyApplet.prototype = {
         }
         return true;
       }
-      if (sourceAlreadyRemoved !== true) {
+      let activeTimer = this._activeTrackedTimer;
+      let sourceIsDispatching = Boolean(
+        activeTimer &&
+        activeTimer.name === key &&
+        activeTimer.sourceId === sourceId &&
+        (!propertyName || activeTimer.propertyName === propertyName)
+      );
+      if (sourceAlreadyRemoved !== true && !sourceIsDispatching) {
         let removed = Mainloop.source_remove(sourceId);
         if (removed === false) {
           throw new Error("Timer source could not be removed");
         }
+        sourceRemovalSucceeded = true;
+      } else if (sourceIsDispatching) {
+        // Current callback returns false after replacement; no source_remove on dispatching source.
         sourceRemovalSucceeded = true;
       }
       let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);
@@ -3295,7 +3638,7 @@ MyApplet.prototype = {
       this._recordLifecycleError("timer-state", new Error("Timer orphan registry is unavailable"));
       return 0;
     }
-    if (this._orphanedTimers.length > 0) {
+    if (this._orphanedTimers.length > 0 && key !== "process-cleanup-retry") {
       let orphanCleanupSucceeded = this._retryOrphanedTimers();
       if (!orphanCleanupSucceeded || this._orphanedTimers.length > 0) {
         this._recordLifecycleError("timer-state", new Error("An orphaned timer is still pending"));
@@ -3335,7 +3678,40 @@ MyApplet.prototype = {
         retireTimer();
         return false;
       }
-    let keepTimer = this._runStateGuarded("timer-" + key, callback, false) === true;
+      let registryOwnsTimer = Boolean(
+        this._resourceRegistry && this._resourceRegistry.timers &&
+        this._resourceRegistry.timers[key] === sourceId
+      );
+      let propertyOwnsTimer = Boolean(propertyName && this[propertyName] === sourceId);
+      let timerIsCurrent = registryOwnsTimer && (!propertyName || propertyOwnsTimer);
+      if (!timerIsCurrent) {
+        retireTimer();
+        return false;
+      }
+      let previousActiveTimer = this._activeTrackedTimer;
+      let activeTimer = {
+        name: key,
+        sourceId: sourceId,
+        propertyName: propertyName || "",
+      };
+      this._activeTrackedTimer = activeTimer;
+      let keepTimer;
+      try {
+        keepTimer = this._runStateGuarded("timer-" + key, callback, false) === true;
+      } finally {
+        if (this._activeTrackedTimer === activeTimer) {
+          this._activeTrackedTimer = previousActiveTimer;
+        }
+      }
+      let timerWasReplaced = !(
+        this._resourceRegistry && this._resourceRegistry.timers &&
+        this._resourceRegistry.timers[key] === sourceId &&
+        (!propertyName || this[propertyName] === sourceId)
+      );
+      if (timerWasReplaced) {
+        // Replacement or explicit clear owns next source; retire dispatching source.
+        return false;
+      }
       if (!keepTimer) {
         retireTimer();
       }
@@ -3451,6 +3827,7 @@ MyApplet.prototype = {
     this.settingsWindowToken = null;
     this.cancelPendingWhileCommandRunning = false;
     this._statusRefreshToken = 0;
+    this._statusCommandToken = null;
     this._statusCommandRunning = false;
     this._doctorCommandRunning = false;
     this.doctorCommandToken = null;
@@ -3511,6 +3888,9 @@ MyApplet.prototype = {
     this.set_applet_tooltip(_("Speed of Cinnamon"));
 
     this.settings = new Settings.AppletSettings(this, UUID, instanceId);
+    if (!this.settings || this.settings.isReady !== true) {
+      throw new Error("Applet settings are unavailable");
+    }
     this._bindSettings();
     this._syncExternalApiConfigOnStartup();
     this._syncActiveLanguage();
@@ -3581,7 +3961,12 @@ MyApplet.prototype = {
     this.menuManager.addMenu(this.menu);
     this._connectSafe(this.menu, "open-state-changed", (menu, open) => {
       if (!this._applet_context_menu || !this._applet_context_menu.isOpen) {
-        this.actor.change_style_pseudo_class("checked", open);
+        let actor = this.actor;
+        if (actor &&
+            (typeof actor.is_finalized !== "function" || !actor.is_finalized()) &&
+            typeof actor.change_style_pseudo_class === "function") {
+          actor.change_style_pseudo_class("checked", open);
+        }
       }
     }, "menu-open-state");
     this._connectSafe(this, "orientation-changed", (applet, orientation) => {
@@ -4042,25 +4427,32 @@ MyApplet.prototype = {
         this._trackOrphanedHotkey(name, removedExternally);
       }
       if (removedExternally && previous) {
-        this._runStateGuarded("hotkeys", () => {
-          Main.keybindingManager.addHotKey(
+        let restored = this._runStateGuarded("hotkeys", () => {
+          return Main.keybindingManager.addHotKey(
             name,
             previous.binding,
             this._guardStateCallback("hotkeys", previous.callback, undefined)
-          );
-        }, undefined);
+          ) === true;
+        }, false) === true;
+        if (restored && this._orphanedHotkeyStates) {
+          this._orphanedHotkeyStates[name] = false;
+        }
       }
       return;
     }
     let accelerator = typeof binding === "string" ? binding.trim() : "";
     if (accelerator === "") {
       if (this._hotkeyDefinitions) {
-        this._runStateGuarded("hotkeys", () => {
+        let definitionCleanupSucceeded = this._runStateGuarded("hotkeys", () => {
           let deleted = delete this._hotkeyDefinitions[name];
           if (deleted === false || Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)) {
             throw new Error("Hotkey definition could not be removed");
           }
-        }, undefined);
+          return true;
+        }, false) === true;
+        if (!definitionCleanupSucceeded) {
+          this._trackOrphanedHotkey(name, true);
+        }
       }
       return;
     }
@@ -4187,6 +4579,9 @@ MyApplet.prototype = {
       } else if (!Object.prototype.hasOwnProperty.call(this._orphanedHotkeyStates, key)) {
         this._orphanedHotkeyStates[key] = false;
       }
+      if (this._lifecycleAllowsWork() && !this.processCleanupRetryTimer) {
+        this._scheduleProcessCleanupRetry();
+      }
       return true;
     } catch (error) {
       this._recordLifecycleError("hotkey-orphan", error);
@@ -4239,7 +4634,11 @@ MyApplet.prototype = {
     return success;
   },
 
-  _retryOrphanedHotkeys: function() {
+  _retryOrphanedHotkeys: function(includeTracked) {
+    let inTeardown = this.appletRemoved ||
+      this.lifecycleState === LIFECYCLE_REMOVING ||
+      this.lifecycleState === LIFECYCLE_REMOVED;
+    let includeTrackedHotkeys = includeTracked === true || inTeardown;
     let pendingNames = [];
     let addPendingName = (value) => {
       let name = String(value || "").trim();
@@ -4266,8 +4665,10 @@ MyApplet.prototype = {
       this._recordLifecycleError("hotkey-state", new Error("Hotkey orphan registry is unavailable"));
     }
     collectPendingNames(this._orphanedHotkeyStates);
-    collectPendingNames(this._resourceRegistry && this._resourceRegistry.hotkeys);
-    collectPendingNames(this._hotkeyDefinitions);
+    if (includeTrackedHotkeys) {
+      collectPendingNames(this._resourceRegistry && this._resourceRegistry.hotkeys);
+      collectPendingNames(this._hotkeyDefinitions);
+    }
     if (pendingNames.length === 0) {
       return true;
     }
@@ -4275,6 +4676,17 @@ MyApplet.prototype = {
     for (let index = pendingNames.length - 1; index >= 0; index--) {
       let name = pendingNames[index];
       let externallyRemoved = this._orphanedHotkeyStates && this._orphanedHotkeyStates[name] === true;
+      let trackedLiveHotkey = !inTeardown && !externallyRemoved && Boolean(
+        (this._resourceRegistry && this._resourceRegistry.hotkeys &&
+          Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)) ||
+        (this._hotkeyDefinitions && Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name))
+      );
+      if (trackedLiveHotkey) {
+        if (!this._untrackOrphanedHotkey(name)) {
+          success = false;
+        }
+        continue;
+      }
       if (!externallyRemoved) {
         if (!this._runTeardownOperation(
           "teardown-orphaned-hotkeys",
@@ -4471,12 +4883,13 @@ MyApplet.prototype = {
     this.voiceModelActionToken = null;
     let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
     if (voiceModelCleanupSucceeded) {
-      this._releaseBusyStateAfterProcessCleanup(
+      let busyStateReleased = this._releaseBusyStateAfterProcessCleanup(
         "voice-model",
         "voiceModelCleanupFailed",
         hadVoiceModelAction || hadVoiceModelCleanupFailure
       );
-      if ((hadVoiceModelAction || hadVoiceModelCleanupFailure) && !this._recordingCommandToken && this.status === "processing") {
+      if ((hadVoiceModelAction || hadVoiceModelCleanupFailure) && busyStateReleased &&
+          !this._recordingCommandToken && !this.isCommandRunning && this.status === "processing") {
         this._setStatus("ready", _("Voice model operation cancelled by settings change"), this.lastTranscript);
       }
     } else {
@@ -4496,11 +4909,22 @@ MyApplet.prototype = {
   _onTextModelSettingsChanged: function() {
     this.textModelMenuRefreshToken = null;
     let textModelRefreshCleanupSucceeded = this._terminateProcessesByGroup("text-model-refresh") !== false;
+    let hadOllamaOperation = Boolean(
+      this.ollamaModelFlowToken ||
+      this.ollamaInstallWatchToken ||
+      this.ollamaModelInstallRunning ||
+      this.ollamaModelInstallToken ||
+      this.ollamaModelCleanupFailed
+    );
     let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
     let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
     if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
       this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
       return;
+    }
+    if (hadOllamaOperation && !this.notificationSessionActive && !this._recordingCommandToken &&
+        !this.isCommandRunning && !this._hasLocalProcessingWorkflow() && this.status === "processing") {
+      this._setStatus("ready", _("Ollama operation cancelled by settings change"), this.lastTranscript);
     }
     this._populateTextModelMenu([], _("Open menu to load local text models"));
     this._updatePanel();
@@ -4516,6 +4940,7 @@ MyApplet.prototype = {
   },
 
   _cancelTextInsertForSettingsChange: function() {
+    this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
     this._clearClipboardOverwriteApproval();
     let dialogCleanupSucceeded = true;
     if (this.clipboardOverwriteDialog) {
@@ -4571,13 +4996,16 @@ MyApplet.prototype = {
   on_applet_clicked: function() {
     return this._runStateGuarded("menu-toggle", () => {
       let menu = this.menu;
-      if (!menu || typeof menu.toggle !== "function") {
+      if (!menu || typeof menu.open !== "function" || typeof menu.close !== "function") {
         return;
       }
-      if (!menu.isOpen) {
-        this._rememberFocusedWindow();
+      if (menu.isOpen) {
+        this._closeMenuSafely(menu, true, true);
+        return;
       }
-      menu.toggle();
+      this._closeMenuSafely(menu, false, true);
+      this._rememberFocusedWindow();
+      menu.open(true);
     }, undefined);
   },
 
@@ -4585,6 +5013,9 @@ MyApplet.prototype = {
     if (!this._beginTeardown()) {
       return;
     }
+    this._statusRefreshToken++;
+    this._statusCommandToken = null;
+    this._statusCommandRunning = false;
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
     this.autoRelistenPendingLanguage = "";
@@ -4966,7 +5397,9 @@ MyApplet.prototype = {
       return this._textModelsArgs(backendOverride);
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
-      this._setStatusPreservingRecording("error", _("Could not prepare text model request: ") + safeError, this.lastTranscript);
+      if (!this.isCommandRunning && !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow()) {
+        this._setStatusPreservingRecording("error", _("Could not prepare text model request: ") + safeError, this.lastTranscript);
+      }
       return null;
     }
   },
@@ -5048,7 +5481,7 @@ MyApplet.prototype = {
   },
 
   _populateRecorderMenu: function() {
-    if (!this.recorderItem) {
+    if (!this._canMutateMenu(this.recorderItem)) {
       return;
     }
     if (!this._clearMenuItems(this.recorderItem.menu)) {
@@ -5102,7 +5535,7 @@ MyApplet.prototype = {
   },
 
   _populateRecordingLimitMenu: function() {
-    if (!this.recordingLimitItem) {
+    if (!this._canMutateMenu(this.recordingLimitItem)) {
       return;
     }
     if (!this._clearMenuItems(this.recordingLimitItem.menu)) {
@@ -5219,13 +5652,11 @@ MyApplet.prototype = {
   },
 
   _updateTranscriptStorageItem: function() {
-    if (this.transcriptStorageItem) {
-      this.transcriptStorageItem.label.text = this._transcriptStorageLabel();
-    }
+    this._setMenuItemLabelSafely(this.transcriptStorageItem, this._transcriptStorageLabel());
   },
 
   _populateTranscriptStorageMenu: function() {
-    if (!this.transcriptStorageItem) {
+    if (!this._canMutateMenu(this.transcriptStorageItem)) {
       return;
     }
     if (!this._clearMenuItems(this.transcriptStorageItem.menu)) {
@@ -5334,7 +5765,7 @@ MyApplet.prototype = {
   },
 
   _populateRecordingOptionsMenu: function() {
-    if (!this.recordingOptionsItem) {
+    if (!this._canMutateMenu(this.recordingOptionsItem)) {
       return;
     }
     if (!this._clearMenuItems(this.recordingOptionsItem.menu)) {
@@ -5392,7 +5823,7 @@ MyApplet.prototype = {
   },
 
   _populateNotificationOptionsMenu: function() {
-    if (!this.notificationOptionsItem) {
+    if (!this._canMutateMenu(this.notificationOptionsItem)) {
       return;
     }
     if (!this._clearMenuItems(this.notificationOptionsItem.menu)) {
@@ -5450,7 +5881,7 @@ MyApplet.prototype = {
   },
 
   _populateOutputMethodMenu: function() {
-    if (!this.outputMethodItem) {
+    if (!this._canMutateMenu(this.outputMethodItem)) {
       return;
     }
     if (!this._clearMenuItems(this.outputMethodItem.menu)) {
@@ -5466,11 +5897,14 @@ MyApplet.prototype = {
   },
 
   _populateArtifactEncryptionMenu: function() {
-    if (!this.artifactEncryptionItem) {
+    if (!this._canMutateMenu(this.artifactEncryptionItem)) {
       return;
     }
     this.artifactEncryption = this._normalizeArtifactEncryption(this.artifactEncryption);
-    this.artifactEncryptionItem.label.text = _("Encryption: ") + this._artifactEncryptionLabel(this.artifactEncryption);
+    this._setMenuItemLabelSafely(
+      this.artifactEncryptionItem,
+      _("Encryption: ") + this._artifactEncryptionLabel(this.artifactEncryption)
+    );
     if (!this._clearMenuItems(this.artifactEncryptionItem.menu)) {
       return;
     }
@@ -5507,7 +5941,7 @@ MyApplet.prototype = {
   },
 
   _populateTextOptionsMenu: function() {
-    if (!this.textOptionsItem) {
+    if (!this._canMutateMenu(this.textOptionsItem)) {
       return;
     }
     if (!this._clearMenuItems(this.textOptionsItem.menu)) {
@@ -5681,7 +6115,7 @@ MyApplet.prototype = {
   },
 
   _populateAutoPasteMenu: function() {
-    if (!this.autoPasteItem) {
+    if (!this._canMutateMenu(this.autoPasteItem)) {
       return;
     }
     if (!this._clearMenuItems(this.autoPasteItem.menu)) {
@@ -5709,9 +6143,7 @@ MyApplet.prototype = {
   },
 
   _updateAutoPasteItem: function() {
-    if (this.autoPasteItem) {
-      this.autoPasteItem.label.text = this._autoPasteLabel();
-    }
+    this._setMenuItemLabelSafely(this.autoPasteItem, this._autoPasteLabel());
   },
 
   _windowTitleMatchesAutoPaste: function() {
@@ -5748,12 +6180,12 @@ MyApplet.prototype = {
   },
 
   _updateOpenAiFlexProcessingItem: function() {
-    if (!this.openAiFlexProcessingItem) {
-      return;
-    }
-    this.openAiFlexProcessingItem.label.text = this._optionLabel(
-      Boolean(this.openaiCompatibleFlexProcessing),
-      _("OpenAI Flex processing")
+    this._setMenuItemLabelSafely(
+      this.openAiFlexProcessingItem,
+      this._optionLabel(
+        Boolean(this.openaiCompatibleFlexProcessing),
+        _("OpenAI Flex processing")
+      )
     );
   },
 
@@ -5813,12 +6245,13 @@ MyApplet.prototype = {
     this.voiceModelActionToken = null;
     let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
     if (voiceModelCleanupSucceeded) {
-      this._releaseBusyStateAfterProcessCleanup(
+      let busyStateReleased = this._releaseBusyStateAfterProcessCleanup(
         "voice-model",
         "voiceModelCleanupFailed",
         hadVoiceModelAction || hadVoiceModelCleanupFailure
       );
-      if ((hadVoiceModelAction || hadVoiceModelCleanupFailure) && !this._recordingCommandToken && this.status === "processing") {
+      if ((hadVoiceModelAction || hadVoiceModelCleanupFailure) && busyStateReleased &&
+          !this._recordingCommandToken && !this.isCommandRunning && this.status === "processing") {
         this._setStatus("ready", _("Voice model operation cancelled by settings change"), this.lastTranscript);
       }
     } else {
@@ -5839,6 +6272,88 @@ MyApplet.prototype = {
   _hasActiveRecordingState: function() {
     return this.status === "recording" || this.status === "recorded" || this.status === "processing" ||
       (this.status === "error" && this.recordingArtifactsPresent);
+  },
+
+  _hasPendingProcessCleanup: function() {
+    for (let registryName of [
+      "_orphanedProcesses",
+      "_orphanedCancellables",
+      "_orphanedTimers",
+      "_orphanedSignals",
+      "_orphanedMonitors",
+      "_orphanedHotkeys",
+    ]) {
+      if (!Array.isArray(this[registryName]) || this[registryName].length > 0) {
+        return true;
+      }
+    }
+    return false;
+  },
+
+  _hasPendingDialogCleanup: function() {
+    return !Array.isArray(this._orphanedDialogs) || this._orphanedDialogs.length > 0;
+  },
+
+  _hasPendingTextInsertCleanup: function() {
+    if (!this.textInsertCancellationFailed) {
+      return false;
+    }
+    return String(this.autoInsertPendingFingerprint || "") !== "" || this._hasPendingTextInsertResources();
+  },
+
+  _hasPendingTextInsertResources: function() {
+    if (this.clipboardOverwriteDialog || this.pasteTimer) {
+      return true;
+    }
+    let timers = this._resourceRegistry && this._resourceRegistry.timers;
+    if (timers && timers.paste) {
+      return true;
+    }
+    if (!Array.isArray(this._orphanedTimers)) {
+      return true;
+    }
+    if (this._orphanedTimers.some((entry) => entry &&
+        (entry.name === "paste" || entry.propertyName === "pasteTimer"))) {
+      return true;
+    }
+    return ["keyboard", "clipboard", "x11"].some((group) => this._hasTrackedProcessGroup(group));
+  },
+
+  _hasLocalProcessingWorkflow: function(includePendingCleanup) {
+    let includePendingCleanupState = includePendingCleanup !== false;
+    return Boolean(
+      this.terminalWorkflowToken ||
+      this.textInsertToken ||
+      this.maintenanceCleanupFailed ||
+      this.voiceModelCleanupFailed ||
+      this.benchmarkCleanupFailed ||
+      this.ollamaModelCleanupFailed ||
+      (includePendingCleanupState && this._hasPendingProcessCleanup()) ||
+      (includePendingCleanupState && this._hasPendingDialogCleanup()) ||
+      (includePendingCleanupState && this._hasPendingTextInsertCleanup()) ||
+      this.clipboardOverwriteDialog ||
+      this.voiceModelActionToken ||
+      this.alarmCheckToken ||
+      this.alarmActionToken ||
+      this.alarmMenuRefreshToken ||
+      this._cleanupCommandToken ||
+      this.settingsTransferToken ||
+      this.setupDiagnosticsToken ||
+      this.cleanupPreviewDialogToken ||
+      this.cleanupPreviewDialog ||
+      this.customLimitPromptToken ||
+      this.autoPastePromptToken ||
+      this.transcriptListPromptToken ||
+      this.transcriptListPromptDialog ||
+      this._doctorCommandRunning ||
+      this.doctorCommandToken ||
+      this.benchmarkFlowToken ||
+      this.transcriptWindowToken ||
+      this.ollamaModelFlowToken ||
+      this.ollamaModelInstallToken ||
+      this.ollamaModelInstallRunning ||
+      this.ollamaInstallWatchToken
+    );
   },
 
   _setActiveLanguage: function(language, message) {
@@ -5873,7 +6388,7 @@ MyApplet.prototype = {
   },
 
   _populateLanguageMenu: function() {
-    if (!this.languageItem) {
+    if (!this._canMutateMenu(this.languageItem)) {
       return;
     }
     if (!this._clearMenuItems(this.languageItem.menu)) {
@@ -5927,7 +6442,7 @@ MyApplet.prototype = {
   },
 
   _populateShortcutMenu: function() {
-    if (!this.shortcutItem) {
+    if (!this._canMutateMenu(this.shortcutItem)) {
       return;
     }
     if (!this._clearMenuItems(this.shortcutItem.menu)) {
@@ -6054,13 +6569,16 @@ MyApplet.prototype = {
     }
   },
 
-  _refreshStatus: function() {
+  _refreshStatus: function(fromStatusTimer) {
     if (this._statusCommandRunning) {
-      return;
+      return this.status === "recording" || this.status === "processing";
     }
-    if (this.isCommandRunning) {
-      return;
+    let localStatusOwner = this.status === "processing" && this._hasLocalProcessingWorkflow();
+    if (this.isCommandRunning || localStatusOwner) {
+      return this.status === "recording" || this.status === "processing";
     }
+    let statusCommandToken = {};
+    this._statusCommandToken = statusCommandToken;
     this._statusCommandRunning = true;
     let statusRefreshToken = ++this._statusRefreshToken;
     try {
@@ -6068,9 +6586,15 @@ MyApplet.prototype = {
         try {
           this._applyPayload(payload, statusRefreshToken);
         } catch (err) {
-          let safeError = this._sanitizeErrorMessage(err);
-          this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
+          if (this._statusCommandToken === statusCommandToken) {
+            let safeError = this._sanitizeErrorMessage(err);
+            this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
+          }
         } finally {
+          if (this._statusCommandToken !== statusCommandToken) {
+            return;
+          }
+          this._statusCommandToken = null;
           this._statusCommandRunning = false;
           // A local command may have invalidated this response while its poll timer expired.
           // Always restore active polling after request completion.
@@ -6078,12 +6602,19 @@ MyApplet.prototype = {
             this._scheduleStatusPoll();
           }
         }
-      }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS });
+      }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS, resourceGroup: "status" });
     } catch (err) {
+      if (this._statusCommandToken !== statusCommandToken) {
+        return;
+      }
+      this._statusCommandToken = null;
       this._statusCommandRunning = false;
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
       if (this.status === "recording" || this.status === "processing") {
+        if (fromStatusTimer === true) {
+          return true;
+        }
         this._scheduleStatusPoll();
       }
     }
@@ -6091,10 +6622,16 @@ MyApplet.prototype = {
 
   _hasCancelableRecordingWork: function(statusOverride) {
     let effectiveStatus = typeof statusOverride === "string" ? statusOverride : this.status;
-    return effectiveStatus === "recording" || effectiveStatus === "recorded" ||
-      (effectiveStatus === "error" && this.recordingArtifactsPresent) ||
-      (effectiveStatus === "processing" && this.recordingArtifactsPresent) ||
-      this.autoRelistenPending ||
+    let localTextInsertAllowsCancel = Boolean(this.autoRelistenPending && this.textInsertToken);
+    let localTextInsertOwnsRecording = Boolean(this.textInsertToken && !localTextInsertAllowsCancel);
+    let localWorkflowOwnsProcessing = effectiveStatus === "processing" &&
+      this._hasLocalProcessingWorkflow() &&
+      !localTextInsertAllowsCancel &&
+      !this._recordingCommandToken;
+    return ((effectiveStatus === "recording" || effectiveStatus === "recorded") && !localTextInsertOwnsRecording) ||
+      (effectiveStatus === "error" && this.recordingArtifactsPresent && !localTextInsertOwnsRecording) ||
+      (effectiveStatus === "processing" && this.recordingArtifactsPresent && !localWorkflowOwnsProcessing) ||
+      (this.autoRelistenPending && !localWorkflowOwnsProcessing) ||
       (this.isCommandRunning && this.notificationSessionActive && Boolean(this._recordingCommandToken));
   },
 
@@ -6191,6 +6728,13 @@ MyApplet.prototype = {
   },
 
   _invalidateBackgroundCallbacksForRecording: function() {
+    this._statusRefreshToken++;
+    this._statusCommandToken = null;
+    this._statusCommandRunning = false;
+    let statusCleanupSucceeded = this._terminateProcessesByGroup("status") !== false;
+    if (!statusCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Status refresh could not be stopped"), this.lastTranscript);
+    }
     this.historyRefreshToken = null;
     let historyRefreshCleanupSucceeded = this._terminateProcessesByGroup("history-refresh") !== false;
     if (!historyRefreshCleanupSucceeded) {
@@ -6310,6 +6854,24 @@ MyApplet.prototype = {
     } else {
       this.transcriptListPromptToken = null;
     }
+    let orphanedDialogCleanupSucceeded = this._retryOrphanedDialogs();
+    if (!orphanedDialogCleanupSucceeded) {
+      this._setStatusPreservingRecording("error", _("Previous dialog could not be stopped"), this.lastTranscript);
+    }
+    let hadCleanupCommand = Boolean(this._cleanupCommandToken);
+    this._cleanupCommandToken = null;
+    this.transcriptWindowToken = null;
+    let maintenanceCleanupSucceeded = this._terminateProcessesByGroup("maintenance") !== false;
+    if (!maintenanceCleanupSucceeded) {
+      this.maintenanceCleanupFailed = true;
+      this._setStatusPreservingRecording("error", _("Maintenance operation could not be stopped"), this.lastTranscript);
+    } else if (hadCleanupCommand || this.maintenanceCleanupFailed) {
+      this._releaseBusyStateAfterProcessCleanup(
+        "maintenance",
+        "maintenanceCleanupFailed",
+        true
+      );
+    }
     let textInsertProcessCleanupSucceeded = true;
     for (let group of ["keyboard", "clipboard", "x11"]) {
       if (this._terminateProcessesByGroup(group) === false) {
@@ -6340,7 +6902,7 @@ MyApplet.prototype = {
       this.ollamaModelCleanupFailed = true;
       this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
     }
-    return historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded && ollamaWatchTimerCleanupSucceeded && ollamaCleanupSucceeded && cleanupPreviewCleanupSucceeded && transcriptPromptCleanupSucceeded;
+    return statusCleanupSucceeded && historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded && ollamaWatchTimerCleanupSucceeded && ollamaCleanupSucceeded && maintenanceCleanupSucceeded && cleanupPreviewCleanupSucceeded && transcriptPromptCleanupSucceeded && orphanedDialogCleanupSucceeded;
   },
 
   _runDoctor: function(startupCheck) {
@@ -6353,6 +6915,10 @@ MyApplet.prototype = {
         this._setDoctorSummary(_("Doctor: already running"));
         this._setStatus(this._hasActiveRecordingState() ? this.status : "ready", _("Doctor: already running"), this.lastTranscript);
       }
+      return;
+    }
+    if (this.isCommandRunning || this._statusCommandRunning || this._hasLocalProcessingWorkflow() ||
+        this.alarmCheckToken || this.alarmActionToken || this.alarmMenuRefreshToken) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(false, startupCheck ? "setup" : "error");
@@ -6484,9 +7050,7 @@ MyApplet.prototype = {
   _setDoctorSummary: function(message) {
     try {
       this.doctorSummaryText = this._uiMessageText(String(message || ""));
-      if (this.doctorSummaryItem) {
-        this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked");
-      }
+      this._setMenuItemLabelSafely(this.doctorSummaryItem, this.doctorSummaryText || _("Doctor: not checked"));
     } catch (error) {
       this._recordLifecycleError("doctor-summary", error);
     }
@@ -6618,7 +7182,7 @@ MyApplet.prototype = {
   },
 
   _openProfanityFilterList: function() {
-    if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
+    if (this.setupDiagnosticsToken || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(false);
@@ -6661,7 +7225,7 @@ MyApplet.prototype = {
   },
 
   _copySetupPlan: function() {
-    if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
+    if (this.setupDiagnosticsToken || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(false);
@@ -6724,7 +7288,7 @@ MyApplet.prototype = {
   },
 
   _copySetupCommands: function() {
-    if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
+    if (this.setupDiagnosticsToken || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(false);
@@ -6773,7 +7337,7 @@ MyApplet.prototype = {
   },
 
   _copyDiagnostics: function() {
-    if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
+    if (this.setupDiagnosticsToken || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(true);
@@ -6814,7 +7378,7 @@ MyApplet.prototype = {
   },
 
   _saveDiagnostics: function() {
-    if (this.setupDiagnosticsToken || this._hasActiveRecordingState()) {
+    if (this.setupDiagnosticsToken || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let inputOption = this._settingsSnapshotInputOptionOrNull(true);
@@ -6888,8 +7452,15 @@ MyApplet.prototype = {
   },
 
   _runTerminalWorkflow: function(title, command, openedMessage, cancelOllamaFlow, ollamaFlowToken) {
-    if (this._hasActiveRecordingState()) {
+    let ollamaFlowContinues = cancelOllamaFlow === true &&
+      Boolean(ollamaFlowToken) &&
+      this.ollamaModelFlowToken === ollamaFlowToken;
+    if (this._hasActiveRecordingState() && !ollamaFlowContinues) {
       this._setStatus(this.status, _("Finish the current recording before starting a terminal workflow"), this.lastTranscript);
+      return false;
+    }
+    if (!ollamaFlowContinues && this._hasLocalProcessingWorkflow()) {
+      this._setStatus(this.status, _("Another command is already running"), this.lastTranscript);
       return false;
     }
     if (this.terminalWorkflowRunning) {
@@ -6962,7 +7533,7 @@ MyApplet.prototype = {
     let script = [
       "set -eu",
       "rc=0",
-      "trap 'rc=$?; printf \"\\nFinished with exit code %s.\\n\" \"$rc\"; read -r -p \"Press Enter to close...\"; exit \"$rc\"' EXIT"
+      "trap 'rc=$?; printf \"\\nFinished with exit code %s.\\n\" \"$rc\"; read -r -p \"Press Enter to close...\" || true; exit \"$rc\"' EXIT"
     ].concat(lines || []);
     return script.join("\n");
   },
@@ -7063,7 +7634,7 @@ MyApplet.prototype = {
     } catch (err) {
       this._safeLogError(err);
       let safeError = this._sanitizeErrorMessage(String(err));
-      this._setStatus("error", _("Could not start uninstall terminal: ") + safeError, this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not start uninstall terminal: ") + safeError, this.lastTranscript);
       this._notify(_("Could not start uninstall terminal"), safeError, true);
     }
   },
@@ -7080,13 +7651,13 @@ MyApplet.prototype = {
     } catch (err) {
       this._safeLogError(err);
       let safeError = this._sanitizeErrorMessage(String(err));
-      this._setStatus("error", _("Could not start setup terminal: ") + safeError, this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("Could not start setup terminal: ") + safeError, this.lastTranscript);
       this._notify(_("Could not start setup terminal"), safeError, true);
     }
   },
 
   _selectBenchmarkAudioFile: function() {
-    if (this.isCommandRunning || this._hasActiveRecordingState() || this.benchmarkFlowToken) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this.benchmarkFlowToken || this._hasLocalProcessingWorkflow()) {
       return;
     }
     if (!this._findTrustedProgramInPath("zenity")) {
@@ -7203,12 +7774,16 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.alarmItem)) {
       return;
     }
+    let canReportAlarmStatus = () => !this.isCommandRunning &&
+      !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     if (this.alarmMenuRefreshToken || this.alarmActionToken || this.alarmCheckToken) {
       return;
     }
     if (this._terminateProcessesByGroup("alarm-menu-refresh") === false) {
       this._populateAlarmMenu([], "", _("Alarm menu refresh could not be stopped"));
-      this._setAlarmErrorStatus(_("Alarm menu refresh could not be stopped"));
+      if (canReportAlarmStatus()) {
+        this._setAlarmErrorStatus(_("Alarm menu refresh could not be stopped"));
+      }
       return;
     }
     let refreshToken = {};
@@ -7223,7 +7798,9 @@ MyApplet.prototype = {
       }
       this._recordLifecycleError("alarm-refresh", error);
       this._populateAlarmMenu([], "", _("Could not prepare alarm list"));
-      this._setAlarmErrorStatus(_("Could not prepare alarm list"));
+      if (canReportAlarmStatus()) {
+        this._setAlarmErrorStatus(_("Could not prepare alarm list"));
+      }
       return;
     }
     this._spawnJson(alarmListArgs, (payload) => {
@@ -7238,7 +7815,9 @@ MyApplet.prototype = {
         if (payload.error) {
           let safeError = this._sanitizeErrorMessage(payload.error);
           this._populateAlarmMenu([], safeError);
-          this._setAlarmErrorStatus(safeError);
+          if (canReportAlarmStatus()) {
+            this._setAlarmErrorStatus(safeError);
+          }
           return;
         }
         this._populateAlarmMenu(payload.alarms || [], payload.summary || "");
@@ -7247,13 +7826,15 @@ MyApplet.prototype = {
           this.alarmMenuRefreshToken = null;
         }
         this._recordLifecycleError("menu-refresh", error);
-        this._setAlarmErrorStatus(_("Could not refresh alarm list"));
+        if (canReportAlarmStatus()) {
+          this._setAlarmErrorStatus(_("Could not refresh alarm list"));
+        }
       }
     }, { resourceGroup: "alarm-menu-refresh" });
   },
 
   _populateAlarmMenu: function(alarms, summary, message) {
-    if (!this.alarmItem) {
+    if (!this._canMutateMenu(this.alarmItem)) {
       return;
     }
     alarms = Array.isArray(alarms) ? alarms : [];
@@ -7350,6 +7931,9 @@ MyApplet.prototype = {
   },
 
   _copyAlarmCommands: function() {
+    if (this.isCommandRunning || this._hasLocalProcessingWorkflow()) {
+      return;
+    }
     let text = [
       "speed-of-cinnamon alarms add --time 09:00 --name \"Standup\" --days weekdays --json",
       "speed-of-cinnamon alarms list --json",
@@ -7363,7 +7947,8 @@ MyApplet.prototype = {
   },
 
   _setAlarmEnabled: function(id, enabled) {
-    if (this.alarmActionToken || this.alarmCheckToken || this.alarmMenuRefreshToken || this._hasActiveRecordingState()) {
+    if (this.alarmActionToken || this.alarmCheckToken || this.alarmMenuRefreshToken || this.isCommandRunning ||
+        this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let actionToken = {};
@@ -7380,6 +7965,8 @@ MyApplet.prototype = {
       this._setAlarmErrorStatus(_("Could not prepare alarm update"));
       return;
     }
+    let canUpdateAlarmStatus = () => !this.isCommandRunning &&
+      !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     this._spawnJson(alarmEnableArgs, (payload) => {
       try {
         if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
@@ -7387,10 +7974,15 @@ MyApplet.prototype = {
         }
         if (payload.error) {
           this.alarmActionToken = null;
-          this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
+          if (canUpdateAlarmStatus()) {
+            this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
+          }
           return;
         }
         this.alarmActionToken = null;
+        if (!canUpdateAlarmStatus()) {
+          return;
+        }
         let alarmFound = Boolean(
           payload.alarm &&
           typeof payload.alarm === "object" &&
@@ -7407,13 +7999,16 @@ MyApplet.prototype = {
           this.alarmActionToken = null;
         }
         this._recordLifecycleError("alarm-action", error);
-        this._setAlarmErrorStatus(_("Could not complete alarm update"));
+        if (canUpdateAlarmStatus()) {
+          this._setAlarmErrorStatus(_("Could not complete alarm update"));
+        }
       }
     }, { resourceGroup: "alarm-action" });
   },
 
   _removeAlarm: function(id) {
-    if (this.alarmActionToken || this.alarmCheckToken || this.alarmMenuRefreshToken || this._hasActiveRecordingState()) {
+    if (this.alarmActionToken || this.alarmCheckToken || this.alarmMenuRefreshToken || this.isCommandRunning ||
+        this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let actionToken = {};
@@ -7430,6 +8025,8 @@ MyApplet.prototype = {
       this._setAlarmErrorStatus(_("Could not prepare alarm removal"));
       return;
     }
+    let canUpdateAlarmStatus = () => !this.isCommandRunning &&
+      !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     this._spawnJson(alarmRemoveArgs, (payload) => {
       try {
         if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
@@ -7437,10 +8034,15 @@ MyApplet.prototype = {
         }
         if (payload.error) {
           this.alarmActionToken = null;
-          this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
+          if (canUpdateAlarmStatus()) {
+            this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
+          }
           return;
         }
         this.alarmActionToken = null;
+        if (!canUpdateAlarmStatus()) {
+          return;
+        }
         this._setAlarmOptionStatus(payload.removed === true ? _("Alarm removed") : _("Alarm not found"));
         this._refreshAlarmMenu();
       } catch (error) {
@@ -7448,13 +8050,17 @@ MyApplet.prototype = {
           this.alarmActionToken = null;
         }
         this._recordLifecycleError("alarm-action", error);
-        this._setAlarmErrorStatus(_("Could not complete alarm removal"));
+        if (canUpdateAlarmStatus()) {
+          this._setAlarmErrorStatus(_("Could not complete alarm removal"));
+        }
       }
     }, { resourceGroup: "alarm-action" });
   },
 
   _checkAlarms: function(manual) {
-    if (this.alarmCheckToken || this.alarmActionToken || this.alarmMenuRefreshToken || (manual && this._hasActiveRecordingState())) {
+    if (this.alarmCheckToken || this.alarmActionToken || this.alarmMenuRefreshToken || this._statusCommandRunning ||
+        this._hasLocalProcessingWorkflow() ||
+        (manual && (this._hasActiveRecordingState() || this.isCommandRunning || this._hasLocalProcessingWorkflow()))) {
       return;
     }
     let checkToken = {};
@@ -7468,10 +8074,12 @@ MyApplet.prototype = {
       }
       this._recordLifecycleError("alarm-check", error);
       if (manual) {
-        this._setAlarmErrorStatus(_("Could not prepare alarm check"));
+      this._setAlarmErrorStatus(_("Could not prepare alarm check"));
       }
       return;
     }
+    let canUpdateManualStatus = () => manual && !this.isCommandRunning &&
+      !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     this._spawnJson(alarmCheckArgs, (payload) => {
       try {
         if (this.alarmCheckToken !== checkToken || !this._lifecycleAllowsWork()) {
@@ -7479,12 +8087,14 @@ MyApplet.prototype = {
         }
         if (payload.error) {
           this.alarmCheckToken = null;
-          if (manual) {
+          if (canUpdateManualStatus()) {
             this._setAlarmErrorStatus(this._sanitizeErrorMessage(payload.error));
           }
           return;
         }
         this.alarmCheckToken = null;
+        let localWorkflowBusy = this.isCommandRunning || this._hasLocalProcessingWorkflow();
+        let manualStatusAllowed = canUpdateManualStatus();
         let due = Array.isArray(payload.due)
           ? payload.due.filter((alarm) => alarm && typeof alarm === "object")
           : [];
@@ -7501,7 +8111,8 @@ MyApplet.prototype = {
         }
         if (due.length > 0) {
           let first = due[0] || {};
-          if (manual || this.status === "idle" || this.status === "ready" || this.status === "done") {
+          if (manualStatusAllowed || (!localWorkflowBusy &&
+              (this.status === "idle" || this.status === "ready" || this.status === "done"))) {
             let firstLabel = typeof first.label === "string" ? first.label.trim() : "";
             let firstTime = typeof first.time === "string" ? first.time.trim() : "";
             let alarmStatusLabel = firstLabel || firstTime || String(dueCount);
@@ -7510,10 +8121,10 @@ MyApplet.prototype = {
             }
             this._setAlarmOptionStatus(_("Alarm: ") + alarmStatusLabel);
           }
-        } else if (manual) {
+        } else if (manualStatusAllowed) {
           this._setAlarmOptionStatus(_("No alarms due"));
         }
-        if (manual) {
+        if (manualStatusAllowed) {
           this._refreshAlarmMenu();
         }
       } catch (error) {
@@ -7521,7 +8132,7 @@ MyApplet.prototype = {
           this.alarmCheckToken = null;
         }
         this._recordLifecycleError("alarm-check", error);
-        if (manual) {
+        if (canUpdateManualStatus()) {
           this._setAlarmErrorStatus(_("Could not complete alarm check"));
         }
       }
@@ -7532,7 +8143,15 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.inputSourceItem)) {
       return;
     }
+    let canReportInputSourceStatus = () => !this.isCommandRunning &&
+      !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     if (this.inputSourceMenuRefreshToken) {
+      return;
+    }
+    if (this._terminateProcessesByGroup("input-source-refresh") === false) {
+      if (canReportInputSourceStatus()) {
+        this._setStatusPreservingRecording("error", _("Input source refresh could not be stopped"), this.lastTranscript);
+      }
       return;
     }
     let refreshToken = {};
@@ -7547,7 +8166,9 @@ MyApplet.prototype = {
       }
       this._recordLifecycleError("input-source-refresh", error);
       this._populateInputSourceMenu([], _("Could not prepare input source list"));
-      this._setStatusPreservingRecording("error", _("Could not prepare input source list"), this.lastTranscript);
+      if (canReportInputSourceStatus()) {
+        this._setStatusPreservingRecording("error", _("Could not prepare input source list"), this.lastTranscript);
+      }
       return;
     }
     this._spawnJson(inputSourceArgs, (payload) => {
@@ -7561,7 +8182,9 @@ MyApplet.prototype = {
         }
         if (payload.error) {
           this._populateInputSourceMenu([], this._sanitizeErrorMessage(payload.error));
-          this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          if (canReportInputSourceStatus()) {
+            this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          }
           return;
         }
         this._populateInputSourceMenu(payload.sources || []);
@@ -7570,13 +8193,15 @@ MyApplet.prototype = {
           this.inputSourceMenuRefreshToken = null;
         }
         this._recordLifecycleError("menu-refresh", error);
-        this._setStatusPreservingRecording("error", _("Could not refresh input source list"), this.lastTranscript);
+        if (canReportInputSourceStatus()) {
+          this._setStatusPreservingRecording("error", _("Could not refresh input source list"), this.lastTranscript);
+        }
       }
     }, { resourceGroup: "input-source-refresh" });
   },
 
   _populateInputSourceMenu: function(sources, message) {
-    if (!this.inputSourceItem) {
+    if (!this._canMutateMenu(this.inputSourceItem)) {
       return;
     }
     sources = Array.isArray(sources) ? sources : [];
@@ -7686,7 +8311,15 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.modelItem)) {
       return;
     }
+    let canReportModelStatus = () => !this.isCommandRunning &&
+      !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     if (this.modelMenuRefreshToken || this.voiceModelActionToken) {
+      return;
+    }
+    if (this._terminateProcessesByGroup("model-menu-refresh") === false) {
+      if (canReportModelStatus()) {
+        this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
+      }
       return;
     }
     let refreshToken = {};
@@ -7701,7 +8334,9 @@ MyApplet.prototype = {
       }
       this._recordLifecycleError("model-refresh", error);
       this._populateModelMenu([], _("Could not prepare voice model list"));
-      this._setStatusPreservingRecording("error", _("Could not prepare voice model list"), this.lastTranscript);
+      if (canReportModelStatus()) {
+        this._setStatusPreservingRecording("error", _("Could not prepare voice model list"), this.lastTranscript);
+      }
       return;
     }
     this._spawnJson(modelArgs, (payload) => {
@@ -7716,7 +8351,9 @@ MyApplet.prototype = {
         if (payload.error) {
           let safeError = this._sanitizeErrorMessage(payload.error);
           this._populateModelMenu([], safeError);
-          this._setStatusPreservingRecording("error", safeError, this.lastTranscript);
+          if (canReportModelStatus()) {
+            this._setStatusPreservingRecording("error", safeError, this.lastTranscript);
+          }
           return;
         }
         this._populateModelMenu(payload.models || []);
@@ -7725,7 +8362,9 @@ MyApplet.prototype = {
           this.modelMenuRefreshToken = null;
         }
         this._recordLifecycleError("menu-refresh", error);
-        this._setStatusPreservingRecording("error", _("Could not refresh voice model list"), this.lastTranscript);
+        if (canReportModelStatus()) {
+          this._setStatusPreservingRecording("error", _("Could not refresh voice model list"), this.lastTranscript);
+        }
       }
     }, { resourceGroup: "model-menu-refresh" });
   },
@@ -7862,7 +8501,7 @@ MyApplet.prototype = {
     }
     let filename = model.filename.trim();
     let modelFormat = model.model_format.trim().toLowerCase();
-    if (filename === "" || !/^[A-Za-z0-9._-]+$/.test(filename)) {
+    if (filename === "" || filename === "." || filename === ".." || filename.length > 255 || !/^[A-Za-z0-9._-]+$/.test(filename)) {
       return "";
     }
     let directory = "";
@@ -8044,19 +8683,13 @@ MyApplet.prototype = {
     try {
       for (let setting of settingsWrites) {
         attemptedWrites.push(setting);
-        let result = this.settings.setValue(setting[0], setting[1]);
-        if (result === false) {
-          throw new Error("Voice backend setting could not be saved");
-        }
+        this._setSettingValueOrThrow(setting[0], setting[1], "Voice backend setting could not be saved");
       }
     } catch (err) {
       for (let index = attemptedWrites.length - 1; index >= 0; index--) {
         let setting = attemptedWrites[index];
         try {
-          let rollbackResult = this.settings.setValue(setting[0], setting[2]);
-          if (rollbackResult === false) {
-            throw new Error("Voice backend setting rollback failed");
-          }
+          this._setSettingValueOrThrow(setting[0], setting[2], "Voice backend setting rollback failed");
         } catch (rollbackErr) {
           this._safeLogError(rollbackErr);
         }
@@ -8106,7 +8739,8 @@ MyApplet.prototype = {
   },
 
   _downloadVoiceModel: function(model) {
-    if (this.isCommandRunning || this.voiceModelActionToken || this.modelMenuRefreshToken || this._hasActiveRecordingState()) {
+    if (this.isCommandRunning || this.voiceModelActionToken || this.modelMenuRefreshToken ||
+        this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
@@ -8161,7 +8795,8 @@ MyApplet.prototype = {
   },
 
   _removeVoiceModel: function(model) {
-    if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken || this.modelMenuRefreshToken) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken ||
+        this.modelMenuRefreshToken || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
@@ -8569,10 +9204,11 @@ MyApplet.prototype = {
     }
     let previousApiKey = this.openaiCompatibleApiKey;
     try {
-      let result = this.settings.setValue("openai-compatible-api-key", "");
-      if (result === false) {
-        throw new Error("Persisted External API key could not be cleared");
-      }
+      this._setSettingValueOrThrow(
+        "openai-compatible-api-key",
+        "",
+        "Persisted External API key could not be cleared"
+      );
       this.openaiCompatibleApiKey = "";
       return true;
     } catch (err) {
@@ -8770,10 +9406,7 @@ MyApplet.prototype = {
       for (let index = writes.length - 1; index >= 0; index--) {
         let setting = writes[index];
         try {
-          let rollbackResult = this.settings.setValue(setting[0], setting[2]);
-          if (rollbackResult === false) {
-            throw new Error("External API setting rollback failed");
-          }
+          this._setSettingValueOrThrow(setting[0], setting[2], "External API setting rollback failed");
         } catch (rollbackErr) {
           this._safeLogError(rollbackErr);
         }
@@ -8783,10 +9416,7 @@ MyApplet.prototype = {
     try {
       for (let setting of settingsWrites) {
         attemptedWrites.push(setting);
-        let result = this.settings.setValue(setting[0], setting[1]);
-        if (result === false) {
-          throw new Error("External API setting could not be saved");
-        }
+        this._setSettingValueOrThrow(setting[0], setting[1], "External API setting could not be saved");
       }
     } catch (err) {
       rollbackSettings(attemptedWrites);
@@ -8816,7 +9446,7 @@ MyApplet.prototype = {
 
   _clearExternalApiEnvMonitor: function() {
     if (!this.externalApiEnvMonitor) {
-      return this._retryOrphanedMonitors();
+      return this._retryOrphanedMonitors(true);
     }
     let monitor = this.externalApiEnvMonitor;
     let clearReference = () => {
@@ -8927,10 +9557,11 @@ MyApplet.prototype = {
     if (target === "text") {
       let previousBackend = this.postProcessBackend;
       try {
-        let result = this.settings.setValue("post-process-backend", "openai-compatible");
-        if (result === false) {
-          throw new Error("External API text backend setting could not be saved");
-        }
+        this._setSettingValueOrThrow(
+          "post-process-backend",
+          "openai-compatible",
+          "External API text backend setting could not be saved"
+        );
       } catch (err) {
         this.postProcessBackend = previousBackend;
         this._safeLogError(err);
@@ -8941,10 +9572,11 @@ MyApplet.prototype = {
       let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
       if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
         try {
-          let rollbackResult = this.settings.setValue("post-process-backend", previousBackend);
-          if (rollbackResult === false) {
-            throw new Error("External API text backend rollback failed");
-          }
+          this._setSettingValueOrThrow(
+            "post-process-backend",
+            previousBackend,
+            "External API text backend rollback failed"
+          );
         } catch (rollbackError) {
           this._safeLogError(rollbackError);
         }
@@ -8991,6 +9623,8 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.textModelItem)) {
       return;
     }
+    let canReportTextModelStatus = () => !this.isCommandRunning &&
+      !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken || this.ollamaModelInstallToken || this.ollamaModelInstallRunning || this.ollamaModelCleanupFailed) {
       return;
     }
@@ -8999,7 +9633,9 @@ MyApplet.prototype = {
     }
     this.textModelMenuRefreshToken = null;
     if (this._terminateProcessesByGroup("text-model-refresh") === false) {
-      this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+      if (canReportTextModelStatus()) {
+        this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+      }
       return;
     }
     let textModelArgs = this._tryTextModelsArgs(backendOverride);
@@ -9037,7 +9673,9 @@ MyApplet.prototype = {
           this.textModelMenuRefreshToken = null;
         }
         this._recordLifecycleError("menu-refresh", error);
-        this._setStatusPreservingRecording("error", _("Could not refresh text model list"), this.lastTranscript);
+        if (canReportTextModelStatus()) {
+          this._setStatusPreservingRecording("error", _("Could not refresh text model list"), this.lastTranscript);
+        }
       }
     }, { resourceGroup: "text-model-refresh" });
   },
@@ -9161,13 +9799,54 @@ MyApplet.prototype = {
   },
 
   _canMutateMenu: function(item) {
-    return Boolean(
-      !this.appletRemoved &&
-      item &&
-      item.menu &&
-      typeof item.menu.removeAll === "function" &&
-      typeof item.menu.addMenuItem === "function"
-    );
+    try {
+      let menu = item && item.menu;
+      let itemActor = item && item.actor;
+      let actor = menu && menu.actor;
+      return Boolean(
+        this._lifecycleAllowsWork() &&
+        item &&
+        itemActor &&
+        (typeof itemActor.is_finalized !== "function" || !itemActor.is_finalized()) &&
+        menu &&
+        actor &&
+        (typeof actor.is_finalized !== "function" || !actor.is_finalized()) &&
+        typeof menu.removeAll === "function" &&
+        typeof menu.addMenuItem === "function"
+      );
+    } catch (error) {
+      this._recordLifecycleError("menu-state", error);
+      return false;
+    }
+  },
+
+  _setMenuItemLabelSafely: function(item, text) {
+    return this._runGuarded("menu-label", () => {
+      if (!item || !item.label || !item.actor) {
+        return false;
+      }
+      let itemActor = item.actor;
+      let label = item.label;
+      if ((typeof itemActor.is_finalized === "function" && itemActor.is_finalized()) ||
+          (typeof label.is_finalized === "function" && label.is_finalized()) ||
+          typeof label.set_text !== "function") {
+        return false;
+      }
+      label.set_text(String(text === undefined || text === null ? "" : text));
+      return true;
+    }, false);
+  },
+
+  _setMenuItemSensitiveSafely: function(item, sensitive) {
+    return this._runGuarded("menu-sensitive", () => {
+      if (!item || !item.actor ||
+          (typeof item.actor.is_finalized === "function" && item.actor.is_finalized()) ||
+          typeof item.setSensitive !== "function") {
+        return false;
+      }
+      item.setSensitive(Boolean(sensitive));
+      return true;
+    }, false);
   },
 
   _addTextModelMenuEntry: function(model, backend) {
@@ -9312,25 +9991,36 @@ MyApplet.prototype = {
     let hadOllamaModelCleanupFailure = this.ollamaModelCleanupFailed === true;
     let hadOllamaModelInstall = Boolean(this.ollamaModelInstallRunning);
     let installToken = this.ollamaModelInstallToken;
+    let hadOllamaTerminalWorkflow = Boolean(
+      this.ollamaModelFlowToken &&
+      (this.terminalWorkflowToken || this.terminalWorkflowRunning)
+    );
     let terminationSucceeded = true;
     this.ollamaModelFlowToken = null;
+    if (hadOllamaTerminalWorkflow) {
+      this.terminalWorkflowToken = null;
+    }
     if (hadOllamaModelInstall) {
-      terminationSucceeded = this._terminateProcessesByGroup("ollama", true);
+      // Flow cleanup owns tokens; suppress cancelled callback to avoid fake backend error.
+      terminationSucceeded = this._terminateProcessesByGroup("ollama");
       if (this.ollamaModelInstallToken === installToken) {
         if (terminationSucceeded) {
           this.ollamaModelInstallToken = null;
           this.ollamaModelInstallRunning = false;
-          this.isCommandRunning = false;
+          this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed", true);
         } else {
           this.ollamaModelInstallRunning = true;
           this.isCommandRunning = true;
         }
       }
     } else {
-      terminationSucceeded = this._terminateProcessesByGroup("ollama", true);
+      terminationSucceeded = this._terminateProcessesByGroup("ollama");
     }
     if (terminationSucceeded && this._hasTrackedProcessGroup("ollama")) {
       terminationSucceeded = false;
+    }
+    if (hadOllamaTerminalWorkflow && terminationSucceeded) {
+      this.terminalWorkflowRunning = false;
     }
     this.ollamaModelCleanupFailed = !terminationSucceeded;
     if (terminationSucceeded && hadOllamaModelCleanupFailure) {
@@ -9344,8 +10034,11 @@ MyApplet.prototype = {
       return false;
     }
     if (!this._hasTrackedProcessGroup("ollama")) {
-      this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed");
-      return false;
+      let cleanupReleased = this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed");
+      if (cleanupReleased && !this.ollamaModelCleanupFailed &&
+          !this.ollamaModelInstallToken && !this.ollamaModelInstallRunning) {
+        return false;
+      }
     }
     this._setStatusPreservingRecording("error", _("Previous Ollama operation is still stopping; try again shortly"), this.lastTranscript);
     return true;
@@ -9362,6 +10055,9 @@ MyApplet.prototype = {
 
   _activateOllamaTextModelFlow: function() {
     if (this._hasActiveRecordingState()) {
+      return;
+    }
+    if (this._hasLocalProcessingWorkflow()) {
       return;
     }
     if (this._ollamaCleanupStillPending()) {
@@ -9524,6 +10220,9 @@ MyApplet.prototype = {
 
   _chooseOllamaTextModel: function() {
     if (this._hasActiveRecordingState()) {
+      return;
+    }
+    if (this._hasLocalProcessingWorkflow()) {
       return;
     }
     if (this._ollamaCleanupStillPending()) {
@@ -9775,11 +10474,12 @@ MyApplet.prototype = {
           return;
         }
         this.ollamaModelInstallToken = null;
-        this.isCommandRunning = false;
         this.ollamaModelInstallRunning = false;
         if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
+          this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed", true);
           return;
         }
+        this.isCommandRunning = false;
         if (payload.error) {
           let safeError = this._sanitizeErrorMessage(payload.error);
           this._clearOllamaModelFlow(flowToken);
@@ -9818,12 +10518,16 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.historyItem)) {
       return;
     }
+    let canReportHistoryStatus = () => !this.isCommandRunning &&
+      !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     if (this.historyRefreshToken) {
       return;
     }
     if (this._terminateProcessesByGroup("history-refresh") === false) {
       this._populateHistoryMenu([]);
-      this._setStatusPreservingRecording("error", _("History refresh could not be stopped"), this.lastTranscript);
+      if (canReportHistoryStatus()) {
+        this._setStatusPreservingRecording("error", _("History refresh could not be stopped"), this.lastTranscript);
+      }
       return;
     }
     let refreshToken = {};
@@ -9837,7 +10541,9 @@ MyApplet.prototype = {
       }
       this._recordLifecycleError("history-refresh", error);
       this._populateHistoryMenu([]);
-      this._setStatusPreservingRecording("error", _("Could not prepare transcript history"), this.lastTranscript);
+      if (canReportHistoryStatus()) {
+        this._setStatusPreservingRecording("error", _("Could not prepare transcript history"), this.lastTranscript);
+      }
       return;
     }
     this._spawnJson(historyArgs, (payload) => {
@@ -9851,7 +10557,9 @@ MyApplet.prototype = {
         }
         if (payload.error) {
           this._populateHistoryMenu([]);
-          this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          if (canReportHistoryStatus()) {
+            this._setStatusPreservingRecording("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          }
           return;
         }
         this._populateHistoryMenu(payload.transcripts || []);
@@ -9860,13 +10568,16 @@ MyApplet.prototype = {
           this.historyRefreshToken = null;
         }
         this._recordLifecycleError("menu-refresh", error);
-        this._setStatusPreservingRecording("error", _("Could not refresh transcript history"), this.lastTranscript);
+        if (canReportHistoryStatus()) {
+          this._setStatusPreservingRecording("error", _("Could not refresh transcript history"), this.lastTranscript);
+        }
       }
     }, { resourceGroup: "history-refresh" });
   },
 
   _listAllTranscripts: function() {
-    if (this.isCommandRunning || this._hasActiveRecordingState() || this.transcriptListPromptToken || this.transcriptWindowToken) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow() ||
+        this.transcriptListPromptToken || this.transcriptWindowToken) {
       return;
     }
     if (!this._findTrustedProgramInPath("zenity")) {
@@ -9891,19 +10602,27 @@ MyApplet.prototype = {
     let dialog = this._newSafeDialog("transcript-list");
     this.transcriptListPromptDialog = dialog;
     let completed = false;
-    let complete = (result) => {
+    let complete = (result, releasePrompt) => {
       if (completed) {
         return;
       }
       completed = true;
-      if (this.transcriptListPromptToken === promptToken) {
+      let ownsPrompt = this.transcriptListPromptToken === promptToken;
+      if (ownsPrompt && releasePrompt !== false) {
         this.transcriptListPromptToken = null;
         if (this.transcriptListPromptDialog === dialog) {
           this.transcriptListPromptDialog = null;
         }
       }
+      if (!ownsPrompt || !this._lifecycleAllowsWork()) {
+        return;
+      }
       if (typeof completionCallback === "function") {
-        completionCallback(result === true);
+        try {
+          completionCallback(result === true);
+        } catch (error) {
+          this._recordLifecycleError("transcript-list-completion", error);
+        }
       }
     };
     let failToOpen = () => {
@@ -9913,7 +10632,7 @@ MyApplet.prototype = {
       } else {
         this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be opened"), this.lastTranscript);
       }
-      complete(false);
+      complete(false, closed);
     };
     if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(_("List all transcripts?"), { x_expand: true }, "transcript-list"), "transcript-list") ||
       !this._dialogAddChild(dialog, this._newSafeLabel(
@@ -9929,8 +10648,9 @@ MyApplet.prototype = {
         label: _("Cancel"),
         key: Clutter.KEY_Escape,
         action: function() {
+          let closed = false;
           try {
-            let closed = this._dialogClose(dialog, "transcript-list");
+            closed = this._dialogClose(dialog, "transcript-list");
             if (!closed) {
               this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed"), this.lastTranscript);
               return;
@@ -9939,7 +10659,7 @@ MyApplet.prototype = {
               this._setStatusPreservingRecording("ready", _("Transcript list cancelled"), this.lastTranscript);
             }
           } finally {
-            complete(false);
+            complete(false, closed);
           }
         }.bind(this),
       },
@@ -9949,7 +10669,7 @@ MyApplet.prototype = {
           let closed = this._dialogClose(dialog, "transcript-list");
           if (!closed) {
             this._setStatusPreservingRecording("error", _("Transcript list confirmation could not be closed"), this.lastTranscript);
-            complete(false);
+            complete(false, false);
             return;
           }
           complete(true);
@@ -9966,7 +10686,7 @@ MyApplet.prototype = {
   },
 
   _loadAllTranscriptsDocument: function() {
-    if (this.isCommandRunning || this._hasActiveRecordingState()) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let historyDocumentArgs;
@@ -10005,7 +10725,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("maintenance-command", error);
         this._setStatus("error", _("Could not complete transcript list"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "maintenance" });
   },
 
   _showTranscriptsWindow: function(content, count, truncated) {
@@ -10060,6 +10780,7 @@ MyApplet.prototype = {
         timeoutMs: 0,
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
+        resourceGroup: "maintenance",
       }, (stdout, stderr, result) => {
         if (!isCurrentWindow()) {
           return;
@@ -10094,7 +10815,7 @@ MyApplet.prototype = {
   },
 
   _exportAllTranscripts: function() {
-    if (this.isCommandRunning || this._hasActiveRecordingState()) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let exportArgs;
@@ -10145,7 +10866,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("maintenance-command", error);
         this._setStatus("error", _("Could not complete transcript export"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "maintenance" });
   },
 
   _safePayloadCount: function(value) {
@@ -10232,12 +10953,16 @@ MyApplet.prototype = {
     let dialog = this._newSafeDialog("cleanup-preview");
     this.cleanupPreviewDialog = dialog;
     let failToOpen = () => {
+      if (!dialog) {
+        releaseDialog();
+        this._setStatusPreservingRecording("error", _("Cleanup preview could not be opened"), this.lastTranscript);
+        return;
+      }
       if (closeDialog(dialog)) {
         this._notify(_("Speed of Cinnamon"), _("Cleanup preview: ") + String(this._cleanupCount(payload, true)), false);
       } else {
         this._setStatusPreservingRecording("error", _("Cleanup preview could not be closed"), this.lastTranscript);
       }
-      releaseDialog();
     };
     if (!dialog || !this._dialogAddChild(dialog, this._newSafeLabel(this._cleanupPreviewText(payload), { x_expand: true }, "cleanup-preview"), "cleanup-preview") ||
       !this._dialogSetButtons(dialog, [
@@ -10326,7 +11051,7 @@ MyApplet.prototype = {
   },
 
   _previewCleanup: function() {
-    if (this.isCommandRunning || this._hasActiveRecordingState() || this.cleanupPreviewDialogToken) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this.cleanupPreviewDialogToken || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let cleanupPreviewArgs;
@@ -10361,11 +11086,11 @@ MyApplet.prototype = {
         this._recordLifecycleError("maintenance-command", error);
         this._setStatus("error", _("Could not complete cleanup preview"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "maintenance" });
   },
 
   _cleanupOldFiles: function() {
-    if (this.isCommandRunning || this._hasActiveRecordingState()) {
+    if (this.isCommandRunning || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let cleanupArgs;
@@ -10401,7 +11126,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("maintenance-command", error);
         this._setStatus("error", _("Could not complete cleanup"), this.lastTranscript);
       }
-    });
+    }, { resourceGroup: "maintenance" });
   },
 
   _settingsSnapshot: function() {
@@ -10584,11 +11309,20 @@ MyApplet.prototype = {
     };
   },
 
-  _settingsSnapshotForCli: function(includeLifecycle) {
+  _settingsSnapshotForCli: function(includeLifecycle, preserveMultilineText) {
     let snapshot = this._settingsSnapshot();
     for (let key in CLI_TEXT_SETTINGS) {
       if (Object.prototype.hasOwnProperty.call(CLI_TEXT_SETTINGS, key) && Object.prototype.hasOwnProperty.call(snapshot, key)) {
-        snapshot[key] = this._coerceCliTextArg(snapshot[key], CLI_TEXT_SETTINGS[key]);
+        let multilineField = key === "personal-context" || key === "vocabulary";
+        let value = snapshot[key];
+        if (multilineField && !preserveMultilineText) {
+          value = this._singleLineCliTextValue(value);
+        }
+        snapshot[key] = this._coerceCliTextArg(
+          value,
+          CLI_TEXT_SETTINGS[key],
+          Boolean(preserveMultilineText && multilineField)
+        );
       }
     }
     if (includeLifecycle) {
@@ -10597,13 +11331,13 @@ MyApplet.prototype = {
     return snapshot;
   },
 
-  _settingsSnapshotInputOption: function(includeLifecycle) {
-    return { inputText: JSON.stringify(this._settingsSnapshotForCli(Boolean(includeLifecycle))) };
+  _settingsSnapshotInputOption: function(includeLifecycle, preserveMultilineText) {
+    return { inputText: JSON.stringify(this._settingsSnapshotForCli(Boolean(includeLifecycle), Boolean(preserveMultilineText))) };
   },
 
-  _settingsSnapshotInputOptionOrNull: function(includeLifecycle, errorStatus) {
+  _settingsSnapshotInputOptionOrNull: function(includeLifecycle, errorStatus, preserveMultilineText) {
     try {
-      return this._settingsSnapshotInputOption(Boolean(includeLifecycle));
+      return this._settingsSnapshotInputOption(Boolean(includeLifecycle), Boolean(preserveMultilineText));
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatus(errorStatus || "error", _("Could not prepare settings for backend: ") + safeError, this.lastTranscript);
@@ -10612,10 +11346,10 @@ MyApplet.prototype = {
   },
 
   _exportSettings: function() {
-    if (this.settingsTransferToken || this._hasActiveRecordingState()) {
+    if (this.settingsTransferToken || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
-    let inputOption = this._settingsSnapshotInputOptionOrNull(false);
+    let inputOption = this._settingsSnapshotInputOptionOrNull(false, undefined, true);
     if (!inputOption) {
       return;
     }
@@ -10656,7 +11390,7 @@ MyApplet.prototype = {
   },
 
   _importSettings: function() {
-    if (this.settingsTransferToken || this._hasActiveRecordingState()) {
+    if (this.settingsTransferToken || this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
     let transferToken = {};
@@ -10721,19 +11455,13 @@ MyApplet.prototype = {
     try {
       for (let item of pending) {
         attemptedWrites.push(item);
-        let result = this.settings.setValue(item.key, item.value);
-        if (result === false) {
-          throw new Error("Imported setting could not be saved");
-        }
+        this._setSettingValueOrThrow(item.key, item.value, "Imported setting could not be saved");
       }
     } catch (err) {
       for (let index = attemptedWrites.length - 1; index >= 0; index--) {
         let item = attemptedWrites[index];
         try {
-          let rollbackResult = this.settings.setValue(item.key, item.previous);
-          if (rollbackResult === false) {
-            throw new Error("Imported setting rollback failed");
-          }
+          this._setSettingValueOrThrow(item.key, item.previous, "Imported setting rollback failed");
         } catch (rollbackErr) {
           this._safeLogError(rollbackErr);
         }
@@ -10827,7 +11555,7 @@ MyApplet.prototype = {
     return [setsid, "--"].concat(args);
   },
 
-  _coerceCliTextArg: function(value, fieldName) {
+  _coerceCliTextArg: function(value, fieldName, allowNewlines) {
     if (value !== undefined && value !== null && typeof value !== "string") {
       throw new Error(String(fieldName || "value") + " must be text");
     }
@@ -10835,7 +11563,7 @@ MyApplet.prototype = {
     if (normalized.indexOf("\u0000") >= 0) {
       throw new Error(String(fieldName || "value") + " contains invalid bytes");
     }
-    if (this._containsCliControlChars(normalized)) {
+    if (this._containsCliControlChars(normalized, Boolean(allowNewlines))) {
       throw new Error(String(fieldName || "value") + " contains invalid control character");
     }
     let maxChars = Object.prototype.hasOwnProperty.call(CLI_RUNTIME_TEXT_LIMITS, String(fieldName || ""))
@@ -10860,11 +11588,11 @@ MyApplet.prototype = {
     }
   },
 
-  _containsCliControlChars: function(value) {
+  _containsCliControlChars: function(value, allowNewlines) {
     let normalized = String(value || "").toLowerCase();
     if (
       normalized.indexOf("\u000d") >= 0
-      || normalized.indexOf("\u000a") >= 0
+      || (!allowNewlines && normalized.indexOf("\u000a") >= 0)
       || normalized.indexOf("\\r") >= 0
       || normalized.indexOf("\\n") >= 0
       || normalized.indexOf("\\u000d") >= 0
@@ -10874,7 +11602,7 @@ MyApplet.prototype = {
     }
     for (let i = 0; i < normalized.length; i++) {
       const code = normalized.charCodeAt(i);
-      if (code < 0x20 || code === 0x7f) {
+      if ((code < 0x20 && !(allowNewlines && code === 0x0a)) || code === 0x7f) {
         return true;
       }
     }
@@ -10919,7 +11647,11 @@ MyApplet.prototype = {
       return fallback;
     }
     try {
-      return this._coerceCliTextArg(value, IMPORT_TEXT_SETTINGS[key]);
+      return this._coerceCliTextArg(
+        value,
+        IMPORT_TEXT_SETTINGS[key],
+        key === "personal-context" || key === "vocabulary"
+      );
     } catch (err) {
       this._safeLogError(err);
       return fallback;
@@ -11095,15 +11827,24 @@ MyApplet.prototype = {
     try {
       processToken = this._registerProcess(process, generation, options.resourceGroup);
     } catch (error) {
+      if (!processToken && error && (typeof error === "object" || typeof error === "function") && error.processToken) {
+        processToken = error.processToken;
+      }
       let processTerminated = this._terminateProcess(process);
       if (processTerminated) {
-        let orphanTracked = this._trackOrphanedProcess(process, generation, options.resourceGroup, undefined, true);
-        let orphanCleanupSucceeded = orphanTracked && this._retryOrphanedProcesses();
-        if (!orphanCleanupSucceeded) {
+        let processCleanupSucceeded = this._unregisterProcess(processToken);
+        if (!processCleanupSucceeded) {
+          let orphanTracked = this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, true);
+          let orphanCleanupSucceeded = orphanTracked && this._retryOrphanedProcesses();
+          if (!orphanCleanupSucceeded) {
+            this._scheduleProcessCleanupRetry();
+          }
+        } else if (!this._untrackOrphanedProcess(process)) {
+          this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, true);
           this._scheduleProcessCleanupRetry();
         }
       } else {
-        this._trackOrphanedProcess(process, generation, options.resourceGroup);
+        this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken);
         this._scheduleProcessCleanupRetry();
       }
       throw error;
@@ -11114,8 +11855,19 @@ MyApplet.prototype = {
       cancellable = new Gio.Cancellable();
       cancellableToken = this._registerCancellable(cancellable);
     } catch (error) {
-      if (!this._unregisterCancellable(cancellableToken)) {
+      if (!cancellableToken && error && (typeof error === "object" || typeof error === "function") && error.cancellableToken) {
+        cancellableToken = error.cancellableToken;
+      }
+      let cancellableCleanupSucceeded = false;
+      try {
+        cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
+      } catch (cleanupError) {
+        this._recordLifecycleError("cancellable-unregister", cleanupError);
+      }
+      if (!cancellableCleanupSucceeded) {
         this._trackOrphanedCancellable(cancellableToken, false);
+      } else if (!this._untrackOrphanedCancellable(cancellableToken)) {
+        this._recordLifecycleError("cancellable-state", new Error("Cancellable orphan cleanup could not be completed"));
       }
       let orphanCancellableCleanupSucceeded = this._retryOrphanedCancellables();
       if (!orphanCancellableCleanupSucceeded ||
@@ -11126,9 +11878,11 @@ MyApplet.prototype = {
       if (processTerminated) {
         if (!this._unregisterProcess(processToken)) {
           this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, true);
+          this._scheduleProcessCleanupRetry();
         }
       } else {
         this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, false);
+        this._scheduleProcessCleanupRetry();
       }
       throw error;
     }
@@ -11365,7 +12119,7 @@ MyApplet.prototype = {
       }
     };
 
-    if (timeoutMs > 0 && !this._scheduleTrackedTimer(timeoutKey, Math.max(minimumTimeoutMs, timeoutMs), () => {
+    if (!done && !setupFailed && timeoutMs > 0 && !this._scheduleTrackedTimer(timeoutKey, Math.max(minimumTimeoutMs, timeoutMs), () => {
       finish({ timedOut: true }, true, false, true);
       return false;
     }, false)) {
@@ -11498,6 +12252,15 @@ MyApplet.prototype = {
         : null;
       return this._runWithBackendEnvironment(this._shouldExposeOpenAiCompatibleApiKeyToBackend(normalizedArgs), (backendEnv) => {
         return this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv || {}, (stdout, result) => {
+          let output = String(stdout || "");
+          let parsedPayload = null;
+          if (output.trim() !== "") {
+            try {
+              parsedPayload = this._parseSpawnOutput(output);
+            } catch (error) {
+              parsedPayload = null;
+            }
+          }
           if (result && result.timedOut) {
             callbackFn({ status: "error", error: "Backend command timed out", transport_error: true });
             return;
@@ -11507,14 +12270,19 @@ MyApplet.prototype = {
             return;
           }
           if (result && result.error) {
+            if (parsedPayload && parsedPayload.transport_error !== true) {
+              callbackFn(parsedPayload);
+              return;
+            }
             callbackFn({ status: "error", error: "Backend command failed", transport_error: true });
             return;
           }
-          if (String(stdout || "").trim() === "") {
+          if (!parsedPayload) {
             callbackFn({ status: "error", error: "Backend returned no response", transport_error: true });
             return;
           }
-          callbackFn(this._parseSpawnOutput(stdout));
+          // callbackFn(this._parseSpawnOutput(stdout));
+          callbackFn(parsedPayload);
         }, inputText, {
           timeoutMs: timeoutMs,
           maxStdoutBytes: MAX_SPAWN_JSON_BYTES,
@@ -11828,7 +12596,8 @@ MyApplet.prototype = {
   },
 
   _maybeAutoTranscribeRecorded: function(payload, statusOverride) {
-    if ((!this.autoTranscribeTimeout && !this.autoRelisten) || !this.notificationSessionActive || this.isCommandRunning) {
+    if ((!this.autoTranscribeTimeout && !this.autoRelisten) || !this.notificationSessionActive ||
+        this.isCommandRunning || this._hasLocalProcessingWorkflow(false)) {
       return;
     }
     let status = statusOverride || this._normalizePayloadStatus(payload.status, Boolean(payload.error));
@@ -11990,7 +12759,12 @@ MyApplet.prototype = {
       return;
     }
     let timerId = this._scheduleTrackedTimer("setup", 2, () => {
-      if (this.status === "idle") {
+      let setupBusy = this._statusCommandRunning || this.isCommandRunning ||
+        this.alarmCheckToken || this.alarmActionToken || this.alarmMenuRefreshToken ||
+        this._hasLocalProcessingWorkflow();
+      if (setupBusy || this._hasActiveRecordingState()) {
+        this._scheduleSetupCheck();
+      } else {
         this._runDoctor(true);
       }
       return false;
@@ -12029,8 +12803,7 @@ MyApplet.prototype = {
       return;
     }
     let timerId = this._scheduleTrackedTimer("status", 2, () => {
-      this._refreshStatus();
-      return false;
+      return this._refreshStatus(true) === true;
     }, true, "statusTimer");
     if (!timerId && (this.status === "recording" || this.status === "processing")) {
       this._setStatusPreservingRecording("error", _("Status polling timer could not be scheduled"), this.lastTranscript);
@@ -12100,7 +12873,6 @@ MyApplet.prototype = {
     if (this._isUsableTargetWindow(window)) {
       this.targetWindow = window;
       this._clearTargetWindowXid();
-      this._rememberActiveXWindow(function() {}, targetGeneration);
       return true;
     }
     if (window && this._windowLooksLikeSpeedOfCinnamon(window)) {
@@ -12131,6 +12903,10 @@ MyApplet.prototype = {
 
   _restoreTargetWindowForPaste: function(completionCallback) {
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    if (!this._lifecycleAllowsWork()) {
+      complete(false);
+      return false;
+    }
     if (this._isUsableTargetWindow(this.targetWindow)) {
       let activated = false;
       try {
@@ -12143,8 +12919,15 @@ MyApplet.prototype = {
         this._recordLifecycleError("x11-focus", err);
       }
       if (activated) {
-        this._runStateGuarded("x11-focus-callback", () => complete(true), undefined);
-        return true;
+        let callbackDelivered = false;
+        this._runStateGuarded("x11-focus-callback", () => {
+          callbackDelivered = true;
+          complete(true);
+        }, undefined);
+        if (!callbackDelivered) {
+          complete(false);
+        }
+        return callbackDelivered;
       }
     }
     return this._activateTargetXWindow(complete);
@@ -12152,11 +12935,8 @@ MyApplet.prototype = {
 
   _closeMenuForKeyboardInsert: function() {
     try {
-      if (this.menu && this.menu.isOpen) {
-        let result = this.menu.close();
-        if (result === false) {
-          throw new Error("Applet menu could not be closed");
-        }
+      if (this.menu) {
+        this._closeMenuSafely(this.menu, false, true);
       }
       return true;
     } catch (err) {
@@ -12239,7 +13019,14 @@ MyApplet.prototype = {
   },
 
   _rememberActiveXWindow: function(completionCallback, expectedGeneration) {
-    let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    let callback = typeof completionCallback === "function" ? completionCallback : function() {};
+    let complete = (result) => {
+      try {
+        callback(result);
+      } catch (error) {
+        this._recordLifecycleError("x11-focus-completion", error);
+      }
+    };
     let targetGeneration = expectedGeneration === undefined
       ? Number(this.targetWindowGeneration || 0)
       : Number(expectedGeneration);
@@ -13142,40 +13929,47 @@ MyApplet.prototype = {
       return false;
     }
     this._restoreTargetWindowForPaste((restored) => {
-      if (!isCurrentOperation()) {
-        completeOnce(false);
-        return;
-      }
-      if (!restored) {
-        if (this._setClipboardText(text)) {
-          this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);
-        } else {
-          this._setStatus("error", _("Could not copy to clipboard"), transcript);
-        }
-        completeOnce(false);
-        return;
-      }
-      if (!isCurrentOperation()) {
-        completeOnce(false);
-        return;
-      }
-      if (!this._setClipboardText(text)) {
-        this._setStatus("error", _("Could not copy to clipboard"), transcript);
-        completeOnce(false);
-        return;
-      }
-      if (!this._pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {
+      try {
         if (!isCurrentOperation()) {
           completeOnce(false);
           return;
         }
-        if (completed) {
-          this._setStatus("done", _("Copied and pasted into target window"), transcript);
+        if (!restored) {
+          if (this._setClipboardText(text)) {
+            this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);
+          } else {
+            this._setStatus("error", _("Could not copy to clipboard"), transcript);
+          }
+          completeOnce(false);
+          return;
         }
-        completeOnce(completed === true);
-      }, isCurrentOperation)) {
-        this._setStatus("error", _("Copied to clipboard; automatic paste command could not be started"), transcript);
-        completeOnce(false);
+        if (!isCurrentOperation()) {
+          completeOnce(false);
+          return;
+        }
+        if (!this._setClipboardText(text)) {
+          this._setStatus("error", _("Could not copy to clipboard"), transcript);
+          completeOnce(false);
+          return;
+        }
+        if (!this._pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {
+          let pasteCompleted = false;
+          try {
+            pasteCompleted = completed === true && isCurrentOperation();
+            if (pasteCompleted && completed) {
+              this._setStatus("done", _("Copied and pasted into target window"), transcript);
+            }
+          } catch (error) {
+            pasteCompleted = false;
+            this._recordLifecycleError("keyboard-insert-status", error);
+          }
+          completeOnce(pasteCompleted);
+        }, isCurrentOperation)) {
+          this._setStatus("error", _("Copied to clipboard; automatic paste command could not be started"), transcript);
+          completeOnce(false);
+        }
+      } catch (error) {
+        this._completeKeyboardInsertFailure(completeOnce, _("Keyboard insert failed"), error);
       }
     });
     return null;
@@ -13207,12 +14001,19 @@ MyApplet.prototype = {
       }
       completed = true;
       if (typeof completionCallback === "function") {
-        completionCallback(result === true);
+        try {
+          completionCallback(result === true);
+        } catch (error) {
+          this._recordLifecycleError("keyboard-insert-completion", error);
+        }
       }
     };
     let failToOpen = () => {
-      if (this._dialogClose(dialog, "clipboard-overwrite")) {
+      let closed = this._dialogClose(dialog, "clipboard-overwrite");
+      if (closed) {
         this.clipboardOverwriteDialog = null;
+      } else {
+        this.textInsertCancellationFailed = true;
       }
       this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);
       complete(false);
@@ -13228,6 +14029,7 @@ MyApplet.prototype = {
         key: Clutter.KEY_Escape,
         action: function() {
           if (!this._dialogClose(dialog, "clipboard-overwrite")) {
+            this.textInsertCancellationFailed = true;
             this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);
             return;
           }
@@ -13243,6 +14045,7 @@ MyApplet.prototype = {
         action: function() {
           try {
             if (!this._dialogClose(dialog, "clipboard-overwrite")) {
+              this.textInsertCancellationFailed = true;
               this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);
               return;
             }
@@ -13403,7 +14206,11 @@ MyApplet.prototype = {
       }
       completed = true;
       if (typeof completionCallback === "function") {
-        completionCallback(result === true);
+        try {
+          completionCallback(result === true);
+        } catch (error) {
+          this._recordLifecycleError("keyboard-insert-completion", error);
+        }
       }
     };
     if (this.appletRemoved || !isCurrentOperation()) {
@@ -13634,61 +14441,81 @@ MyApplet.prototype = {
       }
     };
     this._targetXWindowMatchesSnapshot(expectedTargetWindow, (matches) => {
-      if (!isCurrentOperation()) {
-        fail();
-        return;
-      }
-      if (!matches) {
-        fail(_("Target window changed before automatic paste"));
-        return;
-      }
-      if (!this._spawnKeyboardProcess(args, (firstCompleted) => {
-        if (!firstCompleted) {
-          fail(_("Keyboard insert failed"));
-          return;
-        }
+      try {
         if (!isCurrentOperation()) {
           fail();
           return;
         }
-        if (!followUpArgs) {
-          if (typeof completionCallback === "function") completionCallback(true);
+        if (!matches) {
+          fail(_("Target window changed before automatic paste"));
           return;
         }
-        if (!this._scheduleTrackedTimer("paste", PASTE_SUBMIT_DELAY_MS, () => {
-          if (this.appletRemoved || !isCurrentOperation()) {
-            if (typeof completionCallback === "function") completionCallback(false);
-            return false;
-          }
-          this._targetXWindowMatchesSnapshot(expectedTargetWindow, (submitTargetMatches) => {
+        if (!this._spawnKeyboardProcess(args, (firstCompleted) => {
+          try {
+            if (!firstCompleted) {
+              fail(_("Keyboard insert failed"));
+              return;
+            }
             if (!isCurrentOperation()) {
               fail();
               return;
             }
-            if (!submitTargetMatches) {
-              fail(_("Target window changed before automatic submit"));
+            if (!followUpArgs) {
+              if (typeof completionCallback === "function") completionCallback(true);
               return;
             }
-            if (!this._spawnKeyboardProcess(followUpArgs, (submitCompleted) => {
-              if (!isCurrentOperation()) {
-                fail();
-                return;
+            if (!this._scheduleTrackedTimer("paste", PASTE_SUBMIT_DELAY_MS, () => {
+              if (this.appletRemoved || !isCurrentOperation()) {
+                if (typeof completionCallback === "function") completionCallback(false);
+                return false;
               }
-              if (!submitCompleted) {
-                fail(_("Keyboard insert failed"));
-                return;
+              try {
+                this._targetXWindowMatchesSnapshot(expectedTargetWindow, (submitTargetMatches) => {
+                  try {
+                    if (!isCurrentOperation()) {
+                      fail();
+                      return;
+                    }
+                    if (!submitTargetMatches) {
+                      fail(_("Target window changed before automatic submit"));
+                      return;
+                    }
+                    if (!this._spawnKeyboardProcess(followUpArgs, (submitCompleted) => {
+                      try {
+                        if (!isCurrentOperation()) {
+                          fail();
+                          return;
+                        }
+                        if (!submitCompleted) {
+                          fail(_("Keyboard insert failed"));
+                          return;
+                        }
+                        if (typeof completionCallback === "function") completionCallback(true);
+                      } catch (error) {
+                        this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
+                      }
+                    })) {
+                      fail(_("Keyboard insert failed"));
+                    }
+                  } catch (error) {
+                    this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
+                  }
+                });
+              } catch (error) {
+                this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
               }
-              if (typeof completionCallback === "function") completionCallback(true);
-            })) {
-              fail(_("Keyboard insert failed"));
+              return false;
+            }, false, "pasteTimer")) {
+              fail(_("Keyboard insert failed: submit timer could not be scheduled"));
             }
-          });
-          return false;
-        }, false, "pasteTimer")) {
-          fail(_("Keyboard insert failed: submit timer could not be scheduled"));
+          } catch (error) {
+            this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
+          }
+        })) {
+          fail(_("Keyboard insert failed"));
         }
-      })) {
-        fail(_("Keyboard insert failed"));
+      } catch (error) {
+        this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
       }
     });
   },
@@ -13745,8 +14572,13 @@ MyApplet.prototype = {
             return;
           }
           clearPendingFingerprint();
-          this._finishPendingRelisten();
-        });
+          let relistenStarted = this._finishPendingRelisten();
+          if (!relistenStarted &&
+              (this.status === "recording" || this.status === "recorded" || this.status === "processing") &&
+              !this.isCommandRunning && !this._hasLocalProcessingWorkflow()) {
+              this._setStatus("done", this._payloadMessage(payload, _("Transcript inserted")), transcript);
+          }
+        }, insertFingerprint);
       } catch (error) {
         this._recordLifecycleError("payload-insert", error);
         releaseFingerprint();
@@ -13759,8 +14591,8 @@ MyApplet.prototype = {
       if (result === null) {
         return;
       }
-      clearPendingFingerprint();
       if (result) {
+        clearPendingFingerprint();
         inserted = true;
       }
     }
@@ -13806,9 +14638,11 @@ MyApplet.prototype = {
     let shouldRelisten = this.autoRelistenPending;
     let previousNotificationSessionActive = this.notificationSessionActive;
     let relistenStarted = false;
+    let relistenFailedWithError = false;
     if (shouldRelisten) {
       this.notificationSessionActive = true;
       relistenStarted = this._restartRelistenRecording();
+      relistenFailedWithError = !relistenStarted && this.status === "error";
     }
     if (relistenStarted) {
       this.notificationSessionActive = true;
@@ -13818,6 +14652,9 @@ MyApplet.prototype = {
       this.autoRelistenPendingLanguage = "";
       this.autoRelistenManualStopRequested = false;
       this.notificationSessionActive = previousNotificationSessionActive;
+      if (relistenFailedWithError) {
+        this.notificationSessionActive = false;
+      }
     } else {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
@@ -13952,7 +14789,11 @@ MyApplet.prototype = {
 
   _finishSilentRelistenSkip: function(payload) {
     this._ensureAutoRelistenPendingForDonePayload(payload);
+    let hadPendingRelisten = this.autoRelistenPending;
     if (this._finishPendingRelisten()) {
+      return;
+    }
+    if (hadPendingRelisten && this.status === "error") {
       return;
     }
     this._setStatus("done", this._payloadMessage(payload, _("Silent recording skipped")), this.lastTranscript);
@@ -13960,17 +14801,35 @@ MyApplet.prototype = {
 
   _finishEmptyRelistenDone: function(payload) {
     this._ensureAutoRelistenPendingForDonePayload(payload);
+    let hadPendingRelisten = this.autoRelistenPending;
     if (this._finishPendingRelisten()) {
+      return;
+    }
+    if (hadPendingRelisten && this.status === "error") {
       return;
     }
     this._setStatus("done", this._payloadMessage(payload, _("Recording finished without transcript")), this.lastTranscript);
   },
 
-  _insertTranscriptText: function(transcript, completionCallback) {
+  _insertTranscriptText: function(transcript, completionCallback, protectedInsertFingerprint) {
     if (!this._lifecycleAllowsWork()) {
       return false;
     }
+    if (!this.textInsertCancellationFailed && !this.textInsertToken && !this.clipboardOverwriteDialog &&
+        this._hasPendingTextInsertResources()) {
+      this.textInsertCancellationFailed = true;
+    }
     if (this.textInsertCancellationFailed) {
+      let hadInsertToken = Boolean(this.textInsertToken);
+      if (hadInsertToken) {
+        this.textInsertToken = null;
+        if (this.autoRelistenPending) {
+          this.autoRelistenPending = false;
+          this.autoRelistenPendingToken = "";
+          this.autoRelistenPendingLanguage = "";
+          this.autoRelistenManualStopRequested = true;
+        }
+      }
       if (this.clipboardOverwriteDialog) {
         if (!this._dialogClose(this.clipboardOverwriteDialog, "clipboard-overwrite")) {
           this._setStatusPreservingRecording("error", _("Previous text insertion is still stopping; try again shortly"), this.lastTranscript);
@@ -13993,7 +14852,18 @@ MyApplet.prototype = {
         this._recordLifecycleError("timer-state", error);
         timerCleanupStillPending = true;
       }
-      let cancellationStillPending = timerCleanupStillPending ||
+      let protectedFingerprint = String(protectedInsertFingerprint || "");
+      let fingerprintCleanupStillPending = false;
+      let pendingInsertFingerprint = String(this.autoInsertPendingFingerprint || "");
+      if (pendingInsertFingerprint !== "" && pendingInsertFingerprint !== protectedFingerprint) {
+        let fingerprintCleanupSucceeded = this._forgetAutoInsertFingerprint(pendingInsertFingerprint) !== false;
+        if (fingerprintCleanupSucceeded && this.autoInsertPendingFingerprint === pendingInsertFingerprint) {
+          this.autoInsertPendingFingerprint = "";
+        }
+        fingerprintCleanupStillPending = !fingerprintCleanupSucceeded ||
+          this.autoInsertPendingFingerprint === pendingInsertFingerprint;
+      }
+      let cancellationStillPending = timerCleanupStillPending || fingerprintCleanupStillPending ||
         Boolean(this.clipboardOverwriteDialog) ||
         ["keyboard", "clipboard", "x11"].some((group) => this._hasTrackedProcessGroup(group));
       if (cancellationStillPending) {
@@ -14006,8 +14876,13 @@ MyApplet.prototype = {
       return false;
     }
     let method = this._normalizeOutputMethod(this.insertMethod);
-    let autoPasteTarget = this._windowTitleMatchesAutoPaste();
-    let canPasteWithKeyboard = this._findTrustedProgramInPath("xdotool") || this._findTrustedProgramInPath("wtype");
+    if (method === "none") {
+      this._setStatus("done", _("Insertion disabled"), transcript);
+      return true;
+    }
+    let autoPasteTarget = method === "clipboard-paste" && this._windowTitleMatchesAutoPaste();
+    let canPasteWithKeyboard = method === "clipboard-paste" &&
+      (this._findTrustedProgramInPath("xdotool") || this._findTrustedProgramInPath("wtype"));
     let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;
     let suppressAutoPasteEnter = method !== "clipboard-paste" || submitWithReturn;
     let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter);
@@ -14029,23 +14904,29 @@ MyApplet.prototype = {
         return;
       }
       if (typeof completionCallback === "function") {
-        completionCallback(result === true);
+        try {
+          completionCallback(result === true);
+        } catch (error) {
+          this._recordLifecycleError("text-insert-completion", error);
+        }
       }
     };
-    let failPreparation = (error) => {
+    let failPreparation = (error, notifyCompletion) => {
       if (this.textInsertToken !== insertToken) {
         return false;
       }
       release();
       this._recordLifecycleError("text-insert", error);
       this._setStatusPreservingRecording("error", _("Could not prepare text insertion"), this.lastTranscript);
+      if (notifyCompletion === true && typeof completionCallback === "function") {
+        try {
+          completionCallback(false);
+        } catch (callbackError) {
+          this._recordLifecycleError("text-insert-completion", callbackError);
+        }
+      }
       return false;
     };
-    if (method === "none") {
-      this._setStatus("done", _("Insertion disabled"), transcript);
-      release();
-      return true;
-    }
     if (this._isEmptyTranscriptText(transcript) || this._isEmptyTranscriptText(text)) {
       this._setStatus("done", _("No transcript text to insert"), "");
       release();
@@ -14060,22 +14941,32 @@ MyApplet.prototype = {
             return false;
           }
           this._restoreTargetWindowForPaste((restored) => {
-            if (!isCurrentInsert()) {
-              complete(false);
-              return;
-            }
-            if (!restored) {
-              this._setStatus("error", _("Target window unavailable for direct typing"), transcript);
-              complete(false);
-              return;
-            }
-            if (!this._typeTextAfterFocus(text, (completed) => {
-              if (completed && isCurrentInsert()) {
-                this._setStatus("done", _("Typed into target window"), transcript);
+            try {
+              if (!isCurrentInsert()) {
+                complete(false);
+                return;
               }
-              complete(completed === true);
-            }, isCurrentInsert)) {
-              complete(false);
+              if (!restored) {
+                this._setStatus("error", _("Target window unavailable for direct typing"), transcript);
+                complete(false);
+                return;
+              }
+              if (!this._typeTextAfterFocus(text, (completed) => {
+                let typeCompleted = completed === true;
+                try {
+                  if (typeCompleted && isCurrentInsert()) {
+                    this._setStatus("done", _("Typed into target window"), transcript);
+                  }
+                } catch (error) {
+                  typeCompleted = false;
+                  this._recordLifecycleError("keyboard-insert-status", error);
+                }
+                complete(typeCompleted);
+              }, isCurrentInsert)) {
+                complete(false);
+              }
+            } catch (error) {
+              failPreparation(error, true);
             }
           });
           return null;
@@ -14116,7 +15007,7 @@ MyApplet.prototype = {
               this._clearClipboardOverwriteApproval();
               let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, isCurrentInsert);
               if (result !== null) {
-                release();
+                complete(result);
               }
               return;
             }
@@ -14135,10 +15026,10 @@ MyApplet.prototype = {
           }
           let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, isCurrentInsert);
           if (result !== null) {
-            release();
+            complete(result);
           }
         } catch (error) {
-          failPreparation(error);
+          failPreparation(error, true);
         }
       });
     } catch (error) {
@@ -14152,6 +15043,9 @@ MyApplet.prototype = {
       return false;
     }
     if (!this.autoRelisten) {
+      return false;
+    }
+    if (this._hasLocalProcessingWorkflow() || this.textInsertToken) {
       return false;
     }
     let relistenLanguage = this._normalizeLanguage(this.autoRelistenPendingLanguage, this._currentLanguage());
@@ -14177,7 +15071,7 @@ MyApplet.prototype = {
     this._recordingCommandToken = recordingCommandToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Starting next recording..."), this.lastTranscript);
-    this._spawnJson(startArgs, (payload) => {
+    let startHandle = this._spawnJson(startArgs, (payload) => {
       if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -14210,12 +15104,25 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not start next recording"), this.lastTranscript);
       }
     });
+    if (!startHandle) {
+      if (this._recordingCommandToken === recordingCommandToken) {
+        this._recordingCommandToken = null;
+        this.isCommandRunning = false;
+        this.autoRelistenPending = false;
+        this.autoRelistenPendingToken = "";
+        this.autoRelistenPendingLanguage = "";
+        if (this._lifecycleAllowsWork()) {
+          this._setStatus("error", _("Could not start next recording"), this.lastTranscript);
+        }
+      }
+      return false;
+    }
     return true;
   },
 
   _preparedTranscriptText: function(transcript, suppressAutoPasteEnter) {
     let text = String(transcript || "");
-    let autoPasteEnter = this._windowTitleMatchesAutoPaste();
+    let autoPasteEnter = !suppressAutoPasteEnter && this._windowTitleMatchesAutoPaste();
     if (!this.sanitizeSpecialChars && !this.appendSpace && !autoPasteEnter && text.length <= MAX_TEXT_INSERT_CHARS && text.indexOf("\u0000") < 0) {
       return text;
     }
@@ -14228,10 +15135,11 @@ MyApplet.prototype = {
     if (text.length > MAX_TEXT_INSERT_CHARS) {
       text = text.slice(0, MAX_TEXT_INSERT_CHARS);
     }
-    if (this.appendSpace && text && !" \t\n\r\f\v".includes(text[text.length - 1])) {
+    if (this.appendSpace && text.length < MAX_TEXT_INSERT_CHARS && text && !" \t\n\r\f\v".includes(text[text.length - 1])) {
       text += " ";
     }
-    if (autoPasteEnter && !suppressAutoPasteEnter && text && text[text.length - 1] !== "\n") {
+    if (autoPasteEnter && !suppressAutoPasteEnter && text.length < MAX_TEXT_INSERT_CHARS &&
+        text && text[text.length - 1] !== "\n") {
       text += "\n";
     }
     return text;
@@ -14273,7 +15181,7 @@ MyApplet.prototype = {
   },
 
   _populateHistoryMenu: function(transcripts) {
-    if (!this.historyItem) {
+    if (!this._canMutateMenu(this.historyItem)) {
       return;
     }
     transcripts = Array.isArray(transcripts) ? transcripts : [];
@@ -14361,6 +15269,7 @@ MyApplet.prototype = {
       return;
     }
     try {
+      this._statusRefreshToken++;
       let safeMessage = typeof message === "string" ? message : "";
       this.lastMessage = status === "error"
         ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
@@ -14368,9 +15277,7 @@ MyApplet.prototype = {
       if (typeof transcript === "string" && transcript !== "") {
         this.lastTranscript = transcript;
       }
-      if (this.cancelItem) {
-        this.cancelItem.setSensitive(this._hasCancelableRecordingWork());
-      }
+      this._setMenuItemSensitiveSafely(this.cancelItem, this._hasCancelableRecordingWork());
       this._updatePanel();
     } catch (error) {
       this._recordLifecycleError("status-update", error);
@@ -14393,15 +15300,9 @@ MyApplet.prototype = {
       if (typeof transcript === "string" && transcript !== "") {
         this.lastTranscript = transcript;
       }
-      if (this.copyLastItem) {
-        this.copyLastItem.setSensitive(Boolean(this.lastTranscript));
-      }
-      if (this.insertLastItem) {
-        this.insertLastItem.setSensitive(Boolean(this.lastTranscript));
-      }
-      if (this.cancelItem) {
-        this.cancelItem.setSensitive(this._hasCancelableRecordingWork());
-      }
+      this._setMenuItemSensitiveSafely(this.copyLastItem, Boolean(this.lastTranscript));
+      this._setMenuItemSensitiveSafely(this.insertLastItem, Boolean(this.lastTranscript));
+      this._setMenuItemSensitiveSafely(this.cancelItem, this._hasCancelableRecordingWork());
       this._updatePanel();
       this._maybeNotify(previousStatus, this.status, this.lastMessage);
       this._scheduleStatusPoll();
@@ -14417,6 +15318,9 @@ MyApplet.prototype = {
     }
     let key = status + "\n" + String(message || "");
     if (key === this.lastNotificationKey) {
+      if (status === "done" || status === "error" || (status === "idle" && previousStatus !== "idle")) {
+        this.notificationSessionActive = false;
+      }
       return;
     }
     if (status === "recording") {
@@ -14597,13 +15501,17 @@ MyApplet.prototype = {
 
   _applyPanelStyle: function(status) {
     return this._runGuarded("panel-style", () => {
-      if (!this.actor || !this.actor.add_style_class_name || !this.actor.remove_style_class_name) {
+      let actor = this.actor;
+      if (!actor ||
+          (typeof actor.is_finalized === "function" && actor.is_finalized()) ||
+          typeof actor.add_style_class_name !== "function" ||
+          typeof actor.remove_style_class_name !== "function") {
         return;
       }
       for (let styleClass of PANEL_STATUS_CLASSES) {
-        this.actor.remove_style_class_name(styleClass);
+        actor.remove_style_class_name(styleClass);
       }
-      this.actor.add_style_class_name(this._panelStyleClassForStatus(status));
+      actor.add_style_class_name(this._panelStyleClassForStatus(status));
     }, undefined);
   },
 
@@ -14618,11 +15526,11 @@ MyApplet.prototype = {
         label = "REC " + this._formatSeconds(this._recordingElapsedSeconds());
         tooltip = _("Recording...") + " " + progress + "\n" + mic;
         statusText = "recording " + progress + "; " + mic;
-        if (this.toggleItem) this.toggleItem.label.text = _("Stop dictation");
+        this._setMenuItemLabelSafely(this.toggleItem, _("Stop dictation"));
       } else if (this.status === "processing") {
         label = "...";
         tooltip = this.lastMessage || _("Processing...");
-        if (this.toggleItem) this.toggleItem.label.text = _("Working...");
+        this._setMenuItemLabelSafely(this.toggleItem, _("Working..."));
       } else if (this.status === "error") {
         label = "ERR";
         tooltip = this.lastMessage || _("Error");
@@ -14630,67 +15538,45 @@ MyApplet.prototype = {
         if (this.lastMessage) {
           statusText += " - " + this._shortMenuText(this.lastMessage, 140);
         }
-        if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
+        this._setMenuItemLabelSafely(this.toggleItem, _("Start dictation"));
       } else if (this.status === "recorded") {
         label = "RDY";
         tooltip = this.lastMessage || _("Ready to transcribe");
-        if (this.toggleItem) this.toggleItem.label.text = _("Transcribe recording");
+        this._setMenuItemLabelSafely(this.toggleItem, _("Transcribe recording"));
       } else if (this.status === "setup") {
         label = "SET";
         tooltip = this.lastMessage || _("Setup needed");
-        if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
+        this._setMenuItemLabelSafely(this.toggleItem, _("Start dictation"));
       } else {
         label = "SOC";
         tooltip = this.lastMessage || _("Ready");
-        if (this.toggleItem) this.toggleItem.label.text = _("Start dictation");
+        this._setMenuItemLabelSafely(this.toggleItem, _("Start dictation"));
       }
       this._applyPanelStyle(this.status);
-      this.set_applet_label(this.showPanelLabel ? label : "");
-      this.set_applet_tooltip(tooltip + "\n" + this._shortTranscript());
-      if (this.statusItem) {
-        this.statusItem.label.text = _("Status: ") + statusText;
+      let panelActor = this.actor;
+      if (panelActor &&
+          (typeof panelActor.is_finalized !== "function" || !panelActor.is_finalized()) &&
+          typeof this.set_applet_label === "function" &&
+          typeof this.set_applet_tooltip === "function") {
+        this.set_applet_label(this.showPanelLabel ? label : "");
+        this.set_applet_tooltip(tooltip + "\n" + this._shortTranscript());
       }
-      if (this.microphoneLevelItem) {
-        this.microphoneLevelItem.label.text = this._microphoneLevelText();
-      }
-      if (this.doctorSummaryItem) {
-        this.doctorSummaryItem.label.text = this.doctorSummaryText || _("Doctor: not checked");
-      }
-      if (this.languageItem) {
-        this.languageItem.label.text = _("Language: ") + this._currentLanguage();
-      }
-      if (this.recorderItem) {
-        this.recorderItem.label.text = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder));
-      }
-      if (this.recordingLimitItem) {
-        this.recordingLimitItem.label.text = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds));
-      }
-      if (this.recordingOptionsItem) {
-        this.recordingOptionsItem.label.text = this._recordingOptionsLabel();
-      }
-      if (this.notificationOptionsItem) {
-        this.notificationOptionsItem.label.text = this._notificationOptionsLabel();
-      }
-      if (this.outputMethodItem) {
-        this.outputMethodItem.label.text = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod));
-      }
-      if (this.textOptionsItem) {
-        this.textOptionsItem.label.text = this._textOptionsLabel();
-      }
+      this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
+      this._setMenuItemLabelSafely(this.microphoneLevelItem, this._microphoneLevelText());
+      this._setMenuItemLabelSafely(this.doctorSummaryItem, this.doctorSummaryText || _("Doctor: not checked"));
+      this._setMenuItemLabelSafely(this.languageItem, _("Language: ") + this._currentLanguage());
+      this._setMenuItemLabelSafely(this.recorderItem, _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder)));
+      this._setMenuItemLabelSafely(this.recordingLimitItem, _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds)));
+      this._setMenuItemLabelSafely(this.recordingOptionsItem, this._recordingOptionsLabel());
+      this._setMenuItemLabelSafely(this.notificationOptionsItem, this._notificationOptionsLabel());
+      this._setMenuItemLabelSafely(this.outputMethodItem, _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod)));
+      this._setMenuItemLabelSafely(this.textOptionsItem, this._textOptionsLabel());
       this._updateAutoPasteItem();
       this._updateTranscriptStorageItem();
-      if (this.inputSourceItem) {
-        this.inputSourceItem.label.text = this._inputSourceLabel();
-      }
-      if (this.modelItem) {
-        this.modelItem.label.text = this._voiceBackendLabel();
-      }
-      if (this.textModelItem) {
-        this.textModelItem.label.text = this._textModelLabel();
-      }
-      if (this.transcriptItem) {
-        this.transcriptItem.label.text = this._shortTranscript();
-      }
+      this._setMenuItemLabelSafely(this.inputSourceItem, this._inputSourceLabel());
+      this._setMenuItemLabelSafely(this.modelItem, this._voiceBackendLabel());
+      this._setMenuItemLabelSafely(this.textModelItem, this._textModelLabel());
+      this._setMenuItemLabelSafely(this.transcriptItem, this._shortTranscript());
     }, undefined);
   }
 };

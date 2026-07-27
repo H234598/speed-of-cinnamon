@@ -313,7 +313,45 @@ def _contains_http_header_control_chars(value: str) -> bool:
 def _contains_command_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise CommandChainError("value must be text")
-    return _contains_http_header_control_chars(value)
+    if _ESCAPED_CONTROL_RE.search(value.lower()):
+        return True
+    quote: str | None = None
+    escaped = False
+    for char in value:
+        if escaped:
+            escaped = False
+            if ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F:
+                return True
+            continue
+        if char == "\\" and quote != "'":
+            escaped = True
+            continue
+        if char in {"'", '"'}:
+            if quote is None:
+                quote = char
+            elif quote == char:
+                quote = None
+            continue
+        codepoint = ord(char)
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
+            if char == "\n" and quote is not None:
+                continue
+            return True
+    return False
+
+
+def _contains_command_argument_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise CommandChainError("value must be text")
+    if _ESCAPED_CONTROL_RE.search(value.lower()):
+        return True
+    for char in value:
+        codepoint = ord(char)
+        if char == "\n":
+            continue
+        if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
+            return True
+    return False
 
 
 def _contains_command_output_control_chars(value: str) -> bool:
@@ -462,7 +500,9 @@ def run_command_chain(
             raise CommandChainError(f"invalid {label} command segment")
         if _contains_escaped_null(executable) or any(_contains_escaped_null(str(arg)) for arg in cmd[1:]):
             raise CommandChainError(f"{label} command contains invalid null byte")
-        if _contains_command_control_chars(executable) or any(_contains_command_control_chars(str(arg)) for arg in cmd[1:]):
+        if _contains_command_control_chars(executable) or any(
+            _contains_command_argument_control_chars(str(arg)) for arg in cmd[1:]
+        ):
             raise CommandChainError(f"{label} command contains invalid control character")
         runtime_command = _command_path(executable)
         try:
