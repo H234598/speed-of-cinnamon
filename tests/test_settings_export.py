@@ -999,6 +999,7 @@ class SettingsExportTest(unittest.TestCase):
                 raise KeyboardInterrupt
 
         with (
+            mock.patch.object(settings_export_module, "_assert_clean_path"),
             mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
             mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock()),
@@ -1023,6 +1024,7 @@ class SettingsExportTest(unittest.TestCase):
                 raise OSError("temp close failed")
 
         with (
+            mock.patch.object(settings_export_module, "_assert_clean_path"),
             mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
             mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock()),
@@ -1058,6 +1060,7 @@ class SettingsExportTest(unittest.TestCase):
                 raise OSError("close failed")
 
         with (
+            mock.patch.object(settings_export_module, "_assert_clean_path"),
             mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
             mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
             mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock()),

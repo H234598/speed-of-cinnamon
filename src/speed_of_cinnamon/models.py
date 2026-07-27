@@ -501,9 +501,17 @@ def _same_model_directory_identity(first: os.stat_result, second: os.stat_result
     )
 
 
+def _same_model_directory_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        _same_model_directory_identity(first, second)
+        and first.st_size == second.st_size
+        and first.st_mtime_ns == second.st_mtime_ns
+    )
+
+
 def _same_model_path_identity(first: os.stat_result, second: os.stat_result) -> bool:
     if stat_module.S_ISDIR(first.st_mode) and stat_module.S_ISDIR(second.st_mode):
-        return _same_model_directory_identity(first, second)
+        return _same_model_directory_snapshot(first, second)
     if stat_module.S_ISREG(first.st_mode) and stat_module.S_ISREG(second.st_mode):
         return _same_model_artifact_identity(first, second)
     return False
@@ -1387,6 +1395,7 @@ def _remove_model_directory_leaf(
     *,
     field_name: str = "model directory",
     expected_stat: os.stat_result | None = None,
+    expected_snapshot: bool = False,
 ) -> bool:
     _assert_path_within_model_root(path, root, field_name=field_name)
     if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
@@ -1413,8 +1422,14 @@ def _remove_model_directory_leaf(
             raise ModelError(f"{field_name} must not be a symlink: {path}")
         if not stat_module.S_ISDIR(file_stat.st_mode):
             raise ModelError(f"{field_name} must be a directory: {path}")
-        if expected_stat is not None and not _same_model_directory_identity(file_stat, expected_stat):
-            raise ModelError(f"{field_name} changed before cleanup: {path}")
+        if expected_stat is not None:
+            same_expected_directory = (
+                _same_model_directory_snapshot(file_stat, expected_stat)
+                if expected_snapshot
+                else _same_model_directory_identity(file_stat, expected_stat)
+            )
+            if not same_expected_directory:
+                raise ModelError(f"{field_name} changed before cleanup: {path}")
         for _ in range(100):
             cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
             try:
@@ -1428,7 +1443,7 @@ def _remove_model_directory_leaf(
                 continue
             try:
                 claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
-                if not _same_model_directory_identity(claimed_stat, file_stat):
+                if not _same_model_directory_snapshot(claimed_stat, file_stat):
                     raise ModelError(f"{field_name} changed before cleanup: {path}")
                 shutil.rmtree(cleanup_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
@@ -1478,7 +1493,7 @@ def _remove_model_directory_if_same(
             current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
             return False
-        if not stat_module.S_ISDIR(current_stat.st_mode) or not _same_model_directory_identity(current_stat, expected_stat):
+        if not stat_module.S_ISDIR(current_stat.st_mode) or not _same_model_directory_snapshot(current_stat, expected_stat):
             raise ModelError(f"{field_name} changed before cleanup: {path}")
         for _ in range(100):
             cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
@@ -1493,7 +1508,7 @@ def _remove_model_directory_if_same(
                 continue
             try:
                 claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
-                if not _same_model_directory_identity(claimed_stat, current_stat):
+                if not _same_model_directory_snapshot(claimed_stat, current_stat):
                     raise ModelError(f"{field_name} changed before cleanup: {path}")
                 shutil.rmtree(cleanup_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
@@ -2096,6 +2111,7 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             raise ModelError(f"failed to inspect model temporary directory: {tmp_dir}") from exc
         if tmp_dir_stat is None or not _same_model_directory_identity(current_tmp_dir_stat, tmp_dir_stat):
             raise ModelError(f"model temporary directory changed during download: {tmp_dir}")
+        tmp_dir_stat = current_tmp_dir_stat
         if path.exists() and path.is_dir():
             _assert_safe_model_directory(path)
         backup_dir: Path | None = None
@@ -2258,6 +2274,7 @@ def _remove_model_backup_path(
             backup_path.parent,
             field_name="model backup directory",
             expected_stat=expected_stat,
+            expected_snapshot=True,
         )
         return
     _unlink_model_file_leaf(
