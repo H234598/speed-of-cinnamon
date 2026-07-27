@@ -198,6 +198,8 @@ jobs:
           fi
       - name: Install Python coverage tooling
         run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-coverage.txt
+      - name: Install project runtime dependencies
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-project.txt
       - name: Run checks
         run: make check
       - name: Generate coverage report

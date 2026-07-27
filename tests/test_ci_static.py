@@ -449,20 +449,24 @@ class CiStaticTest(unittest.TestCase):
             "run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-coverage.txt",
             workflow,
         )
+        self.assertIn(
+            "run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-project.txt",
+            workflow,
+        )
         self.assertIn("--require-hashes", bandit_requirements)
         self.assertIn("bandit==1.9.4", bandit_requirements)
         self.assertIn("coverage==7.14.1", coverage_requirements)
         self.assertIn("run: make check", workflow)
         self.assertIn("run: make coverage", workflow)
-        self.assertNotIn("QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}", workflow)
         self.assertNotIn("curl -fsSL https://qlty.sh | sh", workflow)
         self.assertNotIn("https://qlty.sh", workflow)
         self.assertNotIn("sh \"${qlty_installer}\"", workflow)
+        self.assertIn("QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}", workflow)
         self.assertIn(
             "uses: qltysh/qlty-action/coverage@fd52dc852530a708d68c3b7342f8d33d1df4cd55 # v2.2.1",
             workflow,
         )
-        self.assertIn("if: ${{ github.event_name == 'push' && secrets.QLTY_COVERAGE_TOKEN != '' }}", workflow)
+        self.assertIn("if: ${{ github.event_name == 'push' && env.QLTY_COVERAGE_TOKEN != '' }}", workflow)
         self.assertIn("token: ${{ secrets.QLTY_COVERAGE_TOKEN }}", workflow)
         self.assertIn("files: reports/lcov.info", workflow)
         self.assertIn("format: lcov", workflow)
