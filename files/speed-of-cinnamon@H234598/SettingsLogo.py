@@ -41,7 +41,12 @@ class _ResponsiveLogo(SettingsWidget):
         box.set_tooltip_text("Open the Speed of Cinnamon GitHub repository")
 
         try:
-            self._source_pixbuf = GdkPixbuf.Pixbuf.new_from_file(logo_path)
+            self._source_pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(
+                logo_path,
+                self.max_width,
+                self.max_height,
+                True,
+            )
             self._drawing_area = Gtk.DrawingArea()
             self._drawing_area.set_halign(Gtk.Align.FILL)
             self._drawing_area.set_hexpand(True)

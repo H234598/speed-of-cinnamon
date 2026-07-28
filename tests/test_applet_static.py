@@ -35,6 +35,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('Gtk.show_uri_on_window(None, self.github_url, Gtk.get_current_event_time())', widget_source)
         self.assertIn('event_box.connect("button-press-event", self._open_project_repository)', widget_source)
         self.assertIn('box.connect("size-allocate", self._on_size_allocate)', widget_source)
+        responsive_logo_source = widget_source[
+            widget_source.index("class _ResponsiveLogo(SettingsWidget):"):
+            widget_source.index("class HeaderLogo(_ResponsiveLogo):")
+        ]
+        self.assertIn("GdkPixbuf.Pixbuf.new_from_file_at_scale(", responsive_logo_source)
+        self.assertIn("self.max_width,\n                self.max_height,\n                True,", responsive_logo_source)
+        self.assertNotIn("GdkPixbuf.Pixbuf.new_from_file(logo_path)", responsive_logo_source)
         self.assertIn("self._source_pixbuf.scale_simple(", widget_source)
         self.assertIn("max_width = 720", widget_source)
         self.assertIn("max_height = 220", widget_source)
