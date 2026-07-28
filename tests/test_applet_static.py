@@ -8700,7 +8700,26 @@ class AppletStaticTest(unittest.TestCase):
             self.assertEqual(schema[preview_key]["target"], target_key)
 
         self.assertIn("max_size = 112", preview_source)
-        self.assertIn("self._settings.listen(self._target, self._on_target_change)", preview_source)
+        self.assertIn("allowed_targets = (", preview_source)
+        for target_key in [
+            "status-icon-ready",
+            "status-icon-recording",
+            "status-icon-processing",
+            "status-icon-recorded",
+            "status-icon-error",
+            "status-icon-setup",
+        ]:
+            self.assertIn(f'"{target_key}"', preview_source)
+        self.assertIn('self._target = target if isinstance(target, str) and target in self.allowed_targets else ""', preview_source)
+        self.assertIn("widget_ref = weakref.ref(self)", preview_source)
+        self.assertIn("if widget is not None and not widget._destroyed:", preview_source)
+        self.assertIn("self._settings.listen(self._target, settings_listener)", preview_source)
+        self.assertIn('self.connect("destroy", self._on_destroy)', preview_source)
+        self.assertIn("def _on_destroy(self, *_args):", preview_source)
+        self.assertIn("self._destroyed = True", preview_source)
+        self.assertIn("self._settings = None", preview_source)
+        self.assertIn("self._source_pixbuf = None", preview_source)
+        self.assertIn("self._scaled_pixbuf = None", preview_source)
         self.assertIn("value = self._settings.get_value(self._target)", preview_source)
         self.assertIn("def _on_target_change(self, *_args):", preview_source)
         self.assertIn("self._load_from_settings()", preview_source)
@@ -8723,7 +8742,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("self._drawing_area.set_size_request(1, self.max_size)", preview_source)
         self.assertIn("self._drawing_area.set_halign(Gtk.Align.FILL)", preview_source)
         self.assertIn("self._drawing_area.set_hexpand(True)", preview_source)
-        self.assertIn("self._drawing_area.set_size_request(1, target_height)", preview_source)
+        self.assertNotIn("self._drawing_area.set_size_request(1, target_height)", preview_source)
         self.assertIn("_on_size_allocate(self._drawing_area, allocation)", preview_source)
         self.assertIn("if allocation.width <= 1 or allocation.height <= 1:", preview_source)
         self.assertIn("if current_size == self._last_render_size and self._scaled_pixbuf is not None:", preview_source)

@@ -2,6 +2,7 @@
 # pylint: disable=import-error
 
 import os
+import weakref
 
 from JsonSettingsWidgets import SettingsWidget
 from gi.repository import Gdk, GdkPixbuf, Gtk
@@ -160,6 +161,14 @@ class StatusIconPreview(SettingsWidget):
     max_size = 112
     top_margin = 10
     bottom_margin = 10
+    allowed_targets = (
+        "status-icon-ready",
+        "status-icon-recording",
+        "status-icon-processing",
+        "status-icon-recorded",
+        "status-icon-error",
+        "status-icon-setup",
+    )
 
     def __init__(self, info, key, settings):
         SettingsWidget.__init__(self)
@@ -171,7 +180,8 @@ class StatusIconPreview(SettingsWidget):
         self.set_halign(Gtk.Align.FILL)
 
         self._settings = settings
-        self._target = info.get("target", "")
+        target = info.get("target", "")
+        self._target = target if isinstance(target, str) and target in self.allowed_targets else ""
         self._fallback_text = info.get("description", "")
         self._drawing_area = None
         self._fallback_label = None
@@ -179,6 +189,8 @@ class StatusIconPreview(SettingsWidget):
         self._scaled_pixbuf = None
         self._last_render_size = (0, 0)
         self._last_icon_id = None
+        self._destroyed = False
+        self._settings_listener = None
 
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self._asset_base_dir = os.path.join(base_dir, "assets", "status-icons")
@@ -205,17 +217,37 @@ class StatusIconPreview(SettingsWidget):
             box.connect("size-allocate", self._on_size_allocate)
             self.content_widget = box
             self.pack_start(box, True, True, 0)
+            self.connect("destroy", self._on_destroy)
             self._load_from_settings()
             if self._target:
                 try:
-                    self._settings.listen(self._target, self._on_target_change)
+                    widget_ref = weakref.ref(self)
+
+                    def settings_listener(*args):
+                        widget = widget_ref()
+                        if widget is not None and not widget._destroyed:
+                            widget._on_target_change(*args)
+
+                    self._settings_listener = settings_listener
+                    self._settings.listen(self._target, settings_listener)
                 except Exception:
                     pass
         except Exception:
             self._show_fallback()
 
     def _on_target_change(self, *_args):
+        if self._destroyed:
+            return
         self._load_from_settings()
+
+    def _on_destroy(self, *_args):
+        self._destroyed = True
+        self._settings = None
+        self._settings_listener = None
+        self._source_pixbuf = None
+        self._scaled_pixbuf = None
+        self._drawing_area = None
+        self._fallback_label = None
 
     def _load_from_settings(self):
         icon_id = self._normalize_icon_id(self._read_setting())
@@ -329,7 +361,6 @@ class StatusIconPreview(SettingsWidget):
         except Exception:
             self._show_fallback()
             return
-        self._drawing_area.set_size_request(1, target_height)
         self._drawing_area.queue_draw()
 
     def _show_fallback(self):
