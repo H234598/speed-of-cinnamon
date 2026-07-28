@@ -3806,6 +3806,135 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!this._orphanedTooltip && !tooltip)", block)
         self.assertIn('this._runTeardownOperation("teardown-orphaned-tooltip", tooltip, "destroy")', block)
 
+    def test_backend_catalog_menu_close_invalidates_refresh_before_termination(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        build_start = source.index("_buildMenu: function()")
+        build_end = source.index("\n  _styleWideMenus:", build_start)
+        build_block = source[build_start:build_end]
+
+        cases = [
+            (
+                "alarmItem",
+                "alarmMenuRefreshToken",
+                "alarm-menu-refresh",
+                "_refreshAlarmMenu",
+            ),
+            (
+                "inputSourceItem",
+                "inputSourceMenuRefreshToken",
+                "input-source-refresh",
+                "_refreshInputSourceMenu",
+            ),
+            (
+                "modelItem",
+                "modelMenuRefreshToken",
+                "model-menu-refresh",
+                "_refreshModelMenu",
+            ),
+        ]
+
+        for item, token, group, refresh in cases:
+            start = build_block.index(
+                f'this._connectSafe(this.{item}.menu, "open-state-changed"'
+            )
+            end = build_block.index("\n    });", start)
+            handler = build_block[start:end]
+
+            active = f"let refreshActive = Boolean(this.{token});"
+            invalidate = f"this.{token} = null;"
+            terminate = f'this._terminateProcessesByGroup("{group}");'
+            refresh_call = f"this.{refresh}();"
+
+            self.assertIn("if (!open) {", handler)
+            self.assertIn(active, handler)
+            self.assertIn(invalidate, handler)
+            self.assertIn("if (refreshActive) {", handler)
+            self.assertIn(terminate, handler)
+            self.assertIn("return;", handler)
+            self.assertIn(refresh_call, handler)
+            self.assertLess(handler.index(active), handler.index(invalidate))
+            self.assertLess(handler.index(invalidate), handler.index(terminate))
+            self.assertLess(handler.index(terminate), handler.index("return;"))
+            self.assertLess(handler.index("return;"), handler.index(refresh_call))
+
+        alarm_start = build_block.index(
+            'this._connectSafe(this.alarmItem.menu, "open-state-changed"'
+        )
+        alarm_end = build_block.index("\n    });", alarm_start)
+        alarm_handler = build_block[alarm_start:alarm_end]
+        self.assertIn("this.alarmMenuRefreshQueued = false;", alarm_handler)
+
+        callback_cases = [
+            (
+                "_refreshAlarmMenu: function()",
+                "\n  _populateAlarmMenu:",
+                "alarmMenuRefreshToken",
+                "_populateAlarmMenu",
+            ),
+            (
+                "_refreshInputSourceMenu: function()",
+                "\n  _populateInputSourceMenu:",
+                "inputSourceMenuRefreshToken",
+                "_populateInputSourceMenu",
+            ),
+            (
+                "_refreshModelMenu: function()",
+                "\n  _populateModelMenu:",
+                "modelMenuRefreshToken",
+                "_populateModelMenu",
+            ),
+        ]
+
+        for method, next_method, token, populate in callback_cases:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            callback = block[block.index("this._spawnJson"):]
+            guard = (
+                f"if (this.{token} !== refreshToken) {{\n"
+                "        return;\n"
+                "      }"
+            )
+            self.assertIn(guard, callback)
+            self.assertLess(
+                callback.index(guard),
+                callback.index(f"this.{token} = null;"),
+            )
+            self.assertLess(
+                callback.index(guard),
+                callback.index(f"this.{populate}("),
+            )
+
+    def test_read_only_menu_spawns_preserve_status_generation(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        spawn_start = source.index("_spawnJson: function(args, callback, options)")
+        spawn_end = source.index("\n  _spawnText:", spawn_start)
+        spawn_block = source[spawn_start:spawn_end]
+        self.assertIn(
+            "options.invalidatesStatus !== false &&\n"
+            "          !this._isStatusCommandArgs(normalizedArgs)",
+            spawn_block,
+        )
+
+        expected = [
+            ("_refreshAlarmMenu: function()", "alarm-menu-refresh"),
+            ("_refreshInputSourceMenu: function()", "input-source-refresh"),
+            ("_refreshModelMenu: function()", "model-menu-refresh"),
+            ("_refreshTextModelMenuForBackend: function(backendOverride)", "text-model-refresh"),
+            ("_refreshHistory: function()", "history-refresh"),
+        ]
+        for method, group in expected:
+            start = source.index(method)
+            end = source.find("\n  _", start + len(method))
+            self.assertGreater(end, start)
+            block = source[start:end]
+            self.assertIn(
+                f'{{ resourceGroup: "{group}", invalidatesStatus: false }}',
+                block,
+            )
+        self.assertEqual(source.count("invalidatesStatus: false"), len(expected))
+
     def test_hotkey_mutations_are_not_suppressed_by_disabled_error_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_registerHotkey: function(id, binding, callback)")
@@ -4682,7 +4811,8 @@ class AppletStaticTest(unittest.TestCase):
         status_helper_end = source.index("\n  _spawnJson:", status_helper_index)
         self.assertIn('args.length > 1 && String(args[1] || "") === "status"', source[status_helper_index:status_helper_end])
         self.assertNotIn("for (let i = 0; i < args.length; i++)", source[status_helper_index:status_helper_end])
-        self.assertIn("if (!this._isStatusCommandArgs(normalizedArgs)) {", source[spawn_index:spawn_end])
+        self.assertIn("options.invalidatesStatus !== false &&", source[spawn_index:spawn_end])
+        self.assertIn("!this._isStatusCommandArgs(normalizedArgs)) {", source[spawn_index:spawn_end])
         self.assertIn("this._statusRefreshToken++;", source[spawn_index:spawn_end])
 
     def test_status_refresh_reschedules_after_stale_response(self) -> None:

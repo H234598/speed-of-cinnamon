@@ -4188,9 +4188,16 @@ MyApplet.prototype = {
 
     this.alarmItem = new PopupMenu.PopupSubMenuMenuItem(_("Alarms"));
     this._connectSafe(this.alarmItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._refreshAlarmMenu();
+      if (!open) {
+        let refreshActive = Boolean(this.alarmMenuRefreshToken);
+        this.alarmMenuRefreshToken = null;
+        this.alarmMenuRefreshQueued = false;
+        if (refreshActive) {
+          this._terminateProcessesByGroup("alarm-menu-refresh");
+        }
+        return;
       }
+      this._refreshAlarmMenu();
     });
     this.toolsMenuItem.menu.addMenuItem(this.alarmItem);
     this._populateAlarmMenu([], _("Open menu to load alarms"));
@@ -4307,18 +4314,30 @@ MyApplet.prototype = {
 
     this.inputSourceItem = new PopupMenu.PopupSubMenuMenuItem(_("Input source"));
     this._connectSafe(this.inputSourceItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._refreshInputSourceMenu();
+      if (!open) {
+        let refreshActive = Boolean(this.inputSourceMenuRefreshToken);
+        this.inputSourceMenuRefreshToken = null;
+        if (refreshActive) {
+          this._terminateProcessesByGroup("input-source-refresh");
+        }
+        return;
       }
+      this._refreshInputSourceMenu();
     });
     this.recordingMenuItem.menu.addMenuItem(this.inputSourceItem);
     this._populateInputSourceMenu([], _("Open menu to load input sources"));
 
     this.modelItem = new PopupMenu.PopupSubMenuMenuItem(_("Voice model"));
     this._connectSafe(this.modelItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._refreshModelMenu();
+      if (!open) {
+        let refreshActive = Boolean(this.modelMenuRefreshToken);
+        this.modelMenuRefreshToken = null;
+        if (refreshActive) {
+          this._terminateProcessesByGroup("model-menu-refresh");
+        }
+        return;
       }
+      this._refreshModelMenu();
     });
     this.recordingMenuItem.menu.addMenuItem(this.modelItem);
     this._populateModelMenu([], _("Open menu to load voice models"));
@@ -8262,7 +8281,7 @@ MyApplet.prototype = {
           this._refreshAlarmMenu();
         }
       }
-    }, { resourceGroup: "alarm-menu-refresh" });
+    }, { resourceGroup: "alarm-menu-refresh", invalidatesStatus: false });
   },
 
   _populateAlarmMenu: function(alarms, summary, message) {
@@ -8643,7 +8662,7 @@ MyApplet.prototype = {
           this._setStatusPreservingRecording("error", _("Could not refresh input source list"), this.lastTranscript);
         }
       }
-    }, { resourceGroup: "input-source-refresh" });
+    }, { resourceGroup: "input-source-refresh", invalidatesStatus: false });
     if (!refreshProcess) {
       if (this.inputSourceMenuRefreshToken === refreshToken) {
         this.inputSourceMenuRefreshToken = null;
@@ -8846,7 +8865,7 @@ MyApplet.prototype = {
           this._setStatusPreservingRecording("error", _("Could not refresh voice model list"), this.lastTranscript);
         }
       }
-    }, { resourceGroup: "model-menu-refresh" });
+    }, { resourceGroup: "model-menu-refresh", invalidatesStatus: false });
   },
 
   _populateModelMenu: function(models, message) {
@@ -10234,7 +10253,7 @@ MyApplet.prototype = {
           this._setStatusPreservingRecording("error", _("Could not refresh text model list"), this.lastTranscript);
         }
       }
-    }, { resourceGroup: "text-model-refresh" });
+    }, { resourceGroup: "text-model-refresh", invalidatesStatus: false });
     if (!refreshProcess) {
       if (this.textModelMenuRefreshToken === refreshToken) {
         this.textModelMenuRefreshToken = null;
@@ -11278,7 +11297,7 @@ MyApplet.prototype = {
           this._refreshHistory();
         }
       }
-    }, { resourceGroup: "history-refresh" });
+    }, { resourceGroup: "history-refresh", invalidatesStatus: false });
   },
 
   _listAllTranscripts: function() {
@@ -12959,7 +12978,8 @@ MyApplet.prototype = {
 
     try {
       normalizedArgs = this._coerceSpawnArgs(args);
-      if (!this._isStatusCommandArgs(normalizedArgs)) {
+      if (options.invalidatesStatus !== false &&
+          !this._isStatusCommandArgs(normalizedArgs)) {
         this._statusRefreshToken++;
       }
       let timeoutMs = Object.prototype.hasOwnProperty.call(options, "timeoutMs")

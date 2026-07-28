@@ -2046,7 +2046,20 @@ def _process_is_gone(process_target: str) -> bool:
     except OSError:
         return False
     if target < 0:
-        return process_group_has_live_processes(-target) is False
+        group_id = -target
+        leader_fields = _recording_process_stat_fields(group_id)
+        if leader_fields is not None and len(leader_fields) >= 4:
+            try:
+                leader_group_id = int(leader_fields[2])
+            except ValueError:
+                pass
+            else:
+                if (
+                    leader_group_id == group_id
+                    and leader_fields[0] not in {"Z", "X", "x"}
+                ):
+                    return False
+        return process_group_has_live_processes(group_id) is False
     if target > 0:
         stat_fields = _recording_process_stat_fields(target)
         return bool(stat_fields and stat_fields[0] in {"Z", "X", "x"})
@@ -2363,7 +2376,7 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         if process is None:
             return
         try:
-            terminated = _terminate_recorder_process_group(process)
+            terminated = _reap_timed_out_recorder_process(process)
         except BaseException as cleanup_error:
             primary.add_note(f"recorder process cleanup failed: {cleanup_error}")
         else:
@@ -2395,10 +2408,10 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         )
         process_pid = getattr(process, "pid", None)
         if isinstance(process_pid, int) and not isinstance(process_pid, bool) and process_pid > 0:
-            try:
-                setattr(process, "_soc_process_identity", _recording_process_identity_for_pid(process_pid) or "")
-            except (AttributeError, TypeError):
-                pass
+            process_identity = _recording_process_identity_for_pid(process_pid)
+            if not process_identity:
+                raise RecorderError("recorder process identity is unavailable")
+            setattr(process, "_soc_process_identity", process_identity)
         try:
             setattr(process, "_soc_output_pipe_targets", _pipe_targets_for_process(process, log_capture))
         except (AttributeError, TypeError):
@@ -2480,7 +2493,7 @@ def stop_process(
         # a later stop/cancel invocation, while descendants still remain.
         process_group_target = _process_group_exists(pid)
         if process_group_target is False:
-            return True
+            return False
         if process_group_target is not True:
             return False
         process_group_id = pid
