@@ -1141,7 +1141,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let autoPasteTarget = method === "clipboard-paste" && this._windowTitleMatchesAutoPaste();', source)
         self.assertIn('let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;', source)
         self.assertIn('let suppressAutoPasteEnter = method !== "clipboard-paste" || submitWithReturn;', source)
-        self.assertIn('let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter);', source)
+        self.assertIn('let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter, autoPasteTarget);', source)
+        self.assertIn('_preparedTranscriptText: function(transcript, suppressAutoPasteEnter, autoPasteTargetMatch)', source)
+        self.assertIn('typeof autoPasteTargetMatch === "boolean"', source)
         self.assertIn('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)', source)
         self.assertIn('_pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {', source)
         self.assertIn("completeOnce(pasteCompleted);", source)
@@ -1158,7 +1160,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("CLIPBOARD_READY_RETRY_MS", source)
         self.assertIn("CLIPBOARD_READY_TIMEOUT_MS", source)
         self.assertIn("_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard)", source)
-        self.assertIn('this._setStatus("error", _("Clipboard did not confirm new text before automatic paste"), this.lastTranscript);', source)
+        self.assertIn('Clipboard did not confirm new text before automatic paste', source)
         self.assertNotIn('this._preparedTranscriptText(transcript, submitWithReturn)', source)
 
     def test_typing_delay_has_backend_limits(self) -> None:
@@ -4154,18 +4156,50 @@ class AppletStaticTest(unittest.TestCase):
     def test_panel_actor_mutations_skip_finalized_actors(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         style_start = source.index("_applyPanelStyle: function(status)")
-        style_end = source.index("\n  _updatePanel: function()", style_start)
+        style_end = source.index("\n  _updatePanel: function(menuOpenOverride)", style_start)
         style_block = source[style_start:style_end]
         self.assertIn("let actor = this.actor;", style_block)
         self.assertIn("actor.is_finalized", style_block)
         self.assertIn("actor.remove_style_class_name(styleClass)", style_block)
         self.assertIn("actor.add_style_class_name(this._panelStyleClassForStatus(status))", style_block)
 
-        update_start = source.index("_updatePanel: function()")
+        update_start = source.index("_updatePanel: function(menuOpenOverride)")
         update_end = source.index("\n};\n\nfunction main", update_start)
         update_block = source[update_start:update_end]
         self.assertIn("let panelActor = this.actor;", update_block)
         self.assertIn("panelActor.is_finalized", update_block)
+        self.assertIn('let rootMenuOpen = typeof menuOpenOverride === "boolean"', update_block)
+        self.assertIn("previousFingerprint.rootMenuOpen === rootMenuOpen", update_block)
+        self.assertIn("let panelRenderUnchanged = Boolean(", update_block)
+        self.assertIn("if (!panelRenderUnchanged) {", update_block)
+        self.assertIn("if (rootMenuOpen) {", update_block)
+        self.assertIn("rootMenuOpen: rootMenuOpen,", update_block)
+        menu_guard = update_block.index("if (rootMenuOpen) {")
+        self.assertLess(update_block.index("this.set_applet_label(panelLabel);"), menu_guard)
+        self.assertLess(menu_guard, update_block.index("this._setMenuItemLabelSafely(this.statusItem"))
+        self.assertIn("this._panelRenderFingerprint.rootMenuOpen = false;", source)
+        self.assertIn("this._recordingDisplayFingerprint = null;", source)
+        self.assertIn("let panelUpdated = this._updatePanel(true) === true;", source)
+        self.assertIn('this._scheduleTrackedTimer("panel-open-retry"', source)
+        menu_open_start = source.index('this._connectSafe(this.menu, "open-state-changed"')
+        menu_open_end = source.index('}, "menu-open-state");', menu_open_start)
+        menu_open_block = source[menu_open_start:menu_open_end]
+        self.assertIn("if (!panelUpdated) {", menu_open_block)
+        self.assertIn("this.menu.isOpen !== true", menu_open_block)
+        self.assertRegex(
+            menu_open_block,
+            r'(?s)if \(!panelUpdated\) \{\s*'
+            r'let retryTimer = this\._scheduleTrackedTimer\("panel-open-retry", 1, \(\) => \{\s*'
+            r'if \(!this\.menu \|\| this\.menu\.isOpen !== true\) \{\s*'
+            r'return false;\s*\}\s*'
+            r'this\._updatePanel\(true\);\s*'
+            r'return false;\s*\}, false\);\s*'
+            r'if \(!retryTimer && this\._lifecycleAllowsWork\(\) && '
+            r'this\.menu && this\.menu\.isOpen === true\) \{\s*'
+            r'this\._updatePanel\(true\);\s*\}\s*\}',
+        )
+        self.assertNotIn("this._updateRecordingDisplay();", menu_open_block)
+        self.assertIn("return this._panelRenderFingerprint !== null;", update_block)
         self.assertIn("typeof this.set_applet_label === \"function\"", update_block)
         self.assertIn("typeof this.set_applet_tooltip === \"function\"", update_block)
 
@@ -4515,7 +4549,7 @@ class AppletStaticTest(unittest.TestCase):
         display_start = source.index("_updateRecordingDisplay: function()")
         display_end = source.index("\n  _isUsableTargetWindow:", display_start)
         display_block = source[display_start:display_end]
-        panel_start = source.index("_updatePanel: function()")
+        panel_start = source.index("_updatePanel: function(menuOpenOverride)")
         panel_end = source.index("\n};\n\nfunction main", panel_start)
         panel_block = source[panel_start:panel_end]
         for render_block in (display_block, panel_block):
@@ -4718,10 +4752,9 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _spawnKeyboardProcess:", start)
         block = source[start:end]
         self.assertIn("this._completeKeyboardInsertFailure(", block)
-        self.assertIn('_("Clipboard could not be verified before automatic paste")', block)
-        self.assertIn('if (!this.clipboard || !this.clipboard.get_text)', block)
+        self.assertIn("this._spawnKeyboardArgs(", block)
+        self.assertNotIn("this.clipboard.get_text", block)
         self.assertNotIn("global.logError(err);", block)
-        self.assertLess(block.index("try {"), block.index("this.clipboard.get_text"))
 
         args_start = source.index("_spawnKeyboardArgs: function(")
         args_end = source.index("\n  _finishAppletTextInsert:", args_start)
@@ -4884,9 +4917,13 @@ class AppletStaticTest(unittest.TestCase):
         menu_end = source.index("this.toggleItem = new PopupMenu.PopupIconMenuItem", menu_start)
         menu_block = source[menu_start:menu_end]
         self.assertIn('this._connectSafe(this.menu, "open-state-changed"', menu_block)
-        self.assertIn('if (open && this.status === "recording")', menu_block)
+        self.assertIn("if (open) {", menu_block)
+        self.assertIn("this._panelRenderFingerprint.rootMenuOpen = false;", menu_block)
         self.assertIn("this._recordingDisplayFingerprint = null;", menu_block)
-        self.assertIn("this._updateRecordingDisplay();", menu_block)
+        self.assertIn("let panelUpdated = this._updatePanel(true) === true;", menu_block)
+        self.assertIn('this._scheduleTrackedTimer("panel-open-retry"', menu_block)
+        self.assertIn("this.menu.isOpen !== true", menu_block)
+        self.assertNotIn("this._updateRecordingDisplay();", menu_block)
 
         setup_start = source.index("_scheduleSetupCheck: function()")
         setup_end = source.index("\n  _scheduleAlarmCheck:", setup_start)
@@ -6347,6 +6384,11 @@ class AppletStaticTest(unittest.TestCase):
         x11_block = source[x11_start:x11_end]
         self.assertIn("targetGeneration === Number(this.targetWindowXPendingGeneration || 0)", x11_block)
         self.assertNotIn("this._clearTargetWindowXid();", x11_block)
+        self.assertIn("let trustedPrograms = Object.create(null);", x11_block)
+        self.assertIn("Object.prototype.hasOwnProperty.call(trustedPrograms, name)", x11_block)
+        self.assertIn('if (name !== "timeout" && name !== "xdotool")', x11_block)
+        self.assertIn("let trustedProgram = this._findTrustedProgramInPath(name);", x11_block)
+        self.assertEqual(x11_block.count("resolveTrustedProgram);"), 3)
 
         auto_paste_start = source.index("_windowTitleMatchesAutoPaste: function()")
         auto_paste_end = source.index("\n  _updateOpenAiFlexProcessingItem:", auto_paste_start)
@@ -7034,10 +7076,12 @@ class AppletStaticTest(unittest.TestCase):
     def test_prepared_transcript_keeps_hard_insert_limit_after_append_space(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        start = source.index("_preparedTranscriptText: function(transcript, suppressAutoPasteEnter)")
+        start = source.index("_preparedTranscriptText: function(transcript, suppressAutoPasteEnter, autoPasteTargetMatch)")
         end = source.index("\n  _sanitizeSpecialChars:", start)
         block = source[start:end]
-        self.assertIn("let autoPasteEnter = !suppressAutoPasteEnter && this._windowTitleMatchesAutoPaste();", block)
+        self.assertIn("let autoPasteEnter = !suppressAutoPasteEnter && (", block)
+        self.assertIn('typeof autoPasteTargetMatch === "boolean"', block)
+        self.assertIn(": this._windowTitleMatchesAutoPaste()", block)
         self.assertIn("if (text.length > MAX_TEXT_INSERT_CHARS) {", block)
         self.assertIn("if (this.appendSpace && text.length < MAX_TEXT_INSERT_CHARS && text &&", block)
         self.assertIn("autoPasteEnter && !suppressAutoPasteEnter && text.length < MAX_TEXT_INSERT_CHARS", block)
@@ -7084,7 +7128,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("global.display ? global.display.focus_window : null", source)
         self.assertIn("this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;", source)
         self.assertIn("_rememberActiveXWindow: function(completionCallback, expectedGeneration)", source)
-        self.assertIn("_xdotoolOutput: function(args, maxBytes, completionCallback, timeoutMs)", source)
+        self.assertIn("_xdotoolOutput: function(args, maxBytes, completionCallback, timeoutMs, trustedProgramResolver)", source)
         remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure)")
         remember_end = source.index("\n  _restoreTargetWindowForPaste:", remember_start)
         remember_block = source[remember_start:remember_end]
@@ -7168,15 +7212,17 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_x11_helper_probe_failures_complete_the_output_callback(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_xdotoolOutput: function(args, maxBytes, completionCallback, timeoutMs)")
+        start = source.index("_xdotoolOutput: function(args, maxBytes, completionCallback, timeoutMs, trustedProgramResolver)")
         end = source.index("\n  _xWindowLooksLikeSpeedOfCinnamon:", start)
         block = source[start:end]
         self.assertIn("let complete = typeof completionCallback === \"function\" ? completionCallback : function() {};", block)
         self.assertIn("let completeOnce = (value) =>", block)
+        self.assertIn('typeof trustedProgramResolver === "function"', block)
+        self.assertIn('timeout = resolveTrustedProgram("timeout");', block)
+        self.assertIn('xdotool = resolveTrustedProgram("xdotool");', block)
         self.assertIn("let timeout;", block)
         self.assertIn("let xdotool;", block)
-        self.assertIn('timeout = this._findTrustedProgramInPath("timeout");', block)
-        self.assertIn('xdotool = this._findTrustedProgramInPath("xdotool");', block)
+        self.assertIn(": (name) => this._findTrustedProgramInPath(name);", block)
         self.assertIn('this._recordLifecycleError("x11-command", error);', block)
         self.assertIn("completeOnce(null);", block)
 
@@ -7929,7 +7975,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback, isCurrentOperation)', source)
         self.assertIn('if (!isCurrentOperation() || !this._lifecycleAllowsWork()) {', source)
         self.assertIn("this._completeKeyboardInsertFailure(", source)
-        self.assertIn('this._setStatus("error", _("Clipboard changed before automatic paste"), this.lastTranscript);', source)
+        self.assertIn('this._setStatus("error", _("Clipboard did not confirm new text before automatic paste"), this.lastTranscript);', source)
         self.assertIn("return false;", source)
         self.assertIn("return true;", source)
 
@@ -8120,12 +8166,26 @@ class AppletStaticTest(unittest.TestCase):
             "_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard)",
             source,
         )
+        ready_start = source.index("_spawnKeyboardWhenClipboardReady: function(")
+        ready_end = source.index("\n  _spawnKeyboardProcess:", ready_start)
+        ready_block = source[ready_start:ready_end]
+        args_start = source.index("_spawnKeyboardArgs: function(")
+        args_end = source.index("\n  _finishAppletTextInsert:", args_start)
+        args_block = source[args_start:args_end]
+        self.assertNotIn("this.clipboard.get_text", ready_block)
+        self.assertIn("this._spawnKeyboardArgs(", ready_block)
+        self.assertEqual(args_block.count("this.clipboard.get_text(St.ClipboardType.CLIPBOARD"), 1)
         self.assertIn('if (expectedClipboardText !== undefined && expectedClipboardText !== null) {', source)
         self.assertIn('String(clipboardText || "") !== expected', source)
         self.assertIn(
-            'this._setStatus("error", _("Clipboard changed before automatic paste"), this.lastTranscript);',
+            'this._setStatus("error", _("Clipboard did not confirm new text before automatic paste"), this.lastTranscript);',
             source,
         )
+        self.assertIn(
+            'this._setStatus("error", _("Keyboard insert failed: retry timer could not be scheduled"), this.lastTranscript);',
+            args_block,
+        )
+        self.assertIn('failAsync(error, _("Clipboard could not be verified before automatic paste"));', args_block)
 
     def test_applet_prevents_false_success_when_automatic_paste_could_not_start(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -8916,7 +8976,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof label.get_text === "function" && String(label.get_text()) === nextText', block)
         self.assertLess(block.index("label.get_text()"), block.index("label.set_text(nextText)"))
 
-        panel_start = source.index("_updatePanel: function()")
+        panel_start = source.index("_updatePanel: function(menuOpenOverride)")
         panel_end = source.index("\n};\n\nfunction main", panel_start)
         panel_block = source[panel_start:panel_end]
         self.assertIn("let menuRenderSucceeded = true;", panel_block)
@@ -8975,7 +9035,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (status === "processing") return "view-refresh-symbolic";', icon_block)
         self.assertIn('return "audio-input-microphone-symbolic";', icon_block)
 
-        update_start = source.index("_updatePanel: function()")
+        update_start = source.index("_updatePanel: function(menuOpenOverride)")
         update_end = source.index("\n};\n\nfunction main", update_start)
         update_block = source[update_start:update_end]
         self.assertIn("this._applyPanelIcon(this.status);", update_block)

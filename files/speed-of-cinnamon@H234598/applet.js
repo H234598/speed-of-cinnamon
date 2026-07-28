@@ -4069,9 +4069,24 @@ MyApplet.prototype = {
           actor.change_style_pseudo_class("checked", open);
         }
       }
-      if (open && this.status === "recording") {
+      if (open) {
+        if (this._panelRenderFingerprint) {
+          this._panelRenderFingerprint.rootMenuOpen = false;
+        }
         this._recordingDisplayFingerprint = null;
-        this._updateRecordingDisplay();
+        let panelUpdated = this._updatePanel(true) === true;
+        if (!panelUpdated) {
+          let retryTimer = this._scheduleTrackedTimer("panel-open-retry", 1, () => {
+            if (!this.menu || this.menu.isOpen !== true) {
+              return false;
+            }
+            this._updatePanel(true);
+            return false;
+          }, false);
+          if (!retryTimer && this._lifecycleAllowsWork() && this.menu && this.menu.isOpen === true) {
+            this._updatePanel(true);
+          }
+        }
       }
     }, "menu-open-state");
     this._connectSafe(this, "orientation-changed", (applet, orientation) => {
@@ -13418,7 +13433,7 @@ MyApplet.prototype = {
     this.targetWindowXClass = "";
   },
 
-  _xdotoolOutput: function(args, maxBytes, completionCallback, timeoutMs) {
+  _xdotoolOutput: function(args, maxBytes, completionCallback, timeoutMs, trustedProgramResolver) {
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
     let completed = false;
     let completeOnce = (value) => {
@@ -13431,8 +13446,11 @@ MyApplet.prototype = {
     let timeout;
     let xdotool;
     try {
-      timeout = this._findTrustedProgramInPath("timeout");
-      xdotool = this._findTrustedProgramInPath("xdotool");
+      let resolveTrustedProgram = typeof trustedProgramResolver === "function"
+        ? trustedProgramResolver
+        : (name) => this._findTrustedProgramInPath(name);
+      timeout = resolveTrustedProgram("timeout");
+      xdotool = resolveTrustedProgram("xdotool");
     } catch (error) {
       this._recordLifecycleError("x11-command", error);
       completeOnce(null);
@@ -13502,6 +13520,20 @@ MyApplet.prototype = {
       targetGeneration === Number(this.targetWindowXPendingGeneration || 0) &&
       this._lifecycleAllowsWork();
     let deadlineMs = Date.now() + X11_COMMAND_TIMEOUT_MS;
+    let trustedPrograms = Object.create(null);
+    let resolveTrustedProgram = (name) => {
+      if (name !== "timeout" && name !== "xdotool") {
+        return null;
+      }
+      if (Object.prototype.hasOwnProperty.call(trustedPrograms, name)) {
+        return trustedPrograms[name];
+      }
+      let trustedProgram = this._findTrustedProgramInPath(name);
+      if (trustedProgram) {
+        trustedPrograms[name] = trustedProgram;
+      }
+      return trustedProgram;
+    };
     this._xdotoolOutput(["getactivewindow"], MAX_XDOTOOL_TARGET_OUTPUT_BYTES, (activeOutput) => {
       if (!isCurrent()) {
         complete(false);
@@ -13535,9 +13567,9 @@ MyApplet.prototype = {
           this.targetWindowXTitle = this._shortMenuText(title, 160);
           this.targetWindowXClass = this._shortMenuText(windowClass, 160);
           complete(true);
-        }, Math.max(1, deadlineMs - Date.now()));
-      }, Math.max(1, deadlineMs - Date.now()));
-    }, Math.max(1, deadlineMs - Date.now()));
+        }, Math.max(1, deadlineMs - Date.now()), resolveTrustedProgram);
+      }, Math.max(1, deadlineMs - Date.now()), resolveTrustedProgram);
+    }, Math.max(1, deadlineMs - Date.now()), resolveTrustedProgram);
     return true;
   },
 
@@ -14746,72 +14778,21 @@ MyApplet.prototype = {
       if (typeof completionCallback === "function") completionCallback(false);
       return;
     }
-    if (expectedClipboardText === undefined || expectedClipboardText === null) {
-      try {
-        this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, null, null, completionCallback, isCurrentOperation);
-      } catch (error) {
-        failAsync(error);
-      }
-      return;
-    }
-    let expected = String(expectedClipboardText);
+    let expected = expectedClipboardText === undefined || expectedClipboardText === null
+      ? null
+      : String(expectedClipboardText);
     try {
-      if (!this.clipboard || !this.clipboard.get_text) {
-        this._completeKeyboardInsertFailure(completionCallback, _("Clipboard could not be verified before automatic paste"));
-        return;
-      }
-      this.clipboard.get_text(St.ClipboardType.CLIPBOARD, this._guardStateCallback("clipboard-read", (clipboard, clipboardText) => {
-        try {
-          if (this.appletRemoved || !isCurrentOperation()) {
-            if (typeof completionCallback === "function") {
-              completionCallback(false);
-            }
-            return;
-          }
-          if (String(clipboardText || "") === expected) {
-            try {
-              this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, expected, deadlineMs, completionCallback, isCurrentOperation);
-            } catch (error) {
-              failAsync(error);
-            }
-            return;
-          }
-          if (Date.now() >= deadlineMs) {
-            this._setStatus("error", _("Clipboard did not confirm new text before automatic paste"), this.lastTranscript);
-            if (typeof completionCallback === "function") {
-              completionCallback(false);
-            }
-            return;
-          }
-          if (!this._scheduleTrackedTimer("paste", CLIPBOARD_READY_RETRY_MS, () => {
-            if (this.appletRemoved || !isCurrentOperation()) {
-              if (typeof completionCallback === "function") {
-                completionCallback(false);
-              }
-              return false;
-            }
-            try {
-              this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expected, deadlineMs, expectedTargetWindow, completionCallback, isCurrentOperation);
-            } catch (error) {
-              failAsync(error);
-            }
-            return false;
-          }, false, "pasteTimer")) {
-            this._setStatus("error", _("Keyboard insert failed: retry timer could not be scheduled"), this.lastTranscript);
-            if (typeof completionCallback === "function") {
-              completionCallback(false);
-            }
-          }
-        } catch (error) {
-          failAsync(error);
-        }
-      }, undefined));
-    } catch (err) {
-      this._completeKeyboardInsertFailure(
+      this._spawnKeyboardArgs(
+        args,
+        followUpArgs,
+        expectedTargetWindow,
+        expected,
+        expected === null ? null : deadlineMs,
         completionCallback,
-        _("Clipboard could not be verified before automatic paste"),
-        err
+        isCurrentOperation
       );
+    } catch (error) {
+      failAsync(error);
     }
   },
 
@@ -14878,7 +14859,7 @@ MyApplet.prototype = {
             }
             if (String(clipboardText || "") !== expected) {
               if (expectedClipboardDeadlineMs && Date.now() >= expectedClipboardDeadlineMs) {
-                this._setStatus("error", _("Clipboard changed before automatic paste"), this.lastTranscript);
+                this._setStatus("error", _("Clipboard did not confirm new text before automatic paste"), this.lastTranscript);
                 if (typeof completionCallback === "function") {
                   completionCallback(false);
                 }
@@ -14898,6 +14879,7 @@ MyApplet.prototype = {
                 }
                 return false;
               }, false, "pasteTimer")) {
+                this._setStatus("error", _("Keyboard insert failed: retry timer could not be scheduled"), this.lastTranscript);
                 if (typeof completionCallback === "function") {
                   completionCallback(false);
                 }
@@ -14920,7 +14902,7 @@ MyApplet.prototype = {
           }
           return;
         }
-        failAsync(error, _("Clipboard changed before automatic paste"));
+        failAsync(error, _("Clipboard could not be verified before automatic paste"));
       }
       return;
     }
@@ -15383,7 +15365,7 @@ MyApplet.prototype = {
       (this._findTrustedProgramInPath("xdotool") || this._findTrustedProgramInPath("wtype"));
     let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;
     let suppressAutoPasteEnter = method !== "clipboard-paste" || submitWithReturn;
-    let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter);
+    let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter, autoPasteTarget);
     let insertToken = {};
     let insertTargetGeneration = Number(this.targetWindowGeneration || 0);
     this.textInsertToken = insertToken;
@@ -15625,9 +15607,13 @@ MyApplet.prototype = {
     return true;
   },
 
-  _preparedTranscriptText: function(transcript, suppressAutoPasteEnter) {
+  _preparedTranscriptText: function(transcript, suppressAutoPasteEnter, autoPasteTargetMatch) {
     let text = String(transcript || "");
-    let autoPasteEnter = !suppressAutoPasteEnter && this._windowTitleMatchesAutoPaste();
+    let autoPasteEnter = !suppressAutoPasteEnter && (
+      typeof autoPasteTargetMatch === "boolean"
+        ? autoPasteTargetMatch
+        : this._windowTitleMatchesAutoPaste()
+    );
     if (!this.sanitizeSpecialChars && !this.appendSpace && !autoPasteEnter && text.length <= MAX_TEXT_INSERT_CHARS && text.indexOf("\u0000") < 0) {
       return text;
     }
@@ -16130,11 +16116,14 @@ MyApplet.prototype = {
     }, undefined);
   },
 
-  _updatePanel: function() {
+  _updatePanel: function(menuOpenOverride) {
     return this._runGuarded("panel-update", () => {
       if (this.status !== "recording") {
         this._recordingDisplayFingerprint = null;
       }
+      let rootMenuOpen = typeof menuOpenOverride === "boolean"
+        ? menuOpenOverride
+        : Boolean(this.menu && this.menu.isOpen === true);
       let label = "";
       let tooltip = "Speed of Cinnamon";
       let statusText = this.status || "idle";
@@ -16204,12 +16193,18 @@ MyApplet.prototype = {
       );
       let styleClass = this._panelStyleClassForStatus(this.status);
       let previousFingerprint = this._panelRenderFingerprint;
-      if (
+      let panelRenderUnchanged = Boolean(
         previousFingerprint &&
         previousFingerprint.status === this.status &&
         previousFingerprint.showPanelLabel === Boolean(this.showPanelLabel) &&
         previousFingerprint.panelLabel === panelLabel &&
         previousFingerprint.tooltipText === tooltipText &&
+        previousFingerprint.statusIcon === statusIcon &&
+        previousFingerprint.styleClass === styleClass &&
+        previousFingerprint.panelActorReady === panelActorReady
+      );
+      if (
+        panelRenderUnchanged &&
         previousFingerprint.statusText === statusText &&
         previousFingerprint.toggleText === toggleText &&
         previousFingerprint.microphoneText === microphoneText &&
@@ -16227,51 +16222,53 @@ MyApplet.prototype = {
         previousFingerprint.transcriptText === transcriptText &&
         previousFingerprint.autoPasteText === autoPasteText &&
         previousFingerprint.progressText === progressText &&
-        previousFingerprint.statusIcon === statusIcon &&
-        previousFingerprint.styleClass === styleClass &&
-        previousFingerprint.panelActorReady === panelActorReady
+        previousFingerprint.rootMenuOpen === rootMenuOpen
       ) {
-        return;
+        return true;
       }
-      this._applyPanelIcon(this.status);
-      this._applyPanelStyle(this.status);
-      if (panelActorReady) {
-        this.set_applet_label(panelLabel);
-        this.set_applet_tooltip(tooltipText);
+      if (!panelRenderUnchanged) {
+        this._applyPanelIcon(this.status);
+        this._applyPanelStyle(this.status);
+        if (panelActorReady) {
+          this.set_applet_label(panelLabel);
+          this.set_applet_tooltip(tooltipText);
+        }
       }
       let menuRenderSucceeded = true;
-      let labelWriteSucceeded = this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.doctorSummaryItem, doctorSummaryText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.languageItem, languageText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.recorderItem, recorderText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.recordingLimitItem, recordingLimitText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.recordingOptionsItem, recordingOptionsText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.notificationOptionsItem, notificationOptionsText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.outputMethodItem, outputMethodText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.textOptionsItem, textOptionsText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._updateAutoPasteItem(autoPasteText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.inputSourceItem, inputSourceText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.modelItem, modelText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.textModelItem, textModelText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.transcriptItem, transcriptText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.toggleItem, toggleText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      if (rootMenuOpen) {
+        let labelWriteSucceeded = this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.doctorSummaryItem, doctorSummaryText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.languageItem, languageText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.recorderItem, recorderText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.recordingLimitItem, recordingLimitText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.recordingOptionsItem, recordingOptionsText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.notificationOptionsItem, notificationOptionsText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.outputMethodItem, outputMethodText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.textOptionsItem, textOptionsText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._updateAutoPasteItem(autoPasteText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.inputSourceItem, inputSourceText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.modelItem, modelText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.textModelItem, textModelText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.transcriptItem, transcriptText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.toggleItem, toggleText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      }
       this._panelRenderFingerprint = panelActorReady && menuRenderSucceeded ? {
         status: this.status,
         showPanelLabel: Boolean(this.showPanelLabel),
@@ -16297,8 +16294,10 @@ MyApplet.prototype = {
         statusIcon: statusIcon,
         styleClass: styleClass,
         panelActorReady: panelActorReady,
+        rootMenuOpen: rootMenuOpen,
       } : null;
-    }, undefined);
+      return this._panelRenderFingerprint !== null;
+    }, false);
   }
 };
 
