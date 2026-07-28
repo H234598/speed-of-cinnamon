@@ -7899,10 +7899,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn('let clean = this.lastTranscript.replace(/\\s+/g, " ").trim();', source)
         self.assertNotIn('clean.length > 80 ? clean.slice(0, 77) + "..." : clean;', source)
 
-        update_start = source.index("_updateAutoPasteItem: function()")
+        update_start = source.index("_updateAutoPasteItem: function(labelText)")
         update_end = source.index("\n  _windowTitleMatchesAutoPaste:", update_start)
         update_block = source[update_start:update_end]
-        self.assertIn("this._setMenuItemLabelSafely(this.autoPasteItem, this._autoPasteLabel());", update_block)
+        self.assertIn('_updateAutoPasteItem: function(labelText)', update_block)
+        self.assertIn('let nextText = typeof labelText === "string" ? labelText : this._autoPasteLabel();', update_block)
+        self.assertIn("return this._setMenuItemLabelSafely(this.autoPasteItem, nextText);", update_block)
         self.assertNotIn("this._populateAutoPasteMenu();", update_block)
 
         status_start = source.index("_setStatusPreservingRecording: function(status, message, transcript)")
@@ -8419,6 +8421,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof label.set_text !== "function"', block)
         self.assertIn('typeof label.get_text === "function" && String(label.get_text()) === nextText', block)
         self.assertLess(block.index("label.get_text()"), block.index("label.set_text(nextText)"))
+
+        panel_start = source.index("_updatePanel: function()")
+        panel_end = source.index("\n};\n\nfunction main", panel_start)
+        panel_block = source[panel_start:panel_end]
+        self.assertIn("let menuRenderSucceeded = true;", panel_block)
+        self.assertIn("labelWriteSucceeded = this._updateAutoPasteItem(autoPasteText);", panel_block)
+        self.assertIn("menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;", panel_block)
+        self.assertIn("panelActorReady && menuRenderSucceeded ? {", panel_block)
         self.assertNotIn(".label.text", source)
 
     def test_static_submenus_are_not_rebuilt_when_opened(self) -> None:

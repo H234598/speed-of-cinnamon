@@ -6071,8 +6071,9 @@ MyApplet.prototype = {
     this.autoPasteItem.menu.addMenuItem(custom);
   },
 
-  _updateAutoPasteItem: function() {
-    this._setMenuItemLabelSafely(this.autoPasteItem, this._autoPasteLabel());
+  _updateAutoPasteItem: function(labelText) {
+    let nextText = typeof labelText === "string" ? labelText : this._autoPasteLabel();
+    return this._setMenuItemLabelSafely(this.autoPasteItem, nextText);
   },
 
   _windowTitleMatchesAutoPaste: function() {
@@ -15882,23 +15883,40 @@ MyApplet.prototype = {
         this.set_applet_label(panelLabel);
         this.set_applet_tooltip(tooltipText);
       }
-      this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
-      this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
-      this._setMenuItemLabelSafely(this.doctorSummaryItem, doctorSummaryText);
-      this._setMenuItemLabelSafely(this.languageItem, languageText);
-      this._setMenuItemLabelSafely(this.recorderItem, recorderText);
-      this._setMenuItemLabelSafely(this.recordingLimitItem, recordingLimitText);
-      this._setMenuItemLabelSafely(this.recordingOptionsItem, recordingOptionsText);
-      this._setMenuItemLabelSafely(this.notificationOptionsItem, notificationOptionsText);
-      this._setMenuItemLabelSafely(this.outputMethodItem, outputMethodText);
-      this._setMenuItemLabelSafely(this.textOptionsItem, textOptionsText);
-      this._updateAutoPasteItem();
-      this._setMenuItemLabelSafely(this.inputSourceItem, inputSourceText);
-      this._setMenuItemLabelSafely(this.modelItem, modelText);
-      this._setMenuItemLabelSafely(this.textModelItem, textModelText);
-      this._setMenuItemLabelSafely(this.transcriptItem, transcriptText);
-      this._setMenuItemLabelSafely(this.toggleItem, toggleText);
-      this._panelRenderFingerprint = panelActorReady ? {
+      let menuRenderSucceeded = true;
+      let labelWriteSucceeded = this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.doctorSummaryItem, doctorSummaryText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.languageItem, languageText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.recorderItem, recorderText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.recordingLimitItem, recordingLimitText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.recordingOptionsItem, recordingOptionsText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.notificationOptionsItem, notificationOptionsText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.outputMethodItem, outputMethodText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.textOptionsItem, textOptionsText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._updateAutoPasteItem(autoPasteText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.inputSourceItem, inputSourceText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.modelItem, modelText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.textModelItem, textModelText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.transcriptItem, transcriptText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.toggleItem, toggleText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      this._panelRenderFingerprint = panelActorReady && menuRenderSucceeded ? {
         status: this.status,
         showPanelLabel: Boolean(this.showPanelLabel),
         panelLabel: panelLabel,
