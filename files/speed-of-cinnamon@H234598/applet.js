@@ -5457,18 +5457,28 @@ MyApplet.prototype = {
   _cliCommand: function() {
     try {
       let configured = String(this.cliPath || "").trim();
+      if (
+        this._cliCommandCache &&
+        this._cliCommandCache.configured === configured &&
+        this._cliCommandCache.command
+      ) {
+        return this._cliCommandCache.command;
+      }
       if (configured !== "") {
         if (configured.indexOf("~/") === 0) {
           configured = GLib.build_filenamev([GLib.get_home_dir(), configured.substring(2)]);
         }
         if (configured.charAt(0) === "/" && GLib.file_test(configured, GLib.FileTest.IS_EXECUTABLE)) {
+          this._cliCommandCache = { configured: String(this.cliPath || "").trim(), command: configured };
           return configured;
         }
       }
       if (GLib.file_test(DEFAULT_CLI, GLib.FileTest.IS_EXECUTABLE)) {
+        this._cliCommandCache = { configured: String(this.cliPath || "").trim(), command: DEFAULT_CLI };
         return DEFAULT_CLI;
       }
       if (GLib.file_test(SYSTEM_CLI, GLib.FileTest.IS_EXECUTABLE)) {
+        this._cliCommandCache = { configured: String(this.cliPath || "").trim(), command: SYSTEM_CLI };
         return SYSTEM_CLI;
       }
       return "";
@@ -11693,6 +11703,9 @@ MyApplet.prototype = {
     }
     let resolvedCommand = this._resolveAllowedCliCommand(normalized[0]);
     if (resolvedCommand === null) {
+      if (this._cliCommandCache && this._cliCommandCache.command === normalized[0]) {
+        this._cliCommandCache = null;
+      }
       throw new Error("Backend command is not executable");
     }
     normalized[0] = resolvedCommand;
@@ -11858,9 +11871,6 @@ MyApplet.prototype = {
 
   _parseSpawnOutput: function(stdout) {
     let output = String(stdout || "");
-    if (utf8ByteLength(output) > MAX_SPAWN_JSON_BYTES) {
-      return { status: "error", error: "Backend response is too large", transport_error: true };
-    }
     try {
       let parsed = JSON.parse(output || "{}");
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -13895,7 +13905,7 @@ MyApplet.prototype = {
             CLIPBOARD_COMMAND_TIMEOUT_MS * Math.max(1, nonTextTargets.length)
           );
           let fingerprintDeadlineMs = Date.now() + fingerprintBudgetMs;
-          this._clipboardPayloadFingerprintFromTargetsAsync(resolvedSpec, targetText, (payloadFingerprint) => {
+          this._clipboardPayloadFingerprintFromTargetsAsync(resolvedSpec, nonTextTargets, (payloadFingerprint) => {
             try {
               if (payloadFingerprint === "unknown") {
                 unknown();
@@ -13905,7 +13915,7 @@ MyApplet.prototype = {
                 signature: targetText,
                 hasNonTextPayload: nonTextTargets.length > 0,
                 payloadFingerprint: payloadFingerprint,
-                description: this._clipboardPayloadDescriptionFromTargets(targetText),
+                description: this._clipboardPayloadDescriptionFromTargets(nonTextTargets),
               });
             } catch (error) {
               this._recordLifecycleError("clipboard-query", error);
@@ -13925,7 +13935,7 @@ MyApplet.prototype = {
     return true;
   },
 
-  _clipboardPayloadFingerprintFromTargetsAsync: function(spec, targets, completionCallback, deadlineMs) {
+  _clipboardPayloadFingerprintFromTargetsAsync: function(spec, nonTextTargets, completionCallback, deadlineMs) {
     let callback = typeof completionCallback === "function" ? completionCallback : function() {};
     let completed = false;
     let complete = (value) => {
@@ -13945,15 +13955,12 @@ MyApplet.prototype = {
       }
       complete("unknown");
     };
-    let nonTextTargets;
-    try {
-      nonTextTargets = this._clipboardNonTextPayloadTargets(targets);
-      if (!Array.isArray(nonTextTargets) || nonTextTargets.length === 0) {
-        complete("no-nontext");
-        return;
-      }
-    } catch (error) {
-      fail(error);
+    if (!Array.isArray(nonTextTargets)) {
+      fail(new Error("Clipboard targets are invalid"));
+      return;
+    }
+    if (nonTextTargets.length === 0) {
+      complete("no-nontext");
       return;
     }
     let fingerprints = [];
@@ -14106,9 +14113,8 @@ MyApplet.prototype = {
     });
   },
 
-  _clipboardPayloadDescriptionFromTargets: function(targets) {
-    let nonTextTargets = this._clipboardNonTextPayloadTargets(targets);
-    if (nonTextTargets.length === 0) {
+  _clipboardPayloadDescriptionFromTargets: function(nonTextTargets) {
+    if (!Array.isArray(nonTextTargets) || nonTextTargets.length === 0) {
       return _("text");
     }
     let description = nonTextTargets.slice(0, 6).join(", ");
@@ -15623,15 +15629,31 @@ MyApplet.prototype = {
   },
 
   _shortTranscript: function() {
+    let transcriptCacheKey = this.lastTranscript;
+    let transcriptVisible = this.showTranscriptText === true;
+    if (
+      this._shortTranscriptCache &&
+      this._shortTranscriptCache.transcript === transcriptCacheKey &&
+      this._shortTranscriptCache.visible === transcriptVisible
+    ) {
+      return this._shortTranscriptCache.value;
+    }
+    let value;
     if (!this.lastTranscript) {
-      return _("No transcript yet");
-    }
-    if (this.showTranscriptText === true) {
+      value = _("No transcript yet");
+    } else if (transcriptVisible) {
       let sanitizedTranscript = String(this.lastTranscript).replace(/[\u0000-\u001F\u007F-\u009F]/g, " ").replace(/\s+/g, " ").trim();
-      return this._shortMenuText(sanitizedTranscript, MAX_UI_MESSAGE_CHARS);
+      value = this._shortMenuText(sanitizedTranscript, MAX_UI_MESSAGE_CHARS);
+    } else {
+      let transcriptLength = String(this.lastTranscript).length;
+      value = _("Transcript preview hidden (length: ") + String(transcriptLength) + " chars)";
     }
-    let transcriptLength = String(this.lastTranscript).length;
-    return _("Transcript preview hidden (length: ") + String(transcriptLength) + " chars)";
+    this._shortTranscriptCache = {
+      transcript: transcriptCacheKey,
+      visible: transcriptVisible,
+      value: value,
+    };
+    return value;
   },
 
   _formatSeconds: function(seconds) {
