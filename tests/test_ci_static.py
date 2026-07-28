@@ -831,6 +831,26 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('expected_name = "H234598"', verifier)
         self.assertIn('expected_email = "54270221+H234598@users.noreply.github.com"', verifier)
         self.assertIn('expected_repo = "github.com/H234598/speed-of-cinnamon"', verifier)
+        self.assertIn("allowed_history_commit_identities = {", verifier)
+        self.assertNotIn("allowed_committers = {", verifier)
+        for commit in (
+            "5756bb6532666998e015c003a069ee5f5ac42aa0",
+            "9567d0a1daa6d7f982e769ed268155769dd39b91",
+            "e3893bae4656b26fc83aa21477cac6b5733424c0",
+            "e4ec7d426844770cd655794c180dbf9ba35b7821",
+            "b13b5b8af393ca925958d100ae990b877624fcfe",
+            "0d3f81c54d9f6e87408cc9eb63497dedda2a4b95",
+            "f8210a7ebf692ae3246e2ba58256891f8fcde07e",
+            "137a38d0ac84d46cb667231bc00b2ab3f17ab5b9",
+            "63059a082f35713189f4efeb5d9f95a0349a66a0",
+            "c306b77cad968f5e25ec40b67f38c574f12c244d",
+        ):
+            self.assertIn(commit, verifier)
+        self.assertIn('(author_name, author_email) == (expected_name, expected_email)', verifier)
+        self.assertIn('(committer_name, committer_email) == (expected_name, expected_email)', verifier)
+        self.assertIn("history_identity = allowed_history_commit_identities.get(sha)", verifier)
+        self.assertIn('run_git("rev-parse", "--is-shallow-repository", check=False)', verifier)
+        self.assertIn("cannot verify full commit history in shallow clone; use fetch-depth: 0", verifier)
         self.assertIn("readonly TRUSTED_PATH='/usr/bin:/usr/sbin:/bin:/sbin'", verifier)
         self.assertIn('PATH="${TRUSTED_PATH}"', verifier)
         self.assertIn('python_bin="$(command -v python3 || true)"', verifier)
@@ -849,7 +869,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("0x80 <= ord(char) <= 0x9F for char in remote", verifier)
         self.assertIn("normalized_remote not in allowed_remote_urls", verifier)
         self.assertNotIn("expected_repo not in normalized_remote", verifier)
-        self.assertIn('allowed_committers = {', verifier)
+        self.assertNotIn('allowed_committers = {', verifier)
         self.assertIn('("GitHub", "noreply@github.com")', verifier)
         self.assertIn('run_git("--no-pager", "log", "HEAD",', verifier)
         self.assertNotIn('"log", "--all"', verifier)

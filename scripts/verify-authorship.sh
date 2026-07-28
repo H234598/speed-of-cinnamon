@@ -37,9 +37,47 @@ allowed_remote_urls = {
     f"git@github.com:H234598/speed-of-cinnamon",
     f"ssh://git@{expected_repo}",
 }
-allowed_committers = {
-    (expected_name, expected_email),
-    ("GitHub", "noreply@github.com"),
+allowed_history_commit_identities = {
+    "5756bb6532666998e015c003a069ee5f5ac42aa0": (
+        (expected_name, expected_email),
+        ("GitHub", "noreply@github.com"),
+    ),
+    "9567d0a1daa6d7f982e769ed268155769dd39b91": (
+        ("dependabot[bot]", "49699333+dependabot[bot]@users.noreply.github.com"),
+        ("GitHub", "noreply@github.com"),
+    ),
+    "e3893bae4656b26fc83aa21477cac6b5733424c0": (
+        (expected_name, expected_email),
+        ("GitHub", "noreply@github.com"),
+    ),
+    "e4ec7d426844770cd655794c180dbf9ba35b7821": (
+        (expected_name, expected_email),
+        ("GitHub", "noreply@github.com"),
+    ),
+    "b13b5b8af393ca925958d100ae990b877624fcfe": (
+        (expected_name, expected_email),
+        ("GitHub", "noreply@github.com"),
+    ),
+    "0d3f81c54d9f6e87408cc9eb63497dedda2a4b95": (
+        (expected_name, expected_email),
+        ("GitHub", "noreply@github.com"),
+    ),
+    "f8210a7ebf692ae3246e2ba58256891f8fcde07e": (
+        (expected_name, expected_email),
+        ("GitHub", "noreply@github.com"),
+    ),
+    "137a38d0ac84d46cb667231bc00b2ab3f17ab5b9": (
+        (expected_name, expected_email),
+        ("GitHub", "noreply@github.com"),
+    ),
+    "63059a082f35713189f4efeb5d9f95a0349a66a0": (
+        (expected_name, expected_email),
+        ("GitHub", "noreply@github.com"),
+    ),
+    "c306b77cad968f5e25ec40b67f38c574f12c244d": (
+        (expected_name, expected_email),
+        ("GitHub", "noreply@github.com"),
+    ),
 }
 forbidden = re.compile("staff" + r"[-_ ]?" + "control", re.IGNORECASE)
 
@@ -136,6 +174,13 @@ def check_git_identity() -> None:
     if normalized_remote not in allowed_remote_urls:
         fail(f"origin must point at {expected_repo}, got {remote!r}")
 
+    shallow_result = run_git("rev-parse", "--is-shallow-repository", check=False)
+    shallow_state = shallow_result.stdout.strip()
+    if shallow_result.returncode != 0 or shallow_state not in {"true", "false"}:
+        fail("could not determine whether repository is shallow")
+    if shallow_state == "true":
+        fail("cannot verify full commit history in shallow clone; use fetch-depth: 0")
+
     log = run_git("--no-pager", "log", "HEAD", "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1e").stdout
     bad_commits: list[str] = []
     for record in log.strip("\x1e").split("\x1e"):
@@ -146,7 +191,17 @@ def check_git_identity() -> None:
         if len(fields) != 5:
             fail(f"could not parse commit identity record: {record!r}")
         sha, author_name, author_email, committer_name, committer_email = fields
-        if author_name != expected_name or author_email != expected_email or (committer_name, committer_email) not in allowed_committers:
+        normal_identity = (
+            (author_name, author_email) == (expected_name, expected_email)
+            and (committer_name, committer_email) == (expected_name, expected_email)
+        )
+        history_identity = allowed_history_commit_identities.get(sha)
+        allowed_history_identity = (
+            history_identity is not None
+            and (author_name, author_email) == history_identity[0]
+            and (committer_name, committer_email) == history_identity[1]
+        )
+        if not (normal_identity or allowed_history_identity):
             bad_commits.append(
                 f"{sha[:12]} author={author_name} <{author_email}> "
                 f"committer={committer_name} <{committer_email}>"
