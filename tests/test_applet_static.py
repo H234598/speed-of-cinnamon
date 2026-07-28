@@ -937,9 +937,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('const CANCEL_HOTKEY_ID = "speed-of-cinnamon-cancel";', source)
         self.assertIn('["primary-language-keybinding", "primaryLanguageKeybinding"]', source)
         self.assertIn('["cancel-keybinding", "cancelKeybinding"]', source)
-        self.assertIn('this._registerHotkey(PRIMARY_HOTKEY_ID, this.primaryLanguageKeybinding', source)
-        self.assertIn('this._registerHotkey(SECONDARY_HOTKEY_ID, this.secondaryLanguageKeybinding', source)
-        self.assertIn('this._registerHotkey(CANCEL_HOTKEY_ID, this.cancelKeybinding', source)
+        self.assertIn('{ id: PRIMARY_HOTKEY_ID, key: "primary-language-keybinding"', source)
+        self.assertIn('{ id: SECONDARY_HOTKEY_ID, key: "secondary-language-keybinding"', source)
+        self.assertIn('{ id: CANCEL_HOTKEY_ID, key: "cancel-keybinding"', source)
         self.assertIn('let accelerator = typeof binding === "string" ? binding.trim() : "";', source)
         self.assertIn('let value = typeof binding === "string" ? binding.trim() : "";', source)
         self.assertIn("this._hotkeyDefinitions = {};", source)
@@ -2223,7 +2223,7 @@ class AppletStaticTest(unittest.TestCase):
         )
         self.assertIn('toggleArgs = this._baseArgs(commandAction);', block)
         self.assertIn('if (commandAction === "stop") {', block)
-        self.assertIn('} else {', block)
+        self.assertIn('this._setStatus("recording", _("Recording..."), "");', block)
         self.assertLess(
             block.index('let commandAction = forcedAction === "start" || forcedAction === "stop" ? forcedAction : (hasExistingRecordingWork ? "stop" : "start");'),
             block.index('toggleArgs = this._baseArgs(commandAction);')
@@ -2239,9 +2239,26 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!hasExistingRecordingWork)", null_block)
         self.assertIn("this.recordingArtifactsPresent = false;", null_block)
         self.assertIn("this._updatePanel();", null_block)
-        self.assertLess(null_block.index("this.recordingArtifactsPresent = false;"), null_block.index("this._updatePanel();"))
-        self.assertLess(null_block.index("this._updatePanel();"), null_block.index("return false;"))
+        self.assertIn(
+            'if (commandAction === "start") {\n'
+            "        this.recordingStartedAtMs = 0;\n"
+            "        if (!hasExistingRecordingWork) {\n"
+            "          this.recordingArtifactsPresent = false;\n"
+            '          this._setStatus("error", this.lastMessage, this.lastTranscript);\n'
+            "          return false;\n"
+            "        }\n"
+            "      }",
+            null_block,
+        )
         self.assertIn("return false;", null_block)
+        spawn_start = block.index("let toggleHandle = this._spawnJson(toggleArgs,")
+        self.assertNotIn('this._setStatus("recording"', block[:spawn_start])
+        successful_start_status = block.index(
+            'if (commandAction === "start") {\n      this._setStatus("recording", _("Recording..."), "");',
+            null_start,
+        )
+        self.assertLess(null_start, successful_start_status)
+        self.assertLess(successful_start_status, block.index("\n    return true;", successful_start_status))
 
         language_start = source.index("_startWithLanguage: function(language, preserveTargetOnFailure)")
         language_end = source.index("\n  _populateLanguageMenu:", language_start)
@@ -3811,7 +3828,166 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('throw new Error("Hotkey could not be removed")', block)
         self.assertIn("return true;", block)
         self.assertIn("if (!removed) {", block)
-        self.assertIn("return;", block)
+        self.assertIn("this._markHotkeyRebindPending(name, accelerator);", block)
+        self.assertIn("return false;", block)
+
+    def test_hotkey_rebinds_are_stable_bounded_and_retried_from_current_settings(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        lifecycle_start = source.index("_startLifecycle: function()")
+        lifecycle_end = source.index("\n  _lifecycleAllowsWork:", lifecycle_start)
+        lifecycle_block = source[lifecycle_start:lifecycle_end]
+        self.assertIn("this._pendingHotkeyRebinds = {};", lifecycle_block)
+        self.assertIn("this._hotkeyCallbacks[HOTKEY_ID] = () =>", lifecycle_block)
+        self.assertIn("this._hotkeyCallbacks[PRIMARY_HOTKEY_ID] = () =>", lifecycle_block)
+        self.assertIn("this._hotkeyCallbacks[SECONDARY_HOTKEY_ID] = () =>", lifecycle_block)
+        self.assertIn("this._hotkeyCallbacks[CANCEL_HOTKEY_ID] = () =>", lifecycle_block)
+        toggle_callback = lifecycle_block[
+            lifecycle_block.index("this._hotkeyCallbacks[HOTKEY_ID] = () =>") :
+            lifecycle_block.index("this._hotkeyCallbacks[PRIMARY_HOTKEY_ID]")
+        ]
+        primary_callback = lifecycle_block[
+            lifecycle_block.index("this._hotkeyCallbacks[PRIMARY_HOTKEY_ID] = () =>") :
+            lifecycle_block.index("this._hotkeyCallbacks[SECONDARY_HOTKEY_ID]")
+        ]
+        secondary_callback = lifecycle_block[
+            lifecycle_block.index("this._hotkeyCallbacks[SECONDARY_HOTKEY_ID] = () =>") :
+            lifecycle_block.index("this._hotkeyCallbacks[CANCEL_HOTKEY_ID]")
+        ]
+        cancel_callback = lifecycle_block[lifecycle_block.index("this._hotkeyCallbacks[CANCEL_HOTKEY_ID] = () =>"):]
+        self.assertIn("this._toggleRecording();", toggle_callback)
+        self.assertIn("this._startWithLanguage(this._primaryLanguage());", primary_callback)
+        self.assertIn("this._startWithLanguage(this._secondaryLanguage());", secondary_callback)
+        self.assertIn("this._cancelRecording();", cancel_callback)
+
+        register_start = source.index("_registerHotkey: function(id, binding, callback)")
+        register_end = source.index("\n  _trackOrphanedHotkey:", register_start)
+        register_block = source[register_start:register_end]
+        self.assertLess(
+            register_block.index('let accelerator = typeof binding === "string"'),
+            register_block.index("Main.keybindingManager.removeHotKey(name)")
+        )
+        self.assertIn("previous.callback === callback && registryTracksHotkey", register_block)
+        self.assertIn("this._markHotkeyRebindPending(name, accelerator);", register_block)
+        self.assertIn("return this._clearPendingHotkeyRebind(name);", register_block)
+        remove_failure = register_block[
+            register_block.index("if (!removed) {") :
+            register_block.index('if (accelerator === "")')
+        ]
+        self.assertIn(
+            "      }\n"
+            "      this._markHotkeyRebindPending(name, accelerator);\n"
+            "      return false;\n"
+            "    }",
+            remove_failure,
+        )
+        failure_tail = register_block[register_block.rindex("if (this._hotkeyDefinitions)"):]
+        self.assertIn("this._markHotkeyRebindPending(name, accelerator);", failure_tail)
+        self.assertLess(failure_tail.index("this._markHotkeyRebindPending(name, accelerator);"), failure_tail.index("return false;"))
+        restore_start = register_block.index("if (restored) {", register_block.index("if (previous) {"))
+        restore_end = register_block.index("let rollbackRemoved =", restore_start)
+        restore_block = register_block[restore_start:restore_end]
+        self.assertIn("if (tracked) {", restore_block)
+        self.assertIn("this._markHotkeyRebindPending(name, accelerator);", restore_block)
+        self.assertLess(restore_block.index("this._markHotkeyRebindPending(name, accelerator);"), restore_block.index("return false;"))
+
+        retry_start = source.index("_retryPendingHotkeyRebinds: function()")
+        retry_end = source.index("\n  _registerHotkey:", retry_start)
+        retry_block = source[retry_start:retry_end]
+        self.assertIn("HOTKEY_REBIND_MAX_RETRIES", retry_block)
+        self.assertIn("let specs = this._hotkeySpecs();", retry_block)
+        self.assertIn("this._registerHotkey(spec.id, spec.binding, spec.callback);", retry_block)
+
+        pending_start = source.index("_markHotkeyRebindPending: function(name, binding)")
+        pending_end = source.index("\n  _clearPendingHotkeyRebind:", pending_start)
+        pending_block = source[pending_start:pending_end]
+        self.assertIn("let scheduled = this._scheduleProcessCleanupRetry();", pending_block)
+        self.assertIn("if (!scheduled) {", pending_block)
+        self.assertIn("current.retryWarningShown = true;", pending_block)
+        self.assertIn("Hotkey change could not be retried automatically", pending_block)
+        self.assertIn("return false;", pending_block)
+        max_retry_start = retry_block.index("if (attempts >= HOTKEY_REBIND_MAX_RETRIES)")
+        max_retry_end = retry_block.index("this._registerHotkey(spec.id, spec.binding, spec.callback);", max_retry_start)
+        max_retry_block = retry_block[max_retry_start:max_retry_end]
+        self.assertIn("active.callback === spec.callback", max_retry_block)
+        self.assertIn("!orphaned && !rollbackAttempted", max_retry_block)
+        self.assertIn("this._commitSettingValue(", max_retry_block)
+        self.assertIn("this._disableHotkeyAfterRebindFailure(name);", max_retry_block)
+        rollback_success = max_retry_block[
+            max_retry_block.index("if (pendingCleared && this._commitSettingValue(") :
+            max_retry_block.index("let runtimeDisabled =", max_retry_block.index("if (pendingCleared && this._commitSettingValue("))
+        ]
+        self.assertIn("previous shortcut restored", rollback_success)
+        self.assertIn(
+            "            );\n"
+            "            continue;\n"
+            "          }\n"
+            "          this._pendingHotkeyRebinds[name] = {",
+            rollback_success,
+        )
+        self.assertNotIn("_disableHotkeyAfterRebindFailure", rollback_success)
+        self.assertIn("disableAttempts < HOTKEY_REBIND_MAX_RETRIES", max_retry_block)
+        self.assertIn("settingAttempts >= HOTKEY_REBIND_MAX_RETRIES", max_retry_block)
+        self.assertIn("this._setHotkeyRuntimeBlocked(spec.id, true);", max_retry_block)
+        self.assertIn(
+            "            this._setHotkeyRuntimeBlocked(spec.id, true);\n"
+            "            this._clearPendingHotkeyRebind(name);",
+            max_retry_block,
+        )
+        self.assertIn(
+            "            }\n"
+            "            continue;\n"
+            "          }\n"
+            "          this._setHotkeyRuntimeBlocked(spec.id, true);",
+            max_retry_block,
+        )
+        self.assertIn(
+            "        if (settingAttempts >= HOTKEY_REBIND_MAX_RETRIES) {\n"
+            "          this._clearPendingHotkeyRebind(name);\n"
+            "          continue;\n"
+            "        }",
+            max_retry_block,
+        )
+
+        cleanup_start = source.index("_scheduleProcessCleanupRetry: function()")
+        cleanup_block = source[cleanup_start:source.index("\n  },", cleanup_start) + 5]
+        retry_call = cleanup_block.index("let hotkeyRebindSucceeded = this._retryPendingHotkeyRebinds();")
+        pending_guard = cleanup_block.index("!hotkeyRebindSucceeded", retry_call)
+        self.assertLess(retry_call, pending_guard)
+        self.assertIn(
+            "!hotkeyRebindSucceeded || !dialogCleanupSucceeded ||\n"
+            "            this._processCleanupStillPending()) {\n"
+            "          return true;\n"
+            "        }",
+            cleanup_block[pending_guard:],
+        )
+
+    def test_unchanged_hotkeys_use_stable_callbacks_and_skip_re_registration(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        specs_start = source.index("_hotkeySpecs: function()")
+        specs_end = source.index("\n  _retryPendingHotkeyRebinds:", specs_start)
+        specs_block = source[specs_start:specs_end]
+        self.assertIn('{ id: HOTKEY_ID, key: "toggle-keybinding", propertyName: "toggleKeybinding", binding: this.toggleKeybinding, callback: this._hotkeyCallbacks[HOTKEY_ID] }', specs_block)
+        self.assertIn('{ id: PRIMARY_HOTKEY_ID, key: "primary-language-keybinding", propertyName: "primaryLanguageKeybinding", binding: this.primaryLanguageKeybinding, callback: this._hotkeyCallbacks[PRIMARY_HOTKEY_ID] }', specs_block)
+        self.assertIn('{ id: SECONDARY_HOTKEY_ID, key: "secondary-language-keybinding", propertyName: "secondaryLanguageKeybinding", binding: this.secondaryLanguageKeybinding, callback: this._hotkeyCallbacks[SECONDARY_HOTKEY_ID] }', specs_block)
+        self.assertIn('{ id: CANCEL_HOTKEY_ID, key: "cancel-keybinding", propertyName: "cancelKeybinding", binding: this.cancelKeybinding, callback: this._hotkeyCallbacks[CANCEL_HOTKEY_ID] }', specs_block)
+
+        register_start = source.index("_registerHotkey: function(id, binding, callback)")
+        register_end = source.index("\n  _trackOrphanedHotkey:", register_start)
+        register_block = source[register_start:register_end]
+        no_op = register_block.index("if (!orphaned && !pending")
+        removal = register_block.index("Main.keybindingManager.removeHotKey(name)")
+        self.assertLess(no_op, removal)
+        self.assertIn(
+            'if (!orphaned && !pending &&\n'
+            '        ((accelerator === "" && !previous && !registryTracksHotkey) ||\n'
+            '         (accelerator !== "" && previous && previous.binding === accelerator &&\n'
+            "          previous.callback === callback && registryTracksHotkey))) {\n"
+            "      return this._setHotkeyRuntimeBlocked(id, false);\n"
+            "    }",
+            register_block[no_op:removal],
+        )
 
     def test_hotkey_registry_write_failures_roll_back_external_binding(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6340,8 +6516,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", remember_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Previous text insertion could not be stopped")', remember_block)
 
-        hotkey_start = source.index('this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {')
-        hotkey_end = source.index('this._registerHotkey(PRIMARY_HOTKEY_ID', hotkey_start)
+        hotkey_start = source.index("this._hotkeyCallbacks[HOTKEY_ID] = () => {")
+        hotkey_end = source.index("this._hotkeyCallbacks[PRIMARY_HOTKEY_ID]", hotkey_start)
         hotkey_block = source[hotkey_start:hotkey_end]
         self.assertIn('!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()', hotkey_block)
         self.assertIn("return;", hotkey_block)
@@ -7145,7 +7321,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.targetWindowGeneration = 0;", source)
         self.assertIn('this.selfProtectionNoticeKey = "";', source)
         self.assertIn("this.selfProtectionNoticeAtMs = 0;", source)
-        self.assertIn('this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {', source)
+        self.assertIn("this._hotkeyCallbacks[HOTKEY_ID] = () => {", source)
         self.assertIn('if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()) {', source)
         self.assertIn('if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow(true)) {', source)
         self.assertIn('this._connectSafe(startPrimary, "activate", () => this._startWithLanguage(primary, true));', source)
@@ -9167,8 +9343,8 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_start_toggle_request_is_queued_when_start_command_is_running(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        hotkey_start = source.index("_registerHotkeys: function()")
-        hotkey_end = source.index("\n  _onHotkeyChanged:", hotkey_start)
+        hotkey_start = source.index("this._hotkeyCallbacks[HOTKEY_ID] = () => {")
+        hotkey_end = source.index("this._hotkeyCallbacks[PRIMARY_HOTKEY_ID]", hotkey_start)
         hotkey_block = source[hotkey_start:hotkey_end]
         self.assertIn('if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()) {', hotkey_block)
         self.assertIn("this._toggleRecording();", hotkey_block)

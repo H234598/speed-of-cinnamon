@@ -25,6 +25,7 @@ const HOTKEY_ID = "speed-of-cinnamon-toggle";
 const PRIMARY_HOTKEY_ID = "speed-of-cinnamon-primary-language";
 const SECONDARY_HOTKEY_ID = "speed-of-cinnamon-secondary-language";
 const CANCEL_HOTKEY_ID = "speed-of-cinnamon-cancel";
+const HOTKEY_REBIND_MAX_RETRIES = 3;
 const DEFAULT_CLI = GLib.build_filenamev([GLib.get_home_dir(), ".local", "bin", "speed-of-cinnamon"]);
 const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
@@ -502,6 +503,36 @@ MyApplet.prototype = {
     this._orphanedMenus = [];
     this._hotkeyDefinitions = {};
     this._orphanedHotkeyStates = {};
+    this._pendingHotkeyRebinds = {};
+    this._blockedHotkeyIds = {};
+    this._hotkeyCallbacks = {};
+    this._hotkeyCallbacks[HOTKEY_ID] = () => {
+      if (this._blockedHotkeyIds && this._blockedHotkeyIds[HOTKEY_ID] === true) {
+        return;
+      }
+      if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()) {
+        return;
+      }
+      this._toggleRecording();
+    };
+    this._hotkeyCallbacks[PRIMARY_HOTKEY_ID] = () => {
+      if (this._blockedHotkeyIds && this._blockedHotkeyIds[PRIMARY_HOTKEY_ID] === true) {
+        return;
+      }
+      this._startWithLanguage(this._primaryLanguage());
+    };
+    this._hotkeyCallbacks[SECONDARY_HOTKEY_ID] = () => {
+      if (this._blockedHotkeyIds && this._blockedHotkeyIds[SECONDARY_HOTKEY_ID] === true) {
+        return;
+      }
+      this._startWithLanguage(this._secondaryLanguage());
+    };
+    this._hotkeyCallbacks[CANCEL_HOTKEY_ID] = () => {
+      if (this._blockedHotkeyIds && this._blockedHotkeyIds[CANCEL_HOTKEY_ID] === true) {
+        return;
+      }
+      this._cancelRecording();
+    };
     this.autoInsertPendingFingerprint = "";
     this._teardownComplete = false;
     this._initFailed = false;
@@ -2809,6 +2840,8 @@ MyApplet.prototype = {
       !Array.isArray(this._orphanedSignals) || this._orphanedSignals.length > 0 ||
       !Array.isArray(this._orphanedMonitors) || this._orphanedMonitors.length > 0 ||
       !Array.isArray(this._orphanedHotkeys) || this._orphanedHotkeys.length > 0 ||
+      !this._pendingHotkeyRebinds || typeof this._pendingHotkeyRebinds !== "object" ||
+      Object.keys(this._pendingHotkeyRebinds).length > 0 ||
       !Array.isArray(this._orphanedTimers) || this._orphanedTimers.length > 0 ||
       !Array.isArray(this._orphanedDialogs) || this._orphanedDialogs.length > 0;
   },
@@ -2870,11 +2903,12 @@ MyApplet.prototype = {
         let signalCleanupSucceeded = this._disconnectOrphanedSignals();
         let monitorCleanupSucceeded = this._retryOrphanedMonitors();
         let hotkeyCleanupSucceeded = this._retryOrphanedHotkeys();
+        let hotkeyRebindSucceeded = this._retryPendingHotkeyRebinds();
         let timerCleanupSucceeded = this._retryOrphanedTimers();
         let dialogCleanupSucceeded = this._retryOrphanedDialogs();
         if (!processCleanupSucceeded || !cancellableCleanupSucceeded || !timerCleanupSucceeded ||
             !signalCleanupSucceeded || !monitorCleanupSucceeded || !hotkeyCleanupSucceeded ||
-            !dialogCleanupSucceeded ||
+            !hotkeyRebindSucceeded || !dialogCleanupSucceeded ||
             this._processCleanupStillPending()) {
           return true;
         }
@@ -4472,14 +4506,310 @@ MyApplet.prototype = {
     return id + "-" + this.instanceId;
   },
 
+  _markHotkeyRebindPending: function(name, binding) {
+    try {
+      let key = String(name || "").trim();
+      if (key === "") {
+        throw new Error("Pending hotkey name is invalid");
+      }
+      if (!this._pendingHotkeyRebinds || typeof this._pendingHotkeyRebinds !== "object") {
+        this._pendingHotkeyRebinds = {};
+      }
+      let normalizedBinding = typeof binding === "string" ? binding.trim() : "";
+      let current = this._pendingHotkeyRebinds[key];
+      if (!current || current.binding !== normalizedBinding) {
+        this._pendingHotkeyRebinds[key] = { attempts: 0, binding: normalizedBinding };
+      }
+      if (this._lifecycleAllowsWork() && !this.processCleanupRetryTimer) {
+        let scheduled = this._scheduleProcessCleanupRetry();
+        if (!scheduled) {
+          current = this._pendingHotkeyRebinds[key];
+          let warningShown = Boolean(current && current.retryWarningShown === true);
+          if (current) {
+            current.retryWarningShown = true;
+          }
+          this._recordLifecycleError("hotkey-rebind-schedule", new Error("Hotkey rebind retry could not be scheduled"));
+          if (!warningShown) {
+            this._setStatusPreservingRecording(
+              "error",
+              _("Hotkey change could not be retried automatically"),
+              this.lastTranscript
+            );
+          }
+          return false;
+        }
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("hotkey-rebind-pending", error);
+      return false;
+    }
+  },
+
+  _clearPendingHotkeyRebind: function(name) {
+    if (!this._pendingHotkeyRebinds || typeof this._pendingHotkeyRebinds !== "object") {
+      this._pendingHotkeyRebinds = {};
+      return true;
+    }
+    let key = String(name || "").trim();
+    if (key === "" || !Object.prototype.hasOwnProperty.call(this._pendingHotkeyRebinds, key)) {
+      return true;
+    }
+    let deleted = delete this._pendingHotkeyRebinds[key];
+    if (deleted === false || Object.prototype.hasOwnProperty.call(this._pendingHotkeyRebinds, key)) {
+      this._recordLifecycleError("hotkey-rebind-pending", new Error("Pending hotkey rebind could not be cleared"));
+      return false;
+    }
+    return true;
+  },
+
+  _hotkeySpecs: function() {
+    return [
+      { id: HOTKEY_ID, key: "toggle-keybinding", propertyName: "toggleKeybinding", binding: this.toggleKeybinding, callback: this._hotkeyCallbacks[HOTKEY_ID] },
+      { id: PRIMARY_HOTKEY_ID, key: "primary-language-keybinding", propertyName: "primaryLanguageKeybinding", binding: this.primaryLanguageKeybinding, callback: this._hotkeyCallbacks[PRIMARY_HOTKEY_ID] },
+      { id: SECONDARY_HOTKEY_ID, key: "secondary-language-keybinding", propertyName: "secondaryLanguageKeybinding", binding: this.secondaryLanguageKeybinding, callback: this._hotkeyCallbacks[SECONDARY_HOTKEY_ID] },
+      { id: CANCEL_HOTKEY_ID, key: "cancel-keybinding", propertyName: "cancelKeybinding", binding: this.cancelKeybinding, callback: this._hotkeyCallbacks[CANCEL_HOTKEY_ID] },
+    ];
+  },
+
+  _setHotkeyRuntimeBlocked: function(id, blocked) {
+    if (!this._blockedHotkeyIds || typeof this._blockedHotkeyIds !== "object") {
+      this._blockedHotkeyIds = {};
+    }
+    let key = String(id || "").trim();
+    if (key === "") {
+      this._recordLifecycleError("hotkey-runtime-block", new Error("Hotkey id is invalid"));
+      return false;
+    }
+    if (blocked === true) {
+      this._blockedHotkeyIds[key] = true;
+      return this._blockedHotkeyIds[key] === true;
+    }
+    let deleted = delete this._blockedHotkeyIds[key];
+    if (deleted === false || Object.prototype.hasOwnProperty.call(this._blockedHotkeyIds, key)) {
+      this._recordLifecycleError("hotkey-runtime-block", new Error("Hotkey runtime block could not be cleared"));
+      return false;
+    }
+    return true;
+  },
+
+  _disableHotkeyAfterRebindFailure: function(name) {
+    let removedExternally = false;
+    let disabled = this._runStateGuarded("hotkeys", () => {
+      let removeResult = Main.keybindingManager.removeHotKey(name);
+      if (removeResult === false) {
+        throw new Error("Hotkey could not be disabled after rebind failure");
+      }
+      removedExternally = true;
+      if (this._resourceRegistry && this._resourceRegistry.hotkeys) {
+        let deleted = delete this._resourceRegistry.hotkeys[name];
+        if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.hotkeys, name)) {
+          throw new Error("Hotkey registry could not be cleared after rebind failure");
+        }
+      }
+      if (this._hotkeyDefinitions) {
+        let deleted = delete this._hotkeyDefinitions[name];
+        if (deleted === false || Object.prototype.hasOwnProperty.call(this._hotkeyDefinitions, name)) {
+          throw new Error("Hotkey definition could not be cleared after rebind failure");
+        }
+      }
+      if (!this._untrackOrphanedHotkey(name)) {
+        throw new Error("Hotkey orphan state could not be cleared after rebind failure");
+      }
+      return true;
+    }, false) === true;
+    if (!disabled && !removedExternally) {
+      return false;
+    }
+    if (!disabled) {
+      this._trackOrphanedHotkey(name, true);
+    }
+    return true;
+  },
+
+  _retryPendingHotkeyRebinds: function() {
+    if (!this._lifecycleAllowsWork()) {
+      return true;
+    }
+    if (!this._pendingHotkeyRebinds || typeof this._pendingHotkeyRebinds !== "object") {
+      this._pendingHotkeyRebinds = {};
+      return true;
+    }
+    let pendingNames = Object.keys(this._pendingHotkeyRebinds);
+    if (pendingNames.length === 0) {
+      return true;
+    }
+    let specs = this._hotkeySpecs();
+    let specsByName = {};
+    for (let index = 0; index < specs.length; index++) {
+      specsByName[this._hotkeyName(specs[index].id)] = specs[index];
+    }
+    for (let index = 0; index < pendingNames.length; index++) {
+      let name = pendingNames[index];
+      let state = this._pendingHotkeyRebinds[name];
+      let spec = specsByName[name];
+      if (!spec) {
+        this._clearPendingHotkeyRebind(name);
+        continue;
+      }
+      let desiredBinding = typeof spec.binding === "string" ? spec.binding.trim() : "";
+      let attempts = state && state.binding === desiredBinding && Number.isFinite(state.attempts)
+        ? state.attempts
+        : 0;
+      if (attempts >= HOTKEY_REBIND_MAX_RETRIES) {
+        let active = this._hotkeyDefinitions && this._hotkeyDefinitions[name];
+        let activeBinding = active && typeof active.binding === "string" ? active.binding.trim() : "";
+        let activeTracked = Boolean(
+          this._resourceRegistry && this._resourceRegistry.hotkeys &&
+          this._resourceRegistry.hotkeys[name] === true
+        );
+        let activeOwned = Boolean(active && active.callback === spec.callback && activeBinding !== "");
+        let orphaned = Boolean(
+          (Array.isArray(this._orphanedHotkeys) && this._orphanedHotkeys.indexOf(name) >= 0) ||
+          (this._orphanedHotkeyStates &&
+            Object.prototype.hasOwnProperty.call(this._orphanedHotkeyStates, name))
+        );
+        let rollbackAttempted = Boolean(state && state.rollbackAttempted === true);
+        let terminalNotified = Boolean(state && state.terminalNotified === true);
+        if (activeTracked && activeOwned && !orphaned && !rollbackAttempted) {
+          let pendingCleared = this._clearPendingHotkeyRebind(name);
+          if (pendingCleared && this._commitSettingValue(
+            spec.propertyName,
+            spec.key,
+            activeBinding,
+            "hotkey-rebind-rollback",
+            _("Hotkey setting could not be restored; disabling shortcut")
+          )) {
+            this._setStatusPreservingRecording(
+              "error",
+              _("Hotkey binding could not be applied; previous shortcut restored"),
+              this.lastTranscript
+            );
+            continue;
+          }
+          this._pendingHotkeyRebinds[name] = {
+            attempts: attempts,
+            binding: desiredBinding,
+            rollbackAttempted: true,
+            terminalNotified: true,
+          };
+          terminalNotified = true;
+        }
+        let runtimeDisabled = Boolean(state && state.runtimeDisabled === true);
+        let disableAttempts = state && Number.isFinite(state.disableAttempts) ? state.disableAttempts : 0;
+        if (!runtimeDisabled) {
+          runtimeDisabled = this._disableHotkeyAfterRebindFailure(name);
+          if (!runtimeDisabled) {
+            disableAttempts += 1;
+            if (disableAttempts < HOTKEY_REBIND_MAX_RETRIES) {
+              this._pendingHotkeyRebinds[name] = {
+                attempts: attempts,
+                binding: desiredBinding,
+                rollbackAttempted: true,
+                terminalNotified: terminalNotified,
+                runtimeDisabled: false,
+                disableAttempts: disableAttempts,
+                settingAttempts: 0,
+              };
+              continue;
+            }
+            this._setHotkeyRuntimeBlocked(spec.id, true);
+            this._clearPendingHotkeyRebind(name);
+            if (!terminalNotified) {
+              this._setStatusPreservingRecording(
+                "error",
+                _("Hotkey binding could not be removed; shortcut blocked for this session"),
+                this.lastTranscript
+              );
+            }
+            continue;
+          }
+          this._setHotkeyRuntimeBlocked(spec.id, true);
+          this._pendingHotkeyRebinds[name] = {
+            attempts: attempts,
+            binding: desiredBinding,
+            rollbackAttempted: true,
+            terminalNotified: terminalNotified,
+            runtimeDisabled: true,
+            disableAttempts: disableAttempts,
+            settingAttempts: 0,
+          };
+        }
+        state = this._pendingHotkeyRebinds[name];
+        let settingAttempts = state && Number.isFinite(state.settingAttempts) ? state.settingAttempts : 0;
+        let settingCleared = this._commitSettingValue(
+          spec.propertyName,
+          spec.key,
+          "",
+          "hotkey-rebind-disable",
+          settingAttempts === 0
+            ? _("Shortcut was disabled for this session, but its setting could not be saved")
+            : ""
+        );
+        if (settingCleared) {
+          this._clearPendingHotkeyRebind(name);
+          this._setStatusPreservingRecording(
+            "error",
+            _("Hotkey binding could not be applied; shortcut disabled"),
+            this.lastTranscript
+          );
+          continue;
+        }
+        settingAttempts += 1;
+        if (settingAttempts >= HOTKEY_REBIND_MAX_RETRIES) {
+          this._clearPendingHotkeyRebind(name);
+          continue;
+        }
+        this._pendingHotkeyRebinds[name] = {
+          attempts: attempts,
+          binding: desiredBinding,
+          rollbackAttempted: true,
+          terminalNotified: true,
+          runtimeDisabled: true,
+          disableAttempts: disableAttempts,
+          settingAttempts: settingAttempts,
+        };
+        continue;
+      }
+      this._pendingHotkeyRebinds[name] = {
+        attempts: attempts + 1,
+        binding: desiredBinding,
+        rollbackAttempted: false,
+        terminalNotified: false,
+      };
+      this._registerHotkey(spec.id, spec.binding, spec.callback);
+    }
+    return Object.keys(this._pendingHotkeyRebinds).length === 0;
+  },
+
   _registerHotkey: function(id, binding, callback) {
     if (!this._lifecycleAllowsWork()) {
-      return;
+      return false;
     }
     let name = this._hotkeyName(id);
+    let accelerator = typeof binding === "string" ? binding.trim() : "";
     let previous = this._hotkeyDefinitions && this._hotkeyDefinitions[name]
       ? this._hotkeyDefinitions[name]
       : null;
+    let registryTracksHotkey = Boolean(
+      this._resourceRegistry && this._resourceRegistry.hotkeys &&
+      this._resourceRegistry.hotkeys[name] === true
+    );
+    let orphaned = Boolean(
+      (Array.isArray(this._orphanedHotkeys) && this._orphanedHotkeys.indexOf(name) >= 0) ||
+      (this._orphanedHotkeyStates &&
+        Object.prototype.hasOwnProperty.call(this._orphanedHotkeyStates, name))
+    );
+    let pending = Boolean(
+      this._pendingHotkeyRebinds &&
+      Object.prototype.hasOwnProperty.call(this._pendingHotkeyRebinds, name)
+    );
+    if (!orphaned && !pending &&
+        ((accelerator === "" && !previous && !registryTracksHotkey) ||
+         (accelerator !== "" && previous && previous.binding === accelerator &&
+          previous.callback === callback && registryTracksHotkey))) {
+      return this._setHotkeyRuntimeBlocked(id, false);
+    }
     let removedExternally = false;
     let removeAttemptFailed = false;
     let removed = this._runStateGuarded("hotkeys", () => {
@@ -4520,9 +4850,9 @@ MyApplet.prototype = {
           this._orphanedHotkeyStates[name] = false;
         }
       }
-      return;
+      this._markHotkeyRebindPending(name, accelerator);
+      return false;
     }
-    let accelerator = typeof binding === "string" ? binding.trim() : "";
     if (accelerator === "") {
       if (this._hotkeyDefinitions) {
         let definitionCleanupSucceeded = this._runStateGuarded("hotkeys", () => {
@@ -4534,9 +4864,15 @@ MyApplet.prototype = {
         }, false) === true;
         if (!definitionCleanupSucceeded) {
           this._trackOrphanedHotkey(name, true);
+          this._markHotkeyRebindPending(name, accelerator);
+          return false;
         }
       }
-      return;
+      if (!this._setHotkeyRuntimeBlocked(id, false)) {
+        this._markHotkeyRebindPending(name, accelerator);
+        return false;
+      }
+      return this._clearPendingHotkeyRebind(name);
     }
     let hasBinding = accelerator.split("::").some((part) => String(part || "").trim() !== "");
     let registered = false;
@@ -4562,7 +4898,11 @@ MyApplet.prototype = {
         return true;
       }, false) === true;
       if (tracked) {
-        return;
+        if (!this._setHotkeyRuntimeBlocked(id, false)) {
+          this._markHotkeyRebindPending(name, accelerator);
+          return false;
+        }
+        return this._clearPendingHotkeyRebind(name);
       }
       let rollbackRemoved = this._runStateGuarded("hotkeys", () => {
         let removeResult = Main.keybindingManager.removeHotKey(name);
@@ -4603,7 +4943,8 @@ MyApplet.prototype = {
           return true;
         }, false) === true;
         if (tracked) {
-          return;
+          this._markHotkeyRebindPending(name, accelerator);
+          return false;
         }
         let rollbackRemoved = this._runStateGuarded("hotkeys", () => {
           let removeResult = Main.keybindingManager.removeHotKey(name);
@@ -4636,6 +4977,8 @@ MyApplet.prototype = {
         }
       }, undefined);
     }
+    this._markHotkeyRebindPending(name, accelerator);
+    return false;
   },
 
   _trackOrphanedHotkey: function(name, externallyRemoved) {
@@ -4812,6 +5155,7 @@ MyApplet.prototype = {
 
   _removeHotkey: function(id) {
     let name = this._hotkeyName(id);
+    this._clearPendingHotkeyRebind(name);
     let removed = false;
     this._runTeardownGuarded("teardown-hotkeys", () => {
       let removeResult = Main.keybindingManager.removeHotKey(name);
@@ -4860,21 +5204,10 @@ MyApplet.prototype = {
 
   _registerHotkeys: function() {
     this._runStateGuarded("hotkeys", () => {
-      this._registerHotkey(HOTKEY_ID, this.toggleKeybinding, () => {
-        if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()) {
-          return;
-        }
-        this._toggleRecording();
-      });
-      this._registerHotkey(PRIMARY_HOTKEY_ID, this.primaryLanguageKeybinding, () => {
-        this._startWithLanguage(this._primaryLanguage());
-      });
-      this._registerHotkey(SECONDARY_HOTKEY_ID, this.secondaryLanguageKeybinding, () => {
-        this._startWithLanguage(this._secondaryLanguage());
-      });
-      this._registerHotkey(CANCEL_HOTKEY_ID, this.cancelKeybinding, () => {
-        this._cancelRecording();
-      });
+      let specs = this._hotkeySpecs();
+      for (let index = 0; index < specs.length; index++) {
+        this._registerHotkey(specs[index].id, specs[index].binding, specs[index].callback);
+      }
     }, undefined);
   },
 
@@ -5173,6 +5506,7 @@ MyApplet.prototype = {
         this.disconnectAllSignals();
       }
     });
+    this._pendingHotkeyRebinds = {};
     this._removeHotkey(HOTKEY_ID);
     this._removeHotkey(PRIMARY_HOTKEY_ID);
     this._removeHotkey(SECONDARY_HOTKEY_ID);
@@ -6581,8 +6915,6 @@ MyApplet.prototype = {
     this.isCommandRunning = true;
     if (commandAction === "stop") {
       this._setStatus("processing", _("Stopping recording..."), this.lastTranscript);
-    } else {
-      this._setStatus("recording", _("Recording..."), "");
     }
     let toggleHandle = this._spawnJson(toggleArgs, (payload) => {
       if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
@@ -6617,10 +6949,15 @@ MyApplet.prototype = {
         this.recordingStartedAtMs = 0;
         if (!hasExistingRecordingWork) {
           this.recordingArtifactsPresent = false;
+          this._setStatus("error", this.lastMessage, this.lastTranscript);
+          return false;
         }
       }
       this._updatePanel();
       return false;
+    }
+    if (commandAction === "start") {
+      this._setStatus("recording", _("Recording..."), "");
     }
     return true;
   },
