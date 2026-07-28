@@ -47,6 +47,7 @@ const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 3000;
 const CLIPBOARD_OVERWRITE_APPROVAL_TTL_MS = 5000;
 const CLIPBOARD_TARGET_TIMEOUT_SECONDS = 1;
 const CLIPBOARD_COMMAND_TIMEOUT_MS = 1500;
+const CLIPBOARD_PAYLOAD_FINGERPRINT_MAX_BUDGET_MS = 6000;
 const CLIPBOARD_MAX_TARGETS = 16;
 const MAX_CLIPBOARD_TARGET_OUTPUT_BYTES = 65536;
 const MAX_XDOTOOL_TARGET_OUTPUT_BYTES = 4096;
@@ -157,7 +158,8 @@ const AUTO_PASTE_TITLE_PRESETS = [
   "PDF",
   "Excel",
   "Telegram",
-  "Teams"
+  "Teams",
+  "Obsidian"
 ];
 
 function _decodeSubprocessOutputChunks(chunks) {
@@ -294,6 +296,13 @@ const AUTO_PASTE_IDENTITY_MARKERS = {
     "telegram-desktop",
     "telegramdesktop",
     "telegram"
+  ],
+  "obsidian": [
+    "md.obsidian.obsidian",
+    "obsidian",
+    "obsidian.appimage",
+    "obsidian.desktop",
+    "md.obsidian.obsidian.desktop",
   ]
 };
 const PANEL_STATUS_CLASSES = [
@@ -336,6 +345,7 @@ const POST_PROCESS_BACKENDS = [
   "openai-compatible"
 ];
 const BOOLEAN_IMPORT_SETTINGS = {
+  "show-transcript-text": true,
   "show-panel-label": true,
   "auto-transcribe-timeout": true,
   "auto-relisten": true,
@@ -384,12 +394,32 @@ const RECORDING_LIMIT_SECONDS = [
   1800,
   3600
 ];
+const STATUS_ICON_ALLOWLIST = {};
+[
+  "ready-01", "ready-02", "ready-03", "ready-04", "ready-05",
+  "ready-06", "ready-07", "ready-08", "ready-09", "ready-10",
+  "recording-01", "recording-02", "recording-03", "recording-04", "recording-05",
+  "recording-06", "recording-07", "recording-08", "recording-09", "recording-10",
+  "processing-01", "processing-02", "processing-03", "processing-04", "processing-05",
+  "processing-06", "processing-07", "processing-08", "processing-09", "processing-10"
+].forEach((id) => {
+  STATUS_ICON_ALLOWLIST[id] = true;
+});
+const STATUS_ICON_DEFAULTS = {
+  ready: "ready-01",
+  recording: "recording-01",
+  processing: "processing-01",
+  recorded: "ready-09",
+  error: "recording-05",
+  setup: "processing-05"
+};
 const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
   ["primary-language-keybinding", "primaryLanguageKeybinding"],
   ["secondary-language-keybinding", "secondaryLanguageKeybinding"],
   ["cancel-keybinding", "cancelKeybinding"],
   ["show-panel-label", "showPanelLabel"],
+  ["show-transcript-text", "showTranscriptText"],
   ["language", "language"],
   ["secondary-language", "secondaryLanguage"],
   ["max-seconds", "maxSeconds"],
@@ -403,6 +433,12 @@ const EXPORTABLE_SETTINGS = [
   ["notify-recording", "notifyRecording"],
   ["notify-complete", "notifyComplete"],
   ["notify-error", "notifyError"],
+  ["status-icon-ready", "statusIconReady"],
+  ["status-icon-recording", "statusIconRecording"],
+  ["status-icon-processing", "statusIconProcessing"],
+  ["status-icon-recorded", "statusIconRecorded"],
+  ["status-icon-error", "statusIconError"],
+  ["status-icon-setup", "statusIconSetup"],
   ["insert-method", "insertMethod"],
   ["append-space", "appendSpace"],
   ["typing-delay-ms", "typingDelayMs"],
@@ -3238,7 +3274,11 @@ MyApplet.prototype = {
           if (typeof entry.cancel === "function") {
             let result = entry.cancel(Boolean(notifyCallback));
             if (result === false) {
-              throw new Error("Process cancellation failed");
+              let processGroupIdentity = entry.processGroupIdentity ||
+                this._findTrackedProcessGroupIdentity(entry.process);
+              if (!processGroupIdentity || this._processGroupState(processGroupIdentity) !== "stopped") {
+                throw new Error("Process cancellation failed");
+              }
             }
           } else if (!this._terminateProcess(entry.process)) {
             throw new Error("Process termination failed");
@@ -3770,11 +3810,13 @@ MyApplet.prototype = {
     this.metadata = metadata;
     this.orientation = orientation;
     this.instanceId = instanceId;
+    this._statusIconCache = { status: null, icon: null };
     this.toggleKeybinding = "<Super>z::";
     this.primaryLanguageKeybinding = "";
     this.secondaryLanguageKeybinding = "";
     this.cancelKeybinding = "";
     this.showPanelLabel = true;
+    this.showTranscriptText = true;
     this.language = "en";
     this.secondaryLanguage = "de";
     this.activeLanguage = "";
@@ -3826,6 +3868,7 @@ MyApplet.prototype = {
     this.terminalWorkflowToken = null;
     this.settingsWindowToken = null;
     this.cancelPendingWhileCommandRunning = false;
+    this.stopPendingWhileCommandRunning = false;
     this._statusRefreshToken = 0;
     this._statusCommandToken = null;
     this._statusCommandRunning = false;
@@ -3883,6 +3926,13 @@ MyApplet.prototype = {
     this.textInsertCancellationFailed = false;
     this.externalApiEnvMonitor = null;
     this.externalApiEnvApplyTarget = "voice";
+    this.statusIconReady = STATUS_ICON_DEFAULTS.ready;
+    this.statusIconRecording = STATUS_ICON_DEFAULTS.recording;
+    this.statusIconProcessing = STATUS_ICON_DEFAULTS.processing;
+    this.statusIconRecorded = STATUS_ICON_DEFAULTS.recorded;
+    this.statusIconError = STATUS_ICON_DEFAULTS.error;
+    this.statusIconSetup = STATUS_ICON_DEFAULTS.setup;
+    this._resetStatusIconCache();
     this.set_applet_icon_path(this.metadata.path + "/icon.svg");
     this.set_applet_label("");
     this.set_applet_tooltip(_("Speed of Cinnamon"));
@@ -3912,6 +3962,7 @@ MyApplet.prototype = {
     this._bindSetting(Settings.BindingDirection.IN, "secondary-language-keybinding", "secondaryLanguageKeybinding", this._onHotkeyChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "cancel-keybinding", "cancelKeybinding", this._onHotkeyChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "show-panel-label", "showPanelLabel", this._updatePanel, null);
+    this._bindSetting(Settings.BindingDirection.IN, "show-transcript-text", "showTranscriptText", this._onTextOutputSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "language", "language", this._onLanguageSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", this._onRecordingLimitSettingsChanged, null);
@@ -3951,6 +4002,12 @@ MyApplet.prototype = {
     this._bindSetting(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", this._onNotificationSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "notify-complete", "notifyComplete", this._onNotificationSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "notify-error", "notifyError", this._onNotificationSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "status-icon-ready", "statusIconReady", this._onStatusIconSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "status-icon-recording", "statusIconRecording", this._onStatusIconSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "status-icon-processing", "statusIconProcessing", this._onStatusIconSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "status-icon-recorded", "statusIconRecorded", this._onStatusIconSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "status-icon-error", "statusIconError", this._onStatusIconSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "status-icon-setup", "statusIconSetup", this._onStatusIconSettingsChanged, null);
   },
 
   _buildMenu: function() {
@@ -5341,7 +5398,12 @@ MyApplet.prototype = {
   },
 
   _historyArgs: function() {
-    return [this._cliCommand(), "history", "--limit", "5", "--json"];
+    let args = [this._cliCommand(), "history", "--limit", "5"];
+    if (this.showTranscriptText === true) {
+      args.push("--confirm-plaintext");
+    }
+    args.push("--json");
+    return args;
   },
 
   _allHistoryArgs: function() {
@@ -6483,6 +6545,7 @@ MyApplet.prototype = {
   },
 
   _toggleRecording: function() {
+    let forcedAction = arguments.length > 0 ? String(arguments[0] || "") : "";
     if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken || this.ollamaModelInstallRunning || this.ollamaModelCleanupFailed) {
       if (!this._cancelOllamaFlowForRecording()) {
         this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
@@ -6492,29 +6555,38 @@ MyApplet.prototype = {
     if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {
       this.terminalWorkflowToken = null;
     }
-    if (!this._invalidateBackgroundCallbacksForRecording()) {
+    let hasExistingRecordingWork = this._hasActiveRecordingState();
+    if (this.isCommandRunning && this._recordingCommandToken) {
+      this.stopPendingWhileCommandRunning = true;
+      this.autoRelistenManualStopRequested = true;
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenPendingLanguage = "";
+      this._setStatus(
+        "processing",
+        this.autoRelisten ? _("Stopping Auto Relisten...") : _("Stopping recording..."),
+        this.lastTranscript
+      );
       return;
     }
-    if (!this._cancelTextInsertForSettingsChange()) {
+    let backgroundCleanupSucceeded = this._invalidateBackgroundCallbacksForRecording();
+    if (!backgroundCleanupSucceeded && !hasExistingRecordingWork) {
+      return;
+    }
+    let textInsertCleanupSucceeded = this._cancelTextInsertForSettingsChange();
+    if (!textInsertCleanupSucceeded && !hasExistingRecordingWork) {
       return;
     }
     if (this.isCommandRunning) {
-      if (this.autoRelisten && this.notificationSessionActive && this._recordingCommandToken) {
-        this.autoRelistenManualStopRequested = true;
-        this.autoRelistenPending = false;
-        this.autoRelistenPendingToken = "";
-        this.autoRelistenPendingLanguage = "";
-        this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);
-      }
       return;
     }
-    let hasExistingRecordingWork = this._hasActiveRecordingState();
     if (!hasExistingRecordingWork && !this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
       return;
     }
+    let commandAction = forcedAction === "start" || forcedAction === "stop" ? forcedAction : (hasExistingRecordingWork ? "stop" : "start");
     let toggleArgs;
     try {
-      toggleArgs = this._baseArgs("toggle");
+      toggleArgs = this._baseArgs(commandAction);
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatusPreservingRecording("error", _("Could not prepare recording command: ") + safeError, this.lastTranscript);
@@ -6534,19 +6606,36 @@ MyApplet.prototype = {
     this.autoRelistenManualStopRequested = manualRelistenStopRequested;
     this.autoInsertFingerprint = "";
     this.autoInsertFingerprints = [];
-    this.recordingStartedAtMs = 0;
+    this.recordingStartedAtMs = commandAction === "start" ? Date.now() : 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.cancelPendingWhileCommandRunning = false;
+    this.stopPendingWhileCommandRunning = false;
     let recordingCommandToken = {};
     this._recordingCommandToken = recordingCommandToken;
     this.isCommandRunning = true;
-    this._setStatus("processing", _("Working..."), "");
+    if (commandAction === "stop") {
+      this._setStatus("processing", _("Stopping recording..."), this.lastTranscript);
+    } else {
+      this._setStatus("recording", _("Recording..."), "");
+    }
     this._spawnJson(toggleArgs, (payload) => {
       if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
         return;
       }
       this._recordingCommandToken = null;
       this.isCommandRunning = false;
+      let stopPending = this.stopPendingWhileCommandRunning && !this.cancelPendingWhileCommandRunning;
+      let payloadStatus = String(payload && payload.status || "").trim().toLowerCase();
+      let requestStopAfterStart = (
+        stopPending &&
+        commandAction === "start" &&
+        (payloadStatus === "recording" || payloadStatus === "recorded")
+      );
+      this.stopPendingWhileCommandRunning = false;
+      if (requestStopAfterStart) {
+        this._toggleRecording("stop");
+        return;
+      }
       this._applyPayloadSafely(
         payload,
         undefined,
@@ -6691,6 +6780,7 @@ MyApplet.prototype = {
     }
     if (this.isCommandRunning) {
       this.autoTranscribeRecordingKey = "";
+      this.stopPendingWhileCommandRunning = false;
       this.cancelPendingWhileCommandRunning = true;
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
@@ -6712,6 +6802,7 @@ MyApplet.prototype = {
     this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
     this.cancelPendingWhileCommandRunning = false;
+    this.stopPendingWhileCommandRunning = false;
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
     this.autoRelistenPendingLanguage = "";
@@ -12432,7 +12523,7 @@ MyApplet.prototype = {
       this.autoRelistenManualStopRequested &&
       !this.isCommandRunning
     ) {
-      this._toggleRecording();
+      this._toggleRecording("stop");
       return;
     }
     this._maybeAutoTranscribeRecorded(payload, status);
@@ -13581,7 +13672,7 @@ MyApplet.prototype = {
       return ["clipboard"];
     }
     if (String(targets || "").trim() === "") {
-      return ["clipboard"];
+      return [];
     }
     let lines = String(targets || "").split("\n");
     let nonTextTargets = [];
@@ -13650,7 +13741,7 @@ MyApplet.prototype = {
       unknown();
       return false;
     }
-    let deadlineMs = Date.now() + CLIPBOARD_COMMAND_TIMEOUT_MS;
+    let targetDeadlineMs = Date.now() + CLIPBOARD_COMMAND_TIMEOUT_MS;
     try {
       this._clipboardTargetList(spec.program, spec.targetArgs, (targets, resolvedProgram) => {
         try {
@@ -13679,6 +13770,11 @@ MyApplet.prototype = {
             unknown();
             return;
           }
+          let fingerprintBudgetMs = Math.min(
+            CLIPBOARD_PAYLOAD_FINGERPRINT_MAX_BUDGET_MS,
+            CLIPBOARD_COMMAND_TIMEOUT_MS * Math.max(1, nonTextTargets.length)
+          );
+          let fingerprintDeadlineMs = Date.now() + fingerprintBudgetMs;
           this._clipboardPayloadFingerprintFromTargetsAsync(resolvedSpec, targetText, (payloadFingerprint) => {
             try {
               if (payloadFingerprint === "unknown") {
@@ -13695,12 +13791,12 @@ MyApplet.prototype = {
               this._recordLifecycleError("clipboard-query", error);
               unknown();
             }
-          }, deadlineMs);
+          }, fingerprintDeadlineMs);
         } catch (error) {
           this._recordLifecycleError("clipboard-query", error);
           unknown();
         }
-      }, Math.max(1, deadlineMs - Date.now()));
+      }, Math.max(1, targetDeadlineMs - Date.now()));
     } catch (error) {
       this._recordLifecycleError("clipboard-query", error);
       unknown();
@@ -13741,6 +13837,10 @@ MyApplet.prototype = {
       return;
     }
     let fingerprints = [];
+    let fingerprintDeadlineMs = Number(deadlineMs);
+    if (!isFinite(fingerprintDeadlineMs)) {
+      fingerprintDeadlineMs = Date.now() + CLIPBOARD_COMMAND_TIMEOUT_MS;
+    }
     let sortedTargets;
     try {
       sortedTargets = nonTextTargets.slice().sort().slice(0, CLIPBOARD_MAX_TARGETS);
@@ -13754,10 +13854,11 @@ MyApplet.prototype = {
           complete(fingerprints.join("|"));
           return;
         }
-        if (deadlineMs && Date.now() >= deadlineMs) {
+        if (Date.now() >= fingerprintDeadlineMs) {
           complete("unknown");
           return;
         }
+        let remainingBudgetMs = Math.max(1, Math.floor(fingerprintDeadlineMs - Date.now()));
         let targetName = String(sortedTargets[index] || "");
         this._clipboardTargetList(spec.program, this._clipboardPayloadArgs(spec, targetName), (payload) => {
           try {
@@ -13775,7 +13876,7 @@ MyApplet.prototype = {
           } catch (error) {
             fail(error);
           }
-        }, Math.max(1, deadlineMs ? deadlineMs - Date.now() : CLIPBOARD_COMMAND_TIMEOUT_MS));
+        }, Math.max(1, Math.min(remainingBudgetMs, CLIPBOARD_COMMAND_TIMEOUT_MS)));
       } catch (error) {
         fail(error);
       }
@@ -14987,11 +15088,6 @@ MyApplet.prototype = {
       release();
       return false;
     }
-    if (method === "clipboard-paste" && !canPasteWithKeyboard) {
-      this._setStatus("error", _("Clipboard-paste requires a keyboard helper (xdotool or wtype)"), transcript);
-      release();
-      return false;
-    }
     if (method !== "clipboard-paste") {
       try {
         let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, isCurrentInsert);
@@ -15386,6 +15482,10 @@ MyApplet.prototype = {
     if (!this.lastTranscript) {
       return _("No transcript yet");
     }
+    if (this.showTranscriptText === true) {
+      let sanitizedTranscript = String(this.lastTranscript).replace(/[\u0000-\u001F\u007F-\u009F]/g, " ").replace(/\s+/g, " ").trim();
+      return this._shortMenuText(sanitizedTranscript, MAX_UI_MESSAGE_CHARS);
+    }
     let transcriptLength = String(this.lastTranscript).length;
     return _("Transcript preview hidden (length: ") + String(transcriptLength) + " chars)";
   },
@@ -15507,6 +15607,79 @@ MyApplet.prototype = {
     return "speed-of-cinnamon-ready";
   },
 
+  _statusIconNameForStatus: function(status) {
+    if (status === "recording") return "media-record-symbolic";
+    if (status === "processing") return "view-refresh-symbolic";
+    return "audio-input-microphone-symbolic";
+  },
+
+  _resetStatusIconCache: function() {
+    this._statusIconCache = { status: null, icon: null };
+  },
+
+  _statusIconSettingForStatus: function(status) {
+    if (status === "recording") return this.statusIconRecording;
+    if (status === "processing") return this.statusIconProcessing;
+    if (status === "recorded" || status === "done") return this.statusIconRecorded;
+    if (status === "error") return this.statusIconError;
+    if (status === "setup") return this.statusIconSetup;
+    return this.statusIconReady;
+  },
+
+  _statusIconDefaultForStatus: function(status) {
+    if (status === "recording") return STATUS_ICON_DEFAULTS.recording;
+    if (status === "processing") return STATUS_ICON_DEFAULTS.processing;
+    if (status === "recorded" || status === "done") return STATUS_ICON_DEFAULTS.recorded;
+    if (status === "error") return STATUS_ICON_DEFAULTS.error;
+    if (status === "setup") return STATUS_ICON_DEFAULTS.setup;
+    return STATUS_ICON_DEFAULTS.ready;
+  },
+
+  _validatedStatusIconId: function(value, fallbackId) {
+    let candidate = String(value || "").trim();
+    if (candidate !== "" && STATUS_ICON_ALLOWLIST[candidate]) {
+      return candidate;
+    }
+    let fallback = String(fallbackId || "").trim();
+    return STATUS_ICON_ALLOWLIST[fallback] ? fallback : STATUS_ICON_DEFAULTS.ready;
+  },
+
+  _statusIconPathForId: function(iconId, fallbackId) {
+    let validatedId = this._validatedStatusIconId(iconId, fallbackId);
+    if (!this.metadata || !this.metadata.path) {
+      return "";
+    }
+    return this.metadata.path + "/assets/status-icons/" + validatedId + ".png";
+  },
+
+  _onStatusIconSettingsChanged: function() {
+    this._resetStatusIconCache();
+    this._updatePanel();
+  },
+
+  _applyPanelIcon: function(status) {
+    return this._runGuarded("panel-icon", () => {
+      let nextIconName = this._statusIconNameForStatus(status);
+      let nextIconId = this._statusIconSettingForStatus(status);
+      let nextIconPath = this._statusIconPathForId(nextIconId, this._statusIconDefaultForStatus(status));
+      let nextIcon = nextIconPath || nextIconName;
+      if (this._statusIconCache && this._statusIconCache.status === status && this._statusIconCache.icon === nextIcon) {
+        return;
+      }
+      let applied = false;
+      if (nextIconPath && typeof this.set_applet_icon_path === "function") {
+        this.set_applet_icon_path(nextIconPath);
+        applied = true;
+      } else if (nextIconName && typeof this.set_applet_icon_name === "function") {
+        this.set_applet_icon_name(nextIconName);
+        applied = true;
+      }
+      if (applied) {
+        this._statusIconCache = { status: status, icon: nextIcon };
+      }
+    }, undefined);
+  },
+
   _applyPanelStyle: function(status) {
     return this._runGuarded("panel-style", () => {
       let actor = this.actor;
@@ -15560,6 +15733,7 @@ MyApplet.prototype = {
         tooltip = this.lastMessage || _("Ready");
         this._setMenuItemLabelSafely(this.toggleItem, _("Start dictation"));
       }
+      this._applyPanelIcon(this.status);
       this._applyPanelStyle(this.status);
       let panelActor = this.actor;
       if (panelActor &&

@@ -15,6 +15,7 @@
         "recording-section",
         "personalization-section",
         "notification-section",
+        "status-icons-section",
         "output-section",
         "text-polishing-section",
         "backend-section",
@@ -94,6 +95,18 @@
         "notify-error"
       ]
     },
+    "status-icons-section": {
+      "type": "section",
+      "title": "Status icons",
+      "keys": [
+        "status-icon-ready",
+        "status-icon-recording",
+        "status-icon-processing",
+        "status-icon-recorded",
+        "status-icon-error",
+        "status-icon-setup"
+      ]
+    },
     "output-section": {
       "type": "section",
       "title": "Text output (menu: Text and output)",
@@ -102,6 +115,7 @@
         "append-space",
         "sanitize-special-chars",
         "soften-profanity",
+        "show-transcript-text",
         "show-profanity-filter-list",
         "typing-delay-ms",
         "max-transcript-files",
@@ -206,6 +220,12 @@
   "show-panel-label": {
     "type": "switch",
     "description": "Show status text in the panel",
+    "default": true
+  },
+  "show-transcript-text": {
+    "type": "switch",
+    "description": "Show transcript text in the applet and transcript-related errors",
+    "tooltip": "Enabled by default. Disable to replace transcript previews with their character count. Diagnostic protection still redacts secrets, credentials, tokens, API keys, and local paths.",
     "default": true
   },
   "language": {
@@ -623,5 +643,113 @@
     "description": "Off: Stored transcript files and retained recording files are kept as plaintext.\nSecurity impact: Use this only when plaintext transcript and recording files are acceptable. No encryption key, passphrase fallback, or key file is used for stored artifacts. Applet transcript export bundles still use encryption; plaintext export is only available through the CLI with explicit confirmation.",
     "tooltip": "Disables encryption for stored transcript and retained recording artifacts.",
     "dependency": "artifact-encryption=off"
+  },
+  "status-icon-ready": {
+    "type": "combobox",
+    "description": "Status icon while ready",
+    "tooltip": "Icon displayed while the applet is idle and waiting for dictation.",
+    "options": {
+      "Alternative 1": "ready-01",
+      "Alternative 2": "ready-02",
+      "Alternative 3": "ready-03",
+      "Alternative 4": "ready-04",
+      "Alternative 5": "ready-05",
+      "Alternative 6": "ready-06",
+      "Alternative 7": "ready-07",
+      "Alternative 8": "ready-08",
+      "Alternative 9": "ready-09",
+      "Alternative 10": "ready-10"
+    },
+    "default": "ready-01"
+  },
+  "status-icon-recording": {
+    "type": "combobox",
+    "description": "Status icon while recording",
+    "tooltip": "Icon displayed while active recording is running.",
+    "options": {
+      "Alternative 1": "recording-01",
+      "Alternative 2": "recording-02",
+      "Alternative 3": "recording-03",
+      "Alternative 4": "recording-04",
+      "Alternative 5": "recording-05",
+      "Alternative 6": "recording-06",
+      "Alternative 7": "recording-07",
+      "Alternative 8": "recording-08",
+      "Alternative 9": "recording-09",
+      "Alternative 10": "recording-10"
+    },
+    "default": "recording-01"
+  },
+  "status-icon-processing": {
+    "type": "combobox",
+    "description": "Status icon while processing",
+    "tooltip": "Icon displayed while a recording is being transcribed.",
+    "options": {
+      "Alternative 1": "processing-01",
+      "Alternative 2": "processing-02",
+      "Alternative 3": "processing-03",
+      "Alternative 4": "processing-04",
+      "Alternative 5": "processing-05",
+      "Alternative 6": "processing-06",
+      "Alternative 7": "processing-07",
+      "Alternative 8": "processing-08",
+      "Alternative 9": "processing-09",
+      "Alternative 10": "processing-10"
+    },
+    "default": "processing-01"
+  },
+  "status-icon-recorded": {
+    "type": "combobox",
+    "description": "Status icon after transcription",
+    "tooltip": "Icon displayed when transcription is complete and output is ready.",
+    "options": {
+      "Alternative 1": "ready-01",
+      "Alternative 2": "ready-02",
+      "Alternative 3": "ready-03",
+      "Alternative 4": "ready-04",
+      "Alternative 5": "ready-05",
+      "Alternative 6": "ready-06",
+      "Alternative 7": "ready-07",
+      "Alternative 8": "ready-08",
+      "Alternative 9": "ready-09",
+      "Alternative 10": "ready-10"
+    },
+    "default": "ready-09"
+  },
+  "status-icon-error": {
+    "type": "combobox",
+    "description": "Status icon after failure",
+    "tooltip": "Icon displayed when an error is reported for a recording or transcription.",
+    "options": {
+      "Alternative 1": "recording-01",
+      "Alternative 2": "recording-02",
+      "Alternative 3": "recording-03",
+      "Alternative 4": "recording-04",
+      "Alternative 5": "recording-05",
+      "Alternative 6": "recording-06",
+      "Alternative 7": "recording-07",
+      "Alternative 8": "recording-08",
+      "Alternative 9": "recording-09",
+      "Alternative 10": "recording-10"
+    },
+    "default": "recording-05"
+  },
+  "status-icon-setup": {
+    "type": "combobox",
+    "description": "Status icon while setup is active",
+    "tooltip": "Icon displayed during setup actions such as startup or service initialization.",
+    "options": {
+      "Alternative 1": "processing-01",
+      "Alternative 2": "processing-02",
+      "Alternative 3": "processing-03",
+      "Alternative 4": "processing-04",
+      "Alternative 5": "processing-05",
+      "Alternative 6": "processing-06",
+      "Alternative 7": "processing-07",
+      "Alternative 8": "processing-08",
+      "Alternative 9": "processing-09",
+      "Alternative 10": "processing-10"
+    },
+    "default": "processing-05"
   }
 }
