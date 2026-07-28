@@ -6586,7 +6586,7 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("const PASTE_FOCUS_DELAY_MS = 120;", source)
         self.assertIn("const PASTE_SUBMIT_DELAY_MS = 300;", source)
-        self.assertIn("const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 3000;", source)
+        self.assertIn("const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 180000;", source)
         self.assertIn("const CLIPBOARD_TARGET_TIMEOUT_SECONDS = 1;", source)
         self.assertIn("const MAX_XDOTOOL_TARGET_OUTPUT_BYTES = 4096;", source)
         self.assertIn("this.targetWindow = null;", source)
@@ -8300,18 +8300,24 @@ class AppletStaticTest(unittest.TestCase):
         self.assertEqual(snapshot_block.count("complete(result);"), 2)
         self.assertNotIn("if (result !== null) {\n                release();", snapshot_block)
 
-    def test_self_protection_popup_is_deduped_per_insert_token_only(self) -> None:
+    def test_self_protection_popup_is_deduped_per_insert_and_globally_throttled(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_notifySelfProtectionBlocked: function(title, windowClass)")
         end = source.index("\n  _windowIdentityMatchesAutoPaste:", start)
         block = source[start:end]
         self.assertIn("let activeInsertToken = this.textInsertToken;", block)
+        self.assertIn('let recordingKey = String(this.autoInsertPendingFingerprint || this.autoInsertFingerprint || "");', block)
+        self.assertIn("let now = Date.now();", block)
         self.assertIn("if (activeInsertToken) {", block)
         self.assertIn("if (activeInsertToken.selfProtectionNoticeShown === true) {", block)
         self.assertIn("activeInsertToken.selfProtectionNoticeShown = true;", block)
-        self.assertIn('} else {\n      let key = "self-protection\\n" + String(windowClass || "");', block)
-        self.assertIn('let key = "self-protection\\n" + String(windowClass || "");', block)
-        self.assertIn("if (key === this.selfProtectionNoticeKey && now - this.selfProtectionNoticeAtMs < SELF_PROTECTION_NOTICE_COOLDOWN_MS) {", block)
+        self.assertIn('let key = recordingKey !== ""\n      ? "self-protection\\nrecording\\n" + recordingKey\n      : [', block)
+        self.assertIn('String(this.targetWindowGeneration || 0)', block)
+        self.assertIn('String(title || "")', block)
+        cooldown_guard = "if (now - this.selfProtectionNoticeAtMs < SELF_PROTECTION_NOTICE_COOLDOWN_MS) {"
+        self.assertIn(cooldown_guard, block)
+        self.assertNotIn("key === this.selfProtectionNoticeKey", block)
+        self.assertLess(block.index("activeInsertToken.selfProtectionNoticeShown = true;"), block.index(cooldown_guard))
 
     def test_text_insert_cancellation_invalidates_x11_target_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

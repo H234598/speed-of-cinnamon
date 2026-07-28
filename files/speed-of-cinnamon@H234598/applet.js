@@ -43,7 +43,7 @@ const NON_TEXT_TEXT_CLIPBOARD_TARGETS = {
   "text/uri-list": true,
   "text/x-moz-url": true
 };
-const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 3000;
+const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 180000;
 const CLIPBOARD_OVERWRITE_APPROVAL_TTL_MS = 5000;
 const CLIPBOARD_TARGET_TIMEOUT_SECONDS = 1;
 const CLIPBOARD_COMMAND_TIMEOUT_MS = 1500;
@@ -13475,20 +13475,28 @@ MyApplet.prototype = {
       return;
     }
     let activeInsertToken = this.textInsertToken;
+    let recordingKey = String(this.autoInsertPendingFingerprint || this.autoInsertFingerprint || "");
+    let now = Date.now();
     if (activeInsertToken) {
       if (activeInsertToken.selfProtectionNoticeShown === true) {
         return;
       }
       activeInsertToken.selfProtectionNoticeShown = true;
-    } else {
-      let key = "self-protection\n" + String(windowClass || "");
-      let now = Date.now();
-      if (key === this.selfProtectionNoticeKey && now - this.selfProtectionNoticeAtMs < SELF_PROTECTION_NOTICE_COOLDOWN_MS) {
-        return;
-      }
-      this.selfProtectionNoticeKey = key;
-      this.selfProtectionNoticeAtMs = now;
     }
+    let key = recordingKey !== ""
+      ? "self-protection\nrecording\n" + recordingKey
+      : [
+        "self-protection",
+        "window",
+        String(this.targetWindowGeneration || 0),
+        String(windowClass || ""),
+        String(title || "")
+      ].join("\n");
+    if (now - this.selfProtectionNoticeAtMs < SELF_PROTECTION_NOTICE_COOLDOWN_MS) {
+      return;
+    }
+    this.selfProtectionNoticeKey = key;
+    this.selfProtectionNoticeAtMs = now;
     let message = _("Auto-Submit self-protection blocked a protected target");
     this.lastMessage = message;
     this._updatePanel();

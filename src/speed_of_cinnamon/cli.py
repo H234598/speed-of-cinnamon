@@ -5294,7 +5294,8 @@ def finalize_recording(
         audio_path = validate_audio_file(audio_path)
         audio_suffix = audio_path.suffix.lower()
         silence = detect_silent_recording(audio_path)
-        if silence.silent:
+        skip_speechless_recording = silence.silent and silence.speech_seconds <= 0.0
+        if skip_speechless_recording:
             cleanup_log_path = str(log_path) if log_path else None
             recording_encryption = ARTIFACT_ENCRYPTION_OFF
             if not keep_recording_artifacts:
