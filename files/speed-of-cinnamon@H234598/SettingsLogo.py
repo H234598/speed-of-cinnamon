@@ -188,7 +188,7 @@ class StatusIconPreview(SettingsWidget):
                 allowed_status_ids.append(
                     "{}-{}{}".format(state, "0" if idx < 10 else "", idx)
                 )
-        self._allowed_status_ids = tuple(allowed_status_ids)
+        self._allowed_status_ids = ("soc-original",) + tuple(allowed_status_ids)
 
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.set_halign(Gtk.Align.FILL)
@@ -249,9 +249,21 @@ class StatusIconPreview(SettingsWidget):
         if icon_id not in self._allowed_status_ids:
             self._show_fallback()
             return
-        logo_path = os.path.join(self._asset_base_dir, f"{icon_id}.png")
         try:
-            source_pixbuf = GdkPixbuf.Pixbuf.new_from_file(logo_path)
+            if icon_id == "soc-original":
+                icon_name = "audio-input-microphone-symbolic"
+                if self._target == "status-icon-recording":
+                    icon_name = "media-record-symbolic"
+                elif self._target == "status-icon-processing":
+                    icon_name = "view-refresh-symbolic"
+                source_pixbuf = Gtk.IconTheme.get_default().load_icon(
+                    icon_name,
+                    self.max_size,
+                    Gtk.IconLookupFlags.FORCE_SIZE,
+                )
+            else:
+                logo_path = os.path.join(self._asset_base_dir, f"{icon_id}.png")
+                source_pixbuf = GdkPixbuf.Pixbuf.new_from_file(logo_path)
         except Exception:
             self._show_fallback()
             return
@@ -293,6 +305,8 @@ class StatusIconPreview(SettingsWidget):
         return target_width, target_height
 
     def _on_size_allocate(self, _widget, allocation):
+        if allocation.width <= 1 or allocation.height <= 1:
+            return
         self._set_render_size(allocation.width, allocation.height)
 
     def _set_render_size(self, width, height):

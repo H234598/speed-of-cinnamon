@@ -405,13 +405,14 @@ const STATUS_ICON_ALLOWLIST = {};
     STATUS_ICON_ALLOWLIST[family + "-" + index] = true;
   }
 });
+STATUS_ICON_ALLOWLIST["soc-original"] = true;
 const STATUS_ICON_DEFAULTS = {
-  ready: "ready-01",
-  recording: "recording-01",
-  processing: "processing-01",
-  recorded: "ready-09",
-  error: "recording-05",
-  setup: "processing-05"
+  ready: "soc-original",
+  recording: "soc-original",
+  processing: "soc-original",
+  recorded: "soc-original",
+  error: "soc-original",
+  setup: "soc-original"
 };
 const EXPORTABLE_SETTINGS = [
   ["toggle-keybinding", "toggleKeybinding"],
@@ -15812,6 +15813,9 @@ MyApplet.prototype = {
 
   _statusIconPathForId: function(iconId, fallbackId) {
     let validatedId = this._validatedStatusIconId(iconId, fallbackId);
+    if (validatedId === "soc-original") {
+      return "";
+    }
     if (!this.metadata || !this.metadata.path) {
       return "";
     }

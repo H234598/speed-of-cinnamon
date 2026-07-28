@@ -8568,7 +8568,7 @@ class AppletStaticTest(unittest.TestCase):
             self.assertEqual(height, 256)
             self.assertEqual(color_type, 6)
 
-    def test_status_icon_section_contains_12_keys_with_45_options_each(self) -> None:
+    def test_status_icon_section_contains_12_keys_with_original_and_45_alternatives(self) -> None:
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
         section = schema["layout"]["status-icons-section"]
 
@@ -8598,32 +8598,27 @@ class AppletStaticTest(unittest.TestCase):
             "status-icon-error",
             "status-icon-setup",
         ]
-        expected_selector_labels = []
+        expected_selector_labels = ["Original Speed of Cinnamon"]
         expected_selector_labels.extend([f"Alternative {i}" for i in range(1, 31)])
         expected_selector_labels.extend([f"Mouse {i}" for i in range(1, 6)])
         expected_selector_labels.extend([f"Owl {i}" for i in range(1, 6)])
         expected_selector_labels.extend([f"Moon {i}" for i in range(1, 6)])
-        expected_selector_ids = [f"{i:02d}" for i in range(1, 46)]
 
         expected_selector_options = {
-            "ready": [f"ready-{i:02d}" for i in range(1, 46)],
-            "recording": [f"recording-{i:02d}" for i in range(1, 46)],
-            "processing": [f"processing-{i:02d}" for i in range(1, 46)],
-            "recorded": [f"ready-{i:02d}" for i in range(1, 46)],
-            "error": [f"recording-{i:02d}" for i in range(1, 46)],
-            "setup": [f"processing-{i:02d}" for i in range(1, 46)],
+            "ready": ["soc-original"] + [f"ready-{i:02d}" for i in range(1, 46)],
+            "recording": ["soc-original"] + [f"recording-{i:02d}" for i in range(1, 46)],
+            "processing": ["soc-original"] + [f"processing-{i:02d}" for i in range(1, 46)],
+            "recorded": ["soc-original"] + [f"ready-{i:02d}" for i in range(1, 46)],
+            "error": ["soc-original"] + [f"recording-{i:02d}" for i in range(1, 46)],
+            "setup": ["soc-original"] + [f"processing-{i:02d}" for i in range(1, 46)],
         }
         for key in status_selector_keys:
             options = schema[key]["options"]
-            self.assertEqual(len(options), 45)
+            self.assertEqual(len(options), 46)
             self.assertIn(schema[key]["default"], options.values())
             state = key.replace("status-icon-", "")
             self.assertEqual(list(options.values()), expected_selector_options[state])
             self.assertEqual(list(options.keys()), expected_selector_labels, f"{key} option labels")
-            self.assertEqual(
-                [value.split("-", 1)[1] for value in list(options.values())],
-                expected_selector_ids,
-            )
         schema_icon_ids = {
             icon_id
             for key in status_selector_keys
@@ -8633,7 +8628,8 @@ class AppletStaticTest(unittest.TestCase):
             path.stem
             for path in (APPLET_DIR / "assets" / "status-icons").glob("*.png")
         }
-        self.assertEqual(schema_icon_ids, asset_icon_ids)
+        self.assertIn("soc-original", schema_icon_ids)
+        self.assertEqual(schema_icon_ids - {"soc-original"}, asset_icon_ids)
 
         preview_expectations = [
             ("status-icon-ready-preview", "status-icon-ready", "Preview the ready status icon"),
@@ -8653,12 +8649,12 @@ class AppletStaticTest(unittest.TestCase):
             self.assertEqual(preview_schema["description"], expected_description)
 
         schema_defaults = {
-            "ready": "ready-01",
-            "recording": "recording-01",
-            "processing": "processing-01",
-            "recorded": "ready-09",
-            "error": "recording-05",
-            "setup": "processing-05",
+            "ready": "soc-original",
+            "recording": "soc-original",
+            "processing": "soc-original",
+            "recorded": "soc-original",
+            "error": "soc-original",
+            "setup": "soc-original",
         }
         for status, default_id in schema_defaults.items():
             self.assertEqual(schema[f"status-icon-{status}"]["default"], default_id)
@@ -8691,6 +8687,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('for state in ("ready", "recording", "processing"):', preview_source)
         self.assertIn("for idx in range(1, 46):", preview_source)
         self.assertIn('"{}-{}{}".format(state, "0" if idx < 10 else "", idx)', preview_source)
+        self.assertIn('self._allowed_status_ids = ("soc-original",) + tuple(allowed_status_ids)', preview_source)
 
         for preview_key, target_key in [
             ("status-icon-ready-preview", "status-icon-ready"),
@@ -8709,6 +8706,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("self._load_from_settings()", preview_source)
         self.assertIn('_asset_base_dir = os.path.join(base_dir, "assets", "status-icons")', preview_source)
         self.assertIn('logo_path = os.path.join(self._asset_base_dir, f"{icon_id}.png")', preview_source)
+        self.assertIn('if icon_id == "soc-original":', preview_source)
+        self.assertIn('icon_name = "audio-input-microphone-symbolic"', preview_source)
+        self.assertIn('icon_name = "media-record-symbolic"', preview_source)
+        self.assertIn('icon_name = "view-refresh-symbolic"', preview_source)
+        self.assertIn("Gtk.IconTheme.get_default().load_icon(", preview_source)
+        self.assertIn("Gtk.IconLookupFlags.FORCE_SIZE", preview_source)
         self.assertIn("_fit_size_for_allocation", preview_source)
         self.assertIn("_set_render_size", preview_source)
         self.assertIn("max_target = max(1, int(self.max_size))", preview_source)
@@ -8722,6 +8725,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("self._drawing_area.set_hexpand(True)", preview_source)
         self.assertIn("self._drawing_area.set_size_request(1, target_height)", preview_source)
         self.assertIn("_on_size_allocate(self._drawing_area, allocation)", preview_source)
+        self.assertIn("if allocation.width <= 1 or allocation.height <= 1:", preview_source)
         self.assertIn("if current_size == self._last_render_size and self._scaled_pixbuf is not None:", preview_source)
         self.assertIn("self._source_pixbuf.scale_simple(", preview_source)
         self.assertIn("GdkPixbuf.InterpType.BILINEAR", preview_source)
@@ -8808,6 +8812,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('forEach((family) => {', allowlist_block)
         self.assertIn('let index = (i < 10) ? "0" + String(i) : String(i);', allowlist_block)
         self.assertIn('STATUS_ICON_ALLOWLIST[family + "-" + index] = true;', allowlist_block)
+        self.assertIn('STATUS_ICON_ALLOWLIST["soc-original"] = true;', source)
 
         self.assertIn('if (status === "recording") return this.statusIconRecording;', source)
         self.assertIn('if (status === "processing") return this.statusIconProcessing;', source)
@@ -8821,5 +8826,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let validatedId = this._validatedStatusIconId(iconId, fallbackId);', source)
         self.assertIn('if (!this.metadata || !this.metadata.path) {', source)
         self.assertIn('return this.metadata.path + "/assets/status-icons/" + validatedId + ".png";', source)
+        self.assertIn('if (validatedId === "soc-original") {', source)
+        self.assertIn('ready: "soc-original"', source)
+        self.assertIn('recording: "soc-original"', source)
+        self.assertIn('processing: "soc-original"', source)
         self.assertIn("if (this._statusIconCache && this._statusIconCache.icon === nextIcon)", source)
         self.assertNotIn("this._statusIconCache.status === status && this._statusIconCache.icon === nextIcon", source)

@@ -655,6 +655,7 @@
     "description": "Status icon while ready",
     "tooltip": "Icon displayed while the applet is idle and waiting for dictation.",
     "options": {
+      "Original Speed of Cinnamon": "soc-original",
       "Alternative 1": "ready-01",
       "Alternative 2": "ready-02",
       "Alternative 3": "ready-03",
@@ -701,7 +702,7 @@
       "Moon 4": "ready-44",
       "Moon 5": "ready-45"
     },
-    "default": "ready-01"
+    "default": "soc-original"
   },
   "status-icon-ready-preview": {
     "type": "custom",
@@ -716,6 +717,7 @@
     "description": "Status icon while recording",
     "tooltip": "Icon displayed while active recording is running.",
     "options": {
+      "Original Speed of Cinnamon": "soc-original",
       "Alternative 1": "recording-01",
       "Alternative 2": "recording-02",
       "Alternative 3": "recording-03",
@@ -762,7 +764,7 @@
       "Moon 4": "recording-44",
       "Moon 5": "recording-45"
     },
-    "default": "recording-01"
+    "default": "soc-original"
   },
   "status-icon-recording-preview": {
     "type": "custom",
@@ -777,6 +779,7 @@
     "description": "Status icon while processing",
     "tooltip": "Icon displayed while a recording is being transcribed.",
     "options": {
+      "Original Speed of Cinnamon": "soc-original",
       "Alternative 1": "processing-01",
       "Alternative 2": "processing-02",
       "Alternative 3": "processing-03",
@@ -823,7 +826,7 @@
       "Moon 4": "processing-44",
       "Moon 5": "processing-45"
     },
-    "default": "processing-01"
+    "default": "soc-original"
   },
   "status-icon-processing-preview": {
     "type": "custom",
@@ -838,6 +841,7 @@
     "description": "Status icon after transcription",
     "tooltip": "Icon displayed when transcription is complete and output is ready.",
     "options": {
+      "Original Speed of Cinnamon": "soc-original",
       "Alternative 1": "ready-01",
       "Alternative 2": "ready-02",
       "Alternative 3": "ready-03",
@@ -884,7 +888,7 @@
       "Moon 4": "ready-44",
       "Moon 5": "ready-45"
     },
-    "default": "ready-09"
+    "default": "soc-original"
   },
   "status-icon-recorded-preview": {
     "type": "custom",
@@ -899,6 +903,7 @@
     "description": "Status icon after failure",
     "tooltip": "Icon displayed when an error is reported for a recording or transcription.",
     "options": {
+      "Original Speed of Cinnamon": "soc-original",
       "Alternative 1": "recording-01",
       "Alternative 2": "recording-02",
       "Alternative 3": "recording-03",
@@ -945,7 +950,7 @@
       "Moon 4": "recording-44",
       "Moon 5": "recording-45"
     },
-    "default": "recording-05"
+    "default": "soc-original"
   },
   "status-icon-error-preview": {
     "type": "custom",
@@ -960,6 +965,7 @@
     "description": "Status icon while setup is active",
     "tooltip": "Icon displayed during setup actions such as startup or service initialization.",
     "options": {
+      "Original Speed of Cinnamon": "soc-original",
       "Alternative 1": "processing-01",
       "Alternative 2": "processing-02",
       "Alternative 3": "processing-03",
@@ -1006,7 +1012,7 @@
       "Moon 4": "processing-44",
       "Moon 5": "processing-45"
     },
-    "default": "processing-05"
+    "default": "soc-original"
   },
   "status-icon-setup-preview": {
     "type": "custom",
