@@ -13023,9 +13023,17 @@ MyApplet.prototype = {
       }
       let progressText = this._recordingProgressText();
       let microphoneText = this._microphoneLevelText();
+      let recordingMessageText = this.lastMessage
+        ? this._shortMenuText(this.lastMessage, 160)
+        : "";
       let panelLabel = this.showPanelLabel ? "REC " + this._formatSeconds(this._recordingElapsedSeconds()) : "";
-      let tooltipText = _("Recording...") + " " + progressText + "\n" + microphoneText + "\n" + this._shortTranscript();
+      let tooltipText = _("Recording...") + " " + progressText + "\n" + microphoneText;
       let statusText = "recording " + progressText + "; " + microphoneText;
+      if (recordingMessageText !== "") {
+        tooltipText += "\n" + recordingMessageText;
+        statusText += " - " + recordingMessageText;
+      }
+      tooltipText += "\n" + this._shortTranscript();
       let toggleText = _("Stop dictation");
       let panelActor = this.actor;
       let panelActorReady = Boolean(
@@ -13034,15 +13042,16 @@ MyApplet.prototype = {
         typeof this.set_applet_label === "function" &&
         typeof this.set_applet_tooltip === "function"
       );
-      let nextFingerprint = JSON.stringify({
-        panelLabel: panelLabel,
-        tooltipText: tooltipText,
-        statusText: statusText,
-        microphoneText: microphoneText,
-        toggleText: toggleText,
-        panelActorReady: panelActorReady,
-      });
-      if (this._recordingDisplayFingerprint === nextFingerprint) {
+      let previousFingerprint = this._recordingDisplayFingerprint;
+      if (
+        previousFingerprint &&
+        previousFingerprint.panelLabel === panelLabel &&
+        previousFingerprint.tooltipText === tooltipText &&
+        previousFingerprint.statusText === statusText &&
+        previousFingerprint.microphoneText === microphoneText &&
+        previousFingerprint.toggleText === toggleText &&
+        previousFingerprint.panelActorReady === panelActorReady
+      ) {
         return true;
       }
       if (panelActorReady) {
@@ -13052,7 +13061,14 @@ MyApplet.prototype = {
       this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
       this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
       this._setMenuItemLabelSafely(this.toggleItem, toggleText);
-      this._recordingDisplayFingerprint = panelActorReady ? nextFingerprint : null;
+      this._recordingDisplayFingerprint = panelActorReady ? {
+        panelLabel: panelLabel,
+        tooltipText: tooltipText,
+        statusText: statusText,
+        microphoneText: microphoneText,
+        toggleText: toggleText,
+        panelActorReady: panelActorReady,
+      } : null;
       return true;
     }, false);
   },
@@ -15890,10 +15906,17 @@ MyApplet.prototype = {
       let transcriptText = this._shortTranscript();
       let microphoneText = this._microphoneLevelText();
       if (this.status === "recording") {
+        let recordingMessageText = this.lastMessage
+          ? this._shortMenuText(this.lastMessage, 160)
+          : "";
         progressText = this._recordingProgressText();
         label = "REC " + this._formatSeconds(this._recordingElapsedSeconds());
         tooltip = _("Recording...") + " " + progressText + "\n" + microphoneText;
         statusText = "recording " + progressText + "; " + microphoneText;
+        if (recordingMessageText !== "") {
+          tooltip += "\n" + recordingMessageText;
+          statusText += " - " + recordingMessageText;
+        }
         toggleText = _("Stop dictation");
       } else if (this.status === "processing") {
         label = "...";

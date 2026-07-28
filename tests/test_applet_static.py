@@ -4123,6 +4123,17 @@ class AppletStaticTest(unittest.TestCase):
             error_block.index("if (preserveActiveRecordingState)"),
             error_block.index("this.cancelPendingWhileCommandRunning = false;")
         )
+        display_start = source.index("_updateRecordingDisplay: function()")
+        display_end = source.index("\n  _isUsableTargetWindow:", display_start)
+        display_block = source[display_start:display_end]
+        panel_start = source.index("_updatePanel: function()")
+        panel_end = source.index("\n};\n\nfunction main", panel_start)
+        panel_block = source[panel_start:panel_end]
+        for render_block in (display_block, panel_block):
+            self.assertIn("let recordingMessageText = this.lastMessage", render_block)
+            self.assertIn('statusText += " - " + recordingMessageText;', render_block)
+        self.assertIn('tooltipText += "\\n" + recordingMessageText;', display_block)
+        self.assertIn('tooltip += "\\n" + recordingMessageText;', panel_block)
 
     def test_recording_command_errors_keep_active_lifecycle_polling(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -4450,7 +4461,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("this._scheduleDisplayTick();", display_block)
         self.assertIn("return !this.appletRemoved;", display_block)
         self.assertIn('_runGuarded("recording-display-update"', display_block)
-        self.assertIn("this._recordingDisplayFingerprint === nextFingerprint", display_block)
+        self.assertIn("let previousFingerprint = this._recordingDisplayFingerprint;", display_block)
+        self.assertIn("previousFingerprint.panelLabel === panelLabel", display_block)
+        self.assertNotIn("JSON.stringify({", display_block)
         self.assertIn("this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);", display_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Recording display timer could not be scheduled")', display_block)
 
