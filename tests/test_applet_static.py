@@ -1224,9 +1224,11 @@ class AppletStaticTest(unittest.TestCase):
             refresh_block.index('this._terminateProcessesByGroup("alarm-menu-refresh")'),
             refresh_block.index("let refreshToken = {};")
         )
-        self.assertIn("if (this.alarmMenuRefreshToken || this.alarmActionToken || this.alarmCheckToken)", refresh_block)
+        self.assertIn("if (this.alarmMenuRefreshToken)", refresh_block)
+        self.assertIn("if (this.alarmActionToken || this.alarmCheckToken)", refresh_block)
         self.assertIn("this.alarmMenuRefreshToken = null;", refresh_block)
-        self.assertLess(refresh_block.index("if (this.alarmMenuRefreshToken || this.alarmActionToken || this.alarmCheckToken)"), refresh_block.index("let refreshToken = {};"))
+        self.assertLess(refresh_block.index("if (this.alarmMenuRefreshToken)"), refresh_block.index("let refreshToken = {};"))
+        self.assertLess(refresh_block.index("if (this.alarmActionToken || this.alarmCheckToken)"), refresh_block.index("let refreshToken = {};"))
         self.assertLess(refresh_block.index("this.alarmMenuRefreshToken = null;"), refresh_block.index("if (payload.error)"))
         self.assertIn("let canReportAlarmStatus = () => !this.isCommandRunning &&", refresh_block)
         self.assertIn("if (canReportAlarmStatus())", refresh_block)
@@ -2236,6 +2238,83 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(block.index("if (this.inputSourceMenuRefreshToken)"), block.index("let refreshToken = {};"))
         self.assertLess(block.index('this._terminateProcessesByGroup("input-source-refresh")'), block.index("let refreshToken = {};"))
         self.assertLess(block.index("this.inputSourceMenuRefreshToken = null;"), block.index("if (payload.error)"))
+
+    def test_alarm_refresh_queues_one_fresh_reopen_request(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_refreshAlarmMenu: function()")
+        end = source.index("\n  _populateAlarmMenu:", start)
+        block = source[start:end]
+        active_guard = (
+            "if (this.alarmMenuRefreshToken) {\n"
+            "      this.alarmMenuRefreshQueued = true;\n"
+            "      return;\n"
+            "    }"
+        )
+        self.assertIn(active_guard, block)
+        self.assertLess(block.index(active_guard), block.index("if (this.alarmActionToken || this.alarmCheckToken)"))
+        self.assertIn("let refreshQueued = this.alarmMenuRefreshQueued === true;", block)
+        self.assertIn("if (refreshQueued) {\n          return;\n        }", block)
+        self.assertIn("} finally {", block)
+        self.assertIn("refreshQueued && !this.alarmMenuRefreshToken", block)
+        self.assertIn("!this.alarmActionToken && !this.alarmCheckToken", block)
+        self.assertEqual(block.count("this._refreshAlarmMenu();"), 1)
+        self.assertEqual(source.count("this.alarmMenuRefreshQueued = true;"), 1)
+        self.assertGreaterEqual(source.count("this.alarmMenuRefreshQueued = false;"), 5)
+        argument_try = block.index("try {", block.index("let alarmListArgs;"))
+        loading = block.index('this._populateAlarmMenu([], "", _("Loading alarms..."));')
+        argument_build = block.index("alarmListArgs = this._alarmListArgs();")
+        self.assertLess(argument_try, loading)
+        self.assertLess(loading, argument_build)
+
+        cleanup_start = source.index("_invalidateBackgroundCallbacksForRecording: function()")
+        cleanup_end = source.index("\n  _preparedTranscriptText:", cleanup_start)
+        cleanup_block = source[cleanup_start:cleanup_end]
+        token_reset = cleanup_block.index("this.alarmMenuRefreshToken = null;")
+        queue_reset = cleanup_block.index("this.alarmMenuRefreshQueued = false;")
+        process_cleanup = cleanup_block.index('this._terminateProcessesByGroup("alarm-menu-refresh")')
+        self.assertLess(token_reset, queue_reset)
+        self.assertLess(queue_reset, process_cleanup)
+
+    def test_model_menu_refreshes_start_only_while_open(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method, item, token in [
+            ("_refreshModelMenu: function()", "\n  _populateModelMenu:", "modelItem", "modelMenuRefreshToken"),
+            (
+                "_refreshTextModelMenuForBackend: function(backendOverride)",
+                "\n  _populateTextModelMenu:",
+                "textModelItem",
+                "textModelMenuRefreshToken",
+            ),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            guard = f"!this._canMutateMenu(this.{item}) || this.{item}.menu.isOpen !== true"
+            self.assertIn(guard, block)
+            self.assertLess(block.index(guard), block.index(f"this.{token}"))
+
+    def test_ollama_flows_stop_catalog_refresh_before_starting(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        for method, next_method in [
+            ("_activateOllamaTextModelFlow: function()", "\n  _ollamaModelPromptArgs:"),
+            ("_chooseOllamaTextModel: function()", "\n  _promptChooseOllamaTextModel:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            preflight = block.index('let textModelArgs = this._tryTextModelsArgs("ollama");')
+            invalidate = block.index("this.textModelMenuRefreshToken = null;", preflight)
+            terminate = block.index('if (this._terminateProcessesByGroup("text-model-refresh") === false)', invalidate)
+            watch_cleanup = block.index("if (this._cancelOllamaInstallWatch() === false)", terminate)
+            flow_token = block.index("let flowToken = {};")
+            self.assertLess(preflight, invalidate)
+            self.assertLess(invalidate, terminate)
+            self.assertLess(terminate, watch_cleanup)
+            self.assertLess(watch_cleanup, flow_token)
+            self.assertIn('_("Text model list refresh could not be stopped")', block)
 
     def test_menu_refresh_callbacks_fail_closed_on_processing_exceptions(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

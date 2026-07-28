@@ -5059,6 +5059,7 @@ MyApplet.prototype = {
     this.historyRefreshToken = null;
     this.historyRefreshQueued = false;
     this.alarmMenuRefreshToken = null;
+    this.alarmMenuRefreshQueued = false;
     this.inputSourceMenuRefreshToken = null;
     this.voiceModelActionToken = null;
     this.ollamaModelFlowToken = null;
@@ -6741,6 +6742,7 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
     }
     this.alarmMenuRefreshToken = null;
+    this.alarmMenuRefreshQueued = false;
     let alarmMenuRefreshCleanupSucceeded = this._terminateProcessesByGroup("alarm-menu-refresh") !== false;
     if (!alarmMenuRefreshCleanupSucceeded) {
       this._setStatusPreservingRecording("error", _("Alarm menu refresh could not be stopped"), this.lastTranscript);
@@ -7747,7 +7749,12 @@ MyApplet.prototype = {
     }
     let canReportAlarmStatus = () => !this.isCommandRunning &&
       !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
-    if (this.alarmMenuRefreshToken || this.alarmActionToken || this.alarmCheckToken) {
+    if (this.alarmMenuRefreshToken) {
+      this.alarmMenuRefreshQueued = true;
+      return;
+    }
+    this.alarmMenuRefreshQueued = false;
+    if (this.alarmActionToken || this.alarmCheckToken) {
       return;
     }
     if (this._terminateProcessesByGroup("alarm-menu-refresh") === false) {
@@ -7759,16 +7766,17 @@ MyApplet.prototype = {
     }
     let refreshToken = {};
     this.alarmMenuRefreshToken = refreshToken;
-    if (this._alarmMenuFingerprint === null) {
-      this._populateAlarmMenu([], "", _("Loading alarms..."));
-    }
     let alarmListArgs;
     try {
+      if (this._alarmMenuFingerprint === null) {
+        this._populateAlarmMenu([], "", _("Loading alarms..."));
+      }
       alarmListArgs = this._alarmListArgs();
     } catch (error) {
       if (this.alarmMenuRefreshToken === refreshToken) {
         this.alarmMenuRefreshToken = null;
       }
+      this.alarmMenuRefreshQueued = false;
       this._recordLifecycleError("alarm-refresh", error);
       this._populateAlarmMenu([], "", _("Could not prepare alarm list"));
       if (canReportAlarmStatus()) {
@@ -7780,8 +7788,13 @@ MyApplet.prototype = {
       if (this.alarmMenuRefreshToken !== refreshToken) {
         return;
       }
+      let refreshQueued = this.alarmMenuRefreshQueued === true;
+      this.alarmMenuRefreshQueued = false;
       try {
         this.alarmMenuRefreshToken = null;
+        if (refreshQueued) {
+          return;
+        }
         if (!this._canMutateMenu(this.alarmItem) || this.alarmItem.menu.isOpen !== true) {
           return;
         }
@@ -7801,6 +7814,12 @@ MyApplet.prototype = {
         this._recordLifecycleError("menu-refresh", error);
         if (canReportAlarmStatus()) {
           this._setAlarmErrorStatus(_("Could not refresh alarm list"));
+        }
+      } finally {
+        if (refreshQueued && !this.alarmMenuRefreshToken &&
+            !this.alarmActionToken && !this.alarmCheckToken &&
+            this._canMutateMenu(this.alarmItem) && this.alarmItem.menu.isOpen === true) {
+          this._refreshAlarmMenu();
         }
       }
     }, { resourceGroup: "alarm-menu-refresh" });
@@ -8311,7 +8330,7 @@ MyApplet.prototype = {
   },
 
   _refreshModelMenu: function() {
-    if (!this._canMutateMenu(this.modelItem)) {
+    if (!this._canMutateMenu(this.modelItem) || this.modelItem.menu.isOpen !== true) {
       return;
     }
     let canReportModelStatus = () => !this.isCommandRunning &&
@@ -9642,7 +9661,7 @@ MyApplet.prototype = {
   },
 
   _refreshTextModelMenuForBackend: function(backendOverride) {
-    if (!this._canMutateMenu(this.textModelItem)) {
+    if (!this._canMutateMenu(this.textModelItem) || this.textModelItem.menu.isOpen !== true) {
       return;
     }
     let canReportTextModelStatus = () => !this.isCommandRunning &&
@@ -10139,6 +10158,11 @@ MyApplet.prototype = {
       }
       return;
     }
+    this.textModelMenuRefreshToken = null;
+    if (this._terminateProcessesByGroup("text-model-refresh") === false) {
+      this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+      return;
+    }
     if (this._cancelOllamaInstallWatch() === false) {
       this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
       return;
@@ -10302,6 +10326,11 @@ MyApplet.prototype = {
       if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
         this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
       }
+      return;
+    }
+    this.textModelMenuRefreshToken = null;
+    if (this._terminateProcessesByGroup("text-model-refresh") === false) {
+      this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
       return;
     }
     if (this._cancelOllamaInstallWatch() === false) {
