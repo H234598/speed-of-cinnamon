@@ -4478,7 +4478,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let panelRenderUnchanged = Boolean(", update_block)
         self.assertIn("if (!panelRenderUnchanged) {", update_block)
         self.assertIn("if (rootMenuOpen) {", update_block)
-        self.assertIn("rootMenuOpen: rootMenuOpen,", update_block)
+        self.assertIn(
+            "rootMenuOpen: menuRenderSucceeded ? rootMenuOpen : null,",
+            update_block,
+        )
         menu_guard = update_block.index("if (rootMenuOpen) {")
         self.assertLess(update_block.index("this.set_applet_label(panelLabel);"), menu_guard)
         self.assertLess(menu_guard, update_block.index("this._setMenuItemLabelSafely(this.statusItem"))
@@ -4504,7 +4507,13 @@ class AppletStaticTest(unittest.TestCase):
             r'this\._updatePanel\(true\);\s*\}\s*\}',
         )
         self.assertNotIn("this._updateRecordingDisplay();", menu_open_block)
-        self.assertIn("return this._panelRenderFingerprint !== null;", update_block)
+        self.assertIn(
+            "return this._panelRenderFingerprint !== null &&\n"
+            "        panelIconRenderSucceeded &&\n"
+            "        panelStyleRenderSucceeded &&\n"
+            "        menuRenderSucceeded;",
+            update_block,
+        )
         self.assertIn("typeof this.set_applet_label === \"function\"", update_block)
         self.assertIn("typeof this.set_applet_tooltip === \"function\"", update_block)
 
@@ -7775,11 +7784,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"process_identity_present"', artifact_block)
         self.assertIn("payload.audio_deleted === false", artifact_block)
         self.assertIn("let cleanupFailurePresent = payload.audio_deleted === false ||", artifact_block)
-        self.assertIn("this.recordingArtifactsPresent = cleanupFailurePresent;", artifact_block)
+        self.assertIn("this.recordingArtifactsPresent = false;", artifact_block)
         self.assertIn('if (status === "idle" || status === "done")', artifact_block)
         self.assertLess(
             artifact_block.index('if (status === "idle" || status === "done")'),
-            artifact_block.index("this.recordingArtifactsPresent = cleanupFailurePresent;")
+            artifact_block.index("this.recordingArtifactsPresent = false;")
         )
 
         preserving_start = source.index("_setStatusPreservingRecording: function(status, message, transcript)")
@@ -9402,7 +9411,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let menuRenderSucceeded = true;", panel_block)
         self.assertIn("labelWriteSucceeded = this._updateAutoPasteItem(autoPasteText);", panel_block)
         self.assertIn("menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;", panel_block)
-        self.assertIn("panelActorReady && menuRenderSucceeded ? {", panel_block)
+        self.assertIn("panelActorReady ? {", panel_block)
         self.assertNotIn(".label.text", source)
 
     def test_static_submenus_are_not_rebuilt_when_opened(self) -> None:
@@ -9458,7 +9467,10 @@ class AppletStaticTest(unittest.TestCase):
         update_start = source.index("_updatePanel: function(menuOpenOverride)")
         update_end = source.index("\n};\n\nfunction main", update_start)
         update_block = source[update_start:update_end]
-        self.assertIn("this._applyPanelIcon(this.status);", update_block)
+        self.assertIn(
+            "panelIconRenderSucceeded = this._applyPanelIcon(this.status) === true;",
+            update_block,
+        )
 
     def test_history_args_appends_confirm_plaintext_before_json(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -9470,6 +9482,425 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('args.push("--confirm-plaintext");', block)
         self.assertIn('args.push("--json");', block)
         self.assertIn("return args;", block)
+
+    def test_dynamic_panel_text_does_not_reapply_unchanged_icon_or_style(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        icon_start = source.index("_applyPanelIcon: function(status)")
+        style_start = source.index("_applyPanelStyle: function(status)", icon_start)
+        icon_block = source[icon_start:style_start]
+        update_start = source.index("_updatePanel: function(menuOpenOverride)")
+        style_block = source[style_start:update_start]
+        update_end = source.index("\n};", update_start)
+        update_block = source[update_start:update_end]
+        icon_gate_start = update_block.index("let panelIconUnchanged = Boolean(")
+        icon_gate_end = update_block.index(
+            "let panelStyleUnchanged = Boolean(",
+            icon_gate_start,
+        )
+        icon_gate = update_block[icon_gate_start:icon_gate_end]
+        style_gate_start = icon_gate_end
+        style_gate_end = update_block.index(
+            "let panelRenderUnchanged = Boolean(",
+            style_gate_start,
+        )
+        style_gate = update_block[style_gate_start:style_gate_end]
+        render_start = update_block.index("if (!panelRenderUnchanged) {")
+        render_end = update_block.index("if (panelActorReady) {", render_start)
+        render_block = update_block[render_start:render_end]
+
+        self.assertIn(
+            "previousFingerprint &&\n"
+            "        previousFingerprint.statusIcon === statusIcon &&\n"
+            "        previousFingerprint.panelActorReady === panelActorReady",
+            icon_gate,
+        )
+        self.assertIn(
+            "previousFingerprint &&\n"
+            "        previousFingerprint.styleClass === styleClass &&\n"
+            "        previousFingerprint.panelActorReady === panelActorReady",
+            style_gate,
+        )
+        self.assertIn(
+            "let panelIconRenderSucceeded = panelIconUnchanged;\n"
+            "      let panelStyleRenderSucceeded = panelStyleUnchanged;",
+            update_block,
+        )
+        self.assertIn(
+            "if (!panelIconUnchanged) {\n"
+            "          panelIconRenderSucceeded = this._applyPanelIcon(this.status) === true;\n"
+            "        }",
+            render_block,
+        )
+        self.assertIn(
+            "if (!panelStyleUnchanged) {\n"
+            "          panelStyleRenderSucceeded = this._applyPanelStyle(this.status) === true;\n"
+            "        }",
+            render_block,
+        )
+        self.assertEqual(update_block.count("this._applyPanelIcon(this.status)"), 1)
+        self.assertEqual(update_block.count("this._applyPanelStyle(this.status)"), 1)
+        self.assertIn(
+            "statusIcon: panelIconRenderSucceeded ? statusIcon : null,",
+            update_block,
+        )
+        self.assertIn(
+            "styleClass: panelStyleRenderSucceeded ? styleClass : null,",
+            update_block,
+        )
+        self.assertIn(
+            "rootMenuOpen: menuRenderSucceeded ? rootMenuOpen : null,",
+            update_block,
+        )
+        self.assertIn(
+            "if (this._statusIconCache && this._statusIconCache.icon === nextIcon) {\n"
+            "        return true;\n"
+            "      }",
+            icon_block,
+        )
+        self.assertIn("return applied;\n    }, false);", icon_block)
+        self.assertIn("return false;", style_block)
+        self.assertIn("return true;\n    }, false);", style_block)
+        self.assertIn(
+            "return this._panelRenderFingerprint !== null &&\n"
+            "        panelIconRenderSucceeded &&\n"
+            "        panelStyleRenderSucceeded &&\n"
+            "        menuRenderSucceeded;",
+            update_block,
+        )
+
+    def test_terminal_payload_clears_retained_artifact_presence(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        artifact_start = source.index(
+            "_updateRecordingArtifactState: function(payload, status)"
+        )
+        artifact_end = source.index("\n  _cancelRecording:", artifact_start)
+        artifact_block = source[artifact_start:artifact_end]
+        presence_start = artifact_block.index("let hasPresenceFields = [")
+        presence_end = artifact_block.index(
+            "\n    let cleanupFailurePresent",
+            presence_start,
+        )
+        presence_block = artifact_block[presence_start:presence_end]
+        terminal_start = artifact_block.index(
+            'if (status === "idle" || status === "done")'
+        )
+        terminal_end = artifact_block.index(
+            "\n    if (\n"
+            "      payload.discarded_audio_path_present === true",
+            terminal_start,
+        )
+        terminal_block = artifact_block[terminal_start:terminal_end]
+        cleanup_start = artifact_block.index("let cleanupFailurePresent =")
+        cleanup_end = artifact_block.index(
+            '\n    if (status === "recording"',
+            cleanup_start,
+        )
+        cleanup_block = artifact_block[cleanup_start:cleanup_end]
+
+        self.assertNotIn('status !== "error"', artifact_block)
+        for field in (
+            "audio_path_present",
+            "log_path_present",
+            "transcript_path_present",
+            "pid_present",
+            "process_identity_present",
+        ):
+            self.assertIn(f'"{field}"', presence_block)
+            self.assertIn(f"payload.{field} === true", presence_block)
+        self.assertIn(
+            ".some((field) => Object.prototype.hasOwnProperty.call(payload, field));",
+            presence_block,
+        )
+        self.assertIn(
+            "if (hasPresenceFields) {\n"
+            "      this.recordingArtifactsPresent = Boolean(\n"
+            "        payload.audio_path_present === true ||\n"
+            "        payload.log_path_present === true ||\n"
+            "        payload.transcript_path_present === true ||\n"
+            "        payload.pid_present === true ||\n"
+            "        payload.process_identity_present === true\n"
+            "      );\n"
+            "    }",
+            presence_block,
+        )
+        self.assertLess(presence_start, terminal_start)
+        self.assertIn(
+            'if (status === "idle" || status === "done") {\n'
+            "      this.recordingArtifactsPresent = false;\n"
+            "      return;\n"
+            "    }",
+            terminal_block,
+        )
+        self.assertNotIn(
+            "this.recordingArtifactsPresent = cleanupFailurePresent;",
+            terminal_block,
+        )
+        self.assertIn("payload.discarded_audio_path_present === true", cleanup_block)
+        self.assertIn("cleanupFailurePresent", cleanup_block)
+        for field in ("audio_deleted", "log_deleted", "transcript_deleted"):
+            self.assertIn(f"payload.{field} === false", cleanup_block)
+        self.assertIn(
+            "if (\n"
+            "      payload.discarded_audio_path_present === true ||\n"
+            "      cleanupFailurePresent\n"
+            "    ) {\n"
+            "      this.recordingArtifactsPresent = true;\n"
+            "    }",
+            cleanup_block,
+        )
+
+    def test_processing_payload_preserves_pending_cancel(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        apply_start = source.index("_applyPayload: function(payload, statusRefreshToken) {")
+        apply_end = source.index("\n  _artifactEncryptionWarningKey:", apply_start)
+        apply_block = source[apply_start:apply_end]
+
+        self.assertIn(
+            "if (\n"
+            "      this.cancelPendingWhileCommandRunning &&\n"
+            "      !this.isCommandRunning &&\n"
+            '      status !== "processing"\n'
+            "    ) {\n"
+            "      this.cancelPendingWhileCommandRunning = false;\n"
+            "    }",
+            apply_block,
+        )
+
+    def test_empty_done_recovers_auto_relisten_pending(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        apply_start = source.index("_applyPayload: function(payload, statusRefreshToken) {")
+        apply_end = source.index("\n  _artifactEncryptionWarningKey:", apply_start)
+        apply_block = source[apply_start:apply_end]
+
+        self.assertIn(
+            'if (status === "done" && !this.autoRelistenPending) {\n'
+            "      this._ensureAutoRelistenPendingForDonePayload(payload);\n"
+            "    }\n"
+            '    if (status === "done" && this.autoRelistenPending) {\n'
+            "      this._finishEmptyRelistenDone(payload);\n"
+            "      return;\n"
+            "    }",
+            apply_block,
+        )
+
+    def test_status_callback_exception_is_converted_to_status_error(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        refresh_start = source.index("_refreshStatus: function(fromStatusTimer) {")
+        refresh_end = source.index("\n  _hasCancelableRecordingWork:", refresh_start)
+        refresh_block = source[refresh_start:refresh_end]
+        callback_start = refresh_block.index(
+            "this._spawnJson(this._statusArgs(), (payload) => {"
+        )
+        callback_end = refresh_block.index(
+            '      }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS, resourceGroup: "status" });',
+            callback_start,
+        )
+        callback_block = refresh_block[callback_start:callback_end]
+        catch_index = callback_block.index("} catch (err) {")
+        finally_index = callback_block.index("} finally {", catch_index)
+        catch_block = callback_block[catch_index:finally_index]
+        guard_start = catch_block.index(
+            "if (this._statusCommandToken === statusCommandToken) {"
+        )
+        guard_end = catch_block.index("\n          }", guard_start)
+        guard_block = catch_block[guard_start:guard_end]
+
+        self.assertIn(
+            "this._applyPayload(payload, statusRefreshToken);",
+            callback_block[:catch_index],
+        )
+        self.assertIn("this.microphoneLevel = null;", guard_block)
+        self.assertIn(
+            'this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError',
+            guard_block,
+        )
+        self.assertLess(catch_index, finally_index)
+
+    def test_status_spawn_failure_releases_command_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        refresh_start = source.index("_refreshStatus: function(fromStatusTimer) {")
+        refresh_end = source.index("\n  _hasCancelableRecordingWork:", refresh_start)
+        refresh_block = source[refresh_start:refresh_end]
+        spawn_index = refresh_block.index(
+            "let statusHandle = this._spawnJson(this._statusArgs(), (payload) => {"
+        )
+        spawn_end = refresh_block.index(
+            '      }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS, resourceGroup: "status" });',
+            spawn_index,
+        )
+        failure_index = refresh_block.index(
+            "if (!statusHandle && this._statusCommandToken === statusCommandToken) {",
+            spawn_end,
+        )
+        catch_index = refresh_block.index("} catch (err) {", failure_index)
+        catch_block = refresh_block[catch_index:]
+
+        self.assertIn(
+            'throw new Error("Status command could not be started");',
+            refresh_block[failure_index:catch_index],
+        )
+        self.assertIn(
+            "if (this._statusCommandToken !== statusCommandToken) {\n"
+            "        return false;\n"
+            "      }\n"
+            "      this._statusCommandToken = null;\n"
+            "      this._statusCommandRunning = false;",
+            catch_block,
+        )
+        self.assertIn("if (fromStatusTimer === true) {\n          return true;", catch_block)
+        self.assertTrue(refresh_block.rstrip().endswith("return false;\n  },"))
+
+    def test_stop_spawn_failure_rearms_status_polling(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        toggle_start = source.index("_toggleRecording: function()")
+        toggle_end = source.index("\n  _restartApplet:", toggle_start)
+        toggle_block = source[toggle_start:toggle_end]
+        null_start = toggle_block.index("if (!toggleHandle) {")
+        null_end = toggle_block.index(
+            '\n    if (commandAction === "start") {',
+            null_start,
+        )
+        null_block = toggle_block[null_start:null_end]
+
+        poll_guard_index = null_block.index(
+            'if (this.status === "recording" || this.status === "processing") {'
+        )
+        poll_index = null_block.index("this._scheduleStatusPoll();", poll_guard_index)
+        panel_index = null_block.index("this._updatePanel();", poll_index)
+        self.assertIn("this._recordingCommandToken = null;", null_block[:poll_guard_index])
+        self.assertIn("this.isCommandRunning = false;", null_block[:poll_guard_index])
+        self.assertIn(
+            '      }\n'
+            '      if (this.status === "recording" || this.status === "processing") {',
+            null_block,
+        )
+        self.assertLess(poll_guard_index, poll_index)
+        self.assertLess(poll_index, panel_index)
+
+    def test_cancel_spawn_failure_releases_recording_command_state(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        cancel_start = source.index("_cancelRecording: function(statusOverride)")
+        cancel_end = source.index("\n  _invalidateBackgroundCallbacksForRecording:", cancel_start)
+        cancel_block = source[cancel_start:cancel_end]
+
+        self.assertIn("let cancelHandle = this._spawnJson(cancelArgs", cancel_block)
+        self.assertIn(
+            "if (!cancelHandle && this._recordingCommandToken === recordingCommandToken) {",
+            cancel_block,
+        )
+        failure_start = cancel_block.index(
+            "if (!cancelHandle && this._recordingCommandToken === recordingCommandToken) {"
+        )
+        callback_start = cancel_block.index("let cancelHandle = this._spawnJson(cancelArgs")
+        callback_end = cancel_block.index("\n    });", callback_start)
+        callback_block = cancel_block[
+            callback_start:callback_end
+        ]
+        between_callback_and_failure = cancel_block[
+            callback_end + len("\n    });"):failure_start
+        ]
+        failure_end = cancel_block.index("\n    }\n  },", failure_start)
+        failure_block = cancel_block[failure_start:failure_end]
+        callback_token_index = callback_block.index("this._recordingCommandToken = null;")
+        callback_busy_index = callback_block.index("this.isCommandRunning = false;")
+        callback_apply_index = callback_block.index("this._applyPayloadSafely(")
+        self.assertLess(callback_token_index, callback_busy_index)
+        self.assertLess(callback_busy_index, callback_apply_index)
+        self.assertNotIn(
+            "this._recordingCommandToken = null;",
+            between_callback_and_failure,
+        )
+        self.assertNotIn("this.isCommandRunning = false;", between_callback_and_failure)
+        self.assertIn("this._recordingCommandToken = null;", failure_block)
+        self.assertIn("this.isCommandRunning = false;", failure_block)
+        self.assertIn(
+            'this._setStatusPreservingRecording("error", _("Could not cancel recording")',
+            failure_block,
+        )
+        self.assertIn('this.status === "recording" || this.status === "processing"', failure_block)
+        self.assertIn("this._scheduleStatusPoll();", failure_block)
+
+    def test_status_poll_retires_before_refresh_when_status_is_terminal(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        poll_start = source.index("_scheduleStatusPoll: function()")
+        callback_start = source.index(
+            'this._scheduleTrackedTimer("status", 2, () => {',
+            poll_start,
+        )
+        callback_end = source.index('\n    }, true, "statusTimer")', callback_start)
+        callback_block = source[callback_start:callback_end]
+
+        guard = (
+            'if (this.status !== "recording" && this.status !== "processing") {\n'
+            "        return false;\n"
+            "      }"
+        )
+        guard_index = callback_block.index(guard)
+        refresh_index = callback_block.index(
+            "let statusRefreshContinues = this._refreshStatus(true) === true;"
+        )
+        self.assertLess(guard_index, refresh_index)
+
+    def test_status_poll_recovers_only_from_proven_stale_timer_ownership(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        poll_start = source.index("_scheduleStatusPoll: function()")
+        poll_end = source.index("\n  _scheduleDisplayTick:", poll_start)
+        poll_block = source[poll_start:poll_end]
+
+        recovery_start = poll_block.index("if (this.statusTimer) {")
+        recovery_end = poll_block.index(
+            "\n    if (this.statusTimer) {\n      return;\n    }",
+            recovery_start,
+        )
+        recovery_block = poll_block[recovery_start:recovery_end]
+        proof_index = recovery_block.index("let staleStatusTimerProven =")
+        retry_index = recovery_block.index("this._retryOrphanedTimers();", proof_index)
+        registry_refresh_index = recovery_block.index(
+            "timers = this._resourceRegistry && this._resourceRegistry.timers;",
+            retry_index,
+        )
+        adopt_index = recovery_block.index(
+            "this.statusTimer = registeredStatusTimer;",
+            registry_refresh_index,
+        )
+        clear_index = recovery_block.index("this.statusTimer = 0;", adopt_index)
+        return_index = poll_block.index(
+            "if (this.statusTimer) {\n      return;\n    }",
+            recovery_end,
+        )
+        schedule_index = poll_block.index("this._scheduleTrackedTimer(", return_index)
+
+        self.assertIn('entry.name === "status"', recovery_block[:proof_index])
+        self.assertIn("entry.sourceId === staleStatusTimer", recovery_block[:proof_index])
+        self.assertIn('entry.propertyName === "statusTimer"', recovery_block[:proof_index])
+        self.assertIn('name !== "status"', recovery_block[:proof_index])
+        self.assertIn("timers[name] === staleStatusTimer", recovery_block[:proof_index])
+        self.assertIn(
+            "let staleStatusTimerProven = hasExactStatusOrphan || hasForeignTimerOwner;",
+            recovery_block,
+        )
+        self.assertIn(
+            "let retrySucceeded = staleStatusTimerProven && this._retryOrphanedTimers();",
+            recovery_block,
+        )
+        self.assertIn(
+            "if (registeredStatusTimer && registeredStatusTimer !== staleStatusTimer) {\n"
+            "        this.statusTimer = registeredStatusTimer;\n"
+            "      } else if (!registeredStatusTimer && staleStatusTimerProven && retrySucceeded) {\n"
+            "        this.statusTimer = 0;\n"
+            "      }",
+            recovery_block,
+        )
+        self.assertEqual(recovery_block.count("this.statusTimer = 0;"), 1)
+        self.assertEqual(
+            recovery_block.count("this.statusTimer = registeredStatusTimer;"),
+            1,
+        )
+        self.assertLess(proof_index, retry_index)
+        self.assertLess(retry_index, registry_refresh_index)
+        self.assertLess(registry_refresh_index, adopt_index)
+        self.assertLess(adopt_index, clear_index)
+        self.assertLess(return_index, schedule_index)
 
     def test_start_toggle_request_is_queued_when_start_command_is_running(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")

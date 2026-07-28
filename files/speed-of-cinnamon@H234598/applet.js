@@ -6972,6 +6972,9 @@ MyApplet.prototype = {
           return false;
         }
       }
+      if (this.status === "recording" || this.status === "processing") {
+        this._scheduleStatusPoll();
+      }
       this._updatePanel();
       return false;
     }
@@ -7008,7 +7011,7 @@ MyApplet.prototype = {
     this._statusCommandRunning = true;
     let statusRefreshToken = ++this._statusRefreshToken;
     try {
-      this._spawnJson(this._statusArgs(), (payload) => {
+      let statusHandle = this._spawnJson(this._statusArgs(), (payload) => {
         try {
           this._applyPayload(payload, statusRefreshToken);
         } catch (err) {
@@ -7030,9 +7033,12 @@ MyApplet.prototype = {
           }
         }
       }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS, resourceGroup: "status" });
+      if (!statusHandle && this._statusCommandToken === statusCommandToken) {
+        throw new Error("Status command could not be started");
+      }
     } catch (err) {
       if (this._statusCommandToken !== statusCommandToken) {
-        return;
+        return false;
       }
       this._statusCommandToken = null;
       this._statusCommandRunning = false;
@@ -7046,6 +7052,7 @@ MyApplet.prototype = {
         this._scheduleStatusPoll();
       }
     }
+    return false;
   },
 
   _hasCancelableRecordingWork: function(statusOverride) {
@@ -7073,7 +7080,7 @@ MyApplet.prototype = {
       "transcript_path_present",
       "pid_present",
       "process_identity_present"
-    ]
+    ] 
       .some((field) => Object.prototype.hasOwnProperty.call(payload, field));
     if (hasPresenceFields) {
       this.recordingArtifactsPresent = Boolean(
@@ -7088,7 +7095,7 @@ MyApplet.prototype = {
       payload.log_deleted === false ||
       payload.transcript_deleted === false;
     if (status === "idle" || status === "done") {
-      this.recordingArtifactsPresent = cleanupFailurePresent;
+      this.recordingArtifactsPresent = false;
       return;
     }
     if (
@@ -7147,7 +7154,7 @@ MyApplet.prototype = {
     this.autoRelistenPendingLanguage = "";
     this.autoRelistenManualStopRequested = true;
     this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
-    this._spawnJson(cancelArgs, (payload) => {
+    let cancelHandle = this._spawnJson(cancelArgs, (payload) => {
       if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -7155,6 +7162,14 @@ MyApplet.prototype = {
       this.isCommandRunning = false;
       this._applyPayloadSafely(payload, undefined, true);
     });
+    if (!cancelHandle && this._recordingCommandToken === recordingCommandToken) {
+      this._recordingCommandToken = null;
+      this.isCommandRunning = false;
+      this._setStatusPreservingRecording("error", _("Could not cancel recording"), this.lastTranscript);
+      if (this.status === "recording" || this.status === "processing") {
+        this._scheduleStatusPoll();
+      }
+    }
   },
 
   _invalidateBackgroundCallbacksForRecording: function() {
@@ -13149,7 +13164,11 @@ MyApplet.prototype = {
       this._cancelRecording(status);
       return;
     }
-    if (this.cancelPendingWhileCommandRunning && !this.isCommandRunning) {
+    if (
+      this.cancelPendingWhileCommandRunning &&
+      !this.isCommandRunning &&
+      status !== "processing"
+    ) {
       this.cancelPendingWhileCommandRunning = false;
     }
     if (status === "done" && payload.silence_detected === true) {
@@ -13159,6 +13178,9 @@ MyApplet.prototype = {
     if (status === "done" && hasTranscript) {
       this._finishAppletTextInsert(payload);
       return;
+    }
+    if (status === "done" && !this.autoRelistenPending) {
+      this._ensureAutoRelistenPendingForDonePayload(payload);
     }
     if (status === "done" && this.autoRelistenPending) {
       this._finishEmptyRelistenDone(payload);
@@ -13570,9 +13592,44 @@ MyApplet.prototype = {
       return;
     }
     if (this.statusTimer) {
+      let staleStatusTimer = this.statusTimer;
+      let timers = this._resourceRegistry && this._resourceRegistry.timers;
+      let hasExactStatusOrphan = Array.isArray(this._orphanedTimers) &&
+        this._orphanedTimers.some((entry) => {
+          return entry &&
+            entry.name === "status" &&
+            entry.sourceId === staleStatusTimer &&
+            entry.propertyName === "statusTimer";
+        });
+      let hasForeignTimerOwner = false;
+      if (timers && (typeof timers === "object" || typeof timers === "function")) {
+        for (let name in timers) {
+          if (Object.prototype.hasOwnProperty.call(timers, name) &&
+              name !== "status" &&
+              timers[name] === staleStatusTimer) {
+            hasForeignTimerOwner = true;
+            break;
+          }
+        }
+      }
+      let staleStatusTimerProven = hasExactStatusOrphan || hasForeignTimerOwner;
+      let retrySucceeded = staleStatusTimerProven && this._retryOrphanedTimers();
+
+      timers = this._resourceRegistry && this._resourceRegistry.timers;
+      let registeredStatusTimer = timers && timers.status;
+      if (registeredStatusTimer && registeredStatusTimer !== staleStatusTimer) {
+        this.statusTimer = registeredStatusTimer;
+      } else if (!registeredStatusTimer && staleStatusTimerProven && retrySucceeded) {
+        this.statusTimer = 0;
+      }
+    }
+    if (this.statusTimer) {
       return;
     }
     let timerId = this._scheduleTrackedTimer("status", 2, () => {
+      if (this.status !== "recording" && this.status !== "processing") {
+        return false;
+      }
       let statusRefreshContinues = this._refreshStatus(true) === true;
       return statusRefreshContinues || (
         !this._statusCommandRunning &&
@@ -16539,7 +16596,7 @@ MyApplet.prototype = {
       let nextIconPath = this._statusIconPathForId(nextIconId, this._statusIconDefaultForStatus(status));
       let nextIcon = nextIconPath || nextIconName;
       if (this._statusIconCache && this._statusIconCache.icon === nextIcon) {
-        return;
+        return true;
       }
       let applied = false;
       if (nextIconPath && typeof this.set_applet_icon_path === "function") {
@@ -16552,7 +16609,8 @@ MyApplet.prototype = {
       if (applied) {
         this._statusIconCache = { status: status, icon: nextIcon };
       }
-    }, undefined);
+      return applied;
+    }, false);
   },
 
   _applyPanelStyle: function(status) {
@@ -16562,13 +16620,14 @@ MyApplet.prototype = {
           (typeof actor.is_finalized === "function" && actor.is_finalized()) ||
           typeof actor.add_style_class_name !== "function" ||
           typeof actor.remove_style_class_name !== "function") {
-        return;
+        return false;
       }
       for (let styleClass of PANEL_STATUS_CLASSES) {
         actor.remove_style_class_name(styleClass);
       }
       actor.add_style_class_name(this._panelStyleClassForStatus(status));
-    }, undefined);
+      return true;
+    }, false);
   },
 
   _updatePanel: function(menuOpenOverride) {
@@ -16648,6 +16707,18 @@ MyApplet.prototype = {
       );
       let styleClass = this._panelStyleClassForStatus(this.status);
       let previousFingerprint = this._panelRenderFingerprint;
+      let panelIconUnchanged = Boolean(
+        previousFingerprint &&
+        previousFingerprint.statusIcon === statusIcon &&
+        previousFingerprint.panelActorReady === panelActorReady
+      );
+      let panelStyleUnchanged = Boolean(
+        previousFingerprint &&
+        previousFingerprint.styleClass === styleClass &&
+        previousFingerprint.panelActorReady === panelActorReady
+      );
+      let panelIconRenderSucceeded = panelIconUnchanged;
+      let panelStyleRenderSucceeded = panelStyleUnchanged;
       let panelRenderUnchanged = Boolean(
         previousFingerprint &&
         previousFingerprint.status === this.status &&
@@ -16682,8 +16753,12 @@ MyApplet.prototype = {
         return true;
       }
       if (!panelRenderUnchanged) {
-        this._applyPanelIcon(this.status);
-        this._applyPanelStyle(this.status);
+        if (!panelIconUnchanged) {
+          panelIconRenderSucceeded = this._applyPanelIcon(this.status) === true;
+        }
+        if (!panelStyleUnchanged) {
+          panelStyleRenderSucceeded = this._applyPanelStyle(this.status) === true;
+        }
         if (panelActorReady) {
           this.set_applet_label(panelLabel);
           this.set_applet_tooltip(tooltipText);
@@ -16724,7 +16799,7 @@ MyApplet.prototype = {
         labelWriteSucceeded = this._setMenuItemLabelSafely(this.toggleItem, toggleText);
         menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
       }
-      this._panelRenderFingerprint = panelActorReady && menuRenderSucceeded ? {
+      this._panelRenderFingerprint = panelActorReady ? {
         status: this.status,
         showPanelLabel: Boolean(this.showPanelLabel),
         panelLabel: panelLabel,
@@ -16746,12 +16821,15 @@ MyApplet.prototype = {
         transcriptText: transcriptText,
         autoPasteText: autoPasteText,
         progressText: progressText,
-        statusIcon: statusIcon,
-        styleClass: styleClass,
+        statusIcon: panelIconRenderSucceeded ? statusIcon : null,
+        styleClass: panelStyleRenderSucceeded ? styleClass : null,
         panelActorReady: panelActorReady,
-        rootMenuOpen: rootMenuOpen,
+        rootMenuOpen: menuRenderSucceeded ? rootMenuOpen : null,
       } : null;
-      return this._panelRenderFingerprint !== null;
+      return this._panelRenderFingerprint !== null &&
+        panelIconRenderSucceeded &&
+        panelStyleRenderSucceeded &&
+        menuRenderSucceeded;
     }, false);
   }
 };
