@@ -145,7 +145,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._commitSettingValue("postProcessPreset", "post-process-preset"', source)
         self.assertIn("this._commitSettingValue(propertyName, settingKey, nextValue", source)
         self.assertIn("_rollbackSettingsBatch: function(writes)", source)
-        self.assertIn("_commitSettingsBatch: function(writes, group, errorMessage, preserveRecording)", source)
+        self.assertIn("_commitSettingsBatch: function(writes, group, errorMessage, preserveRecording, result)", source)
         self.assertIn('this._commitSettingsBatch(settingsWrites, "settings-text-model"', source)
         self.assertIn('this._commitSettingsBatch(settingsWrites, "settings-text-polishing"', source)
         self.assertIn("_refreshTextModelMenuForBackend: function(backendOverride)", source)
@@ -174,10 +174,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('"openai-compatible-api-key": "openai-compatible API key"', source)
         self.assertIn('"openai-compatible-api-key", "openaiCompatibleApiKey"', source)
         self.assertNotIn('this.settings.setValue("openai-compatible-api-key", this.openaiCompatibleApiKey);', source)
-        self.assertIn(
-            'this._setSettingValueOrThrow(\n        "openai-compatible-api-key",\n        "",',
-            source,
-        )
+        self.assertIn('[["openai-compatible-api-key", "", previousApiKey]]', source)
         self.assertNotIn('args.push("--openai-compatible-api-key"', source)
         self.assertIn('"SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY"', source)
         self.assertIn("_shouldExposeOpenAiCompatibleApiKeyToBackend: function(args)", source)
@@ -217,9 +214,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._openAppletSettings();', source)
         self.assertIn('this._setStatusPreservingRecording("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);', source)
         self.assertIn("_selectStaticVoiceBackend: function(transcriber, message)", source)
-        self.assertIn("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording)", source)
+        self.assertIn("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording, result)", source)
         self.assertIn('"voice-static"', source)
-        self.assertIn("_selectExternalApiVoiceBackend: function()", source)
+        self.assertIn("_selectExternalApiVoiceBackend: function(result)", source)
         self.assertIn('"external-api-voice"', source)
         self.assertIn('return _("Voice: External API ") + this._shortMenuText(externalModel, 96);', source)
 
@@ -240,6 +237,82 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._commitSettingValue("artifactEncryption", "artifact-encryption"', source)
         self.assertIn('args.push("--artifact-encryption", this._normalizeArtifactEncryption(this.artifactEncryption));', source)
         self.assertIn("this._populateArtifactEncryptionMenu();", source)
+
+    def test_external_api_settings_rollback_and_env_apply_are_transactional(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        rollback_start = source.index("_rollbackSettingsBatch: function(writes)")
+        rollback_end = source.index("\n  _commitSettingsBatch:", rollback_start)
+        rollback_block = source[rollback_start:rollback_end]
+        self.assertIn("let rollbackSucceeded = true;", rollback_block)
+        self.assertIn("rollbackSucceeded = false;", rollback_block)
+        self.assertIn("return rollbackSucceeded;", rollback_block)
+        commit_start = source.index("_commitSettingsBatch: function(writes, group, errorMessage, preserveRecording, result)")
+        commit_end = source.index("\n  _connectSafe:", commit_start)
+        commit_block = source[commit_start:commit_end]
+        self.assertIn("result.rollbackSucceeded = rollbackSucceeded;", commit_block)
+
+        apply_start = source.index("_applyExternalApiEnvFile: function(showStatus, transaction, target)")
+        apply_end = source.index("\n  _clearExternalApiEnvMonitor:", apply_start)
+        apply_block = source[apply_start:apply_end]
+        self.assertIn('settingsWrites.push(["openai-compatible-api-key", "", previousPersistedApiKey]);', apply_block)
+        self.assertIn('String(previousPersistedApiKey || "") !== ""', apply_block)
+        self.assertIn("this._commitSettingsBatch(", apply_block)
+        self.assertIn("let commitResult = {};", apply_block)
+        self.assertIn("transaction.rollbackFailed = commitResult.rollbackSucceeded === false;", apply_block)
+        self.assertIn("transaction.rollback = () => {", apply_block)
+        self.assertIn("let rollbackSucceeded = this._rollbackSettingsBatch(settingsWrites);", apply_block)
+        self.assertLess(apply_block.index("config = this._validatedExternalApiConfig"), apply_block.index("this._prepareExternalApiEnvTarget(target)"))
+        self.assertLess(apply_block.index("this._prepareExternalApiEnvTarget(target)"), apply_block.index("this._commitSettingsBatch("))
+        self.assertLess(apply_block.index("this._commitSettingsBatch("), apply_block.index("this.openaiCompatibleUrl = config.url;"))
+        self.assertNotIn("if (!this._clearPersistedOpenAiCompatibleApiKey())", apply_block)
+
+    def test_external_api_target_cleanup_precedes_env_and_backend_writes(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        prepare_start = source.index("_prepareExternalApiEnvTarget: function(target)")
+        prepare_end = source.index("\n  _applyExternalApiEnvTarget:", prepare_start)
+        prepare_block = source[prepare_start:prepare_end]
+        self.assertIn("this._cancelOllamaInstallWatch()", prepare_block)
+        self.assertIn("this._clearOllamaModelFlow()", prepare_block)
+        self.assertIn("this.voiceModelActionToken", prepare_block)
+        self.assertIn("this.voiceModelCleanupFailed !== true", prepare_block)
+
+        editor_start = source.index("_openExternalApiEnvEditor: function(target)")
+        editor_end = source.index("\n  _prepareExternalApiEnvTarget:", editor_start)
+        editor_block = source[editor_start:editor_end]
+        self.assertIn("this._applyExternalApiEnvFile(false, transaction, requestedTarget)", editor_block)
+        self.assertIn("!this._applyExternalApiEnvTarget(requestedTarget, true, transaction)", editor_block)
+        self.assertIn("transaction.rollback() !== false", editor_block)
+        self.assertIn("transaction.targetRollbackFailed === true", editor_block)
+        self.assertIn("let watcherAllowed = true;", editor_block)
+        self.assertIn("let previousMonitor = this.externalApiEnvMonitor;", editor_block)
+        self.assertIn("if (transaction.rollbackFailed === true)", editor_block)
+        self.assertIn("if (watcherAllowed)", editor_block)
+        self.assertIn("else if (this.externalApiEnvMonitor === previousMonitor)", editor_block)
+
+        monitor_start = source.index("_watchExternalApiEnvFile: function(path)")
+        monitor_end = source.index("\n  _openExternalApiEnvEditor:", monitor_start)
+        monitor_block = source[monitor_start:monitor_end]
+        self.assertIn("this._applyExternalApiEnvFile(false, transaction, applyTarget)", monitor_block)
+        self.assertNotIn("this._applyExternalApiEnvFile(true)", monitor_block)
+        self.assertIn("this._applyExternalApiEnvTarget(applyTarget, true, transaction)", monitor_block)
+        self.assertIn("transaction.rollback() !== false", monitor_block)
+        self.assertIn("transaction.targetRollbackFailed === true", monitor_block)
+        self.assertIn("transaction.rollbackFailed === true && this.externalApiEnvMonitor === monitor", monitor_block)
+        self.assertIn("if (this.externalApiEnvMonitor === monitor)", monitor_block)
+
+        target_start = source.index("_applyExternalApiEnvTarget: function(target, cleanupPrepared, transaction)")
+        target_end = source.index("\n  _selectExternalApiVoiceBackend:", target_start)
+        target_block = source[target_start:target_end]
+        self.assertLess(target_block.index("this._prepareExternalApiEnvTarget(target)"), target_block.index("this._commitSettingsBatch("))
+
+        select_start = source.index("_selectTextModelBackend: function(backend, model, message, preserveRecording)")
+        select_end = source.index("\n  _clearOllamaModelFlow:", select_start)
+        select_block = source[select_start:select_end]
+        self.assertLess(select_block.index("this._clearOllamaModelFlow()"), select_block.index("this._commitSettingsBatch(settingsWrites"))
+        self.assertIn("let rollbackSucceeded = this._rollbackSettingsBatch(settingsWrites);", select_block)
+        self.assertIn("if (!rollbackSucceeded)", select_block)
 
     def test_external_api_voice_menu_opens_env_file_for_configuration(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -287,7 +360,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("values.OPENAI_COMPATIBLE_STT_MODEL || values.OPENAI_COMPATIBLE_MODEL", source)
         self.assertIn("this.externalApiEnvApplyTarget = \"voice\";", source)
         self.assertIn("_openExternalApiEnvEditor: function(target)", source)
-        self.assertIn("_applyExternalApiEnvTarget: function(target)", source)
+        self.assertIn("_applyExternalApiEnvTarget: function(target, cleanupPrepared, transaction)", source)
         self.assertIn('this._connectSafe(useItem, "activate", () => this._openExternalApiEnvEditor("voice"));', source)
         self.assertIn('this._connectSafe(openaiCompatible, "activate", () => this._openExternalApiEnvEditor("text"));', source)
         self.assertIn('this._setStatusPreservingRecording("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);', source)
@@ -297,7 +370,7 @@ class AppletStaticTest(unittest.TestCase):
             "this._refreshTextModelMenu();\n        return;\n      }" in source or
             "this._refreshTextModelMenu();\n          return;\n        }" in source
         )
-        self.assertIn("this._selectExternalApiVoiceBackend();", source)
+        self.assertIn("this._selectExternalApiVoiceBackend(commitResult)", source)
         self.assertNotIn('this._selectTextModelBackend("openai-compatible", this.openaiCompatibleModel, _("Text polishing: OpenAI-compatible API"));', source)
         self.assertIn("_watchExternalApiEnvFile: function(path)", source)
         editor_start = source.index("_openExternalApiEnvEditor: function(target)")
@@ -312,7 +385,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("addTarget(item);", source)
         self.assertIn("addTarget(item.menu);", source)
         self.assertIn("Gio.FileMonitorEvent.CHANGES_DONE_HINT", source)
-        self.assertIn("_applyExternalApiEnvFile: function(showStatus)", source)
+        self.assertIn("_applyExternalApiEnvFile: function(showStatus, transaction, target)", source)
         self.assertIn("_validateExternalApiUrl: function(value, fieldName)", source)
         self.assertIn("_validatedExternalApiConfig: function(values)", source)
         self.assertIn('let normalized = typeof value === "string" ? value.trim() : "";', source)
@@ -326,40 +399,37 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let legacyApiKey = this._coerceCliTextArg(", source)
         self.assertIn("let migratedValues = this._parseExternalApiEnvText(migrated);", source)
         self.assertIn('"OPENAI_COMPATIBLE_API_KEY=" + this._externalApiEnvEncodeValue(legacyApiKey)', source)
-        self.assertIn("let rollbackSettings = (writes) =>", source)
-        self.assertIn('if (!this._clearPersistedOpenAiCompatibleApiKey())', source)
-        self.assertIn('this._setStatusPreservingRecording("error", _("External API settings could not be finalized")', source)
+        self.assertIn("let rollbackSucceeded = this._rollbackSettingsBatch(settingsWrites);", source)
+        self.assertNotIn('if (!this._clearPersistedOpenAiCompatibleApiKey())', source)
+        self.assertNotIn('External API settings could not be finalized', source)
         self.assertIn("let previousConfig = {", source)
         self.assertIn("let settingsWrites = [", source)
         self.assertIn("let attemptedWrites = [];", source)
         self.assertIn("if (result === false)", source)
-        self.assertIn(
-            'this._setSettingValueOrThrow(setting[0], setting[2], "External API setting rollback failed");',
-            source,
-        )
-        self.assertIn('this._setStatusPreservingRecording("error", _("External API settings could not be saved"), this.lastTranscript);', source)
+        self.assertIn('this._setSettingValueOrThrow(setting[0], setting[2], "Setting rollback failed");', source)
+        self.assertIn('_("External API settings could not be saved")', source)
         clear_start = source.index("_clearPersistedOpenAiCompatibleApiKey: function()")
         clear_end = source.index("\n  _ensureExternalApiEnvFile:", clear_start)
         clear_block = source[clear_start:clear_end]
         self.assertIn("let previousApiKey = this.openaiCompatibleApiKey;", clear_block)
-        self.assertIn('this._setSettingValueOrThrow(\n        "openai-compatible-api-key",\n        "",', clear_block)
+        self.assertIn('[["openai-compatible-api-key", "", previousApiKey]]', clear_block)
         self.assertIn("this.openaiCompatibleApiKey = previousApiKey;", clear_block)
         self.assertIn("return false;", clear_block)
-        target_start = source.index("_applyExternalApiEnvTarget: function(target)")
+        target_start = source.index("_applyExternalApiEnvTarget: function(target, cleanupPrepared, transaction)")
         target_end = source.index("\n  _selectExternalApiVoiceBackend:", target_start)
         target_block = source[target_start:target_end]
-        self.assertIn('this._setSettingValueOrThrow(\n          "post-process-backend",\n          "openai-compatible",', target_block)
+        self.assertIn('[["post-process-backend", "openai-compatible", previousBackend]]', target_block)
         self.assertIn("this.postProcessBackend = previousBackend;", target_block)
         self.assertIn("return false;", target_block)
-        voice_start = source.index("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording)")
+        voice_start = source.index("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording, result)")
         voice_end = source.index("\n  _ensureVoiceModelCompatibleWithPrimaryLanguage:", voice_start)
         voice_block = source[voice_start:voice_end]
         self.assertIn("let previousTranscriber = this.transcriber;", voice_block)
         self.assertIn("let previousWhisperModel = this.whisperModel;", voice_block)
-        self.assertIn("let attemptedWrites = [];", voice_block)
+        self.assertIn("this._commitSettingsBatch(settingsWrites, group, errorMessage, preserveRecording, result)", voice_block)
         self.assertIn("this.transcriber = transcriber;", voice_block)
         self.assertIn("this.whisperModel = whisperModel;", voice_block)
-        apply_index = source.index("_applyExternalApiEnvFile: function(showStatus)")
+        apply_index = source.index("_applyExternalApiEnvFile: function(showStatus, transaction, target)")
         set_index = source.index("let settingsWrites = [", apply_index)
         validate_index = source.index("config = this._validatedExternalApiConfig", apply_index)
         self.assertLess(validate_index, set_index)
@@ -471,7 +541,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!connectionId) {\n        this._clearExternalApiEnvMonitor();", block)
         self.assertIn("} catch (err) {\n      this._clearExternalApiEnvMonitor();", block)
         self.assertIn('let applyTarget = this.externalApiEnvApplyTarget || "voice";', block)
-        self.assertIn("this._applyExternalApiEnvTarget(applyTarget);", block)
+        self.assertIn("!this._applyExternalApiEnvTarget(applyTarget, true, transaction)", block)
 
     def test_external_env_monitor_ignores_stale_changed_signals(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -482,9 +552,9 @@ class AppletStaticTest(unittest.TestCase):
         guard = "if (this.appletRemoved || !this._lifecycleAllowsWork() || this.externalApiEnvMonitor !== monitor || changedMonitor !== monitor)"
         self.assertIn(guard, block)
         self.assertIn("this.externalApiEnvMonitor !== monitor", block)
-        self.assertLess(block.index(guard), block.index("this._applyExternalApiEnvFile(true)"))
+        self.assertLess(block.index(guard), block.index("this._applyExternalApiEnvFile(false, transaction, applyTarget)"))
         self.assertLess(block.index('let applyTarget = this.externalApiEnvApplyTarget || "voice";'), block.index('"changed", (changedMonitor'))
-        self.assertLess(block.index("this._applyExternalApiEnvFile(true)"), block.index("this._applyExternalApiEnvTarget(applyTarget);"))
+        self.assertLess(block.index("this._applyExternalApiEnvFile(false, transaction, applyTarget)"), block.index("this._applyExternalApiEnvTarget(applyTarget, true, transaction)"))
 
     def test_signal_rollback_restores_registry_when_orphan_tracking_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1792,7 +1862,7 @@ class AppletStaticTest(unittest.TestCase):
             ("_selectVoiceModel: function(model, preserveRecording)", "\n  _selectAutomaticVoiceBackend:", "return false;"),
             ("_selectAutomaticVoiceBackend: function()", "\n  _selectStaticVoiceBackend:", "return;"),
             ("_selectStaticVoiceBackend: function(transcriber, message)", "\n  _externalApiEnvPath:", "return;"),
-            ("_selectExternalApiVoiceBackend: function()", "\n  _refreshTextModelMenu:", "return false;"),
+            ("_selectExternalApiVoiceBackend: function(result)", "\n  _refreshTextModelMenu:", "return false;"),
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
@@ -1801,7 +1871,7 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn("this.voiceModelCleanupFailed === true", block)
             self.assertIn(result, block)
 
-        voice_start = source.index("_selectExternalApiVoiceBackend: function()")
+        voice_start = source.index("_selectExternalApiVoiceBackend: function(result)")
         voice_end = source.index("\n  _refreshTextModelMenu:", voice_start)
         voice_block = source[voice_start:voice_end]
         self.assertIn('this._setStatusPreservingRecording("error", _("Voice model operation is still running")', voice_block)
@@ -2354,7 +2424,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!refreshProcess)", refresh)
 
         guarded_callers = [
-            ("_applyExternalApiEnvTarget: function(target)", "\n  _selectExternalApiVoiceBackend:"),
+            ("_applyExternalApiEnvTarget: function(target, cleanupPrepared, transaction)", "\n  _selectExternalApiVoiceBackend:"),
             ("_selectTextPolishingPreset: function(preset)", "\n  _populateTextPolishingSafetyMenu:"),
             ("_toggleTextPolishingSafetyFlag: function(settingKey, propertyName, label)", "\n  _selectTextModelBackend:"),
             ("_selectTextModelBackend: function(backend, model, message, preserveRecording)", "\n  _clearOllamaModelFlow:"),
@@ -5752,20 +5822,12 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method in [
             ("_selectTextModelBackend: function(backend, model, message, preserveRecording)", "\n  _activateOllamaTextModelFlow:"),
-            ("_openExternalApiEnvEditor: function(target)", "\n  _applyExternalApiEnvTarget:"),
-            ("_applyExternalApiEnvTarget: function(target)", "\n  _selectTextModelBackend:"),
+            ("_prepareExternalApiEnvTarget: function(target)", "\n  _applyExternalApiEnvTarget:"),
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
-            if method in [
-                "_selectTextModelBackend: function(backend, model, message, preserveRecording)",
-                "_openExternalApiEnvEditor: function(target)",
-                "_applyExternalApiEnvTarget: function(target)",
-            ]:
-                self.assertIn("this._cancelOllamaInstallWatch() !== false;", block)
-            else:
-                self.assertIn("this._cancelOllamaInstallWatch();", block)
+            self.assertIn("this._cancelOllamaInstallWatch() !== false;", block)
             self.assertIn("this._clearOllamaModelFlow", block)
 
     def test_text_backend_changes_abort_when_ollama_cleanup_fails(self) -> None:

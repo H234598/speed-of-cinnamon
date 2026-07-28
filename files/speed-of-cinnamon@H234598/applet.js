@@ -741,22 +741,34 @@ MyApplet.prototype = {
 
   _rollbackSettingsBatch: function(writes) {
     if (!Array.isArray(writes)) {
-      return;
+      return false;
     }
+    let rollbackSucceeded = true;
     for (let index = writes.length - 1; index >= 0; index--) {
       let setting = writes[index];
+      if (!Array.isArray(setting) || setting.length < 3) {
+        rollbackSucceeded = false;
+        this._recordLifecycleError("settings-rollback", new Error("Setting rollback batch is invalid"));
+        continue;
+      }
       try {
         this._setSettingValueOrThrow(setting[0], setting[2], "Setting rollback failed");
       } catch (err) {
+        rollbackSucceeded = false;
         this._safeLogError(err);
+        this._recordLifecycleError("settings-rollback", err);
       }
     }
+    return rollbackSucceeded;
   },
 
-  _commitSettingsBatch: function(writes, group, errorMessage, preserveRecording) {
+  _commitSettingsBatch: function(writes, group, errorMessage, preserveRecording, result) {
     let setStatus = preserveRecording === false
       ? this._setStatus.bind(this)
       : this._setStatusPreservingRecording.bind(this);
+    if (result && typeof result === "object") {
+      result.rollbackSucceeded = true;
+    }
     if (!Array.isArray(writes)) {
       return false;
     }
@@ -771,8 +783,17 @@ MyApplet.prototype = {
       }
       return true;
     } catch (err) {
-      this._rollbackSettingsBatch(attemptedWrites);
+      let rollbackSucceeded = this._rollbackSettingsBatch(attemptedWrites);
+      if (result && typeof result === "object") {
+        result.rollbackSucceeded = rollbackSucceeded;
+      }
       this._recordLifecycleError(group || "settings-batch", err);
+      if (!rollbackSucceeded) {
+        this._recordLifecycleError(
+          String(group || "settings-batch") + "-rollback",
+          new Error("Setting batch rollback failed")
+        );
+      }
       if (errorMessage) {
         setStatus("error", errorMessage, this.lastTranscript);
       }
@@ -8729,40 +8750,19 @@ MyApplet.prototype = {
     return this._voiceModelSupportsLanguage("", model, language);
   },
 
-  _commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording) {
+  _commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording, result) {
     if (this.voiceModelCleanupFailed === true) {
       return false;
     }
-    let setStatus = preserveRecording === false
-      ? this._setStatus.bind(this)
-      : this._setStatusPreservingRecording.bind(this);
     let previousTranscriber = this.transcriber;
     let previousWhisperModel = this.whisperModel;
     let settingsWrites = [
       ["transcriber", transcriber, previousTranscriber],
       ["whisper-model", whisperModel, previousWhisperModel],
     ];
-    let attemptedWrites = [];
-    try {
-      for (let setting of settingsWrites) {
-        attemptedWrites.push(setting);
-        this._setSettingValueOrThrow(setting[0], setting[1], "Voice backend setting could not be saved");
-      }
-    } catch (err) {
-      for (let index = attemptedWrites.length - 1; index >= 0; index--) {
-        let setting = attemptedWrites[index];
-        try {
-          this._setSettingValueOrThrow(setting[0], setting[2], "Voice backend setting rollback failed");
-        } catch (rollbackErr) {
-          this._safeLogError(rollbackErr);
-        }
-      }
+    if (!this._commitSettingsBatch(settingsWrites, group, errorMessage, preserveRecording, result)) {
       this.transcriber = previousTranscriber;
       this.whisperModel = previousWhisperModel;
-      this._recordLifecycleError(group || "voice-settings", err);
-      if (errorMessage) {
-        setStatus("error", errorMessage, this.lastTranscript);
-      }
       return false;
     }
     this.transcriber = transcriber;
@@ -9268,19 +9268,16 @@ MyApplet.prototype = {
       return true;
     }
     let previousApiKey = this.openaiCompatibleApiKey;
-    try {
-      this._setSettingValueOrThrow(
-        "openai-compatible-api-key",
-        "",
-        "Persisted External API key could not be cleared"
-      );
-      this.openaiCompatibleApiKey = "";
-      return true;
-    } catch (err) {
+    if (!this._commitSettingsBatch(
+      [["openai-compatible-api-key", "", previousApiKey]],
+      "settings-external-api-key",
+      _("Persisted External API key could not be cleared")
+    )) {
       this.openaiCompatibleApiKey = previousApiKey;
-      this._safeLogError(err);
       return false;
     }
+    this.openaiCompatibleApiKey = "";
+    return true;
   },
 
   _ensureExternalApiEnvFile: function() {
@@ -9426,7 +9423,7 @@ MyApplet.prototype = {
     return values;
   },
 
-  _applyExternalApiEnvFile: function(showStatus) {
+  _applyExternalApiEnvFile: function(showStatus, transaction, target) {
     let path = this._externalApiEnvPath();
     let text;
     try {
@@ -9455,6 +9452,11 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("External API config contains invalid values"), this.lastTranscript);
       return false;
     }
+    if (target !== undefined && target !== null && target !== "") {
+      if ((target !== "text" && target !== "voice") || !this._prepareExternalApiEnvTarget(target)) {
+        return false;
+      }
+    }
     let previousConfig = {
       url: this.openaiCompatibleUrl,
       model: this.openaiCompatibleModel,
@@ -9467,41 +9469,37 @@ MyApplet.prototype = {
       ["openai-compatible-model", config.model, previousConfig.model],
       ["openai-compatible-text-model", config.textModel, previousConfig.textModel],
     ];
-    let rollbackSettings = (writes) => {
-      for (let index = writes.length - 1; index >= 0; index--) {
-        let setting = writes[index];
-        try {
-          this._setSettingValueOrThrow(setting[0], setting[2], "External API setting rollback failed");
-        } catch (rollbackErr) {
-          this._safeLogError(rollbackErr);
-        }
+    if (String(previousPersistedApiKey || "") !== "") {
+      settingsWrites.push(["openai-compatible-api-key", "", previousPersistedApiKey]);
+    }
+    let commitResult = {};
+    if (!this._commitSettingsBatch(
+      settingsWrites,
+      "settings-external-api",
+      _("External API settings could not be saved"),
+      undefined,
+      commitResult
+    )) {
+      if (transaction && typeof transaction === "object") {
+        transaction.rollbackFailed = commitResult.rollbackSucceeded === false;
       }
-    };
-    let attemptedWrites = [];
-    try {
-      for (let setting of settingsWrites) {
-        attemptedWrites.push(setting);
-        this._setSettingValueOrThrow(setting[0], setting[1], "External API setting could not be saved");
-      }
-    } catch (err) {
-      rollbackSettings(attemptedWrites);
-      this._safeLogError(err);
-      this._setStatusPreservingRecording("error", _("External API settings could not be saved"), this.lastTranscript);
       return false;
     }
     this.openaiCompatibleUrl = config.url;
     this.openaiCompatibleModel = config.model;
     this.openaiCompatibleTextModel = config.textModel;
     this.externalApiEnvApiKey = config.apiKey;
-    if (!this._clearPersistedOpenAiCompatibleApiKey()) {
-      rollbackSettings(settingsWrites);
-      this.openaiCompatibleUrl = previousConfig.url;
-      this.openaiCompatibleModel = previousConfig.model;
-      this.openaiCompatibleTextModel = previousConfig.textModel;
-      this.externalApiEnvApiKey = previousConfig.apiKey;
-      this.openaiCompatibleApiKey = previousPersistedApiKey;
-      this._setStatusPreservingRecording("error", _("External API settings could not be finalized"), this.lastTranscript);
-      return false;
+    this.openaiCompatibleApiKey = "";
+    if (transaction && typeof transaction === "object") {
+      transaction.rollback = () => {
+        let rollbackSucceeded = this._rollbackSettingsBatch(settingsWrites);
+        this.openaiCompatibleUrl = previousConfig.url;
+        this.openaiCompatibleModel = previousConfig.model;
+        this.openaiCompatibleTextModel = previousConfig.textModel;
+        this.externalApiEnvApiKey = previousConfig.apiKey;
+        this.openaiCompatibleApiKey = previousPersistedApiKey;
+        return rollbackSucceeded;
+      };
     }
     if (showStatus) {
       this._setStatusPreservingRecording("ready", _("External API config loaded: ") + (this.openaiCompatibleModel || _("not configured")), this.lastTranscript);
@@ -9580,11 +9578,34 @@ MyApplet.prototype = {
           return;
         }
         if (eventType === Gio.FileMonitorEvent.CHANGES_DONE_HINT || eventType === Gio.FileMonitorEvent.CREATED) {
-          if (this._applyExternalApiEnvFile(true)) {
+          let transaction = {};
+          let envApplied = this._applyExternalApiEnvFile(false, transaction, applyTarget);
+          if (!envApplied) {
+            if (transaction.rollbackFailed === true && this.externalApiEnvMonitor === monitor) {
+              this._clearExternalApiEnvMonitor();
+            }
+            return;
+          }
+          if (envApplied) {
             if (!this._lifecycleAllowsWork() || this.externalApiEnvMonitor !== monitor) {
+              if (typeof transaction.rollback === "function" && transaction.rollback() === false) {
+                this._recordLifecycleError(
+                  "settings-external-api-rollback",
+                  new Error("External API settings rollback failed")
+                );
+              }
               return;
             }
-            this._applyExternalApiEnvTarget(applyTarget);
+            if (!this._applyExternalApiEnvTarget(applyTarget, true, transaction)) {
+              let envRollbackSucceeded = typeof transaction.rollback === "function" &&
+                transaction.rollback() !== false;
+              if (!envRollbackSucceeded || transaction.targetRollbackFailed === true) {
+                this._setStatusPreservingRecording("error", _("External API settings rollback failed"), this.lastTranscript);
+                if (this.externalApiEnvMonitor === monitor) {
+                  this._clearExternalApiEnvMonitor();
+                }
+              }
+            }
           }
         }
       });
@@ -9598,55 +9619,73 @@ MyApplet.prototype = {
   },
 
   _openExternalApiEnvEditor: function(target) {
-    this.externalApiEnvApplyTarget = target || "voice";
-    if (this.externalApiEnvApplyTarget === "text") {
-      let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
-      let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
-      if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
-        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
-        return;
-      }
-    }
+    let requestedTarget = target === "text" ? "text" : "voice";
+    let previousMonitor = this.externalApiEnvMonitor;
+    this.externalApiEnvApplyTarget = requestedTarget;
     let path = this._ensureExternalApiEnvFile();
     if (!path) {
       return;
     }
-    if (this._applyExternalApiEnvFile(false)) {
-      this._applyExternalApiEnvTarget(this.externalApiEnvApplyTarget);
+    let transaction = {};
+    let watcherAllowed = true;
+    let envApplied = this._applyExternalApiEnvFile(false, transaction, requestedTarget);
+    if (transaction.rollbackFailed === true) {
+      watcherAllowed = false;
     }
-    this._watchExternalApiEnvFile(path);
+    if (envApplied && !this._applyExternalApiEnvTarget(requestedTarget, true, transaction)) {
+      let envRollbackSucceeded = typeof transaction.rollback === "function" &&
+        transaction.rollback() !== false;
+      if (!envRollbackSucceeded || transaction.targetRollbackFailed === true) {
+        watcherAllowed = false;
+        this._setStatusPreservingRecording("error", _("External API settings rollback failed"), this.lastTranscript);
+      }
+    }
+    if (watcherAllowed) {
+      this._watchExternalApiEnvFile(path);
+    } else if (this.externalApiEnvMonitor === previousMonitor) {
+      this._clearExternalApiEnvMonitor();
+    }
     this._openFile(path, _("Opened External API .env"));
   },
 
-  _applyExternalApiEnvTarget: function(target) {
+  _prepareExternalApiEnvTarget: function(target) {
     if (target === "text") {
-      let previousBackend = this.postProcessBackend;
-      try {
-        this._setSettingValueOrThrow(
-          "post-process-backend",
-          "openai-compatible",
-          "External API text backend setting could not be saved"
-        );
-      } catch (err) {
-        this.postProcessBackend = previousBackend;
-        this._safeLogError(err);
-        this._setStatusPreservingRecording("error", _("External API text backend could not be selected"), this.lastTranscript);
-        return false;
-      }
       let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
       let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
       if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
-        try {
-          this._setSettingValueOrThrow(
-            "post-process-backend",
-            previousBackend,
-            "External API text backend rollback failed"
-          );
-        } catch (rollbackError) {
-          this._safeLogError(rollbackError);
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+        return false;
+      }
+      return true;
+    }
+    if (target !== "voice") {
+      return false;
+    }
+    if (this.voiceModelActionToken) {
+      this._setStatusPreservingRecording("error", _("Voice model operation is still running"), this.lastTranscript);
+      return false;
+    }
+    return this.voiceModelCleanupFailed !== true;
+  },
+
+  _applyExternalApiEnvTarget: function(target, cleanupPrepared, transaction) {
+    if (cleanupPrepared !== true && !this._prepareExternalApiEnvTarget(target)) {
+      return false;
+    }
+    if (target === "text") {
+      let previousBackend = this.postProcessBackend;
+      let commitResult = {};
+      if (!this._commitSettingsBatch(
+        [["post-process-backend", "openai-compatible", previousBackend]],
+        "settings-external-api-text",
+        _("External API text backend could not be selected"),
+        undefined,
+        commitResult
+      )) {
+        if (transaction && typeof transaction === "object") {
+          transaction.targetRollbackFailed = commitResult.rollbackSucceeded === false;
         }
         this.postProcessBackend = previousBackend;
-        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
         return false;
       }
       this.postProcessBackend = "openai-compatible";
@@ -9655,10 +9694,18 @@ MyApplet.prototype = {
       }
       return true;
     }
-    return this._selectExternalApiVoiceBackend();
+    if (target !== "voice") {
+      return false;
+    }
+    let commitResult = {};
+    let voiceSelected = this._selectExternalApiVoiceBackend(commitResult);
+    if (!voiceSelected && transaction && typeof transaction === "object") {
+      transaction.targetRollbackFailed = commitResult.rollbackSucceeded === false;
+    }
+    return voiceSelected;
   },
 
-  _selectExternalApiVoiceBackend: function() {
+  _selectExternalApiVoiceBackend: function(result) {
     if (this.voiceModelActionToken) {
       this._setStatusPreservingRecording("error", _("Voice model operation is still running"), this.lastTranscript);
       return false;
@@ -9670,7 +9717,9 @@ MyApplet.prototype = {
       "openai-compatible",
       "",
       "external-api-voice",
-      _("External API voice backend could not be selected")
+      _("External API voice backend could not be selected"),
+      undefined,
+      result
     )) {
       return false;
     }
@@ -10082,17 +10131,13 @@ MyApplet.prototype = {
     if (nextBackend === "openai-compatible") {
       settingsWrites.push(["openai-compatible-text-model", safeModel, previousExternalTextModel]);
     }
-    if (!this._commitSettingsBatch(settingsWrites, "settings-text-model", _("Text model settings could not be saved"), preserveRecording)) {
-      return false;
-    }
     let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
     let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
     if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
-      this._rollbackSettingsBatch(settingsWrites);
-      this.postProcessBackend = previousBackend;
-      this.ollamaModel = previousOllamaModel;
-      this.openaiCompatibleTextModel = previousExternalTextModel;
       setStatus("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      return false;
+    }
+    if (!this._commitSettingsBatch(settingsWrites, "settings-text-model", _("Text model settings could not be saved"), preserveRecording)) {
       return false;
     }
     this.postProcessBackend = nextBackend;
@@ -10105,8 +10150,11 @@ MyApplet.prototype = {
         this.postProcessBackend = previousBackend;
         this.ollamaModel = previousOllamaModel;
         this.openaiCompatibleTextModel = previousExternalTextModel;
-        this._rollbackSettingsBatch(settingsWrites);
+        let rollbackSucceeded = this._rollbackSettingsBatch(settingsWrites);
         this._refreshTextModelMenu();
+        if (!rollbackSucceeded) {
+          setStatus("error", _("Text model settings rollback failed"), this.lastTranscript);
+        }
         return false;
       }
     }
