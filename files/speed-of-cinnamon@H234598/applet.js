@@ -396,14 +396,14 @@ const RECORDING_LIMIT_SECONDS = [
 ];
 const STATUS_ICON_ALLOWLIST = {};
 [
-  "ready-01", "ready-02", "ready-03", "ready-04", "ready-05",
-  "ready-06", "ready-07", "ready-08", "ready-09", "ready-10",
-  "recording-01", "recording-02", "recording-03", "recording-04", "recording-05",
-  "recording-06", "recording-07", "recording-08", "recording-09", "recording-10",
-  "processing-01", "processing-02", "processing-03", "processing-04", "processing-05",
-  "processing-06", "processing-07", "processing-08", "processing-09", "processing-10"
-].forEach((id) => {
-  STATUS_ICON_ALLOWLIST[id] = true;
+  "ready",
+  "recording",
+  "processing"
+].forEach((family) => {
+  for (let i = 1; i <= 45; i++) {
+    let index = (i < 10) ? "0" + String(i) : String(i);
+    STATUS_ICON_ALLOWLIST[family + "-" + index] = true;
+  }
 });
 const STATUS_ICON_DEFAULTS = {
   ready: "ready-01",
@@ -3811,6 +3811,8 @@ MyApplet.prototype = {
     this.orientation = orientation;
     this.instanceId = instanceId;
     this._statusIconCache = { status: null, icon: null };
+    this._panelRenderFingerprint = null;
+    this._recordingDisplayFingerprint = null;
     this.toggleKeybinding = "<Super>z::";
     this.primaryLanguageKeybinding = "";
     this.secondaryLanguageKeybinding = "";
@@ -4058,11 +4060,6 @@ MyApplet.prototype = {
     this.doctorSummaryItem.setSensitive(false);
 
     this.languageItem = new PopupMenu.PopupSubMenuMenuItem(_("Language: en"));
-    this._connectSafe(this.languageItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._populateLanguageMenu();
-      }
-    });
     this.menu.addMenuItem(this.languageItem);
     this._populateLanguageMenu();
 
@@ -4079,38 +4076,18 @@ MyApplet.prototype = {
     this.menu.addMenuItem(this.toolsMenuItem);
 
     this.recorderItem = new PopupMenu.PopupSubMenuMenuItem(_("Recorder: Automatic"));
-    this._connectSafe(this.recorderItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._populateRecorderMenu();
-      }
-    });
     this.recordingMenuItem.menu.addMenuItem(this.recorderItem);
     this._populateRecorderMenu();
 
     this.recordingLimitItem = new PopupMenu.PopupSubMenuMenuItem(_("Duration: 30s"));
-    this._connectSafe(this.recordingLimitItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._populateRecordingLimitMenu();
-      }
-    });
     this.recordingMenuItem.menu.addMenuItem(this.recordingLimitItem);
     this._populateRecordingLimitMenu();
 
     this.recordingOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Recording options"));
-    this._connectSafe(this.recordingOptionsItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._populateRecordingOptionsMenu();
-      }
-    });
     this.recordingMenuItem.menu.addMenuItem(this.recordingOptionsItem);
     this._populateRecordingOptionsMenu();
 
     this.notificationOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Notifications"));
-    this._connectSafe(this.notificationOptionsItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._populateNotificationOptionsMenu();
-      }
-    });
     this.recordingMenuItem.menu.addMenuItem(this.notificationOptionsItem);
     this._populateNotificationOptionsMenu();
 
@@ -4124,11 +4101,6 @@ MyApplet.prototype = {
     this._populateAlarmMenu([], _("Open menu to load alarms"));
 
     this.shortcutItem = new PopupMenu.PopupSubMenuMenuItem(_("Keyboard shortcuts"));
-    this._connectSafe(this.shortcutItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._populateShortcutMenu();
-      }
-    });
     this.toolsMenuItem.menu.addMenuItem(this.shortcutItem);
     this._populateShortcutMenu();
 
@@ -4137,29 +4109,14 @@ MyApplet.prototype = {
     this._populateOutputMethodMenu();
 
     this.artifactEncryptionItem = new PopupMenu.PopupSubMenuMenuItem(_("Encryption: Secret Service keyring"));
-    this._connectSafe(this.artifactEncryptionItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._populateArtifactEncryptionMenu();
-      }
-    });
     this.textOutputMenuItem.menu.addMenuItem(this.artifactEncryptionItem);
     this._populateArtifactEncryptionMenu();
 
     this.textOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Text options"));
-    this._connectSafe(this.textOptionsItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._populateTextOptionsMenu();
-      }
-    });
     this.textOutputMenuItem.menu.addMenuItem(this.textOptionsItem);
     this._populateTextOptionsMenu();
 
     this.autoPasteItem = new PopupMenu.PopupSubMenuMenuItem(_("Auto-Submit: codex"));
-    this._connectSafe(this.autoPasteItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._populateAutoPasteMenu();
-      }
-    });
     this.textOutputMenuItem.menu.addMenuItem(this.autoPasteItem);
     this._populateAutoPasteMenu();
 
@@ -9923,7 +9880,11 @@ MyApplet.prototype = {
           typeof label.set_text !== "function") {
         return false;
       }
-      label.set_text(String(text === undefined || text === null ? "" : text));
+      let nextText = String(text === undefined || text === null ? "" : text);
+      if (typeof label.get_text === "function" && String(label.get_text()) === nextText) {
+        return true;
+      }
+      label.set_text(nextText);
       return true;
     }, false);
   },
@@ -12911,7 +12872,7 @@ MyApplet.prototype = {
     }
     let timerId = this._scheduleTrackedTimer("display", 1, () => {
       if (this.status === "recording") {
-        this._updatePanel();
+        this._updateRecordingDisplay();
         if (!this.appletRemoved) {
           this._scheduleDisplayTick();
         }
@@ -12921,6 +12882,48 @@ MyApplet.prototype = {
     if (!timerId && this._lifecycleAllowsWork() && this.status === "recording") {
       this._setStatusPreservingRecording("error", _("Recording display timer could not be scheduled"), this.lastTranscript);
     }
+  },
+
+  _updateRecordingDisplay: function() {
+    return this._runGuarded("recording-display-update", () => {
+      if (this.appletRemoved || this.status !== "recording") {
+        this._recordingDisplayFingerprint = null;
+        return false;
+      }
+      let progressText = this._recordingProgressText();
+      let microphoneText = this._microphoneLevelText();
+      let panelLabel = this.showPanelLabel ? "REC " + this._formatSeconds(this._recordingElapsedSeconds()) : "";
+      let tooltipText = _("Recording...") + " " + progressText + "\n" + microphoneText + "\n" + this._shortTranscript();
+      let statusText = "recording " + progressText + "; " + microphoneText;
+      let toggleText = _("Stop dictation");
+      let panelActor = this.actor;
+      let panelActorReady = Boolean(
+        panelActor &&
+        (typeof panelActor.is_finalized !== "function" || !panelActor.is_finalized()) &&
+        typeof this.set_applet_label === "function" &&
+        typeof this.set_applet_tooltip === "function"
+      );
+      let nextFingerprint = JSON.stringify({
+        panelLabel: panelLabel,
+        tooltipText: tooltipText,
+        statusText: statusText,
+        microphoneText: microphoneText,
+        toggleText: toggleText,
+        panelActorReady: panelActorReady,
+      });
+      if (this._recordingDisplayFingerprint === nextFingerprint) {
+        return true;
+      }
+      if (panelActorReady) {
+        this.set_applet_label(panelLabel);
+        this.set_applet_tooltip(tooltipText);
+      }
+      this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
+      this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
+      this._setMenuItemLabelSafely(this.toggleItem, toggleText);
+      this._recordingDisplayFingerprint = panelActorReady ? nextFingerprint : null;
+      return true;
+    }, false);
   },
 
   _isUsableTargetWindow: function(window) {
@@ -15698,20 +15701,26 @@ MyApplet.prototype = {
 
   _updatePanel: function() {
     return this._runGuarded("panel-update", () => {
+      if (this.status !== "recording") {
+        this._recordingDisplayFingerprint = null;
+      }
       let label = "";
       let tooltip = "Speed of Cinnamon";
       let statusText = this.status || "idle";
+      let toggleText = _("Start dictation");
+      let progressText = "";
+      let transcriptText = this._shortTranscript();
+      let microphoneText = this._microphoneLevelText();
       if (this.status === "recording") {
-        let progress = this._recordingProgressText();
-        let mic = this._microphoneLevelText();
+        progressText = this._recordingProgressText();
         label = "REC " + this._formatSeconds(this._recordingElapsedSeconds());
-        tooltip = _("Recording...") + " " + progress + "\n" + mic;
-        statusText = "recording " + progress + "; " + mic;
-        this._setMenuItemLabelSafely(this.toggleItem, _("Stop dictation"));
+        tooltip = _("Recording...") + " " + progressText + "\n" + microphoneText;
+        statusText = "recording " + progressText + "; " + microphoneText;
+        toggleText = _("Stop dictation");
       } else if (this.status === "processing") {
         label = "...";
         tooltip = this.lastMessage || _("Processing...");
-        this._setMenuItemLabelSafely(this.toggleItem, _("Working..."));
+        toggleText = _("Working...");
       } else if (this.status === "error") {
         label = "ERR";
         tooltip = this.lastMessage || _("Error");
@@ -15719,46 +15728,97 @@ MyApplet.prototype = {
         if (this.lastMessage) {
           statusText += " - " + this._shortMenuText(this.lastMessage, 140);
         }
-        this._setMenuItemLabelSafely(this.toggleItem, _("Start dictation"));
       } else if (this.status === "recorded") {
         label = "RDY";
         tooltip = this.lastMessage || _("Ready to transcribe");
-        this._setMenuItemLabelSafely(this.toggleItem, _("Transcribe recording"));
+        toggleText = _("Transcribe recording");
       } else if (this.status === "setup") {
         label = "SET";
         tooltip = this.lastMessage || _("Setup needed");
-        this._setMenuItemLabelSafely(this.toggleItem, _("Start dictation"));
       } else {
         label = "SOC";
         tooltip = this.lastMessage || _("Ready");
-        this._setMenuItemLabelSafely(this.toggleItem, _("Start dictation"));
+      }
+      let recordingLimitText = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds));
+      let recordingOptionsText = this._recordingOptionsLabel();
+      let notificationOptionsText = this._notificationOptionsLabel();
+      let outputMethodText = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod));
+      let textOptionsText = this._textOptionsLabel();
+      let inputSourceText = this._inputSourceLabel();
+      let modelText = this._voiceBackendLabel();
+      let textModelText = this._textModelLabel();
+      let autoPasteText = this._autoPasteLabel();
+      let transcriptStorageText = this._transcriptStorageLabel();
+      let doctorSummaryText = this.doctorSummaryText || _("Doctor: not checked");
+      let languageText = _("Language: ") + this._currentLanguage();
+      let recorderText = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder));
+      let statusIconName = this._statusIconNameForStatus(this.status);
+      let statusIconSetting = this._statusIconSettingForStatus(this.status);
+      let statusIconPath = this._statusIconPathForId(statusIconSetting, this._statusIconDefaultForStatus(this.status));
+      let statusIcon = statusIconPath || statusIconName;
+      let panelLabel = this.showPanelLabel ? label : "";
+      let tooltipText = tooltip + "\n" + transcriptText;
+      let panelActor = this.actor;
+      let panelActorReady = Boolean(
+        panelActor &&
+        (typeof panelActor.is_finalized !== "function" || !panelActor.is_finalized()) &&
+        typeof this.set_applet_label === "function" &&
+        typeof this.set_applet_tooltip === "function"
+      );
+      let nextFingerprint = JSON.stringify({
+        status: this.status,
+        showPanelLabel: Boolean(this.showPanelLabel),
+        panelLabel: panelLabel,
+        tooltipText: tooltipText,
+        statusText: statusText,
+        toggleText: toggleText,
+        microphoneText: microphoneText,
+        doctorSummaryText: doctorSummaryText,
+        languageText: languageText,
+        recorderText: recorderText,
+        recordingLimitText: recordingLimitText,
+        recordingOptionsText: recordingOptionsText,
+        notificationOptionsText: notificationOptionsText,
+        outputMethodText: outputMethodText,
+        textOptionsText: textOptionsText,
+        inputSourceText: inputSourceText,
+        modelText: modelText,
+        textModelText: textModelText,
+        transcriptText: transcriptText,
+        autoPasteText: autoPasteText,
+        transcriptStorageText: transcriptStorageText,
+        progressText: progressText,
+        statusIcon: statusIcon,
+        styleClass: this._panelStyleClassForStatus(this.status),
+        panelActorReady: panelActorReady,
+      });
+      if (this._panelRenderFingerprint === nextFingerprint) {
+        return;
       }
       this._applyPanelIcon(this.status);
       this._applyPanelStyle(this.status);
-      let panelActor = this.actor;
-      if (panelActor &&
-          (typeof panelActor.is_finalized !== "function" || !panelActor.is_finalized()) &&
-          typeof this.set_applet_label === "function" &&
-          typeof this.set_applet_tooltip === "function") {
-        this.set_applet_label(this.showPanelLabel ? label : "");
-        this.set_applet_tooltip(tooltip + "\n" + this._shortTranscript());
+      if (panelActorReady) {
+        this.set_applet_label(panelLabel);
+        this.set_applet_tooltip(tooltipText);
       }
       this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
-      this._setMenuItemLabelSafely(this.microphoneLevelItem, this._microphoneLevelText());
-      this._setMenuItemLabelSafely(this.doctorSummaryItem, this.doctorSummaryText || _("Doctor: not checked"));
-      this._setMenuItemLabelSafely(this.languageItem, _("Language: ") + this._currentLanguage());
-      this._setMenuItemLabelSafely(this.recorderItem, _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder)));
-      this._setMenuItemLabelSafely(this.recordingLimitItem, _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds)));
-      this._setMenuItemLabelSafely(this.recordingOptionsItem, this._recordingOptionsLabel());
-      this._setMenuItemLabelSafely(this.notificationOptionsItem, this._notificationOptionsLabel());
-      this._setMenuItemLabelSafely(this.outputMethodItem, _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod)));
-      this._setMenuItemLabelSafely(this.textOptionsItem, this._textOptionsLabel());
+      this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
+      this._setMenuItemLabelSafely(this.doctorSummaryItem, doctorSummaryText);
+      this._setMenuItemLabelSafely(this.languageItem, languageText);
+      this._setMenuItemLabelSafely(this.recorderItem, recorderText);
+      this._setMenuItemLabelSafely(this.recordingLimitItem, recordingLimitText);
+      this._setMenuItemLabelSafely(this.recordingOptionsItem, recordingOptionsText);
+      this._setMenuItemLabelSafely(this.notificationOptionsItem, notificationOptionsText);
+      this._setMenuItemLabelSafely(this.outputMethodItem, outputMethodText);
+      this._setMenuItemLabelSafely(this.textOptionsItem, textOptionsText);
       this._updateAutoPasteItem();
       this._updateTranscriptStorageItem();
-      this._setMenuItemLabelSafely(this.inputSourceItem, this._inputSourceLabel());
-      this._setMenuItemLabelSafely(this.modelItem, this._voiceBackendLabel());
-      this._setMenuItemLabelSafely(this.textModelItem, this._textModelLabel());
-      this._setMenuItemLabelSafely(this.transcriptItem, this._shortTranscript());
+      this._setMenuItemLabelSafely(this.inputSourceItem, inputSourceText);
+      this._setMenuItemLabelSafely(this.modelItem, modelText);
+      this._setMenuItemLabelSafely(this.textModelItem, textModelText);
+      this._setMenuItemLabelSafely(this.transcriptItem, transcriptText);
+      this._setMenuItemLabelSafely(this.toggleItem, toggleText);
+      this._panelRenderFingerprint = panelActorReady ? nextFingerprint : null;
     }, undefined);
   }
 };

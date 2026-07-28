@@ -934,7 +934,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_selectRecorder: function(method)", source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null)', source)
         self.assertIn('this._commitSettingValue("recorder", "recorder"', source)
-        self.assertIn('this._setMenuItemLabelSafely(this.recorderItem, _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder)))', source)
+        self.assertIn('let recorderText = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder));', source)
+        self.assertIn("this._setMenuItemLabelSafely(this.recorderItem, recorderText);", source)
         self.assertIn('this._setStatusPreservingRecording(this.status, _("Recorder for next recording: ") + label', source)
 
     def test_applet_exposes_recording_duration_submenu(self) -> None:
@@ -962,7 +963,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", this._onRecordingLimitSettingsChanged, null)', source)
         self.assertIn('this._commitSettingValue("maxSeconds", "max-seconds"', source)
         self.assertIn('"--max-seconds", String(this._normalizeRecordingLimit(this.maxSeconds))', source)
-        self.assertIn('this._setMenuItemLabelSafely(this.recordingLimitItem, _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds)))', source)
+        self.assertIn('let recordingLimitText = _("Duration: ") + this._formatSeconds(this._normalizeRecordingLimit(this.maxSeconds));', source)
+        self.assertIn("this._setMenuItemLabelSafely(this.recordingLimitItem, recordingLimitText);", source)
         self.assertIn('this._setStatusPreservingRecording(this.status, _("Duration for next recording: ") + label', source)
 
 
@@ -4342,6 +4344,11 @@ class AppletStaticTest(unittest.TestCase):
         display_end = source.index("\n  _isUsableTargetWindow:", display_start)
         display_block = source[display_start:display_end]
         self.assertIn('let timerId = this._scheduleTrackedTimer("display"', display_block)
+        self.assertIn("this._updateRecordingDisplay();", display_block)
+        self.assertNotIn("this._updatePanel();", display_block)
+        self.assertIn('_runGuarded("recording-display-update"', display_block)
+        self.assertIn("this._recordingDisplayFingerprint === nextFingerprint", display_block)
+        self.assertIn("this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);", display_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Recording display timer could not be scheduled")', display_block)
 
         setup_start = source.index("_scheduleSetupCheck: function()")
@@ -4652,7 +4659,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._applyMicrophoneLevel(payload.microphone_level, status);", source)
         self.assertIn("_microphoneLevelText: function()", source)
         self.assertIn("_levelBar: function(percent)", source)
-        self.assertIn('this._setMenuItemLabelSafely(this.microphoneLevelItem, this._microphoneLevelText());', source)
+        self.assertIn("let microphoneText = this._microphoneLevelText();", source)
+        self.assertIn("this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);", source)
 
     def test_left_click_menu_uses_compact_top_level_groups(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6996,7 +7004,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_selectOutputMethod: function(method)', source)
         self.assertIn('this._commitSettingValue("insertMethod", "insert-method"', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null)', source)
-        self.assertIn('this._setMenuItemLabelSafely(this.outputMethodItem, _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod)))', source)
+        self.assertIn('let outputMethodText = _("Output: ") + this._outputMethodLabel(this._normalizeOutputMethod(this.insertMethod));', source)
+        self.assertIn("this._setMenuItemLabelSafely(this.outputMethodItem, outputMethodText);", source)
         self.assertIn('"--insert-method", "none"', source)
         self.assertNotIn("_usesCinnamonClipboard", source)
 
@@ -7653,7 +7662,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return this._shortMenuText(sanitizedTranscript, MAX_UI_MESSAGE_CHARS);", source)
         self.assertIn('let transcriptLength = String(this.lastTranscript).length;', source)
         self.assertIn('return _("Transcript preview hidden (length: ") + String(transcriptLength) + " chars)";', source)
-        self.assertIn('set_applet_tooltip(tooltip + "\\n" + this._shortTranscript())', source)
+        self.assertIn("let transcriptText = this._shortTranscript();", source)
+        self.assertIn('let tooltipText = tooltip + "\\n" + transcriptText;', source)
+        self.assertIn("this.set_applet_tooltip(tooltipText);", source)
         self.assertNotIn('let clean = this.lastTranscript.replace(/\\s+/g, " ").trim();', source)
         self.assertNotIn('clean.length > 80 ? clean.slice(0, 77) + "..." : clean;', source)
 
@@ -8173,7 +8184,39 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("itemActor.is_finalized", block)
         self.assertIn("label.is_finalized", block)
         self.assertIn('typeof label.set_text !== "function"', block)
+        self.assertIn('typeof label.get_text === "function" && String(label.get_text()) === nextText', block)
+        self.assertLess(block.index("label.get_text()"), block.index("label.set_text(nextText)"))
         self.assertNotIn(".label.text", source)
+
+    def test_static_submenus_are_not_rebuilt_when_opened(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_buildMenu: function()")
+        end = source.index("\n  _styleWideMenus:", start)
+        block = source[start:end]
+
+        for populate_call in (
+            "this._populateLanguageMenu();",
+            "this._populateRecorderMenu();",
+            "this._populateRecordingLimitMenu();",
+            "this._populateRecordingOptionsMenu();",
+            "this._populateNotificationOptionsMenu();",
+            "this._populateShortcutMenu();",
+            "this._populateArtifactEncryptionMenu();",
+            "this._populateTextOptionsMenu();",
+            "this._populateAutoPasteMenu();",
+        ):
+            with self.subTest(populate_call=populate_call):
+                self.assertEqual(block.count(populate_call), 1)
+
+        for dynamic_refresh in (
+            "this._refreshAlarmMenu();",
+            "this._refreshHistory();",
+            "this._refreshInputSourceMenu();",
+            "this._refreshModelMenu();",
+            "this._refreshTextModelMenu();",
+        ):
+            with self.subTest(dynamic_refresh=dynamic_refresh):
+                self.assertIn(dynamic_refresh, block)
 
     def test_menu_sensitivity_updates_skip_finalized_cinnamon_actors(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -8283,17 +8326,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn(interlace_method, [0, 1])
         return width, height, color_type
 
-    def test_status_icon_assets_have_30_png_files_signature_and_256x256_rgba(self) -> None:
+    def test_status_icon_assets_have_135_png_files_signature_and_256x256_rgba(self) -> None:
         status_icons = APPLET_DIR / "assets" / "status-icons"
         self.assertTrue(status_icons.is_dir())
 
         icon_files = sorted([p for p in status_icons.iterdir() if p.is_file() and p.suffix.lower() == ".png"])
-        self.assertEqual(len(icon_files), 30)
+        self.assertEqual(len(icon_files), 135)
 
         families = sorted({p.stem.split("-", 1)[0] for p in icon_files})
         families_ids = sorted({p.stem.split("-", 1)[1] for p in icon_files})
         self.assertEqual(families, ["processing", "ready", "recording"])
-        self.assertEqual(families_ids, [f"{i:02d}" for i in range(1, 11)])
+        self.assertEqual(families_ids, [f"{i:02d}" for i in range(1, 46)])
+
+        expected_assets = sorted(
+            [f"{family}-{i:02d}" for family in ["processing", "ready", "recording"] for i in range(1, 46)]
+        )
+        observed_assets = sorted([p.stem for p in icon_files])
+        self.assertEqual(observed_assets, expected_assets)
 
         for icon_file in icon_files:
             width, height, color_type = self._parse_png_ihdr(icon_file)
@@ -8301,12 +8350,29 @@ class AppletStaticTest(unittest.TestCase):
             self.assertEqual(height, 256)
             self.assertEqual(color_type, 6)
 
-    def test_status_icon_section_contains_6_keys_with_10_options_each(self) -> None:
+    def test_status_icon_section_contains_12_keys_with_45_options_each(self) -> None:
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
         section = schema["layout"]["status-icons-section"]
 
         section_keys = section["keys"]
         expected_keys = [
+            "status-icon-ready",
+            "status-icon-ready-preview",
+            "status-icon-recording",
+            "status-icon-recording-preview",
+            "status-icon-processing",
+            "status-icon-processing-preview",
+            "status-icon-recorded",
+            "status-icon-recorded-preview",
+            "status-icon-error",
+            "status-icon-error-preview",
+            "status-icon-setup",
+            "status-icon-setup-preview",
+        ]
+        self.assertEqual(section_keys, expected_keys)
+        self.assertEqual(len(section_keys), 12)
+
+        status_selector_keys = [
             "status-icon-ready",
             "status-icon-recording",
             "status-icon-processing",
@@ -8314,13 +8380,59 @@ class AppletStaticTest(unittest.TestCase):
             "status-icon-error",
             "status-icon-setup",
         ]
-        self.assertEqual(section_keys, expected_keys)
-        self.assertEqual(len(section_keys), 6)
+        expected_selector_labels = []
+        expected_selector_labels.extend([f"Alternative {i}" for i in range(1, 31)])
+        expected_selector_labels.extend([f"Mouse {i}" for i in range(1, 6)])
+        expected_selector_labels.extend([f"Owl {i}" for i in range(1, 6)])
+        expected_selector_labels.extend([f"Moon {i}" for i in range(1, 6)])
+        expected_selector_ids = [f"{i:02d}" for i in range(1, 46)]
 
-        for key in expected_keys:
+        expected_selector_options = {
+            "ready": [f"ready-{i:02d}" for i in range(1, 46)],
+            "recording": [f"recording-{i:02d}" for i in range(1, 46)],
+            "processing": [f"processing-{i:02d}" for i in range(1, 46)],
+            "recorded": [f"ready-{i:02d}" for i in range(1, 46)],
+            "error": [f"recording-{i:02d}" for i in range(1, 46)],
+            "setup": [f"processing-{i:02d}" for i in range(1, 46)],
+        }
+        for key in status_selector_keys:
             options = schema[key]["options"]
-            self.assertEqual(len(options), 10)
+            self.assertEqual(len(options), 45)
             self.assertIn(schema[key]["default"], options.values())
+            state = key.replace("status-icon-", "")
+            self.assertEqual(list(options.values()), expected_selector_options[state])
+            self.assertEqual(list(options.keys()), expected_selector_labels, f"{key} option labels")
+            self.assertEqual(
+                [value.split("-", 1)[1] for value in list(options.values())],
+                expected_selector_ids,
+            )
+        schema_icon_ids = {
+            icon_id
+            for key in status_selector_keys
+            for icon_id in schema[key]["options"].values()
+        }
+        asset_icon_ids = {
+            path.stem
+            for path in (APPLET_DIR / "assets" / "status-icons").glob("*.png")
+        }
+        self.assertEqual(schema_icon_ids, asset_icon_ids)
+
+        preview_expectations = [
+            ("status-icon-ready-preview", "status-icon-ready", "Preview the ready status icon"),
+            ("status-icon-recording-preview", "status-icon-recording", "Preview the recording status icon"),
+            ("status-icon-processing-preview", "status-icon-processing", "Preview the processing status icon"),
+            ("status-icon-recorded-preview", "status-icon-recorded", "Preview the recorded status icon"),
+            ("status-icon-error-preview", "status-icon-error", "Preview the error status icon"),
+            ("status-icon-setup-preview", "status-icon-setup", "Preview the setup status icon"),
+        ]
+        for preview_key, target_key, expected_description in preview_expectations:
+            preview_schema = schema[preview_key]
+            self.assertEqual(preview_schema["type"], "custom")
+            self.assertEqual(preview_schema["file"], "SettingsLogo.py")
+            self.assertEqual(preview_schema["widget"], "StatusIconPreview")
+            self.assertEqual(preview_schema["target"], target_key)
+            self.assertEqual(preview_schema["default"], "")
+            self.assertEqual(preview_schema["description"], expected_description)
 
         schema_defaults = {
             "ready": "ready-01",
@@ -8332,6 +8444,87 @@ class AppletStaticTest(unittest.TestCase):
         }
         for status, default_id in schema_defaults.items():
             self.assertEqual(schema[f"status-icon-{status}"]["default"], default_id)
+
+    def test_status_icon_live_previews_are_secure_and_bounded(self) -> None:
+        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+        widget_source = (APPLET_DIR / "SettingsLogo.py").read_text(encoding="utf-8")
+        applet_source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        preview_source = widget_source[widget_source.index("class StatusIconPreview(SettingsWidget):"):]
+
+        section = schema["layout"]["status-icons-section"]
+        section_keys = section["keys"]
+        expected_keys = [
+            "status-icon-ready",
+            "status-icon-ready-preview",
+            "status-icon-recording",
+            "status-icon-recording-preview",
+            "status-icon-processing",
+            "status-icon-processing-preview",
+            "status-icon-recorded",
+            "status-icon-recorded-preview",
+            "status-icon-error",
+            "status-icon-error-preview",
+            "status-icon-setup",
+            "status-icon-setup-preview",
+        ]
+        self.assertEqual(section_keys, expected_keys)
+        self.assertEqual(section["type"], "section")
+
+        self.assertIn('for state in ("ready", "recording", "processing"):', preview_source)
+        self.assertIn("for idx in range(1, 46):", preview_source)
+        self.assertIn('"{}-{}{}".format(state, "0" if idx < 10 else "", idx)', preview_source)
+
+        for preview_key, target_key in [
+            ("status-icon-ready-preview", "status-icon-ready"),
+            ("status-icon-recording-preview", "status-icon-recording"),
+            ("status-icon-processing-preview", "status-icon-processing"),
+            ("status-icon-recorded-preview", "status-icon-recorded"),
+            ("status-icon-error-preview", "status-icon-error"),
+            ("status-icon-setup-preview", "status-icon-setup"),
+        ]:
+            self.assertEqual(schema[preview_key]["target"], target_key)
+
+        self.assertIn("max_size = 112", preview_source)
+        self.assertIn("self._settings.listen(self._target, self._on_target_change)", preview_source)
+        self.assertIn("value = self._settings.get_value(self._target)", preview_source)
+        self.assertIn("def _on_target_change(self, *_args):", preview_source)
+        self.assertIn("self._load_from_settings()", preview_source)
+        self.assertIn('_asset_base_dir = os.path.join(base_dir, "assets", "status-icons")', preview_source)
+        self.assertIn('logo_path = os.path.join(self._asset_base_dir, f"{icon_id}.png")', preview_source)
+        self.assertIn("_fit_size_for_allocation", preview_source)
+        self.assertIn("_set_render_size", preview_source)
+        self.assertIn("max_target = max(1, int(self.max_size))", preview_source)
+        self.assertIn("available_width = min(available_width, max_target)", preview_source)
+        self.assertIn("available_height = min(available_height, max_target)", preview_source)
+        self.assertIn("self._last_icon_id = None", preview_source)
+        self.assertIn("if icon_id == self._last_icon_id:", preview_source)
+        self.assertIn("self._last_icon_id = icon_id", preview_source)
+        self.assertIn("self._drawing_area.set_size_request(1, self.max_size)", preview_source)
+        self.assertIn("self._drawing_area.set_size_request(1, target_height)", preview_source)
+        self.assertIn("_on_size_allocate(self._drawing_area, allocation)", preview_source)
+        self.assertIn("if current_size == self._last_render_size and self._scaled_pixbuf is not None:", preview_source)
+        self.assertIn("self._source_pixbuf.scale_simple(", preview_source)
+        self.assertIn("GdkPixbuf.InterpType.BILINEAR", preview_source)
+        self.assertIn("_show_fallback()", preview_source)
+        self.assertIn("if not isinstance(value, str):", preview_source)
+        self.assertIn("if candidate in self._allowed_status_ids:", preview_source)
+        self.assertIn("if icon_id is None:", preview_source)
+        self.assertIn("if self._source_pixbuf is None or self._drawing_area is None:", preview_source)
+        self.assertIn("if icon_id not in self._allowed_status_ids:", preview_source)
+        self.assertIn("self._load_icon(icon_id)", preview_source)
+        self.assertIn("def _on_draw(self, widget, cr):", preview_source)
+        self.assertNotIn("self._set_render_size(", preview_source.partition("def _on_draw(self, widget, cr):")[2])
+        self.assertNotIn("candidate.endswith", preview_source)
+
+        self.assertNotIn("subprocess", preview_source)
+        self.assertNotIn("Gtk.FileChooserDialog", preview_source)
+        self.assertNotIn("requests", preview_source)
+        self.assertNotIn("http://", preview_source)
+        self.assertNotIn("https://", preview_source)
+        self.assertNotIn("FileChooser", preview_source)
+        self.assertIn("const STATUS_ICON_ALLOWLIST = {};", applet_source)
+        self.assertIn("if (candidate !== \"\" && STATUS_ICON_ALLOWLIST[candidate])", applet_source)
+        self.assertIn("return this.metadata.path + \"/assets/status-icons/\" + validatedId + \".png\";", applet_source)
 
     def test_applet_init_binds_status_icon_settings_and_resets_cache_on_change(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -8388,16 +8581,13 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_status_icon_allowlist_status_mapping_and_runtime_path_cache_reset(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        self.assertIn('"ready-01", "ready-02", "ready-03", "ready-04", "ready-05",', source)
-        self.assertIn('"recording-01", "recording-02", "recording-03", "recording-04", "recording-05",', source)
-        self.assertIn('"processing-01", "processing-02", "processing-03", "processing-04", "processing-05",', source)
+        self.assertIn("for (let i = 1; i <= 45; i++) {", source)
         allowlist_start = source.index('const STATUS_ICON_ALLOWLIST = {};')
         allowlist_end = source.index('const STATUS_ICON_DEFAULTS = {', allowlist_start)
         allowlist_block = source[allowlist_start:allowlist_end]
-        for family in ["ready", "recording", "processing"]:
-            for index in range(1, 11):
-                key = f'"{family}-{index:02d}"'
-                self.assertIn(key, allowlist_block)
+        self.assertIn('forEach((family) => {', allowlist_block)
+        self.assertIn('let index = (i < 10) ? "0" + String(i) : String(i);', allowlist_block)
+        self.assertIn('STATUS_ICON_ALLOWLIST[family + "-" + index] = true;', allowlist_block)
 
         self.assertIn('if (status === "recording") return this.statusIconRecording;', source)
         self.assertIn('if (status === "processing") return this.statusIconProcessing;', source)
