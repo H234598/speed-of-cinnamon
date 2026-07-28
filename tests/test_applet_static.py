@@ -4462,6 +4462,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("previousFingerprint.panelLabel === panelLabel", display_block)
         self.assertNotIn("JSON.stringify({", display_block)
         self.assertIn("this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);", display_block)
+        self.assertIn("let menuRenderSucceeded = true;", display_block)
+        self.assertIn("menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;", display_block)
+        self.assertIn("panelActorReady && menuRenderSucceeded ? {", display_block)
+        self.assertIn("return true;", display_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Recording display timer could not be scheduled")', display_block)
 
         setup_start = source.index("_scheduleSetupCheck: function()")

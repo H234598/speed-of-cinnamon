@@ -12939,10 +12939,14 @@ MyApplet.prototype = {
         this.set_applet_label(panelLabel);
         this.set_applet_tooltip(tooltipText);
       }
-      this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
-      this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
-      this._setMenuItemLabelSafely(this.toggleItem, toggleText);
-      this._recordingDisplayFingerprint = panelActorReady ? {
+      let menuRenderSucceeded = true;
+      let labelWriteSucceeded = this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      labelWriteSucceeded = this._setMenuItemLabelSafely(this.toggleItem, toggleText);
+      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      this._recordingDisplayFingerprint = panelActorReady && menuRenderSucceeded ? {
         panelLabel: panelLabel,
         tooltipText: tooltipText,
         statusText: statusText,
