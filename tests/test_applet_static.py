@@ -1147,9 +1147,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot, keyboardProgram)', source)
         self.assertIn('_pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {', source)
         self.assertIn("completeOnce(pasteCompleted);", source)
-        self.assertIn('_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard)', source)
-        self.assertIn('_spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS, expectedTargetWindow, complete, isCurrentOperation);', source)
-        self.assertIn('_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard)', source)
+        self.assertIn('_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs)', source)
+        self.assertIn('_spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS, expectedTargetWindow, complete, isCurrentOperation, processTimeoutMs);', source)
+        self.assertIn('_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard, processTimeoutMs)', source)
         self.assertIn('completionCallback(false);', source)
         self.assertIn('return null;', source)
         self.assertNotIn('if (method === "clipboard-paste" && !autoPasteTarget) {', source)
@@ -1159,7 +1159,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {', source)
         self.assertIn("CLIPBOARD_READY_RETRY_MS", source)
         self.assertIn("CLIPBOARD_READY_TIMEOUT_MS", source)
-        self.assertIn("_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard)", source)
+        self.assertIn("_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs)", source)
         self.assertIn('Clipboard did not confirm new text before automatic paste', source)
         self.assertNotIn('this._preparedTranscriptText(transcript, submitWithReturn)', source)
 
@@ -1169,6 +1169,7 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertEqual(schema["typing-delay-ms"]["min"], 0)
         self.assertEqual(schema["typing-delay-ms"]["max"], 10000)
+        self.assertIn("const MAX_KEYBOARD_COMMAND_TIMEOUT_MS = 300000;", source)
         self.assertIn("_normalizeTypingDelayMs: function(delay)", source)
         self.assertIn('typeof delay === "number" && isFinite(delay)', source)
         self.assertIn("_normalizeTypingDelayMs(this.typingDelayMs)", source)
@@ -1543,9 +1544,9 @@ class AppletStaticTest(unittest.TestCase):
         for signature in [
             "_pasteClipboardAfterFocus: function(sendEnter, expectedClipboardText, completionCallback, operationGuard, keyboardProgram)",
             "_typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath)",
-            "_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard)",
-            "_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard)",
-            "_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard)",
+            "_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs)",
+            "_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs)",
+            "_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard, processTimeoutMs)",
         ]:
             self.assertIn(signature, source)
         focus_start = source.index("_spawnKeyboardAfterFocus: function(")
@@ -1562,13 +1563,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (completed) {", focus_block)
         self.assertIn("completed = true;", focus_block)
         self.assertIn(
-            "expectedTargetWindow, complete, isCurrentOperation);",
+            "expectedTargetWindow, complete, isCurrentOperation, processTimeoutMs);",
             focus_block,
         )
         self.assertRegex(
             ready_block,
             r"(?s)this\._spawnKeyboardArgs\([^;]*"
-            r"completionCallback,\s*isCurrentOperation\s*\);",
+            r"completionCallback,\s*isCurrentOperation,\s*"
+            r"processTimeoutMs\s*\);",
         )
         self.assertIn(
             "let retryDelayMs = clipboardDeadlineMs - Date.now();",
@@ -3440,7 +3442,7 @@ class AppletStaticTest(unittest.TestCase):
             "_scheduleAlarmCheck: function(delaySeconds)",
             "_scheduleStatusPoll: function()",
             "_scheduleDisplayTick: function()",
-            "_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard)",
+            "_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs)",
             "_watchExternalApiEnvFile: function(path)",
         ):
             with self.subTest(marker=marker):
@@ -6826,7 +6828,7 @@ class AppletStaticTest(unittest.TestCase):
         remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure)")
         remember_end = source.index("\n  _closeMenuForKeyboardInsert:", remember_start)
         remember_block = source[remember_start:remember_end]
-        keyboard_start = source.index("_spawnKeyboardProcess: function(args, completionCallback)")
+        keyboard_start = source.index("_spawnKeyboardProcess: function(args, completionCallback, timeoutMs)")
         keyboard_end = source.index("\n  _spawnKeyboardArgs:", keyboard_start)
         keyboard_block = source[keyboard_start:keyboard_end]
 
@@ -7642,8 +7644,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Text too long for keyboard typing", source)
         self.assertIn("_closeMenuForKeyboardInsert: function() {", source)
         self.assertIn("Could not close applet menu before keyboard insert", source)
-        self.assertIn("_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard) {", source)
-        self.assertIn("_spawnKeyboardProcess: function(args, completionCallback)", source)
+        self.assertIn("_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs) {", source)
+        self.assertIn("_spawnKeyboardProcess: function(args, completionCallback, timeoutMs)", source)
 
     def test_prepared_transcript_keeps_hard_insert_limit_after_append_space(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -8536,7 +8538,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (!this._closeMenuForKeyboardInsert()) {', source)
         self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', source)
         self.assertIn('this._restoreTargetWindowForPaste((restored) => {', source)
-        self.assertIn("_spawnKeyboardProcess: function(args, completionCallback)", source)
+        self.assertIn("_spawnKeyboardProcess: function(args, completionCallback, timeoutMs)", source)
         self.assertIn('let xdotool;', source)
         self.assertIn('xdotool = this._findTrustedProgramInPath("xdotool");', source)
         self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]', source)
@@ -8572,7 +8574,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (!expectedTargetWindow) {\n      this._setStatus("error", _("Target window unavailable for automatic paste"), this.lastTranscript);', source)
         self.assertIn("return this._spawnKeyboardAfterFocus(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, isCurrentOperation);", source)
         self.assertIn('this._setStatus("error", _("Target window unavailable for direct typing"), this.lastTranscript);', source)
-        self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback, isCurrentOperation)', source)
+        self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback, isCurrentOperation, typingTimeoutMs)', source)
         self.assertIn('if (!isCurrentOperation() || !this._lifecycleAllowsWork()) {', source)
         self.assertIn("this._completeKeyboardInsertFailure(", source)
         args_start = source.index("_spawnKeyboardArgs: function(")
@@ -8807,11 +8809,11 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn(
-            "_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard)",
+            "_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs)",
             source,
         )
         self.assertIn(
-            "_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard)",
+            "_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard, processTimeoutMs)",
             source,
         )
         ready_start = source.index("_spawnKeyboardWhenClipboardReady: function(")

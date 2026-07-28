@@ -20,6 +20,7 @@ function loadAppletMethod(name, nextName, clock, extraContext = {}) {
   return vm.runInNewContext(`({${property}}).${name}`, {
     CLIPBOARD_READY_RETRY_MS: 40,
     CLIPBOARD_READY_TIMEOUT_MS: 100,
+    MAX_KEYBOARD_COMMAND_TIMEOUT_MS: 300000,
     MAX_XDOTOOL_TARGET_OUTPUT_BYTES: 4096,
     PASTE_FOCUS_DELAY_MS: 25,
     PASTE_SUBMIT_DELAY_MS: 300,
@@ -53,6 +54,46 @@ function loadSpawnKeyboardWhenClipboardReady(clock) {
 
 function loadTrackedTimerOwnedBy(clock) {
   return loadAppletMethod("_trackedTimerOwnedBy", "_untrackTimer", clock);
+}
+
+function makeTypeApplet(clock, delay) {
+  const calls = [];
+  const statuses = [];
+  const applet = {
+    lastTranscript: "",
+    typingDelayMs: delay,
+    _typeTextAfterFocus: loadAppletMethod(
+      "_typeTextAfterFocus",
+      "_coerceTypeText",
+      clock,
+      { X11_COMMAND_TIMEOUT_MS: 2000 }
+    ),
+    _coerceTypeText: (text) => String(text),
+    _completeKeyboardInsertFailure() {},
+    _findTrustedProgramInPath: () => "/usr/bin/xdotool",
+    _normalizeTypingDelayMs: (value) => value,
+    _setStatus(status, message) {
+      statuses.push({ message, status });
+    },
+    _spawnKeyboardAfterFocus(...args) {
+      calls.push(args);
+      return true;
+    },
+    _targetXWindowSnapshot: () => ({ xid: "1" }),
+  };
+  return {
+    applet,
+    calls,
+    statuses,
+    invoke(text) {
+      return applet._typeTextAfterFocus(
+        text,
+        () => {},
+        () => true,
+        "/usr/bin/xdotool"
+      );
+    },
+  };
 }
 
 function makeCaptureApplet(clock) {
@@ -193,6 +234,7 @@ function makeApplet(clock) {
   const reads = [];
   const processes = [];
   const processCallbacks = [];
+  const processTimeouts = [];
   const completions = [];
   const statuses = [];
   let clearPasteTimerCalls = 0;
@@ -278,8 +320,9 @@ function makeApplet(clock) {
     _windowTitleMatchesAutoPaste() {
       return true;
     },
-    _spawnKeyboardProcess(args, callback) {
+    _spawnKeyboardProcess(args, callback, timeoutMs) {
       processes.push(args);
+      processTimeouts.push(timeoutMs);
       if (this.failNextProcess) {
         this.failNextProcess = false;
         callback(false);
@@ -310,7 +353,7 @@ function makeApplet(clock) {
     fireCallback(callback) {
       return callback();
     },
-    invoke(expected = "text", deadline = 1100, followUpArgs = null) {
+    invoke(expected = "text", deadline = 1100, followUpArgs = null, processTimeoutMs = null) {
       // Models _spawnKeyboardAfterFocus.complete(), which guards every production entry.
       let outerCompletionDelivered = false;
       this._spawnKeyboardArgs(
@@ -326,17 +369,19 @@ function makeApplet(clock) {
           outerCompletionDelivered = true;
           completions.push(result);
         },
-        () => operationCurrent
+        () => operationCurrent,
+        processTimeoutMs
       );
     },
-    invokeAfterFocus(expected = "text", followUpArgs = null) {
+    invokeAfterFocus(expected = "text", followUpArgs = null, processTimeoutMs = null) {
       return this._spawnKeyboardAfterFocus(
         ["xdotool", "key", "ctrl+v"],
         followUpArgs,
         expected,
         { xid: "1" },
         (result) => completions.push(result),
-        () => operationCurrent
+        () => operationCurrent,
+        processTimeoutMs
       );
     },
     setOperationCurrent(value) {
@@ -349,6 +394,7 @@ function makeApplet(clock) {
     completions,
     processes,
     processCallbacks,
+    processTimeouts,
     reads,
     statuses,
     timers,
@@ -890,4 +936,61 @@ test("focused target restore skips redundant compositor activation", () => {
   assert.deepEqual(state.completions, [true]);
   assert.equal(state.activations(), 0);
   assert.equal(state.fallbacks(), 0);
+});
+
+test("direct typing derives bounded timeout from codepoints and delay", () => {
+  const clock = { value: 1000 };
+  const state = makeTypeApplet(clock, 8);
+  const text = "x".repeat(4000);
+
+  assert.equal(state.invoke(text), true);
+
+  assert.equal(state.calls.length, 1);
+  assert.equal(state.calls[0][6], 33992);
+  assert.equal(state.statuses.length, 0);
+});
+
+test("direct typing timeout counts Unicode codepoints", () => {
+  const clock = { value: 1000 };
+  const state = makeTypeApplet(clock, 100);
+
+  assert.equal(state.invoke("😀a"), true);
+
+  assert.equal(state.calls[0][6], 2100);
+});
+
+test("direct typing rejects unsafe duration before spawn", () => {
+  const clock = { value: 1000 };
+  const state = makeTypeApplet(clock, 10000);
+
+  assert.equal(state.invoke("x".repeat(40)), false);
+
+  assert.equal(state.calls.length, 0);
+  assert.equal(state.statuses.length, 1);
+  assert.equal(state.statuses[0].status, "error");
+});
+
+test("direct typing timeout reaches keyboard process through focus path", () => {
+  const clock = { value: 1000 };
+  const state = makeApplet(clock);
+
+  state.applet.invokeAfterFocus(null, null, 33992);
+  state.applet.fireTimer(state.applet.pasteTimer);
+
+  assert.deepEqual(state.processTimeouts, [33992]);
+  assert.deepEqual(state.completions, [true]);
+});
+
+test("direct typing accepts exact maximum timeout and rejects next codepoint", () => {
+  const clock = { value: 1000 };
+
+  const atLimit = makeTypeApplet(clock, 1000);
+  assert.equal(atLimit.invoke("x".repeat(299)), true);
+  assert.equal(atLimit.calls[0][6], 300000);
+
+  const aboveLimit = makeTypeApplet(clock, 1000);
+  assert.equal(aboveLimit.invoke("x".repeat(300)), false);
+  assert.equal(aboveLimit.calls.length, 0);
+  assert.equal(aboveLimit.statuses.length, 1);
+  assert.equal(aboveLimit.statuses[0].status, "error");
 });

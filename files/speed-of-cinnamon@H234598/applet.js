@@ -53,6 +53,7 @@ const CLIPBOARD_MAX_TARGETS = 16;
 const MAX_CLIPBOARD_TARGET_OUTPUT_BYTES = 65536;
 const MAX_XDOTOOL_TARGET_OUTPUT_BYTES = 4096;
 const X11_COMMAND_TIMEOUT_MS = 2000;
+const MAX_KEYBOARD_COMMAND_TIMEOUT_MS = 300000;
 const ALARM_CHECK_SECONDS = 60;
 const MAX_ALARM_MENU_ENTRIES = 128;
 const MAX_ALARM_NOTIFICATIONS = 32;
@@ -15242,6 +15243,14 @@ MyApplet.prototype = {
     if (typedText === null) {
       return false;
     }
+    let characterCount = Array.from(typedText).length;
+    let expectedTypingMs = Math.max(0, characterCount - 1) * delay;
+    let typingTimeoutMs = expectedTypingMs + X11_COMMAND_TIMEOUT_MS;
+    if (!Number.isSafeInteger(typingTimeoutMs) ||
+        typingTimeoutMs > MAX_KEYBOARD_COMMAND_TIMEOUT_MS) {
+      this._setStatus("error", _("Typing delay is too high for this text"), this.lastTranscript);
+      return false;
+    }
     let xdotool;
     if (typeof xdotoolPath === "string" && xdotoolPath !== "") {
       xdotool = xdotoolPath;
@@ -15261,7 +15270,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Target window unavailable for direct typing"), this.lastTranscript);
       return false;
     }
-    return this._spawnKeyboardAfterFocus([xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback, isCurrentOperation);
+    return this._spawnKeyboardAfterFocus([xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback, isCurrentOperation, typingTimeoutMs);
   },
 
   _coerceTypeText: function(text) {
@@ -15298,7 +15307,7 @@ MyApplet.prototype = {
     }
   },
 
-  _spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard) {
+  _spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs) {
     let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
     this._clearPasteTimer();
     let completed = false;
@@ -15325,7 +15334,7 @@ MyApplet.prototype = {
         return false;
       }
       try {
-        this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS, expectedTargetWindow, complete, isCurrentOperation);
+        this._spawnKeyboardWhenClipboardReady(args, followUpArgs, expectedClipboardText, Date.now() + CLIPBOARD_READY_TIMEOUT_MS, expectedTargetWindow, complete, isCurrentOperation, processTimeoutMs);
       } catch (error) {
         this._completeKeyboardInsertFailure(complete, _("Keyboard insert failed"), error);
       }
@@ -15338,7 +15347,7 @@ MyApplet.prototype = {
     return true;
   },
 
-  _spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard) {
+  _spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs) {
     let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
     let failAsync = (error, message) => this._completeKeyboardInsertFailure(
       completionCallback,
@@ -15360,14 +15369,15 @@ MyApplet.prototype = {
         expected,
         expected === null ? null : deadlineMs,
         completionCallback,
-        isCurrentOperation
+        isCurrentOperation,
+        processTimeoutMs
       );
     } catch (error) {
       failAsync(error);
     }
   },
 
-  _spawnKeyboardProcess: function(args, completionCallback) {
+  _spawnKeyboardProcess: function(args, completionCallback, timeoutMs) {
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
     let completed = false;
     let completeOnce = (result) => {
@@ -15383,7 +15393,10 @@ MyApplet.prototype = {
     }
     try {
       let handle = this._runBoundedSubprocess(this._coerceSpawnArgs(args), {}, {
-        timeoutMs: X11_COMMAND_TIMEOUT_MS,
+        timeoutMs: Math.max(1, Math.min(
+          MAX_KEYBOARD_COMMAND_TIMEOUT_MS,
+          Number(timeoutMs || X11_COMMAND_TIMEOUT_MS)
+        )),
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
         resourceGroup: "keyboard",
@@ -15402,7 +15415,7 @@ MyApplet.prototype = {
     }
   },
 
-  _spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard) {
+  _spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard, processTimeoutMs) {
     let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
     let failAsync = (error, message) => this._completeKeyboardInsertFailure(
       completionCallback,
@@ -15505,7 +15518,7 @@ MyApplet.prototype = {
                   return false;
                 }
                 try {
-                  this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, expected, clipboardDeadlineMs, completionCallback, isCurrentOperation);
+                  this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, expected, clipboardDeadlineMs, completionCallback, isCurrentOperation, processTimeoutMs);
                 } catch (error) {
                   failAsync(error);
                 }
@@ -15519,7 +15532,7 @@ MyApplet.prototype = {
               return;
             }
             try {
-              this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, null, null, completionCallback, isCurrentOperation);
+              this._spawnKeyboardArgs(args, followUpArgs, expectedTargetWindow, null, null, completionCallback, isCurrentOperation, processTimeoutMs);
             } catch (error) {
               failAsync(error);
             }
@@ -15611,7 +15624,7 @@ MyApplet.prototype = {
                       } catch (error) {
                         this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
                       }
-                    });
+                    }, processTimeoutMs);
                   } catch (error) {
                     this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
                   }
@@ -15626,7 +15639,7 @@ MyApplet.prototype = {
           } catch (error) {
             this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
           }
-        });
+        }, processTimeoutMs);
       } catch (error) {
         this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
       }
