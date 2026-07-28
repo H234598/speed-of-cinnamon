@@ -6318,6 +6318,7 @@ MyApplet.prototype = {
   _hasLocalProcessingWorkflow: function(includePendingCleanup) {
     let includePendingCleanupState = includePendingCleanup !== false;
     return Boolean(
+      this.terminalWorkflowRunning ||
       this.terminalWorkflowToken ||
       this.textInsertToken ||
       this.maintenanceCleanupFailed ||
@@ -6493,7 +6494,12 @@ MyApplet.prototype = {
       }
     }
     if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {
-      this.terminalWorkflowToken = null;
+      this._setStatusPreservingRecording(
+        this.status,
+        _("Finish the terminal workflow before starting dictation"),
+        this.lastTranscript
+      );
+      return false;
     }
     let hasExistingRecordingWork = this._hasActiveRecordingState();
     if (this.isCommandRunning && this._recordingCommandToken) {
@@ -12341,7 +12347,7 @@ MyApplet.prototype = {
             typeof callback === "function" && !callbackDelivered) {
           callbackDelivered = true;
           try {
-            callback("", "", { error: "Subprocess cleanup failed" });
+            callback("", "", { error: "Subprocess cleanup failed", cleanupFailed: true });
           } catch (error) {
             this._recordLifecycleError("process-callback", error);
           }
@@ -12353,7 +12359,9 @@ MyApplet.prototype = {
       if (!cleanupSucceeded) {
         this._scheduleProcessCleanupRetry();
       }
-      let callbackResult = cleanupSucceeded ? (result || {}) : { error: "Subprocess cleanup failed" };
+      let callbackResult = cleanupSucceeded
+        ? (result || {})
+        : { error: "Subprocess cleanup failed", cleanupFailed: true };
       if (suppressCallback || this.appletRemoved || this.spawnGeneration !== generation || typeof callback !== "function") {
         return cleanupSucceeded;
       }
@@ -12366,7 +12374,10 @@ MyApplet.prototype = {
             stdoutText = _decodeSubprocessOutputChunks(stdoutParts);
             stderrText = _decodeSubprocessOutputChunks(stderrParts);
           } catch (error) {
-            callbackResult = { error: "Subprocess output is not valid UTF-8" };
+            callbackResult = {
+              error: "Subprocess output is not valid UTF-8",
+              cleanupFailed: !cleanupSucceeded,
+            };
           }
           callback(stdoutText, stderrText, callbackResult);
         } catch (error) {
@@ -12622,6 +12633,10 @@ MyApplet.prototype = {
         : null;
       return this._runWithBackendEnvironment(this._shouldExposeOpenAiCompatibleApiKeyToBackend(normalizedArgs), (backendEnv) => {
         return this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv || {}, (stdout, result) => {
+          if (result && result.cleanupFailed) {
+            callbackFn({ status: "error", error: "Backend command cleanup failed", transport_error: true });
+            return;
+          }
           let output = String(stdout || "");
           let parsedPayload = null;
           if (output.trim() !== "") {

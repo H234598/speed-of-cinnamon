@@ -4312,8 +4312,8 @@ class AppletStaticTest(unittest.TestCase):
             "this.ollamaInstallWatchToken",
         ]:
             self.assertIn(token, helper_block)
+        self.assertIn("this.terminalWorkflowRunning ||", helper_block)
         self.assertIn("this.terminalWorkflowToken", helper_block)
-        self.assertNotIn("this.terminalWorkflowRunning ||", helper_block)
         self.assertIn("if (this.isCommandRunning || localStatusOwner) {", block)
         busy_guard = block.index("if (this.isCommandRunning || localStatusOwner) {")
         self.assertIn('return this.status === "recording" || this.status === "processing";', block[busy_guard:])
@@ -4330,17 +4330,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('entry.propertyName === "pasteTimer"', block)
         self.assertNotIn("this._orphanedTimers.length > 0", block)
 
-    def test_invalidated_terminal_workflow_does_not_own_status_polling(self) -> None:
+    def test_terminal_workflow_owns_status_until_completion(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         helper_start = source.index("_hasLocalProcessingWorkflow: function(includePendingCleanup)")
         helper_end = source.index("\n  _setActiveLanguage:", helper_start)
         helper_block = source[helper_start:helper_end]
+        self.assertIn("this.terminalWorkflowRunning ||", helper_block)
         self.assertIn("this.terminalWorkflowToken", helper_block)
-        self.assertNotIn("this.terminalWorkflowRunning ||", helper_block)
         toggle_start = source.index("_toggleRecording: function()")
         toggle_end = source.index("\n  _restartApplet:", toggle_start)
         toggle_block = source[toggle_start:toggle_end]
-        self.assertIn("this.terminalWorkflowToken = null;", toggle_block)
+        terminal_guard = toggle_block.index("if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {")
+        recording_state = toggle_block.index("let hasExistingRecordingWork = this._hasActiveRecordingState();")
+        self.assertLess(terminal_guard, recording_state)
+        self.assertIn('Finish the terminal workflow before starting dictation', toggle_block[terminal_guard:recording_state])
+        self.assertIn("return false;", toggle_block[terminal_guard:recording_state])
+        self.assertNotIn("this.terminalWorkflowToken = null;", toggle_block)
         self.assertNotIn("this.terminalWorkflowRunning = false;", toggle_block)
 
     def test_cancel_does_not_start_backend_cancel_for_local_processing_workflow(self) -> None:
@@ -6112,7 +6117,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let setupFailed = false;", block)
         self.assertIn("let inputPending = hasInput;", block)
         self.assertIn("let timeoutSourceAlreadyRemoved = false;", block)
-        self.assertIn('callback("", "", { error: "Subprocess cleanup failed" });', block)
+        self.assertIn('callback("", "", { error: "Subprocess cleanup failed", cleanupFailed: true });', block)
         self.assertIn("!suppressCallback && !this.appletRemoved", block)
         self.assertIn("!ended.stdout || !ended.stderr || inputPending", block)
         self.assertIn("if (setupFailed || done) {\n      return null;", block)
@@ -6137,7 +6142,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("timeoutCleanupSucceeded && cancellableCleanupSucceeded && cancellableOrphanCleanupSucceeded &&", block)
         self.assertIn("processOrphanCleanupSucceeded", block)
         self.assertIn("let cleanupSucceeded = cleanupResources(timeoutCleanupSucceeded);", block)
-        self.assertIn('let callbackResult = cleanupSucceeded ? (result || {}) : { error: "Subprocess cleanup failed" };', block)
+        self.assertIn(': { error: "Subprocess cleanup failed", cleanupFailed: true };', block)
+        self.assertIn("cleanupFailed: !cleanupSucceeded,", block)
         self.assertIn("callback(stdoutText, stderrText, callbackResult);", block)
 
     def test_subprocess_output_reassembles_bytes_before_utf8_decode(self) -> None:
@@ -6151,7 +6157,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("stderrText = _decodeSubprocessOutputChunks(stderrParts);", block)
         self.assertIn("let chunk = new Uint8Array(data || []);", block)
         self.assertNotIn('ByteArray.toString(data || "")', block)
-        self.assertIn('callbackResult = { error: "Subprocess output is not valid UTF-8" };', block)
+        self.assertIn('error: "Subprocess output is not valid UTF-8",', block)
+        self.assertIn("cleanupFailed: !cleanupSucceeded,", block)
 
     def test_teardown_uses_safe_process_and_cancellable_unregistration(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6978,10 +6985,26 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_spawn_json_preserves_valid_backend_error_payload_on_nonzero_exit(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        bounded_start = source.index("_runBoundedSubprocess: function(args, env, options, callback)")
+        bridge_start = source.index("\n  _spawnJsonWithBackendEnvironment:", bounded_start)
+        bounded_block = source[bounded_start:bridge_start]
+        json_start = source.index("\n  _spawnJson: function(args, callback, options)", bridge_start)
+        bridge_block = source[bridge_start:json_start]
         start = source.index("_spawnJson: function(args, callback, options)")
         end = source.index("\n  _spawnText:", start)
         block = source[start:end]
 
+        self.assertIn("callback(stdoutText, stderrText, callbackResult);", bounded_block)
+        self.assertIn("let completeOnce = (stdout, result, stderr) =>", bridge_block)
+        self.assertIn(
+            '}, (stdout, stderr, result) => {\n'
+            '      completeOnce(String(stdout || ""), result || {}, String(stderr || ""));',
+            bridge_block,
+        )
+        self.assertIn(
+            "return this._spawnJsonWithBackendEnvironment(normalizedArgs, backendEnv || {}, (stdout, result) => {",
+            block,
+        )
         self.assertIn('let output = String(stdout || "");', block)
         self.assertIn("let parsedPayload = null;", block)
         self.assertIn('if (output.trim() !== "") {', block)
@@ -6990,6 +7013,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (result && result.error) {", block)
         self.assertIn("parsedPayload.transport_error !== true", block)
         self.assertIn("callbackFn(parsedPayload);", block)
+        self.assertIn("if (result && result.cleanupFailed) {", block)
+        self.assertIn('error: "Backend command cleanup failed"', block)
+        cleanup_start = block.index("if (result && result.cleanupFailed) {")
+        output_start = block.index('let output = String(stdout || "");')
+        cleanup_block = block[cleanup_start:output_start]
+        self.assertIn(
+            'callbackFn({ status: "error", error: "Backend command cleanup failed", transport_error: true });',
+            cleanup_block,
+        )
+        self.assertIn("return;", cleanup_block)
+        self.assertLess(cleanup_start, output_start)
         self.assertLess(block.index("let parsedPayload ="), block.index("if (result && result.error)"))
 
     def test_transcript_list_confirmation_is_serialized(self) -> None:
@@ -8564,16 +8598,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.ollamaModelFlowToken !== ollamaFlowToken", terminal_block)
         self.assertIn('resourceGroup: cancelOllamaFlow === true ? "ollama" : "terminal",', terminal_block)
 
-    def test_terminal_workflow_cannot_overwrite_new_recording_status(self) -> None:
+    def test_recording_toggle_cannot_invalidate_terminal_workflow(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         toggle_start = source.index("_toggleRecording: function()")
         toggle_end = source.index("\n  _restartApplet:", toggle_start)
         toggle_block = source[toggle_start:toggle_end]
+        terminal_guard = toggle_block.index("if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {")
         self.assertLess(
-            toggle_block.index("this.terminalWorkflowToken = null;"),
-            toggle_block.index("if (this.isCommandRunning)"),
+            terminal_guard,
+            toggle_block.index("let hasExistingRecordingWork = this._hasActiveRecordingState();"),
         )
+        self.assertNotIn("this.terminalWorkflowToken = null;", toggle_block)
 
         workflow_start = source.index("_runTerminalWorkflow: function(")
         workflow_end = source.index("\n  _terminalWorkflowScript:", workflow_start)
@@ -8582,6 +8618,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.terminalWorkflowToken = terminalWorkflowToken;", workflow_block)
         self.assertIn("if (this.terminalWorkflowToken !== terminalWorkflowToken)", workflow_block)
         self.assertIn("this.terminalWorkflowToken = null;", workflow_block)
+        self.assertIn(
+            "}\n        this.terminalWorkflowRunning = false;\n        this.terminalWorkflowToken = null;",
+            workflow_block,
+        )
+        self.assertIn('if (!handle) {\n        throw new Error("terminal process could not be started");', workflow_block)
+        catch_start = workflow_block.index("} catch (err) {")
+        catch_block = workflow_block[catch_start:]
+        self.assertIn(
+            "this.terminalWorkflowRunning = false;\n      this.terminalWorkflowToken = null;",
+            catch_block,
+        )
+        self.assertLess(
+            catch_block.index("this.terminalWorkflowRunning = false;"),
+            catch_block.index("this._safeLogError(err);"),
+        )
 
     def test_terminal_ollama_cleanup_failures_are_preserved(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
