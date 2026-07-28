@@ -1259,6 +1259,23 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let canReportHistoryStatus = () => !this.isCommandRunning &&", refresh_block)
         self.assertIn("if (canReportHistoryStatus())", refresh_block)
 
+        menu_start = source.index("this.historyItem = new PopupMenu.PopupSubMenuMenuItem")
+        menu_end = source.index("this.transcriptsMenuItem.menu.addMenuItem(this.historyItem);", menu_start)
+        menu_block = source[menu_start:menu_end]
+        self.assertIn("if (!open) {", menu_block)
+        self.assertIn("this.historyRefreshToken = null;", menu_block)
+        self.assertIn("this.historyRefreshQueued = false;", menu_block)
+        self.assertIn('this._terminateProcessesByGroup("history-refresh");', menu_block)
+        self.assertIn("return;", menu_block)
+        self.assertLess(
+            menu_block.index("this.historyRefreshToken = null;"),
+            menu_block.index('this._terminateProcessesByGroup("history-refresh");'),
+        )
+        self.assertLess(
+            menu_block.index('this._terminateProcessesByGroup("history-refresh");'),
+            menu_block.index("this._refreshHistory();"),
+        )
+
     def test_dynamic_refreshes_skip_hidden_menu_actor_rebuilds(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -2187,7 +2204,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let safeTranscriber = TRANSCRIBER_METHODS.indexOf(String(this.transcriber || "")) >= 0', source)
         self.assertIn('let safePostProcessBackend = POST_PROCESS_BACKENDS.indexOf(String(this.postProcessBackend || "")) >= 0', source)
         self.assertLess(block.index("let toggleArgs;"), block.index("this.isCommandRunning = true;"))
-        self.assertIn("this._spawnJson(toggleArgs,", block)
+        self.assertIn("let toggleHandle = this._spawnJson(toggleArgs,", block)
+        self.assertIn("if (!toggleHandle) {", block)
+        self.assertIn("return false;", block)
+        self.assertIn("return true;", block)
 
     def test_toggle_recording_uses_explicit_start_stop_action(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2206,6 +2226,27 @@ class AppletStaticTest(unittest.TestCase):
             block.index('let commandAction = forcedAction === "start" || forcedAction === "stop" ? forcedAction : (hasExistingRecordingWork ? "stop" : "start");'),
             block.index('toggleArgs = this._baseArgs(commandAction);')
         )
+        null_start = block.index("if (!toggleHandle) {")
+        null_end = block.index("\n    return true;", null_start)
+        null_block = block[null_start:null_end]
+        self.assertIn("this._recordingCommandToken === recordingCommandToken", null_block)
+        self.assertIn("this._recordingCommandToken = null;", null_block)
+        self.assertIn("this.isCommandRunning = false;", null_block)
+        self.assertIn('if (commandAction === "start")', null_block)
+        self.assertIn("this.recordingStartedAtMs = 0;", null_block)
+        self.assertIn("if (!hasExistingRecordingWork)", null_block)
+        self.assertIn("this.recordingArtifactsPresent = false;", null_block)
+        self.assertIn("this._updatePanel();", null_block)
+        self.assertLess(null_block.index("this.recordingArtifactsPresent = false;"), null_block.index("this._updatePanel();"))
+        self.assertLess(null_block.index("this._updatePanel();"), null_block.index("return false;"))
+        self.assertIn("return false;", null_block)
+
+        language_start = source.index("_startWithLanguage: function(language, preserveTargetOnFailure)")
+        language_end = source.index("\n  _populateLanguageMenu:", language_start)
+        language_block = source[language_start:language_end]
+        self.assertIn('let recordingStarted = this._toggleRecording("start") === true;', language_block)
+        self.assertNotIn("this._updatePanel();", language_block)
+        self.assertIn("return recordingStarted;", language_block)
 
     def test_toggle_recording_busy_stop_is_latched_before_cleanup(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2218,7 +2259,17 @@ class AppletStaticTest(unittest.TestCase):
         insert_cleanup = block.index("let textInsertCleanupSucceeded = this._cancelTextInsertForSettingsChange();")
         self.assertLess(busy_start, background_cleanup)
         self.assertLess(busy_start, insert_cleanup)
-        self.assertIn("return;", block)
+        busy_block = block[busy_start:background_cleanup]
+        self.assertIn("this._recordingCommandToken.action", busy_block)
+        self.assertIn('if (forcedAction === "start")', busy_block)
+        self.assertIn('if (activeRecordingCommandAction === "start")', busy_block)
+        self.assertLess(
+            busy_block.index('if (forcedAction === "start")'),
+            busy_block.index('if (activeRecordingCommandAction === "start")')
+        )
+        self.assertNotIn('this._toggleRecording("start")', busy_block)
+        self.assertIn("return false;", busy_block)
+        self.assertIn("return true;", busy_block)
 
     def test_recording_command_callbacks_ignore_stale_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2235,8 +2286,9 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             recording_blocks.append(source[start:end])
 
-        for block in recording_blocks:
-            self.assertIn("let recordingCommandToken = {};", block)
+        expected_actions = ["commandAction", '"cancel"', '"stop"', '"start"']
+        for block, action in zip(recording_blocks, expected_actions):
+            self.assertIn(f"let recordingCommandToken = {{ action: {action} }};", block)
             self.assertIn("this._recordingCommandToken = recordingCommandToken;", block)
             self.assertIn("this._recordingCommandToken !== recordingCommandToken", block)
             self.assertIn("!this._lifecycleAllowsWork()", block)
@@ -4277,6 +4329,10 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_maybeNotify: function(previousStatus, status, message)")
         end = source.index("\n  _notify:", start)
         block = source[start:end]
+        self.assertIn(
+            'let key = status === "recording" ? status : status + "\\n" + String(message || "");',
+            block,
+        )
         duplicate_index = block.index("if (key === this.lastNotificationKey) {")
         cleanup_index = block.index("this.notificationSessionActive = false;", duplicate_index)
         self.assertIn('status === "done" || status === "error"', block[duplicate_index:cleanup_index])
@@ -4520,12 +4576,19 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let timerWasReplaced = !(", block)
         self.assertIn("if (timerWasReplaced) {", block)
         self.assertIn("if (!keepTimer) {", block)
-        self.assertIn("let retireTimer = () => {", block)
-        self.assertIn("let registryUntracked = this._untrackTimer(key, sourceId, propertyName);", block)
+        self.assertIn("let retireTimer = (sourceRemovedOnFailure) => {", block)
+        self.assertIn("let registryUntracked = orphanUntracked &&", block)
         self.assertIn("let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);", block)
-        self.assertIn("this._trackOrphanedTimer(key, sourceId, propertyName, true)", block)
+        self.assertLess(block.index("let orphanUntracked ="), block.index("let registryUntracked ="))
+        self.assertIn("sourceRemovedOnFailure === true", block)
+        self.assertIn('let retryTimerMustRemainActive = key === "process-cleanup-retry";', block)
+        self.assertIn("let retired = retireTimer(!retryTimerMustRemainActive);", block)
+        self.assertIn("if (!retired && retryTimerMustRemainActive)", block)
+        retry_retirement_start = block.index("if (!retired && retryTimerMustRemainActive)")
+        retry_retirement_end = block.index("}", retry_retirement_start)
+        self.assertIn("return true;", block[retry_retirement_start:retry_retirement_end])
         self.assertIn('this._recordLifecycleError("timer-state", new Error("Expired timer cleanup could not be tracked"));', block)
-        self.assertIn("retireTimer();", block)
+        self.assertIn("retireTimer(true);", block)
         self.assertLess(block.index("let keepTimer"), block.index("if (!keepTimer)"))
         self.assertIn("let deleted = delete this._resourceRegistry.timers[key];", block)
         self.assertIn("Timer rollback registry entry could not be removed", block)
@@ -4778,7 +4841,10 @@ class AppletStaticTest(unittest.TestCase):
         poll_end = source.index("\n  _scheduleDisplayTick:", poll_start)
         poll_block = source[poll_start:poll_end]
         self.assertIn('let timerId = this._scheduleTrackedTimer("status"', poll_block)
-        self.assertIn("return this._refreshStatus(true) === true;", poll_block)
+        self.assertIn("let statusRefreshContinues = this._refreshStatus(true) === true;", poll_block)
+        self.assertIn("return statusRefreshContinues || (", poll_block)
+        self.assertIn("!this._statusCommandRunning &&", poll_block)
+        self.assertIn('(this.status === "recording" || this.status === "processing")', poll_block)
         self.assertIn("if (this.statusTimer)", poll_block)
         self.assertLess(poll_block.index("this.status !== \"recording\""), poll_block.index("if (this.statusTimer)"))
         self.assertIn("if (!timerId && (this.status === \"recording\" || this.status === \"processing\"))", poll_block)
@@ -4796,13 +4862,31 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_runGuarded("recording-display-update"', display_block)
         self.assertIn("let previousFingerprint = this._recordingDisplayFingerprint;", display_block)
         self.assertIn("previousFingerprint.panelLabel === panelLabel", display_block)
+        self.assertIn("let menuOpen = Boolean(this.menu && this.menu.isOpen === true);", display_block)
+        self.assertIn("previousFingerprint.menuOpen === menuOpen", display_block)
         self.assertNotIn("JSON.stringify({", display_block)
         self.assertIn("this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);", display_block)
+        menu_guard = display_block.index("if (menuOpen) {")
+        menu_write = display_block.index("this._setMenuItemLabelSafely(this.statusItem", menu_guard)
+        fingerprint_write = display_block.index("this._recordingDisplayFingerprint =", menu_write)
+        self.assertLess(display_block.index("this.set_applet_label(panelLabel);"), menu_guard)
+        self.assertLess(display_block.index("this.set_applet_tooltip(tooltipText);"), menu_guard)
+        self.assertLess(menu_guard, menu_write)
+        self.assertLess(menu_write, fingerprint_write)
+        self.assertIn("menuOpen: menuOpen,", display_block)
         self.assertIn("let menuRenderSucceeded = true;", display_block)
         self.assertIn("menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;", display_block)
         self.assertIn("panelActorReady && menuRenderSucceeded ? {", display_block)
         self.assertIn("return true;", display_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Recording display timer could not be scheduled")', display_block)
+
+        menu_start = source.index("_buildMenu: function()")
+        menu_end = source.index("this.toggleItem = new PopupMenu.PopupIconMenuItem", menu_start)
+        menu_block = source[menu_start:menu_end]
+        self.assertIn('this._connectSafe(this.menu, "open-state-changed"', menu_block)
+        self.assertIn('if (open && this.status === "recording")', menu_block)
+        self.assertIn("this._recordingDisplayFingerprint = null;", menu_block)
+        self.assertIn("this._updateRecordingDisplay();", menu_block)
 
         setup_start = source.index("_scheduleSetupCheck: function()")
         setup_end = source.index("\n  _scheduleAlarmCheck:", setup_start)
@@ -5962,6 +6046,11 @@ class AppletStaticTest(unittest.TestCase):
         group_block = source[group_start:group_end]
         self.assertIn("typeof entry.cancel === \"function\"", group_block)
         self.assertIn("entry.cancel(Boolean(notifyCallback));", group_block)
+        cancel_failure_start = group_block.index("if (result === false) {")
+        cancel_failure_end = group_block.index("} else if (!this._terminateProcess(entry.process))", cancel_failure_start)
+        cancel_failure_block = group_block[cancel_failure_start:cancel_failure_end]
+        self.assertIn("allSucceeded = false;", cancel_failure_block)
+        self.assertLess(cancel_failure_block.index("allSucceeded = false;"), cancel_failure_block.index("this._processGroupState(processGroupIdentity)"))
         self.assertIn('this._recordLifecycleError("process-cancel", error);', group_block)
         self.assertIn("let cleanupSucceeded = false;", group_block)
         self.assertIn("if (selected && cleanupSucceeded) {", group_block)
@@ -6219,10 +6308,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this._hasActiveRecordingState() || this.isCommandRunning || this._recordingCommandToken)", language_block)
         self.assertLess(language_block.index("this._hasActiveRecordingState()"), language_block.index("this._rememberFocusedWindow"))
         self.assertIn("if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure)))", language_block)
-        self.assertIn("this._toggleRecording(\"start\");", language_block)
+        self.assertIn('let recordingStarted = this._toggleRecording("start") === true;', language_block)
         self.assertNotIn("this._toggleRecording();", language_block)
-        self.assertLess(language_block.index("this._toggleRecording(\"start\");"), language_block.index("this._updatePanel();"))
-        self.assertIn("return true;", language_block)
+        self.assertNotIn("this._updatePanel();", language_block)
+        self.assertIn("return recordingStarted;", language_block)
 
     def test_target_window_generation_invalidates_stale_insert_resources(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6233,6 +6322,36 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('for (let group of ["keyboard", "x11", "clipboard"])', remember_block)
         self.assertIn('this._terminateProcessesByGroup(group, true) === false', remember_block)
         self.assertIn('if (!preserveOnFailure) {\n      this._clearTargetWindowXid();\n    }', remember_block)
+        self.assertIn(
+            "if (!(preserveOnFailure && this._hasRememberedTargetWindow())) {\n"
+            "        this._clearTargetWindowXid();\n"
+            "      }",
+            remember_block,
+        )
+        self.assertIn("this.targetWindowXPendingGeneration = targetGeneration;", remember_block)
+        self.assertIn("targetGeneration !== Number(this.targetWindowXPendingGeneration || 0)", remember_block)
+        self.assertIn("this.targetWindowXPendingGeneration = 0;", remember_block)
+        self.assertLess(
+            remember_block.index("this.targetWindowXPendingGeneration = targetGeneration;"),
+            remember_block.index("this._rememberActiveXWindow("),
+        )
+
+        pending_start = source.index("_isTargetWindowXLookupPending: function()")
+        pending_end = source.index("\n  _rememberFocusedWindow:", pending_start)
+        pending_block = source[pending_start:pending_end]
+        self.assertIn("pendingGeneration > 0 &&", pending_block)
+        self.assertIn("pendingGeneration === Number(this.targetWindowGeneration || 0)", pending_block)
+
+        x11_start = source.index("_rememberActiveXWindow: function(completionCallback, expectedGeneration)")
+        x11_end = source.index("\n  _activateTargetXWindow:", x11_start)
+        x11_block = source[x11_start:x11_end]
+        self.assertIn("targetGeneration === Number(this.targetWindowXPendingGeneration || 0)", x11_block)
+        self.assertNotIn("this._clearTargetWindowXid();", x11_block)
+
+        auto_paste_start = source.index("_windowTitleMatchesAutoPaste: function()")
+        auto_paste_end = source.index("\n  _updateOpenAiFlexProcessingItem:", auto_paste_start)
+        auto_paste_block = source[auto_paste_start:auto_paste_end]
+        self.assertIn("!targetWindowUsable && this._isTargetWindowXLookupPending()", auto_paste_block)
 
         snapshot_start = source.index("_targetXWindowSnapshot: function()")
         snapshot_end = source.index("\n  _targetXWindowMatchesSnapshot:", snapshot_start)
@@ -6265,8 +6384,20 @@ class AppletStaticTest(unittest.TestCase):
         activate_start = source.index("_activateTargetXWindow: function(completionCallback)")
         activate_end = source.index("\n  _targetXWindowSnapshot:", activate_start)
         activate_block = source[activate_start:activate_end]
+        self.assertIn("if (this._isTargetWindowXLookupPending())", activate_block)
         self.assertIn("let targetGeneration = Number(this.targetWindowGeneration || 0);", activate_block)
         self.assertIn("targetGeneration === Number(this.targetWindowGeneration || 0) && output !== null", activate_block)
+        self.assertIn("let xid = this._isTargetWindowXLookupPending()", snapshot_block)
+
+        identity_start = source.index("_windowIdentityMatchesAutoPaste: function(marker)")
+        identity_end = source.index("\n  _windowIdentityValueMatchesMarker:", identity_start)
+        identity_block = source[identity_start:identity_end]
+        self.assertIn("let xTargetAvailable = !this._isTargetWindowXLookupPending();", identity_block)
+
+        terminal_start = source.index("_isTerminalTargetWindow: function()")
+        terminal_end = source.index("\n  _clipboardProgramSpecs:", terminal_start)
+        terminal_block = source[terminal_start:terminal_end]
+        self.assertIn("let xTargetAvailable = !this._isTargetWindowXLookupPending();", terminal_block)
 
         insert_start = source.index("_insertTranscriptText: function(transcript, completionCallback, protectedInsertFingerprint)")
         insert_end = source.index("\n  _restartRelistenRecording:", insert_start)
@@ -7013,7 +7144,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let classValue = String(windowClass || \"\").toLowerCase();", source)
         self.assertIn("let identityValues = [", source)
         self.assertIn("TERMINAL_WINDOW_MARKERS.length", source)
-        self.assertIn('if (!this._isUsableTargetWindow(this.targetWindow) && !this.targetWindowXTitle && !this.targetWindowXClass) {', source)
+        self.assertIn(
+            "if (!targetWindowUsable && (!xTargetAvailable || (!this.targetWindowXClass && !this.targetWindowXTitle))) {",
+            source,
+        )
         self.assertIn('let title = this._normalizedAutoPasteWindowTitle(this._windowProbeValue(this.targetWindow, "get_title") || this.targetWindowXTitle || "");', source)
         self.assertIn('"speed of cinnamon"', source)
         self.assertIn('"speed-of-cinnamon"', source)
@@ -7173,6 +7307,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let relistenFailedWithError = false;", source[finish_pending_index:finish_pending_end])
         self.assertIn('relistenFailedWithError = !relistenStarted && this.status === "error";', source[finish_pending_index:finish_pending_end])
         self.assertIn("if (relistenFailedWithError) {", source[finish_pending_index:finish_pending_end])
+        finish_pending_block = source[finish_pending_index:finish_pending_end]
+        no_pending_branch = finish_pending_block.rindex("    } else {")
+        self.assertNotIn("this.autoRelistenManualStopRequested = false;", finish_pending_block[no_pending_branch:])
 
     def test_manual_toggle_suppresses_next_auto_relisten_restart(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -7186,8 +7323,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let manualRelistenStopRequested = Boolean(", source[toggle_index:toggle_end])
         self.assertIn('this.status === "recording" || this.status === "recorded" || this.autoRelistenPending', source[toggle_index:toggle_end])
         self.assertIn("if (this.isCommandRunning && this._recordingCommandToken)", source[toggle_index:toggle_end])
+        self.assertIn('activeRecordingCommandAction === "stop" &&', source[toggle_index:toggle_end])
+        self.assertIn("this.autoRelistenPending &&", source[toggle_index:toggle_end])
+        self.assertIn("Boolean(this.autoTranscribeRecordingKey)", source[toggle_index:toggle_end])
         self.assertNotIn("if (this.autoRelisten && this.notificationSessionActive) {", source[toggle_index:toggle_end])
         self.assertIn("this.autoRelistenManualStopRequested = manualRelistenStopRequested;", source[toggle_index:toggle_end])
+        self.assertIn('if (commandAction === "start") {\n      this.lastNotificationKey = "";', source[toggle_index:toggle_end])
+        self.assertNotIn('this.notificationSessionActive = true;\n    this.lastNotificationKey = "";', source[toggle_index:toggle_end])
         self.assertIn('this.autoRelisten ? _("Stopping Auto Relisten...") : _("Stopping recording...")', source[toggle_index:toggle_end])
         self.assertIn("if (this.isCommandRunning) {", source[cancel_index:cancel_end])
         self.assertIn("this.cancelPendingWhileCommandRunning = true;", source[cancel_index:cancel_end])
@@ -7429,6 +7571,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!startHandle) {\n      if (this._recordingCommandToken === recordingCommandToken) {", restart_block)
         self.assertIn("this.isCommandRunning = false;", restart_block)
         self.assertIn('this._setStatus("error", _("Could not start next recording")', restart_block)
+        self.assertIn('this.lastNotificationKey = "";', restart_block)
+        self.assertLess(restart_block.index("if (!startHandle) {"), restart_block.index('this.lastNotificationKey = "";'))
         apply_index = restart_block.index("this._applyPayloadSafely(payload);")
         self.assertNotIn("this.autoRelistenManualStopRequested = false;", restart_block[:apply_index])
 
@@ -7442,7 +7586,9 @@ class AppletStaticTest(unittest.TestCase):
         start_args = block.index('startArgs = this._baseArgs("start", relistenLanguage);')
         self.assertIn("if (this._recordingCommandToken) {\n      return false;", block)
         self.assertIn("if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {\n      this.terminalWorkflowToken = null;", block)
-        self.assertIn("if (!backgroundCleanupSucceeded) {\n      return false;", block)
+        cleanup_failure = block[block.index("if (!backgroundCleanupSucceeded) {"):remaining_work]
+        self.assertIn('this._setStatus("error", _("Could not start next recording"), this.lastTranscript);', cleanup_failure)
+        self.assertLess(cleanup_failure.index('this._setStatus("error"'), cleanup_failure.index("return false;"))
         self.assertLess(cleanup, remaining_work)
         self.assertLess(remaining_work, start_args)
         self.assertNotIn("if (!this.notificationSessionActive || this.isCommandRunning)", block)
@@ -7762,7 +7908,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('hasXdotool = this._findTrustedProgramInPath("xdotool");', source)
         self.assertIn('let hasWtype;', source)
         self.assertIn('hasWtype = this._findTrustedProgramInPath("wtype");', source)
-        self.assertIn('if (!this._isUsableTargetWindow(this.targetWindow) && !this.targetWindowXClass && !this.targetWindowXTitle) {', source)
+        self.assertIn(
+            "if (!targetWindowUsable && (!xTargetAvailable || (!this.targetWindowXClass && !this.targetWindowXTitle))) {",
+            source,
+        )
         self.assertIn('String(this.targetWindowXClass || "").toLowerCase()', source)
         self.assertIn('String(this.targetWindowXTitle || "").toLowerCase()', source)
         self.assertIn('if (hasXdotool) {', source)

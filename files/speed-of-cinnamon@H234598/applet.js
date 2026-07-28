@@ -508,6 +508,7 @@ MyApplet.prototype = {
     this.appletRemoved = false;
     this.spawnGeneration = 0;
     this.targetWindowGeneration = 0;
+    this.targetWindowXPendingGeneration = 0;
     this.terminalWorkflowToken = null;
     this.doctorCommandToken = null;
     this.settingsWindowToken = null;
@@ -3298,6 +3299,7 @@ MyApplet.prototype = {
           if (typeof entry.cancel === "function") {
             let result = entry.cancel(Boolean(notifyCallback));
             if (result === false) {
+              allSucceeded = false;
               let processGroupIdentity = entry.processGroupIdentity ||
                 this._findTrackedProcessGroupIdentity(entry.process);
               if (!processGroupIdentity || this._processGroupState(processGroupIdentity) !== "stopped") {
@@ -3726,20 +3728,26 @@ MyApplet.prototype = {
       this._recordLifecycleError("timer-schedule", error);
       return 0;
     }
-    let retireTimer = () => {
-      let registryUntracked = this._untrackTimer(key, sourceId, propertyName);
+    let retireTimer = (sourceRemovedOnFailure) => {
       let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);
+      let registryUntracked = orphanUntracked &&
+        this._untrackTimer(key, sourceId, propertyName);
       if (registryUntracked && orphanUntracked) {
         return true;
       }
-      if (!this._trackOrphanedTimer(key, sourceId, propertyName, true)) {
+      if (!this._trackOrphanedTimer(
+        key,
+        sourceId,
+        propertyName,
+        sourceRemovedOnFailure === true
+      )) {
         this._recordLifecycleError("timer-state", new Error("Expired timer cleanup could not be tracked"));
       }
       return false;
     };
     let timerCallback = () => {
       if (this.appletRemoved || this.spawnGeneration !== generation) {
-        retireTimer();
+        retireTimer(true);
         return false;
       }
       let registryOwnsTimer = Boolean(
@@ -3749,7 +3757,7 @@ MyApplet.prototype = {
       let propertyOwnsTimer = Boolean(propertyName && this[propertyName] === sourceId);
       let timerIsCurrent = registryOwnsTimer && (!propertyName || propertyOwnsTimer);
       if (!timerIsCurrent) {
-        retireTimer();
+        retireTimer(true);
         return false;
       }
       let previousActiveTimer = this._activeTrackedTimer;
@@ -3777,7 +3785,11 @@ MyApplet.prototype = {
         return false;
       }
       if (!keepTimer) {
-        retireTimer();
+        let retryTimerMustRemainActive = key === "process-cleanup-retry";
+        let retired = retireTimer(!retryTimerMustRemainActive);
+        if (!retired && retryTimerMustRemainActive) {
+          return true;
+        }
       }
       return keepTimer;
     };
@@ -4057,6 +4069,10 @@ MyApplet.prototype = {
           actor.change_style_pseudo_class("checked", open);
         }
       }
+      if (open && this.status === "recording") {
+        this._recordingDisplayFingerprint = null;
+        this._updateRecordingDisplay();
+      }
     }, "menu-open-state");
     this._connectSafe(this, "orientation-changed", (applet, orientation) => {
       if (this.menu && this.menu.setOrientation) {
@@ -4166,9 +4182,13 @@ MyApplet.prototype = {
 
     this.historyItem = new PopupMenu.PopupSubMenuMenuItem(_("Recent transcripts"));
     this._connectSafe(this.historyItem.menu, "open-state-changed", (menu, open) => {
-      if (open) {
-        this._refreshHistory();
+      if (!open) {
+        this.historyRefreshToken = null;
+        this.historyRefreshQueued = false;
+        this._terminateProcessesByGroup("history-refresh");
+        return;
       }
+      this._refreshHistory();
     });
     this.transcriptsMenuItem.menu.addMenuItem(this.historyItem);
     this._populateHistoryMenu([]);
@@ -6108,7 +6128,11 @@ MyApplet.prototype = {
     if (markers.length === 0) {
       return false;
     }
-    if (!this._isUsableTargetWindow(this.targetWindow) && !this.targetWindowXTitle && !this.targetWindowXClass) {
+    let targetWindowUsable = this._isUsableTargetWindow(this.targetWindow);
+    if (!targetWindowUsable && this._isTargetWindowXLookupPending()) {
+      return false;
+    }
+    if (!targetWindowUsable && !this.targetWindowXTitle && !this.targetWindowXClass) {
       return false;
     }
     let title = this._normalizedAutoPasteWindowTitle(this._windowProbeValue(this.targetWindow, "get_title") || this.targetWindowXTitle || "");
@@ -6346,9 +6370,8 @@ MyApplet.prototype = {
     }
     this.activeLanguage = this._normalizeLanguage(language, this._primaryLanguage());
     this.activeLanguageExplicit = true;
-    this._toggleRecording("start");
-    this._updatePanel();
-    return true;
+    let recordingStarted = this._toggleRecording("start") === true;
+    return recordingStarted;
   },
 
   _populateLanguageMenu: function() {
@@ -6451,7 +6474,7 @@ MyApplet.prototype = {
     if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken || this.ollamaModelInstallRunning || this.ollamaModelCleanupFailed) {
       if (!this._cancelOllamaFlowForRecording()) {
         this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
-        return;
+        return false;
       }
     }
     if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {
@@ -6459,31 +6482,49 @@ MyApplet.prototype = {
     }
     let hasExistingRecordingWork = this._hasActiveRecordingState();
     if (this.isCommandRunning && this._recordingCommandToken) {
-      this.stopPendingWhileCommandRunning = true;
-      this.autoRelistenManualStopRequested = true;
-      this.autoRelistenPending = false;
-      this.autoRelistenPendingToken = "";
-      this.autoRelistenPendingLanguage = "";
-      this._setStatus(
-        "processing",
-        this.autoRelisten ? _("Stopping Auto Relisten...") : _("Stopping recording..."),
-        this.lastTranscript
-      );
-      return;
+      let activeRecordingCommandAction = String(this._recordingCommandToken.action || "");
+      if (forcedAction === "start") {
+        return false;
+      }
+      if (activeRecordingCommandAction === "start") {
+        this.stopPendingWhileCommandRunning = true;
+        this.autoRelistenManualStopRequested = true;
+        this.autoRelistenPending = false;
+        this.autoRelistenPendingToken = "";
+        this.autoRelistenPendingLanguage = "";
+        this._setStatus(
+          "processing",
+          this.autoRelisten ? _("Stopping Auto Relisten...") : _("Stopping recording..."),
+          this.lastTranscript
+        );
+      }
+      if (
+        activeRecordingCommandAction === "stop" &&
+        forcedAction !== "start" &&
+        this.status === "processing" &&
+        this.autoRelistenPending &&
+        Boolean(this.autoTranscribeRecordingKey)
+      ) {
+        this.autoRelistenManualStopRequested = true;
+        this.autoRelistenPending = false;
+        this.autoRelistenPendingToken = "";
+        this.autoRelistenPendingLanguage = "";
+      }
+      return true;
     }
     let backgroundCleanupSucceeded = this._invalidateBackgroundCallbacksForRecording();
     if (!backgroundCleanupSucceeded && !hasExistingRecordingWork) {
-      return;
+      return false;
     }
     let textInsertCleanupSucceeded = this._cancelTextInsertForSettingsChange();
     if (!textInsertCleanupSucceeded && !hasExistingRecordingWork) {
-      return;
+      return false;
     }
     if (this.isCommandRunning) {
-      return;
+      return false;
     }
     if (!hasExistingRecordingWork && !this._ensureVoiceModelCompatibleWithCurrentLanguage(true)) {
-      return;
+      return false;
     }
     let commandAction = forcedAction === "start" || forcedAction === "stop" ? forcedAction : (hasExistingRecordingWork ? "stop" : "start");
     let toggleArgs;
@@ -6492,7 +6533,7 @@ MyApplet.prototype = {
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatusPreservingRecording("error", _("Could not prepare recording command: ") + safeError, this.lastTranscript);
-      return;
+      return false;
     }
     let manualRelistenStopRequested = Boolean(
       this.autoRelisten &&
@@ -6500,7 +6541,9 @@ MyApplet.prototype = {
       (this.status === "recording" || this.status === "recorded" || this.autoRelistenPending)
     );
     this.notificationSessionActive = true;
-    this.lastNotificationKey = "";
+    if (commandAction === "start") {
+      this.lastNotificationKey = "";
+    }
     this.autoTranscribeRecordingKey = "";
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
@@ -6512,7 +6555,7 @@ MyApplet.prototype = {
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.cancelPendingWhileCommandRunning = false;
     this.stopPendingWhileCommandRunning = false;
-    let recordingCommandToken = {};
+    let recordingCommandToken = { action: commandAction };
     this._recordingCommandToken = recordingCommandToken;
     this.isCommandRunning = true;
     if (commandAction === "stop") {
@@ -6520,7 +6563,7 @@ MyApplet.prototype = {
     } else {
       this._setStatus("recording", _("Recording..."), "");
     }
-    this._spawnJson(toggleArgs, (payload) => {
+    let toggleHandle = this._spawnJson(toggleArgs, (payload) => {
       if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -6544,6 +6587,21 @@ MyApplet.prototype = {
         true
       );
     });
+    if (!toggleHandle) {
+      if (this._recordingCommandToken === recordingCommandToken) {
+        this._recordingCommandToken = null;
+        this.isCommandRunning = false;
+      }
+      if (commandAction === "start") {
+        this.recordingStartedAtMs = 0;
+        if (!hasExistingRecordingWork) {
+          this.recordingArtifactsPresent = false;
+        }
+      }
+      this._updatePanel();
+      return false;
+    }
+    return true;
   },
 
   _restartApplet: function() {
@@ -6701,7 +6759,7 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Could not prepare cancellation command: ") + safeError, this.lastTranscript);
       return;
     }
-    let recordingCommandToken = {};
+    let recordingCommandToken = { action: "cancel" };
     this._recordingCommandToken = recordingCommandToken;
     this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
@@ -10792,7 +10850,7 @@ MyApplet.prototype = {
   },
 
   _refreshHistory: function() {
-    if (!this._canMutateMenu(this.historyItem)) {
+    if (!this._canMutateMenu(this.historyItem) || this.historyItem.menu.isOpen !== true) {
       return;
     }
     let canReportHistoryStatus = () => !this.isCommandRunning &&
@@ -12925,7 +12983,7 @@ MyApplet.prototype = {
     }
     this.autoRelistenPending = Boolean(relistenToken);
     this.autoRelistenPendingToken = relistenToken;
-    let recordingCommandToken = {};
+    let recordingCommandToken = { action: "stop" };
     this._recordingCommandToken = recordingCommandToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Transcribing timed-out recording..."), this.lastTranscript);
@@ -13128,7 +13186,11 @@ MyApplet.prototype = {
       return;
     }
     let timerId = this._scheduleTrackedTimer("status", 2, () => {
-      return this._refreshStatus(true) === true;
+      let statusRefreshContinues = this._refreshStatus(true) === true;
+      return statusRefreshContinues || (
+        !this._statusCommandRunning &&
+        (this.status === "recording" || this.status === "processing")
+      );
     }, true, "statusTimer");
     if (!timerId && (this.status === "recording" || this.status === "processing")) {
       this._setStatusPreservingRecording("error", _("Status polling timer could not be scheduled"), this.lastTranscript);
@@ -13185,6 +13247,7 @@ MyApplet.prototype = {
         typeof this.set_applet_label === "function" &&
         typeof this.set_applet_tooltip === "function"
       );
+      let menuOpen = Boolean(this.menu && this.menu.isOpen === true);
       let previousFingerprint = this._recordingDisplayFingerprint;
       if (
         previousFingerprint &&
@@ -13193,6 +13256,7 @@ MyApplet.prototype = {
         previousFingerprint.statusText === statusText &&
         previousFingerprint.microphoneText === microphoneText &&
         previousFingerprint.toggleText === toggleText &&
+        previousFingerprint.menuOpen === menuOpen &&
         previousFingerprint.panelActorReady === panelActorReady
       ) {
         return true;
@@ -13202,18 +13266,21 @@ MyApplet.prototype = {
         this.set_applet_tooltip(tooltipText);
       }
       let menuRenderSucceeded = true;
-      let labelWriteSucceeded = this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
-      labelWriteSucceeded = this._setMenuItemLabelSafely(this.toggleItem, toggleText);
-      menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      if (menuOpen) {
+        let labelWriteSucceeded = this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+        labelWriteSucceeded = this._setMenuItemLabelSafely(this.toggleItem, toggleText);
+        menuRenderSucceeded = labelWriteSucceeded && menuRenderSucceeded;
+      }
       this._recordingDisplayFingerprint = panelActorReady && menuRenderSucceeded ? {
         panelLabel: panelLabel,
         tooltipText: tooltipText,
         statusText: statusText,
         microphoneText: microphoneText,
         toggleText: toggleText,
+        menuOpen: menuOpen,
         panelActorReady: panelActorReady,
       } : null;
       return true;
@@ -13241,9 +13308,16 @@ MyApplet.prototype = {
     return this._isUsableTargetWindow(this.targetWindow) || /^[0-9]+$/.test(String(this.targetWindowXid || "").trim());
   },
 
+  _isTargetWindowXLookupPending: function() {
+    let pendingGeneration = Number(this.targetWindowXPendingGeneration || 0);
+    return pendingGeneration > 0 &&
+      pendingGeneration === Number(this.targetWindowGeneration || 0);
+  },
+
   _rememberFocusedWindow: function(preserveOnFailure) {
     this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
     let targetGeneration = this.targetWindowGeneration;
+    this.targetWindowXPendingGeneration = 0;
     let processCleanupSucceeded = true;
     for (let group of ["keyboard", "x11", "clipboard"]) {
       if (this._terminateProcessesByGroup(group, true) === false) {
@@ -13275,10 +13349,15 @@ MyApplet.prototype = {
     if (!preserveOnFailure) {
       this._clearTargetWindowXid();
     }
+    this.targetWindowXPendingGeneration = targetGeneration;
     this._rememberActiveXWindow((remembered) => {
-      if (targetGeneration !== this.targetWindowGeneration) {
+      if (
+        targetGeneration !== this.targetWindowGeneration ||
+        targetGeneration !== Number(this.targetWindowXPendingGeneration || 0)
+      ) {
         return;
       }
+      this.targetWindowXPendingGeneration = 0;
       if (remembered) {
         return;
       }
@@ -13418,7 +13497,10 @@ MyApplet.prototype = {
     let targetGeneration = expectedGeneration === undefined
       ? Number(this.targetWindowGeneration || 0)
       : Number(expectedGeneration);
-    let isCurrent = () => targetGeneration === Number(this.targetWindowGeneration || 0) && this._lifecycleAllowsWork();
+    let isCurrent = () =>
+      targetGeneration === Number(this.targetWindowGeneration || 0) &&
+      targetGeneration === Number(this.targetWindowXPendingGeneration || 0) &&
+      this._lifecycleAllowsWork();
     let deadlineMs = Date.now() + X11_COMMAND_TIMEOUT_MS;
     this._xdotoolOutput(["getactivewindow"], MAX_XDOTOOL_TARGET_OUTPUT_BYTES, (activeOutput) => {
       if (!isCurrent()) {
@@ -13427,7 +13509,6 @@ MyApplet.prototype = {
       }
       let xid = String(activeOutput || "").trim();
       if (!/^[0-9]+$/.test(xid)) {
-        this._clearTargetWindowXid();
         complete(false);
         return;
       }
@@ -13447,7 +13528,6 @@ MyApplet.prototype = {
           windowClass = String(classOutput || "").trim();
           if (this._xWindowLooksLikeSpeedOfCinnamon(title, windowClass)) {
             this._notifySelfProtectionBlocked(title, windowClass);
-            this._clearTargetWindowXid();
             complete(false);
             return;
           }
@@ -13463,6 +13543,10 @@ MyApplet.prototype = {
 
   _activateTargetXWindow: function(completionCallback) {
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    if (this._isTargetWindowXLookupPending()) {
+      complete(false);
+      return false;
+    }
     let xid = String(this.targetWindowXid || "").trim();
     let targetGeneration = Number(this.targetWindowGeneration || 0);
     if (!/^[0-9]+$/.test(xid)) {
@@ -13475,7 +13559,9 @@ MyApplet.prototype = {
   },
 
   _targetXWindowSnapshot: function() {
-    let xid = String(this.targetWindowXid || "").trim();
+    let xid = this._isTargetWindowXLookupPending()
+      ? ""
+      : String(this.targetWindowXid || "").trim();
     if (!/^[0-9]+$/.test(xid)) {
       if (this._isUsableTargetWindow(this.targetWindow)) {
         return {
@@ -13675,12 +13761,13 @@ MyApplet.prototype = {
     if (!allowed) {
       return false;
     }
+    let xTargetAvailable = !this._isTargetWindowXLookupPending();
     let values = [
       this._windowProbeValue(this.targetWindow, "get_wm_class"),
       this._windowProbeValue(this.targetWindow, "get_wm_class_instance"),
       this._windowProbeValue(this.targetWindow, "get_gtk_application_id"),
-      String(this.targetWindowXClass || "").toLowerCase(),
-      String(this.targetWindowXTitle || "").toLowerCase()
+      xTargetAvailable ? String(this.targetWindowXClass || "").toLowerCase() : "",
+      xTargetAvailable ? String(this.targetWindowXTitle || "").toLowerCase() : ""
     ];
     for (let i = 0; i < values.length; i++) {
       let value = values[i];
@@ -13731,15 +13818,17 @@ MyApplet.prototype = {
   },
 
   _isTerminalTargetWindow: function() {
-    if (!this._isUsableTargetWindow(this.targetWindow) && !this.targetWindowXClass && !this.targetWindowXTitle) {
+    let targetWindowUsable = this._isUsableTargetWindow(this.targetWindow);
+    let xTargetAvailable = !this._isTargetWindowXLookupPending();
+    if (!targetWindowUsable && (!xTargetAvailable || (!this.targetWindowXClass && !this.targetWindowXTitle))) {
       return false;
     }
     let values = [
       this._windowProbeValue(this.targetWindow, "get_wm_class"),
       this._windowProbeValue(this.targetWindow, "get_wm_class_instance"),
       this._windowProbeValue(this.targetWindow, "get_gtk_application_id"),
-      String(this.targetWindowXClass || "").toLowerCase(),
-      String(this.targetWindowXTitle || "").toLowerCase()
+      xTargetAvailable ? String(this.targetWindowXClass || "").toLowerCase() : "",
+      xTargetAvailable ? String(this.targetWindowXTitle || "").toLowerCase() : ""
     ];
     for (let i = 0; i < values.length; i++) {
       let value = values[i];
@@ -15069,7 +15158,6 @@ MyApplet.prototype = {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenPendingLanguage = "";
-      this.autoRelistenManualStopRequested = false;
     }
     return relistenStarted;
   },
@@ -15458,6 +15546,7 @@ MyApplet.prototype = {
     }
     let backgroundCleanupSucceeded = this._invalidateBackgroundCallbacksForRecording();
     if (!backgroundCleanupSucceeded) {
+      this._setStatus("error", _("Could not start next recording"), this.lastTranscript);
       return false;
     }
     if (this.isCommandRunning || this._hasLocalProcessingWorkflow() || this.textInsertToken) {
@@ -15482,7 +15571,7 @@ MyApplet.prototype = {
     this.autoTranscribeRecordingKey = "";
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
-    let recordingCommandToken = {};
+    let recordingCommandToken = { action: "start" };
     this._recordingCommandToken = recordingCommandToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Starting next recording..."), this.lastTranscript);
@@ -15532,6 +15621,7 @@ MyApplet.prototype = {
       }
       return false;
     }
+    this.lastNotificationKey = "";
     return true;
   },
 
@@ -15745,7 +15835,7 @@ MyApplet.prototype = {
     if (!this._lifecycleAllowsWork() || !this.notificationSessionActive || status === "processing") {
       return;
     }
-    let key = status + "\n" + String(message || "");
+    let key = status === "recording" ? status : status + "\n" + String(message || "");
     if (key === this.lastNotificationKey) {
       if (status === "done" || status === "error" || (status === "idle" && previousStatus !== "idle")) {
         this.notificationSessionActive = false;
