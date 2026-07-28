@@ -4237,6 +4237,9 @@ MyApplet.prototype = {
     this._connectSafe(this.textModelItem.menu, "open-state-changed", (menu, open) => {
       if (open) {
         this._refreshTextModelMenu();
+      } else {
+        this.textModelMenuRefreshToken = null;
+        this._terminateProcessesByGroup("text-model-refresh");
       }
     });
     this.textOutputMenuItem.menu.addMenuItem(this.textModelItem);
@@ -9647,8 +9650,9 @@ MyApplet.prototype = {
         return false;
       }
       this.postProcessBackend = "openai-compatible";
-      this._refreshTextModelMenuForBackend("openai-compatible");
-      this._setStatusPreservingRecording("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);
+      if (this._refreshTextModelMenuForBackend("openai-compatible") !== false) {
+        this._setStatusPreservingRecording("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);
+      }
       return true;
     }
     return this._selectExternalApiVoiceBackend();
@@ -9681,27 +9685,32 @@ MyApplet.prototype = {
   },
 
   _refreshTextModelMenu: function() {
-    this._refreshTextModelMenuForBackend("");
+    return this._refreshTextModelMenuForBackend("");
   },
 
   _refreshTextModelMenuForBackend: function(backendOverride) {
+    let requestedBackend = String(backendOverride || "");
+    if (requestedBackend !== "" && requestedBackend !== "ollama" &&
+        requestedBackend !== "openai-compatible") {
+      return false;
+    }
     if (!this._canMutateMenu(this.textModelItem) || this.textModelItem.menu.isOpen !== true) {
-      return;
+      return true;
     }
     let canReportTextModelStatus = () => !this.isCommandRunning &&
       !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken || this.ollamaModelInstallToken || this.ollamaModelInstallRunning || this.ollamaModelCleanupFailed) {
-      return;
+      return true;
     }
     if (this.textModelMenuRefreshToken && !backendOverride) {
-      return;
+      return true;
     }
     this.textModelMenuRefreshToken = null;
     if (this._terminateProcessesByGroup("text-model-refresh") === false) {
       if (canReportTextModelStatus()) {
         this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
       }
-      return;
+      return false;
     }
     let backend = String(backendOverride || this.postProcessBackend || "");
     let provider = backend === "openai-compatible" ? "openai-compatible" : "ollama";
@@ -9712,7 +9721,7 @@ MyApplet.prototype = {
       } catch (error) {
         this._recordLifecycleError("text-model-refresh", error);
       }
-      return;
+      return false;
     }
     let refreshToken = {};
     this.textModelMenuRefreshToken = refreshToken;
@@ -9731,9 +9740,9 @@ MyApplet.prototype = {
       if (canReportTextModelStatus()) {
         this._setStatusPreservingRecording("error", _("Could not prepare text model list"), this.lastTranscript);
       }
-      return;
+      return false;
     }
-    this._spawnJson(textModelArgs, (payload) => {
+    let refreshProcess = this._spawnJson(textModelArgs, (payload) => {
       if (this.textModelMenuRefreshToken !== refreshToken) {
         return;
       }
@@ -9761,6 +9770,13 @@ MyApplet.prototype = {
         }
       }
     }, { resourceGroup: "text-model-refresh" });
+    if (!refreshProcess) {
+      if (this.textModelMenuRefreshToken === refreshToken) {
+        this.textModelMenuRefreshToken = null;
+      }
+      return false;
+    }
+    return true;
   },
 
   _populateTextModelMenu: function(models, message, provider) {
@@ -10014,8 +10030,9 @@ MyApplet.prototype = {
     if (!this._commitSettingValue("postProcessPreset", "post-process-preset", nextPreset, "settings-text-polishing", _("Polishing preset could not be saved"))) {
       return;
     }
-    this._refreshTextModelMenu();
-    this._setStatusPreservingRecording("ready", _("Polishing preset: ") + this._textPolishingPresetLabel(this.postProcessPreset), this.lastTranscript);
+    if (this._refreshTextModelMenu() !== false) {
+      this._setStatusPreservingRecording("ready", _("Polishing preset: ") + this._textPolishingPresetLabel(this.postProcessPreset), this.lastTranscript);
+    }
   },
 
   _populateTextPolishingSafetyMenu: function(parentMenu) {
@@ -10037,8 +10054,9 @@ MyApplet.prototype = {
     if (!this._commitSettingValue(propertyName, settingKey, nextValue, "settings-text-polishing", label + _(" could not be saved"))) {
       return;
     }
-    this._refreshTextModelMenu();
-    this._setStatusPreservingRecording("ready", label + ": " + (this[propertyName] ? _("enabled") : _("disabled")), this.lastTranscript);
+    if (this._refreshTextModelMenu() !== false) {
+      this._setStatusPreservingRecording("ready", label + ": " + (this[propertyName] ? _("enabled") : _("disabled")), this.lastTranscript);
+    }
   },
 
   _selectTextModelBackend: function(backend, model, message, preserveRecording) {
@@ -10092,8 +10110,9 @@ MyApplet.prototype = {
         return false;
       }
     }
-    this._refreshTextModelMenu();
-    setStatus("ready", message, this.lastTranscript);
+    if (this._refreshTextModelMenu() !== false) {
+      setStatus("ready", message, this.lastTranscript);
+    }
     return true;
   },
 
@@ -11269,8 +11288,9 @@ MyApplet.prototype = {
     this.postProcessPreserveCode = true;
     this.postProcessNeverAddContent = true;
     this.postProcessMaskSensitiveData = false;
-    this._refreshTextModelMenu();
-    this._setStatusPreservingRecording("ready", _("Text polishing defaults restored"), this.lastTranscript);
+    if (this._refreshTextModelMenu() !== false) {
+      this._setStatusPreservingRecording("ready", _("Text polishing defaults restored"), this.lastTranscript);
+    }
   },
 
   _previewCleanup: function() {

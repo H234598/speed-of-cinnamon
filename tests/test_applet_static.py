@@ -149,7 +149,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._commitSettingsBatch(settingsWrites, "settings-text-model"', source)
         self.assertIn('this._commitSettingsBatch(settingsWrites, "settings-text-polishing"', source)
         self.assertIn("_refreshTextModelMenuForBackend: function(backendOverride)", source)
-        self.assertIn('this._refreshTextModelMenuForBackend("openai-compatible");', source)
+        self.assertIn('if (this._refreshTextModelMenuForBackend("openai-compatible") !== false)', source)
         self.assertIn('_("Loading OpenAI-compatible text models...")', source)
         self.assertNotIn('_selectTextModelBackend("openai-compatible"', source)
         self.assertIn('_("OpenAI-compatible API")', source)
@@ -291,7 +291,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._connectSafe(useItem, "activate", () => this._openExternalApiEnvEditor("voice"));', source)
         self.assertIn('this._connectSafe(openaiCompatible, "activate", () => this._openExternalApiEnvEditor("text"));', source)
         self.assertIn('this._setStatusPreservingRecording("ready", _("Text polishing: OpenAI-compatible API"), this.lastTranscript);', source)
-        self.assertIn('this._refreshTextModelMenuForBackend("openai-compatible");', source)
+        self.assertIn('if (this._refreshTextModelMenuForBackend("openai-compatible") !== false)', source)
         self.assertIn("if (!this._writeExternalApiEnvFile()) {", source)
         self.assertTrue(
             "this._refreshTextModelMenu();\n        return;\n      }" in source or
@@ -2335,6 +2335,47 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(loading_try, loading)
         self.assertLess(loading, loading_error)
         self.assertIn("this.textModelMenuRefreshToken = null;", text_block[loading_try:loading_error])
+
+    def test_text_model_refresh_reports_sync_failure_without_overwriting_status(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        wrapper_start = source.index("_refreshTextModelMenu: function()")
+        wrapper_end = source.index("\n  _refreshTextModelMenuForBackend:", wrapper_start)
+        wrapper = source[wrapper_start:wrapper_end]
+        self.assertIn('return this._refreshTextModelMenuForBackend("");', wrapper)
+
+        refresh_start = source.index("_refreshTextModelMenuForBackend: function(backendOverride)")
+        refresh_end = source.index("\n  _populateTextModelMenu:", refresh_start)
+        refresh = source[refresh_start:refresh_end]
+        self.assertIn('requestedBackend !== "ollama"', refresh)
+        self.assertGreaterEqual(refresh.count("return true;"), 3)
+        self.assertGreaterEqual(refresh.count("return false;"), 5)
+        self.assertIn("let refreshProcess = this._spawnJson(textModelArgs", refresh)
+        self.assertIn("if (!refreshProcess)", refresh)
+
+        guarded_callers = [
+            ("_applyExternalApiEnvTarget: function(target)", "\n  _selectExternalApiVoiceBackend:"),
+            ("_selectTextPolishingPreset: function(preset)", "\n  _populateTextPolishingSafetyMenu:"),
+            ("_toggleTextPolishingSafetyFlag: function(settingKey, propertyName, label)", "\n  _selectTextModelBackend:"),
+            ("_selectTextModelBackend: function(backend, model, message, preserveRecording)", "\n  _clearOllamaModelFlow:"),
+            ("_resetTextPolishingDefaults: function()", "\n  _previewCleanup:"),
+        ]
+        for method, next_method in guarded_callers:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("!== false", block, method)
+            self.assertLess(block.index("!== false"), block.index('"ready"'), method)
+
+    def test_text_model_menu_close_cancels_inflight_refresh(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        item_start = source.index('this.textModelItem = new PopupMenu.PopupSubMenuMenuItem(_("Text model"));')
+        item_end = source.index("this.textOutputMenuItem.menu.addMenuItem(this.textModelItem);", item_start)
+        block = source[item_start:item_end]
+        self.assertIn("} else {", block)
+        token = block.index("this.textModelMenuRefreshToken = null;")
+        cleanup = block.index('this._terminateProcessesByGroup("text-model-refresh");')
+        self.assertLess(token, cleanup)
 
     def test_ollama_catalog_and_install_payloads_fail_closed(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
