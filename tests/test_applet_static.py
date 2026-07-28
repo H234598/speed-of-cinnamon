@@ -1404,6 +1404,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._onTextOutputSettingsChanged();", visibility_block)
         self.assertIn("this.historyItem.menu.isOpen === true", visibility_block)
         self.assertIn("this.historyRefreshToken = null;", visibility_block)
+        self.assertIn("this.historyRefreshQueued = false;", visibility_block)
         self.assertIn("this._refreshHistory();", visibility_block)
 
         text_output_start = source.index("_onTextOutputSettingsChanged: function()")
@@ -3844,6 +3845,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._statusRefreshToken++;", block)
         self.assertIn("this._statusCommandToken = null;", block)
         self.assertIn("this._statusCommandRunning = false;", block)
+        self.assertIn("this.historyRefreshQueued = false;", block)
         self.assertLess(
             block.index("this._statusCommandToken = null;"),
             block.index("this._terminateAllProcesses()"),
@@ -7752,12 +7754,22 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _listAllTranscripts:", start)
         block = source[start:end]
         self.assertIn("if (this.historyRefreshToken)", block)
+        self.assertIn("this.historyRefreshQueued = true;", block)
+        self.assertIn("let refreshQueued = this.historyRefreshQueued === true;", block)
+        self.assertIn("this.historyRefreshQueued = false;", block)
         self.assertIn("this.historyRefreshToken = refreshToken;", block)
         self.assertIn("this.historyRefreshToken = null;", block)
         self.assertLess(block.index("if (this.historyRefreshToken)"), block.index("let refreshToken = {};"))
+        self.assertLess(block.index("this.historyRefreshQueued = false;"), block.index("let refreshToken = {};"))
         callback_block = block[block.index("this._spawnJson(historyArgs,"):]
         self.assertLess(callback_block.index("this.historyRefreshToken !== refreshToken"), callback_block.index("this.historyRefreshToken = null;"))
         self.assertLess(callback_block.index("this.historyRefreshToken = null;"), callback_block.index("if (payload.error)"))
+        finally_block = callback_block[callback_block.index("} finally {"):]
+        self.assertIn("refreshQueued &&", finally_block)
+        self.assertIn("!this.historyRefreshToken &&", finally_block)
+        self.assertIn("this.historyItem.menu.isOpen === true", finally_block)
+        self.assertIn("this._refreshHistory();", finally_block)
+        self.assertIn("this.historyRefreshQueued = false;", source)
 
     def test_cleanup_can_be_previewed_before_deleting_files(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -8086,6 +8098,7 @@ class AppletStaticTest(unittest.TestCase):
             "cleanupPreviewDialogToken",
         ]:
             self.assertIn(f"this.{token} = null;", helper_block)
+        self.assertIn("this.historyRefreshQueued = false;", helper_block)
         self.assertIn("let cleanupPreviewCleanupSucceeded = true;", helper_block)
         self.assertIn("this._dialogClose(this.cleanupPreviewDialog, \"cleanup-preview\")", helper_block)
         self.assertIn("this._setStatusPreservingRecording(\"error\", _(\"Cleanup preview could not be stopped\")", helper_block)

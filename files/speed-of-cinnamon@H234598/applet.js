@@ -4835,6 +4835,7 @@ MyApplet.prototype = {
     this._onTextOutputSettingsChanged();
     if (this.historyItem && this.historyItem.menu && this.historyItem.menu.isOpen === true) {
       this.historyRefreshToken = null;
+      this.historyRefreshQueued = false;
       this._refreshHistory();
     }
   },
@@ -5056,6 +5057,7 @@ MyApplet.prototype = {
     this.modelMenuRefreshToken = null;
     this.textModelMenuRefreshToken = null;
     this.historyRefreshToken = null;
+    this.historyRefreshQueued = false;
     this.alarmMenuRefreshToken = null;
     this.inputSourceMenuRefreshToken = null;
     this.voiceModelActionToken = null;
@@ -6704,6 +6706,7 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Status refresh could not be stopped"), this.lastTranscript);
     }
     this.historyRefreshToken = null;
+    this.historyRefreshQueued = false;
     let historyRefreshCleanupSucceeded = this._terminateProcessesByGroup("history-refresh") !== false;
     if (!historyRefreshCleanupSucceeded) {
       this._setStatusPreservingRecording("error", _("History refresh could not be stopped"), this.lastTranscript);
@@ -10572,8 +10575,10 @@ MyApplet.prototype = {
     let canReportHistoryStatus = () => !this.isCommandRunning &&
       !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     if (this.historyRefreshToken) {
+      this.historyRefreshQueued = true;
       return;
     }
+    this.historyRefreshQueued = false;
     if (this._terminateProcessesByGroup("history-refresh") === false) {
       this._populateHistoryMenu([]);
       if (canReportHistoryStatus()) {
@@ -10601,6 +10606,8 @@ MyApplet.prototype = {
       if (this.historyRefreshToken !== refreshToken) {
         return;
       }
+      let refreshQueued = this.historyRefreshQueued === true;
+      this.historyRefreshQueued = false;
       try {
         this.historyRefreshToken = null;
         if (!this._canMutateMenu(this.historyItem) || this.historyItem.menu.isOpen !== true) {
@@ -10621,6 +10628,15 @@ MyApplet.prototype = {
         this._recordLifecycleError("menu-refresh", error);
         if (canReportHistoryStatus()) {
           this._setStatusPreservingRecording("error", _("Could not refresh transcript history"), this.lastTranscript);
+        }
+      } finally {
+        if (
+          refreshQueued &&
+          !this.historyRefreshToken &&
+          this._canMutateMenu(this.historyItem) &&
+          this.historyItem.menu.isOpen === true
+        ) {
+          this._refreshHistory();
         }
       }
     }, { resourceGroup: "history-refresh" });
