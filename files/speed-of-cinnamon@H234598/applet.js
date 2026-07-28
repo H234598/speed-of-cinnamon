@@ -3813,6 +3813,12 @@ MyApplet.prototype = {
     this._statusIconCache = { status: null, icon: null };
     this._panelRenderFingerprint = null;
     this._recordingDisplayFingerprint = null;
+    this._historyMenuFingerprint = null;
+    this._inputSourceMenuFingerprint = null;
+    this._modelMenuFingerprint = null;
+    this._textModelMenuFingerprint = null;
+    this._textModelMenuProvider = "";
+    this._alarmMenuFingerprint = null;
     this.toggleKeybinding = "<Super>z::";
     this.primaryLanguageKeybinding = "";
     this.secondaryLanguageKeybinding = "";
@@ -3964,7 +3970,7 @@ MyApplet.prototype = {
     this._bindSetting(Settings.BindingDirection.IN, "secondary-language-keybinding", "secondaryLanguageKeybinding", this._onHotkeyChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "cancel-keybinding", "cancelKeybinding", this._onHotkeyChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "show-panel-label", "showPanelLabel", this._updatePanel, null);
-    this._bindSetting(Settings.BindingDirection.IN, "show-transcript-text", "showTranscriptText", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "show-transcript-text", "showTranscriptText", this._onTranscriptVisibilitySettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "language", "language", this._onLanguageSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "secondary-language", "secondaryLanguage", this._onLanguageSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "max-seconds", "maxSeconds", this._onRecordingLimitSettingsChanged, null);
@@ -4822,9 +4828,18 @@ MyApplet.prototype = {
     this._updatePanel();
   },
 
+  _onTranscriptVisibilitySettingsChanged: function() {
+    this._onTextOutputSettingsChanged();
+    if (this.historyItem && this.historyItem.menu && this.historyItem.menu.isOpen === true) {
+      this.historyRefreshToken = null;
+      this._refreshHistory();
+    }
+  },
+
   _onTextOutputSettingsChanged: function() {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
+    this._historyMenuFingerprint = null;
     let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
     this._cancelTextInsertForSettingsChange();
     this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
@@ -7819,7 +7834,7 @@ MyApplet.prototype = {
   },
 
   _refreshAlarmMenu: function() {
-    if (!this._canMutateMenu(this.alarmItem)) {
+    if (!this._canMutateMenu(this.alarmItem) || this.alarmItem.menu.isOpen !== true) {
       return;
     }
     let canReportAlarmStatus = () => !this.isCommandRunning &&
@@ -7836,7 +7851,9 @@ MyApplet.prototype = {
     }
     let refreshToken = {};
     this.alarmMenuRefreshToken = refreshToken;
-    this._populateAlarmMenu([], _("Loading alarms..."));
+    if (this._alarmMenuFingerprint === null) {
+      this._populateAlarmMenu([], "", _("Loading alarms..."));
+    }
     let alarmListArgs;
     try {
       alarmListArgs = this._alarmListArgs();
@@ -7857,12 +7874,12 @@ MyApplet.prototype = {
       }
       try {
         this.alarmMenuRefreshToken = null;
-        if (!this._canMutateMenu(this.alarmItem)) {
+        if (!this._canMutateMenu(this.alarmItem) || this.alarmItem.menu.isOpen !== true) {
           return;
         }
         if (payload.error) {
           let safeError = this._sanitizeErrorMessage(payload.error);
-          this._populateAlarmMenu([], safeError);
+          this._populateAlarmMenu([], "", safeError);
           if (canReportAlarmStatus()) {
             this._setAlarmErrorStatus(safeError);
           }
@@ -7891,12 +7908,21 @@ MyApplet.prototype = {
     if (alarmsWereTruncated) {
       alarms = alarms.slice(0, MAX_ALARM_MENU_ENTRIES);
     }
+    let messageText = typeof message === "string" ? message.trim() : "";
+    let summaryText = typeof summary === "string" ? summary.trim() : "";
+    let nextFingerprint = JSON.stringify({
+      message: messageText,
+      summary: summaryText,
+      truncated: alarmsWereTruncated,
+      alarms: alarms,
+    });
+    if (this._alarmMenuFingerprint === nextFingerprint) {
+      return;
+    }
     if (!this._clearMenuItems(this.alarmItem.menu)) {
       return;
     }
 
-    let messageText = typeof message === "string" ? message.trim() : "";
-    let summaryText = typeof summary === "string" ? summary.trim() : "";
     let summaryLabel = messageText || summaryText || _("No alarms configured");
     summaryLabel = this._uiMessageText(summaryLabel);
     let summaryItem = new PopupMenu.PopupMenuItem(summaryLabel);
@@ -7920,12 +7946,14 @@ MyApplet.prototype = {
     this.alarmItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
 
     if (messageText !== "") {
+      this._alarmMenuFingerprint = nextFingerprint;
       return;
     }
     if (!alarms || alarms.length === 0) {
       let empty = new PopupMenu.PopupMenuItem(_("No alarms configured"));
       empty.setSensitive(false);
       this.alarmItem.menu.addMenuItem(empty);
+      this._alarmMenuFingerprint = nextFingerprint;
       return;
     }
     for (let alarm of alarms) {
@@ -7937,6 +7965,7 @@ MyApplet.prototype = {
     if (alarmsWereTruncated) {
       this.alarmItem.menu.addMenuItem(this._selectionInfoItem(_("Alarm list truncated for safety")));
     }
+    this._alarmMenuFingerprint = nextFingerprint;
   },
 
   _addAlarmMenuEntry: function(alarm) {
@@ -8204,7 +8233,9 @@ MyApplet.prototype = {
     }
     let refreshToken = {};
     this.inputSourceMenuRefreshToken = refreshToken;
-    this._populateInputSourceMenu([], _("Loading input sources..."));
+    if (this._inputSourceMenuFingerprint === null) {
+      this._populateInputSourceMenu([], _("Loading input sources..."));
+    }
     let inputSourceArgs;
     try {
       inputSourceArgs = this._listInputsArgs();
@@ -8225,7 +8256,7 @@ MyApplet.prototype = {
       }
       try {
         this.inputSourceMenuRefreshToken = null;
-        if (!this._canMutateMenu(this.inputSourceItem)) {
+        if (!this._canMutateMenu(this.inputSourceItem) || this.inputSourceItem.menu.isOpen !== true) {
           return;
         }
         if (payload.error) {
@@ -8260,10 +8291,23 @@ MyApplet.prototype = {
     }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
+    let current = String(this.inputDevice || "");
+    let nextFingerprint = JSON.stringify({
+      current: current,
+      message: messageText,
+      truncated: sourcesWereTruncated,
+      sources: sources.map((source) => ({
+        name: typeof source.name === "string" ? source.name : "",
+        description: typeof source.description === "string" ? source.description : "",
+        default: source.default === true,
+      })),
+    });
+    if (this._inputSourceMenuFingerprint === nextFingerprint) {
+      return;
+    }
     if (!this._clearMenuItems(this.inputSourceItem.menu)) {
       return;
     }
-    let current = String(this.inputDevice || "");
     let currentWasListed = current === "";
     let defaultLabel = (current === "" ? "[x] " : "[ ] ") + _("System default");
     let defaultItem = this._selectionMenuItem(defaultLabel);
@@ -8284,11 +8328,13 @@ MyApplet.prototype = {
     if (messageText !== "") {
       addCurrentCustomInput();
       this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(messageText));
+      this._inputSourceMenuFingerprint = nextFingerprint;
       return;
     }
     if (!sources || sources.length === 0) {
       addCurrentCustomInput();
       this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(_("No input sources found")));
+      this._inputSourceMenuFingerprint = nextFingerprint;
       return;
     }
     for (let source of sources) {
@@ -8322,6 +8368,7 @@ MyApplet.prototype = {
     if (sourcesWereTruncated) {
       this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(_("Input source list truncated for safety")));
     }
+    this._inputSourceMenuFingerprint = nextFingerprint;
   },
 
   _selectInputSource: function(name, label) {
@@ -8372,7 +8419,9 @@ MyApplet.prototype = {
     }
     let refreshToken = {};
     this.modelMenuRefreshToken = refreshToken;
-    this._populateModelMenu([], _("Loading voice models..."));
+    if (this._modelMenuFingerprint === null) {
+      this._populateModelMenu([], _("Loading voice models..."));
+    }
     let modelArgs;
     try {
       modelArgs = this._modelsArgs();
@@ -8393,7 +8442,7 @@ MyApplet.prototype = {
       }
       try {
         this.modelMenuRefreshToken = null;
-        if (!this._canMutateMenu(this.modelItem)) {
+        if (!this._canMutateMenu(this.modelItem) || this.modelItem.menu.isOpen !== true) {
           return;
         }
         if (payload.error) {
@@ -8429,6 +8478,20 @@ MyApplet.prototype = {
     }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
+    let nextFingerprint = JSON.stringify({
+      transcriber: String(this.transcriber || ""),
+      whisperModel: String(this.whisperModel || ""),
+      transcriberCommand: String(this.transcriberCommand || ""),
+      language: this._voiceModelLanguage(),
+      openaiCompatibleModel: String(this.openaiCompatibleModel || ""),
+      openaiCompatibleUrl: String(this.openaiCompatibleUrl || ""),
+      message: messageText,
+      truncated: voiceModelsWereTruncated,
+      models: models,
+    });
+    if (this._modelMenuFingerprint === nextFingerprint) {
+      return;
+    }
     if (!this._clearMenuItems(this.modelItem.menu)) {
       return;
     }
@@ -8481,10 +8544,12 @@ MyApplet.prototype = {
 
     if (messageText !== "") {
       this.modelItem.menu.addMenuItem(this._selectionInfoItem(messageText));
+      this._modelMenuFingerprint = nextFingerprint;
       return;
     }
     if (!models || models.length === 0) {
       this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("No models in catalog")));
+      this._modelMenuFingerprint = nextFingerprint;
       return;
     }
     let ct2Menu = new PopupMenu.PopupSubMenuMenuItem(_("CTranslate2"));
@@ -8527,6 +8592,7 @@ MyApplet.prototype = {
     if (voiceModelsWereTruncated) {
       this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("Voice model list truncated for safety")));
     }
+    this._modelMenuFingerprint = nextFingerprint;
   },
 
   _populateExternalApiVoiceMenu: function(parentMenu) {
@@ -9697,14 +9763,16 @@ MyApplet.prototype = {
     let loadingMessage = provider === "openai-compatible"
       ? _("Loading OpenAI-compatible text models...")
       : _("Loading local text models...");
-    this._populateTextModelMenu([], loadingMessage, provider);
+    if (this._textModelMenuFingerprint === null || this._textModelMenuProvider !== provider) {
+      this._populateTextModelMenu([], loadingMessage, provider);
+    }
     this._spawnJson(textModelArgs, (payload) => {
       if (this.textModelMenuRefreshToken !== refreshToken) {
         return;
       }
       try {
         this.textModelMenuRefreshToken = null;
-        if (!this._canMutateMenu(this.textModelItem)) {
+        if (!this._canMutateMenu(this.textModelItem) || this.textModelItem.menu.isOpen !== true) {
           return;
         }
         if (payload.error) {
@@ -9740,9 +9808,6 @@ MyApplet.prototype = {
     }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
-    if (!this._clearMenuItems(this.textModelItem.menu)) {
-      return;
-    }
     let backend = String(this.postProcessBackend || "none");
     let activeProvider = provider === "openai-compatible" || provider === "ollama"
       ? provider
@@ -9764,6 +9829,27 @@ MyApplet.prototype = {
           description: _("selected")
         };
       }
+    }
+    let nextFingerprint = JSON.stringify({
+      backend: backend,
+      provider: activeProvider,
+      postProcessCommand: String(this.postProcessCommand || ""),
+      ollamaModel: selectedOllamaModel,
+      openaiCompatibleTextModel: String(this.openaiCompatibleTextModel || ""),
+      openaiCompatibleModel: String(this.openaiCompatibleModel || ""),
+      preset: String(this.postProcessPreset || ""),
+      preserveCode: this.postProcessPreserveCode === true,
+      neverAddContent: this.postProcessNeverAddContent === true,
+      maskSensitiveData: this.postProcessMaskSensitiveData === true,
+      message: messageText,
+      truncated: modelListWasTruncated,
+      models: models,
+    });
+    if (this._textModelMenuFingerprint === nextFingerprint) {
+      return;
+    }
+    if (!this._clearMenuItems(this.textModelItem.menu)) {
+      return;
     }
 
     let disabled = this._selectionMenuItem((backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
@@ -9817,6 +9903,8 @@ MyApplet.prototype = {
 
     if (messageText !== "") {
       this.textModelItem.menu.addMenuItem(this._selectionInfoItem(messageText));
+      this._textModelMenuFingerprint = nextFingerprint;
+      this._textModelMenuProvider = activeProvider;
       return;
     }
     if (!models || models.length === 0) {
@@ -9827,12 +9915,16 @@ MyApplet.prototype = {
           description: _("selected")
         }, "ollama");
         this.textModelItem.menu.addMenuItem(this._selectionInfoItem(_("Model list is temporarily empty; using selected Ollama model")));
+        this._textModelMenuFingerprint = nextFingerprint;
+        this._textModelMenuProvider = activeProvider;
         return;
       }
       let emptyLabel = activeProvider === "openai-compatible"
         ? _("No OpenAI-compatible text models found")
         : _("No local Ollama models found");
       this.textModelItem.menu.addMenuItem(this._selectionInfoItem(emptyLabel));
+      this._textModelMenuFingerprint = nextFingerprint;
+      this._textModelMenuProvider = activeProvider;
       return;
     }
     for (let model of models) {
@@ -9844,6 +9936,8 @@ MyApplet.prototype = {
     if (modelListWasTruncated) {
       this.textModelItem.menu.addMenuItem(this._selectionInfoItem(_("Model list truncated for safety")));
     }
+    this._textModelMenuFingerprint = nextFingerprint;
+    this._textModelMenuProvider = activeProvider;
   },
 
   _canMutateMenu: function(item) {
@@ -10604,7 +10698,7 @@ MyApplet.prototype = {
       }
       try {
         this.historyRefreshToken = null;
-        if (!this._canMutateMenu(this.historyItem)) {
+        if (!this._canMutateMenu(this.historyItem) || this.historyItem.menu.isOpen !== true) {
           return;
         }
         if (payload.error) {
@@ -15298,12 +15392,24 @@ MyApplet.prototype = {
       }
       let preview = typeof transcript.preview === "string" ? transcript.preview.trim() : "";
       let name = typeof transcript.name === "string" ? transcript.name.trim() : "";
-      let text = typeof transcript.text === "string" ? transcript.text.trim() : "";
-      return preview !== "" || name !== "" || text !== "";
+      let text = typeof transcript.text === "string" ? transcript.text : "";
+      return preview !== "" || name !== "" || text.trim() !== "";
     });
+    transcripts = transcripts.map((transcript) => ({
+      preview: typeof transcript.preview === "string" ? transcript.preview.trim() : "",
+      name: typeof transcript.name === "string" ? transcript.name.trim() : "",
+      text: typeof transcript.text === "string" ? transcript.text : "",
+    }));
     let historyWasTruncated = transcripts.length > MAX_HISTORY_MENU_ENTRIES;
     if (historyWasTruncated) {
       transcripts = transcripts.slice(0, MAX_HISTORY_MENU_ENTRIES);
+    }
+    let nextFingerprint = JSON.stringify({
+      truncated: historyWasTruncated,
+      transcripts: transcripts,
+    });
+    if (this._historyMenuFingerprint === nextFingerprint) {
+      return;
     }
     if (!this._clearMenuItems(this.historyItem.menu)) {
       return;
@@ -15312,6 +15418,7 @@ MyApplet.prototype = {
       let empty = new PopupMenu.PopupMenuItem(_("No transcripts yet"));
       empty.setSensitive(false);
       this.historyItem.menu.addMenuItem(empty);
+      this._historyMenuFingerprint = nextFingerprint;
       return;
     }
     for (let transcript of transcripts) {
@@ -15342,6 +15449,7 @@ MyApplet.prototype = {
     if (historyWasTruncated) {
       this.historyItem.menu.addMenuItem(this._selectionInfoItem(_("Transcript list truncated for safety")));
     }
+    this._historyMenuFingerprint = nextFingerprint;
   },
 
   _copyHistoryTranscript: function(text) {
