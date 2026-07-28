@@ -8557,20 +8557,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn(interlace_method, [0, 1])
         return width, height, color_type
 
-    def test_status_icon_assets_have_135_png_files_signature_and_256x256_rgba(self) -> None:
+    def test_status_icon_assets_cover_six_families_and_51_slots(self) -> None:
         status_icons = APPLET_DIR / "assets" / "status-icons"
         self.assertTrue(status_icons.is_dir())
 
         icon_files = sorted([p for p in status_icons.iterdir() if p.is_file() and p.suffix.lower() == ".png"])
-        self.assertEqual(len(icon_files), 135)
+        self.assertEqual(len(icon_files), 306)
 
         families = sorted({p.stem.split("-", 1)[0] for p in icon_files})
         families_ids = sorted({p.stem.split("-", 1)[1] for p in icon_files})
-        self.assertEqual(families, ["processing", "ready", "recording"])
-        self.assertEqual(families_ids, [f"{i:02d}" for i in range(1, 46)])
+        expected_families = ["error", "processing", "ready", "recorded", "recording", "setup"]
+        self.assertEqual(families, expected_families)
+        self.assertEqual(families_ids, [f"{i:02d}" for i in range(1, 52)])
 
         expected_assets = sorted(
-            [f"{family}-{i:02d}" for family in ["processing", "ready", "recording"] for i in range(1, 46)]
+            [f"{family}-{i:02d}" for family in expected_families for i in range(1, 52)]
         )
         observed_assets = sorted([p.stem for p in icon_files])
         self.assertEqual(observed_assets, expected_assets)
@@ -8581,68 +8582,70 @@ class AppletStaticTest(unittest.TestCase):
             self.assertEqual(height, 256)
             self.assertEqual(color_type, 6)
 
-    def test_status_icon_section_contains_12_keys_with_original_and_45_alternatives(self) -> None:
+    def test_status_icon_section_uses_two_stage_selectors_for_every_status(self) -> None:
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+        widget_source = (APPLET_DIR / "SettingsLogo.py").read_text(encoding="utf-8")
         section = schema["layout"]["status-icons-section"]
 
         section_keys = section["keys"]
         expected_keys = [
-            "status-icon-ready",
+            "status-icon-ready-selector",
             "status-icon-ready-preview",
-            "status-icon-recording",
+            "status-icon-recording-selector",
             "status-icon-recording-preview",
-            "status-icon-processing",
+            "status-icon-processing-selector",
             "status-icon-processing-preview",
-            "status-icon-recorded",
+            "status-icon-recorded-selector",
             "status-icon-recorded-preview",
-            "status-icon-error",
+            "status-icon-error-selector",
             "status-icon-error-preview",
-            "status-icon-setup",
+            "status-icon-setup-selector",
             "status-icon-setup-preview",
         ]
         self.assertEqual(section_keys, expected_keys)
         self.assertEqual(len(section_keys), 12)
 
         status_selector_keys = [
-            "status-icon-ready",
-            "status-icon-recording",
-            "status-icon-processing",
-            "status-icon-recorded",
-            "status-icon-error",
-            "status-icon-setup",
+            f"status-icon-{status}-selector"
+            for status in ["ready", "recording", "processing", "recorded", "error", "setup"]
         ]
-        expected_selector_labels = ["Original Speed of Cinnamon"]
-        expected_selector_labels.extend([f"Alternative {i}" for i in range(1, 31)])
-        expected_selector_labels.extend([f"Mouse {i}" for i in range(1, 6)])
-        expected_selector_labels.extend([f"Owl {i}" for i in range(1, 6)])
-        expected_selector_labels.extend([f"Moon {i}" for i in range(1, 6)])
-
-        expected_selector_options = {
-            "ready": ["soc-original"] + [f"ready-{i:02d}" for i in range(1, 46)],
-            "recording": ["soc-original"] + [f"recording-{i:02d}" for i in range(1, 46)],
-            "processing": ["soc-original"] + [f"processing-{i:02d}" for i in range(1, 46)],
-            "recorded": ["soc-original"] + [f"ready-{i:02d}" for i in range(1, 46)],
-            "error": ["soc-original"] + [f"recording-{i:02d}" for i in range(1, 46)],
-            "setup": ["soc-original"] + [f"processing-{i:02d}" for i in range(1, 46)],
-        }
         for key in status_selector_keys:
-            options = schema[key]["options"]
-            self.assertEqual(len(options), 46)
-            self.assertIn(schema[key]["default"], options.values())
-            state = key.replace("status-icon-", "")
-            self.assertEqual(list(options.values()), expected_selector_options[state])
-            self.assertEqual(list(options.keys()), expected_selector_labels, f"{key} option labels")
-        schema_icon_ids = {
-            icon_id
-            for key in status_selector_keys
-            for icon_id in schema[key]["options"].values()
-        }
+            target_key = key.removesuffix("-selector")
+            selector = schema[key]
+            self.assertEqual(selector["type"], "custom")
+            self.assertEqual(selector["file"], "SettingsLogo.py")
+            self.assertEqual(selector["widget"], "StatusIconSelector")
+            self.assertEqual(selector["target"], target_key)
+            self.assertEqual(schema[target_key], {"type": "generic", "default": "soc-original"})
+
         asset_icon_ids = {
             path.stem
             for path in (APPLET_DIR / "assets" / "status-icons").glob("*.png")
         }
-        self.assertIn("soc-original", schema_icon_ids)
-        self.assertEqual(schema_icon_ids - {"soc-original"}, asset_icon_ids)
+        expected_asset_ids = {
+            f"{family}-{slot:02d}"
+            for family in ["ready", "recording", "processing", "recorded", "error", "setup"]
+            for slot in range(1, 52)
+        }
+        self.assertEqual(asset_icon_ids, expected_asset_ids)
+
+        selector_source = widget_source[
+            widget_source.index("class StatusIconSelector(SettingsWidget):"):
+            widget_source.index("class StatusIconPreview(SettingsWidget):")
+        ]
+        for set_name in [
+            "Original Speed of Cinnamon",
+            "Classic green SOC",
+            "Alternatives",
+            "Mice",
+            "Owls",
+            "Moons",
+        ]:
+            self.assertIn(set_name, selector_source)
+        self.assertIn('self._settings.set_value(self._target, normalized)', selector_source)
+        self.assertIn('candidate = f"{self._family}-{slot:02d}"', selector_source)
+        self.assertIn("os.path.isfile(candidate_path)", selector_source)
+        self.assertIn("_remove_settings_listener(self._settings, self._target, self._settings_listener)", selector_source)
 
         preview_expectations = [
             ("status-icon-ready-preview", "status-icon-ready", "Preview the ready status icon"),
@@ -8681,24 +8684,24 @@ class AppletStaticTest(unittest.TestCase):
         section = schema["layout"]["status-icons-section"]
         section_keys = section["keys"]
         expected_keys = [
-            "status-icon-ready",
+            "status-icon-ready-selector",
             "status-icon-ready-preview",
-            "status-icon-recording",
+            "status-icon-recording-selector",
             "status-icon-recording-preview",
-            "status-icon-processing",
+            "status-icon-processing-selector",
             "status-icon-processing-preview",
-            "status-icon-recorded",
+            "status-icon-recorded-selector",
             "status-icon-recorded-preview",
-            "status-icon-error",
+            "status-icon-error-selector",
             "status-icon-error-preview",
-            "status-icon-setup",
+            "status-icon-setup-selector",
             "status-icon-setup-preview",
         ]
         self.assertEqual(section_keys, expected_keys)
         self.assertEqual(section["type"], "section")
 
-        self.assertIn('for state in ("ready", "recording", "processing"):', preview_source)
-        self.assertIn("for idx in range(1, 46):", preview_source)
+        self.assertIn('for state in ("ready", "recording", "processing", "recorded", "error", "setup"):', preview_source)
+        self.assertIn("for idx in range(1, 52):", preview_source)
         self.assertIn('"{}-{}{}".format(state, "0" if idx < 10 else "", idx)', preview_source)
         self.assertIn('self._allowed_status_ids = ("soc-original",) + tuple(allowed_status_ids)', preview_source)
 
@@ -8837,10 +8840,12 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_status_icon_allowlist_status_mapping_and_runtime_path_cache_reset(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        self.assertIn("for (let i = 1; i <= 45; i++) {", source)
+        self.assertIn("for (let i = 1; i <= 51; i++) {", source)
         allowlist_start = source.index('const STATUS_ICON_ALLOWLIST = {};')
         allowlist_end = source.index('const STATUS_ICON_DEFAULTS = {', allowlist_start)
         allowlist_block = source[allowlist_start:allowlist_end]
+        for family in ["ready", "recording", "processing", "recorded", "error", "setup"]:
+            self.assertIn(f'"{family}"', allowlist_block)
         self.assertIn('forEach((family) => {', allowlist_block)
         self.assertIn('let index = (i < 10) ? "0" + String(i) : String(i);', allowlist_block)
         self.assertIn('STATUS_ICON_ALLOWLIST[family + "-" + index] = true;', allowlist_block)

@@ -162,6 +162,233 @@ class FooterLogo(_ResponsiveLogo):
     bottom_margin = 0
 
 
+def _remove_settings_listener(settings, target, callback):
+    if settings is None or not target or callback is None:
+        return
+    listeners = getattr(settings, "listeners", None)
+    if not isinstance(listeners, dict):
+        return
+    callbacks = listeners.get(target)
+    if not isinstance(callbacks, list):
+        return
+    try:
+        callbacks.remove(callback)
+    except ValueError:
+        return
+    if not callbacks:
+        listeners.pop(target, None)
+
+
+class StatusIconSelector(SettingsWidget):
+    allowed_targets = (
+        "status-icon-ready",
+        "status-icon-recording",
+        "status-icon-processing",
+        "status-icon-recorded",
+        "status-icon-error",
+        "status-icon-setup",
+    )
+    target_families = {
+        "status-icon-ready": "ready",
+        "status-icon-recording": "recording",
+        "status-icon-processing": "processing",
+        "status-icon-recorded": "recorded",
+        "status-icon-error": "error",
+        "status-icon-setup": "setup",
+    }
+    icon_sets = (
+        ("original", "Original Speed of Cinnamon", 0, 0),
+        ("classic", "Classic green SOC", 46, 51),
+        ("alternatives", "Alternatives", 1, 30),
+        ("mouse", "Mice", 31, 35),
+        ("owl", "Owls", 36, 40),
+        ("moon", "Moons", 41, 45),
+    )
+    classic_labels = ("SOC", "SOC.", "SOC..", "SOC...", "Status", "Microphone")
+
+    def __init__(self, info, key, settings):
+        SettingsWidget.__init__(self)
+        self.set_orientation(Gtk.Orientation.VERTICAL)
+        self.set_spacing(6)
+        self.set_margin_top(6)
+        self.set_margin_bottom(6)
+        self.set_hexpand(True)
+
+        target = info.get("target", key)
+        self._target = target if isinstance(target, str) and target in self.allowed_targets else ""
+        self._family = self.target_families.get(self._target, "")
+        self._settings = settings
+        self._updating = False
+        self._destroyed = False
+        self._settings_listener = None
+        self._set_combo = Gtk.ComboBoxText()
+        self._icon_combo = Gtk.ComboBoxText()
+
+        title = Gtk.Label(label=str(info.get("description", "")))
+        title.set_halign(Gtk.Align.START)
+        title.set_hexpand(True)
+        tooltip = info.get("tooltip", "")
+        if isinstance(tooltip, str) and tooltip:
+            title.set_tooltip_text(tooltip)
+
+        grid = Gtk.Grid()
+        grid.set_column_spacing(12)
+        grid.set_row_spacing(6)
+        grid.set_hexpand(True)
+        set_label = Gtk.Label(label="Icon set")
+        set_label.set_halign(Gtk.Align.START)
+        icon_label = Gtk.Label(label="Icon")
+        icon_label.set_halign(Gtk.Align.START)
+        self._set_combo.set_hexpand(True)
+        self._icon_combo.set_hexpand(True)
+        grid.attach(set_label, 0, 0, 1, 1)
+        grid.attach(self._set_combo, 1, 0, 1, 1)
+        grid.attach(icon_label, 0, 1, 1, 1)
+        grid.attach(self._icon_combo, 1, 1, 1, 1)
+
+        for set_id, label, _first, _last in self.icon_sets:
+            self._set_combo.append(set_id, label)
+        self._set_combo.connect("changed", self._on_set_changed)
+        self._icon_combo.connect("changed", self._on_icon_changed)
+
+        self.content_widget = grid
+        self.pack_start(title, False, False, 0)
+        self.pack_start(grid, False, False, 0)
+        self.connect("destroy", self._on_destroy)
+        self._load_from_settings()
+        if self._target:
+            try:
+                widget_ref = weakref.ref(self)
+
+                def settings_listener(*args):
+                    widget = widget_ref()
+                    if widget is not None and not widget._destroyed:
+                        widget._load_from_settings()
+
+                self._settings_listener = settings_listener
+                self._settings.listen(self._target, settings_listener)
+            except Exception:
+                pass
+
+    def _on_destroy(self, *_args):
+        self._destroyed = True
+        _remove_settings_listener(self._settings, self._target, self._settings_listener)
+        self._settings = None
+        self._settings_listener = None
+        self._set_combo = None
+        self._icon_combo = None
+
+    def _read_setting(self):
+        if not self._settings or not self._target:
+            return "soc-original"
+        try:
+            return self._settings.get_value(self._target)
+        except Exception:
+            return "soc-original"
+
+    def _slot_from_value(self, value):
+        if not isinstance(value, str):
+            return None
+        candidate = value.strip()
+        if candidate == "soc-original":
+            return 0
+        prefix, separator, suffix = candidate.rpartition("-")
+        if separator != "-" or prefix not in self.target_families.values():
+            return None
+        if len(suffix) != 2 or not suffix.isdigit():
+            return None
+        slot = int(suffix)
+        return slot if 1 <= slot <= 51 else None
+
+    def _normalize_for_target(self, value):
+        slot = self._slot_from_value(value)
+        if slot == 0:
+            return "soc-original"
+        if slot is None or not self._family:
+            return "soc-original"
+        candidate = f"{self._family}-{slot:02d}"
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidate_path = os.path.join(base_dir, "assets", "status-icons", f"{candidate}.png")
+        return candidate if os.path.isfile(candidate_path) else "soc-original"
+
+    def _set_id_for_slot(self, slot):
+        if slot == 0:
+            return "original"
+        for set_id, _label, first, last in self.icon_sets:
+            if first <= slot <= last and first != 0:
+                return set_id
+        return "original"
+
+    def _options_for_set(self, set_id):
+        if set_id == "original":
+            return (("soc-original", "Original Speed of Cinnamon"),)
+        for candidate_id, _label, first, last in self.icon_sets:
+            if candidate_id != set_id:
+                continue
+            options = []
+            for slot in range(first, last + 1):
+                icon_id = f"{self._family}-{slot:02d}"
+                if set_id == "alternatives":
+                    label = f"Alternative {slot}"
+                elif set_id == "classic":
+                    label = self.classic_labels[slot - first]
+                else:
+                    label = f"{set_id.title()} {slot - first + 1}"
+                options.append((icon_id, label))
+            return tuple(options)
+        return (("soc-original", "Original Speed of Cinnamon"),)
+
+    def _populate_icons(self, set_id, preferred_icon):
+        self._icon_combo.remove_all()
+        options = self._options_for_set(set_id)
+        option_ids = []
+        for icon_id, label in options:
+            option_ids.append(icon_id)
+            self._icon_combo.append(icon_id, label)
+        active_id = preferred_icon if preferred_icon in option_ids else option_ids[0]
+        self._icon_combo.set_active_id(active_id)
+        return active_id
+
+    def _load_from_settings(self):
+        if self._destroyed or self._set_combo is None or self._icon_combo is None:
+            return
+        raw_value = self._read_setting()
+        normalized = self._normalize_for_target(raw_value)
+        slot = self._slot_from_value(normalized)
+        set_id = self._set_id_for_slot(slot if slot is not None else 0)
+        self._updating = True
+        try:
+            self._set_combo.set_active_id(set_id)
+            self._populate_icons(set_id, normalized)
+            if normalized != raw_value and self._settings and self._target:
+                self._settings.set_value(self._target, normalized)
+        finally:
+            self._updating = False
+
+    def _write_icon(self, icon_id):
+        normalized = self._normalize_for_target(icon_id)
+        if self._settings and self._target:
+            self._settings.set_value(self._target, normalized)
+
+    def _on_set_changed(self, *_args):
+        if self._updating or self._set_combo is None or self._icon_combo is None:
+            return
+        set_id = self._set_combo.get_active_id() or "original"
+        self._updating = True
+        try:
+            active_id = self._populate_icons(set_id, "")
+            self._write_icon(active_id)
+        finally:
+            self._updating = False
+
+    def _on_icon_changed(self, *_args):
+        if self._updating or self._icon_combo is None:
+            return
+        icon_id = self._icon_combo.get_active_id()
+        if icon_id:
+            self._write_icon(icon_id)
+
+
 class StatusIconPreview(SettingsWidget):
     max_size = 112
     top_margin = 10
@@ -200,8 +427,8 @@ class StatusIconPreview(SettingsWidget):
         base_dir = os.path.dirname(os.path.abspath(__file__))
         self._asset_base_dir = os.path.join(base_dir, "assets", "status-icons")
         allowed_status_ids = []
-        for state in ("ready", "recording", "processing"):
-            for idx in range(1, 46):
+        for state in ("ready", "recording", "processing", "recorded", "error", "setup"):
+            for idx in range(1, 52):
                 allowed_status_ids.append(
                     "{}-{}{}".format(state, "0" if idx < 10 else "", idx)
                 )
@@ -247,6 +474,7 @@ class StatusIconPreview(SettingsWidget):
 
     def _on_destroy(self, *_args):
         self._destroyed = True
+        _remove_settings_listener(self._settings, self._target, self._settings_listener)
         self._settings = None
         self._settings_listener = None
         self._source_pixbuf = None

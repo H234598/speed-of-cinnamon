@@ -398,9 +398,12 @@ const STATUS_ICON_ALLOWLIST = {};
 [
   "ready",
   "recording",
-  "processing"
+  "processing",
+  "recorded",
+  "error",
+  "setup"
 ].forEach((family) => {
-  for (let i = 1; i <= 45; i++) {
+  for (let i = 1; i <= 51; i++) {
     let index = (i < 10) ? "0" + String(i) : String(i);
     STATUS_ICON_ALLOWLIST[family + "-" + index] = true;
   }
