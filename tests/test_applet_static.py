@@ -1144,7 +1144,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter, autoPasteTarget);', source)
         self.assertIn('_preparedTranscriptText: function(transcript, suppressAutoPasteEnter, autoPasteTargetMatch)', source)
         self.assertIn('typeof autoPasteTargetMatch === "boolean"', source)
-        self.assertIn('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)', source)
+        self.assertIn('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot)', source)
         self.assertIn('_pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {', source)
         self.assertIn("completeOnce(pasteCompleted);", source)
         self.assertIn('_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard)', source)
@@ -7201,6 +7201,16 @@ class AppletStaticTest(unittest.TestCase):
         submit_timer_block = source[submit_timer_start:submit_timer_end]
         self.assertIn("try {", submit_timer_block)
         self.assertIn('this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);', submit_timer_block)
+        allowlist_guard_block = (
+            'if (!this._windowTitleMatchesAutoPaste()) {\n'
+            '                      if (typeof completionCallback === "function") completionCallback(true);\n'
+            '                      return;\n'
+            '                    }'
+        )
+        self.assertIn(allowlist_guard_block, submit_timer_block)
+        allowlist_guard = submit_timer_block.index(allowlist_guard_block)
+        submit_spawn = submit_timer_block.index("this._spawnKeyboardProcess(followUpArgs")
+        self.assertLess(allowlist_guard, submit_spawn)
         keyboard_args_start = source.index("_spawnKeyboardArgs: function(")
         keyboard_args_end = source.index("\n  _finishAppletTextInsert:", keyboard_args_start)
         keyboard_args_block = source[keyboard_args_start:keyboard_args_end]
@@ -8061,18 +8071,39 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_clipboardPayloadDescriptionFromTargets: function(nonTextTargets)", source)
         self.assertIn("nonTextTargets.slice(0, 6).join(\", \")", source)
         self.assertIn("this._shortMenuText(description, 160)", source)
-        self.assertIn("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)", source)
-        copy_index = source.index("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)")
+        self.assertIn("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot)", source)
+        copy_index = source.index("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot)")
         copy_end = source.index("_confirmClipboardOverwriteForPaste: function", copy_index)
         copy_body = source[copy_index:copy_end]
+        write_start = copy_body.index("let writeClipboardAndPaste = (restored) => {")
+        guarded_clipboard_index = copy_body.index("this._setClipboardText(text)", write_start)
         restore_index = copy_body.index("this._restoreTargetWindowForPaste((restored) => {")
-        guarded_clipboard_index = copy_body.index("this._setClipboardText(text)", restore_index)
+        final_snapshot_index = copy_body.index("this._clipboardPayloadSnapshotAsync((currentClipboardSnapshot) => {", restore_index)
+        final_match_index = copy_body.index(
+            "this._clipboardPayloadSignaturesMatch(expectedClipboardSnapshot, currentClipboardSnapshot)",
+            final_snapshot_index,
+        )
+        guarded_write_call = copy_body.index("writeClipboardAndPaste(restored);", final_match_index)
         self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', copy_body)
         self.assertIn(
             'this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);',
             copy_body,
         )
-        self.assertLess(restore_index, guarded_clipboard_index)
+        self.assertLess(restore_index, final_snapshot_index)
+        self.assertLess(final_snapshot_index, final_match_index)
+        self.assertLess(final_match_index, guarded_write_call)
+        self.assertLess(write_start, guarded_clipboard_index)
+        self.assertIn("this._clipboardPayloadSignaturesMatch(expectedClipboardSnapshot, currentClipboardSnapshot)", copy_body)
+        mismatch_block = (
+            'if (!this._clipboardPayloadSignaturesMatch(expectedClipboardSnapshot, currentClipboardSnapshot)) {\n'
+            '              this._clearClipboardOverwriteApproval();\n'
+            '              this._setStatus("ready", _("Clipboard changed; overwrite cancelled"), transcript);\n'
+            '              completeOnce(false);\n'
+            '              return;\n'
+            '            }\n'
+            '            writeClipboardAndPaste(restored);'
+        )
+        self.assertIn(mismatch_block, copy_body)
         self.assertIn('  _describeNonTextClipboardPayload: function(completionCallback) {', source)
         self.assertIn('_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)', source)
         self.assertNotIn('if (method === "clipboard-paste" && !canPasteWithKeyboard) {', source)
@@ -8131,8 +8162,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('complete(false);', source)
         self.assertNotIn('this.clipboard.set_text(St.ClipboardType.CLIPBOARD, "");', source)
         self.assertIn("this._setClipboardText(text)", source)
-        self.assertIn('this._setClipboardOverwriteApproval(currentClipboardSnapshot);', source)
-        self.assertIn("let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, operationGuard);", source)
+        self.assertIn('this._setClipboardOverwriteApproval(approvedSnapshot);', source)
+        self.assertIn("operationGuard,\n        approvedSnapshot", source)
+        self.assertIn("if (this.clipboardOverwriteDialog !== dialog)", source)
+        self.assertNotIn("if (this.clipboardOverwriteDialog !== dialog || !isCurrentOperation())", source)
+        self.assertIn("if (this.clipboardOverwriteDialog === dialog) {\n            this.clipboardOverwriteDialog = null;", source)
+        self.assertIn("if (canPasteWithKeyboard) {\n              continueWithApprovedSnapshot(clipboardSnapshot);", source)
         self.assertIn('if (!this._dialogOpen(dialog, "clipboard-overwrite")) {', source)
         self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);', source)
         self.assertIn("if (result === null) {\n        return;\n      }", source)
@@ -8147,6 +8182,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_clearClipboardOverwriteApproval: function() {", source)
         self.assertIn("if (this._hasValidClipboardOverwriteApproval(clipboardSnapshot)) {", source)
         self.assertIn("this._clearClipboardOverwriteApproval();", source)
+        set_start = source.index("_setClipboardText: function(text)")
+        set_end = source.index("\n  _describeNonTextClipboardPayload:", set_start)
+        set_block = source[set_start:set_end]
+        self.assertIn(
+            'if (result === false) {\n'
+            '        throw new Error("Clipboard text could not be set");\n'
+            '      }\n'
+            '      this._clearClipboardOverwriteApproval();\n'
+            '      return true;',
+            set_block,
+        )
 
     def test_clipboard_overwrite_approval_rejects_empty_or_invalid_fingerprints(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -8224,7 +8270,7 @@ class AppletStaticTest(unittest.TestCase):
     def test_applet_prevents_false_success_when_automatic_paste_could_not_start(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         fn_index = source.index(
-            "_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)"
+            "_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot)"
         )
         confirm_index = source.index(
             "_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)",
@@ -8237,7 +8283,10 @@ class AppletStaticTest(unittest.TestCase):
         paste_command_index = fn_body.index('if (!this._pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {')
 
         self.assertNotIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", fn_body)
-        self.assertIn("this._setClipboardText(text)", fn_body[restore_index:paste_command_index])
+        write_start = fn_body.index("let writeClipboardAndPaste = (restored) => {")
+        self.assertIn("this._setClipboardText(text)", fn_body[write_start:restore_index])
+        snapshot_start = fn_body.index("this._clipboardPayloadSnapshotAsync((currentClipboardSnapshot) => {", restore_index)
+        self.assertLess(snapshot_start, fn_body.index("writeClipboardAndPaste(restored);", snapshot_start))
         self.assertIn(
             'if (!restored) {\n          if (this._setClipboardText(text)) {\n            this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);\n          } else {\n            this._setStatus("error", _("Could not copy to clipboard"), transcript);\n          }\n          completeOnce(false);\n          return;\n        }',
             fn_body,
@@ -8791,14 +8840,28 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _pasteClipboardAfterFocus:", start)
         block = source[start:end]
         cancel = block.index('this._setStatus("ready", _("Clipboard overwrite cancelled")')
-        self.assertIn("if (isCurrentOperation())", block[cancel - 80:cancel])
+        cancel_guard = block.index("if (this.clipboardOverwriteDialog !== dialog)")
+        cancel_close = block.index('if (!this._dialogClose(dialog, "clipboard-overwrite"))', cancel_guard)
+        stale_guard = block.index("if (!isCurrentOperation())", cancel_guard)
+        self.assertLess(cancel_guard, cancel_close)
+        self.assertLess(cancel_close, stale_guard)
+        self.assertLess(stale_guard, cancel)
         self.assertIn('if (!this._dialogClose(dialog, "clipboard-overwrite"))', block)
         self.assertIn("this.textInsertCancellationFailed = true;", block)
         self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);', block)
         overwrite = block.index('label: _("Overwrite clipboard")')
         overwrite_block = block[overwrite:]
-        self.assertIn('if (!this._dialogClose(dialog, "clipboard-overwrite"))', overwrite_block)
-        self.assertIn('return;\n            }\n            this.clipboardOverwriteDialog = null;\n            if (!isCurrentOperation())', overwrite_block)
+        overwrite_guard = overwrite_block.index("if (this.clipboardOverwriteDialog !== dialog)")
+        overwrite_close = overwrite_block.index('if (!this._dialogClose(dialog, "clipboard-overwrite"))')
+        overwrite_stale = overwrite_block.index("if (!isCurrentOperation())")
+        self.assertLess(overwrite_guard, overwrite_close)
+        self.assertLess(overwrite_close, overwrite_stale)
+        self.assertIn(
+            "if (this.clipboardOverwriteDialog === dialog) {\n"
+            "              this.clipboardOverwriteDialog = null;\n"
+            "            }",
+            overwrite_block,
+        )
         self.assertIn('this._recordLifecycleError("clipboard-overwrite", error);', block)
 
     def test_clipboard_overwrite_does_not_continue_when_dialog_close_fails(self) -> None:
@@ -9138,7 +9201,7 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_clipboard_paste_without_keyboard_helpers_copies_first(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        copy_start = source.index('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)')
+        copy_start = source.index('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot)')
         copy_end = source.index("_confirmClipboardOverwriteForPaste: function", copy_start)
         copy_block = source[copy_start:copy_end]
         self.assertIn('if (!this._setClipboardText(text)) {', copy_block)
@@ -9151,6 +9214,8 @@ class AppletStaticTest(unittest.TestCase):
         insert_block = source[insert_start:insert_end]
         self.assertNotIn('if (method === "clipboard-paste" && !canPasteWithKeyboard) {', insert_block)
         self.assertIn("this._clipboardPayloadSnapshotAsync((clipboardSnapshot) => {", insert_block)
+        self.assertEqual(insert_block.count("                isCurrentInsert,\n                clipboardSnapshot"), 1)
+        self.assertEqual(insert_block.count("            isCurrentInsert,\n            clipboardSnapshot"), 1)
 
     def _parse_png_ihdr(self, path: Path) -> tuple[int, int, int]:
         data = path.read_bytes()

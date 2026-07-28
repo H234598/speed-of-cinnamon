@@ -14410,6 +14410,7 @@ MyApplet.prototype = {
       if (result === false) {
         throw new Error("Clipboard text could not be set");
       }
+      this._clearClipboardOverwriteApproval();
       return true;
     } catch (error) {
       this._recordLifecycleError("clipboard-set", error);
@@ -14435,7 +14436,7 @@ MyApplet.prototype = {
     return this._shortMenuText(description, 160);
   },
 
-  _copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard) {
+  _copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot) {
     let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
     let completionFinished = false;
     let completeOnce = (result) => {
@@ -14474,7 +14475,7 @@ MyApplet.prototype = {
       completeOnce(false);
       return false;
     }
-    this._restoreTargetWindowForPaste((restored) => {
+    let writeClipboardAndPaste = (restored) => {
       try {
         if (!isCurrentOperation()) {
           completeOnce(false);
@@ -14517,6 +14518,37 @@ MyApplet.prototype = {
       } catch (error) {
         this._completeKeyboardInsertFailure(completeOnce, _("Keyboard insert failed"), error);
       }
+    };
+    this._restoreTargetWindowForPaste((restored) => {
+      try {
+        if (!isCurrentOperation()) {
+          completeOnce(false);
+          return;
+        }
+        if (!expectedClipboardSnapshot) {
+          writeClipboardAndPaste(restored);
+          return;
+        }
+        this._clipboardPayloadSnapshotAsync((currentClipboardSnapshot) => {
+          try {
+            if (!isCurrentOperation()) {
+              completeOnce(false);
+              return;
+            }
+            if (!this._clipboardPayloadSignaturesMatch(expectedClipboardSnapshot, currentClipboardSnapshot)) {
+              this._clearClipboardOverwriteApproval();
+              this._setStatus("ready", _("Clipboard changed; overwrite cancelled"), transcript);
+              completeOnce(false);
+              return;
+            }
+            writeClipboardAndPaste(restored);
+          } catch (error) {
+            this._completeKeyboardInsertFailure(completeOnce, _("Keyboard insert failed"), error);
+          }
+        });
+      } catch (error) {
+        this._completeKeyboardInsertFailure(completeOnce, _("Keyboard insert failed"), error);
+      }
     });
     return null;
   },
@@ -14554,6 +14586,22 @@ MyApplet.prototype = {
         }
       }
     };
+    let continueWithApprovedSnapshot = (approvedSnapshot) => {
+      this._setClipboardOverwriteApproval(approvedSnapshot);
+      let result = this._copyAndMaybePasteTranscriptText(
+        transcript,
+        text,
+        method,
+        canPasteWithKeyboard,
+        submitWithReturn,
+        complete,
+        operationGuard,
+        approvedSnapshot
+      );
+      if (result !== null) {
+        complete(result);
+      }
+    };
     let failToOpen = () => {
       let closed = this._dialogClose(dialog, "clipboard-overwrite");
       if (closed) {
@@ -14574,15 +14622,23 @@ MyApplet.prototype = {
         label: _("Cancel"),
         key: Clutter.KEY_Escape,
         action: function() {
+          if (this.clipboardOverwriteDialog !== dialog) {
+            complete(false);
+            return;
+          }
           if (!this._dialogClose(dialog, "clipboard-overwrite")) {
             this.textInsertCancellationFailed = true;
             this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);
             return;
           }
-          this.clipboardOverwriteDialog = null;
-          if (isCurrentOperation()) {
-            this._setStatus("ready", _("Clipboard overwrite cancelled"), transcript);
+          if (this.clipboardOverwriteDialog === dialog) {
+            this.clipboardOverwriteDialog = null;
           }
+          if (!isCurrentOperation()) {
+            complete(false);
+            return;
+          }
+          this._setStatus("ready", _("Clipboard overwrite cancelled"), transcript);
           complete(false);
         }.bind(this),
       },
@@ -14590,14 +14646,24 @@ MyApplet.prototype = {
         label: _("Overwrite clipboard"),
         action: function() {
           try {
+            if (this.clipboardOverwriteDialog !== dialog) {
+              complete(false);
+              return;
+            }
             if (!this._dialogClose(dialog, "clipboard-overwrite")) {
               this.textInsertCancellationFailed = true;
               this._setStatus("error", _("Clipboard overwrite prompt could not be closed"), transcript);
               return;
             }
-            this.clipboardOverwriteDialog = null;
+            if (this.clipboardOverwriteDialog === dialog) {
+              this.clipboardOverwriteDialog = null;
+            }
             if (!isCurrentOperation()) {
               complete(false);
+              return;
+            }
+            if (canPasteWithKeyboard) {
+              continueWithApprovedSnapshot(clipboardSnapshot);
               return;
             }
             this._clipboardPayloadSnapshotAsync((currentClipboardSnapshot) => {
@@ -14611,11 +14677,7 @@ MyApplet.prototype = {
                   complete(false);
                   return;
                 }
-                this._setClipboardOverwriteApproval(currentClipboardSnapshot);
-                let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, operationGuard);
-                if (result !== null) {
-                  complete(result);
-                }
+                continueWithApprovedSnapshot(currentClipboardSnapshot);
               } catch (error) {
                 this._recordLifecycleError("clipboard-overwrite", error);
                 complete(false);
@@ -14974,6 +15036,10 @@ MyApplet.prototype = {
                     }
                     if (!submitTargetMatches) {
                       fail(_("Target window changed before automatic submit"));
+                      return;
+                    }
+                    if (!this._windowTitleMatchesAutoPaste()) {
+                      if (typeof completionCallback === "function") completionCallback(true);
                       return;
                     }
                     if (!this._spawnKeyboardProcess(followUpArgs, (submitCompleted) => {
@@ -15494,8 +15560,16 @@ MyApplet.prototype = {
           }
           if (clipboardSnapshot.hasNonTextPayload) {
             if (this._hasValidClipboardOverwriteApproval(clipboardSnapshot)) {
-              this._clearClipboardOverwriteApproval();
-              let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, isCurrentInsert);
+              let result = this._copyAndMaybePasteTranscriptText(
+                transcript,
+                text,
+                method,
+                canPasteWithKeyboard,
+                submitWithReturn,
+                complete,
+                isCurrentInsert,
+                clipboardSnapshot
+              );
               if (result !== null) {
                 complete(result);
               }
@@ -15514,7 +15588,16 @@ MyApplet.prototype = {
             );
             return;
           }
-          let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, isCurrentInsert);
+          let result = this._copyAndMaybePasteTranscriptText(
+            transcript,
+            text,
+            method,
+            canPasteWithKeyboard,
+            submitWithReturn,
+            complete,
+            isCurrentInsert,
+            clipboardSnapshot
+          );
           if (result !== null) {
             complete(result);
           }
