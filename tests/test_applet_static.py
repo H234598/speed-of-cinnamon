@@ -2297,6 +2297,45 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(cleanup_guard, block, method)
             self.assertLess(block.index(cleanup_guard), block.index(side_effect), method)
 
+    def test_model_catalog_loading_failures_release_refresh_tokens(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        voice_start = source.index("_refreshModelMenu: function()")
+        voice_end = source.index("\n  _populateModelMenu:", voice_start)
+        voice_block = source[voice_start:voice_end]
+        voice_try = voice_block.index("try {", voice_block.index("let modelArgs;"))
+        voice_loading = voice_block.index('this._populateModelMenu([], _("Loading voice models..."));')
+        voice_args = voice_block.index("modelArgs = this._modelsArgs();")
+        voice_fallback = voice_block.index('this._populateModelMenu([], _("Could not prepare voice model list"));')
+        voice_fallback_error = voice_block.index('this._recordLifecycleError("menu-refresh", populateError);')
+        self.assertLess(voice_try, voice_loading)
+        self.assertLess(voice_loading, voice_args)
+        self.assertLess(voice_fallback, voice_fallback_error)
+
+        text_start = source.index("_refreshTextModelMenuForBackend: function(backendOverride)")
+        text_end = source.index("\n  _populateTextModelMenu:", text_start)
+        text_block = source[text_start:text_end]
+        provider = text_block.index('let provider = backend === "openai-compatible"')
+        preflight = text_block.index("let textModelArgs = this._tryTextModelsArgs(backendOverride);")
+        preflight_error = text_block.index(
+            'this._populateTextModelMenu([], _("Could not prepare text model list"), provider);'
+        )
+        preflight_error_log = text_block.index('this._recordLifecycleError("text-model-refresh", error);')
+        token = text_block.index("this.textModelMenuRefreshToken = refreshToken;")
+        loading_try = text_block.index("try {", token)
+        loading = text_block.index("this._populateTextModelMenu([], loadingMessage, provider);")
+        loading_error = text_block.index('this._recordLifecycleError("text-model-refresh", error);', loading)
+        self.assertLess(provider, preflight)
+        self.assertLess(preflight, preflight_error)
+        self.assertLess(preflight_error, preflight_error_log)
+        self.assertLess(preflight_error, token)
+        preflight_failure_block = text_block[preflight:text_block.index("let refreshToken = {};")]
+        self.assertNotIn("_setStatusPreservingRecording", preflight_failure_block)
+        self.assertLess(token, loading_try)
+        self.assertLess(loading_try, loading)
+        self.assertLess(loading, loading_error)
+        self.assertIn("this.textModelMenuRefreshToken = null;", text_block[loading_try:loading_error])
+
     def test_alarm_refresh_queues_one_fresh_reopen_request(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 

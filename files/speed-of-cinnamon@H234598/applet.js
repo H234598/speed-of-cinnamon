@@ -8358,18 +8358,22 @@ MyApplet.prototype = {
     }
     let refreshToken = {};
     this.modelMenuRefreshToken = refreshToken;
-    if (this._modelMenuFingerprint === null) {
-      this._populateModelMenu([], _("Loading voice models..."));
-    }
     let modelArgs;
     try {
+      if (this._modelMenuFingerprint === null) {
+        this._populateModelMenu([], _("Loading voice models..."));
+      }
       modelArgs = this._modelsArgs();
     } catch (error) {
       if (this.modelMenuRefreshToken === refreshToken) {
         this.modelMenuRefreshToken = null;
       }
       this._recordLifecycleError("model-refresh", error);
-      this._populateModelMenu([], _("Could not prepare voice model list"));
+      try {
+        this._populateModelMenu([], _("Could not prepare voice model list"));
+      } catch (populateError) {
+        this._recordLifecycleError("menu-refresh", populateError);
+      }
       if (canReportModelStatus()) {
         this._setStatusPreservingRecording("error", _("Could not prepare voice model list"), this.lastTranscript);
       }
@@ -9699,19 +9703,35 @@ MyApplet.prototype = {
       }
       return;
     }
+    let backend = String(backendOverride || this.postProcessBackend || "");
+    let provider = backend === "openai-compatible" ? "openai-compatible" : "ollama";
     let textModelArgs = this._tryTextModelsArgs(backendOverride);
     if (!textModelArgs) {
+      try {
+        this._populateTextModelMenu([], _("Could not prepare text model list"), provider);
+      } catch (error) {
+        this._recordLifecycleError("text-model-refresh", error);
+      }
       return;
     }
     let refreshToken = {};
     this.textModelMenuRefreshToken = refreshToken;
-    let backend = String(backendOverride || this.postProcessBackend || "");
-    let provider = backend === "openai-compatible" ? "openai-compatible" : "ollama";
     let loadingMessage = provider === "openai-compatible"
       ? _("Loading OpenAI-compatible text models...")
       : _("Loading local text models...");
-    if (this._textModelMenuFingerprint === null || this._textModelMenuProvider !== provider) {
-      this._populateTextModelMenu([], loadingMessage, provider);
+    try {
+      if (this._textModelMenuFingerprint === null || this._textModelMenuProvider !== provider) {
+        this._populateTextModelMenu([], loadingMessage, provider);
+      }
+    } catch (error) {
+      if (this.textModelMenuRefreshToken === refreshToken) {
+        this.textModelMenuRefreshToken = null;
+      }
+      this._recordLifecycleError("text-model-refresh", error);
+      if (canReportTextModelStatus()) {
+        this._setStatusPreservingRecording("error", _("Could not prepare text model list"), this.lastTranscript);
+      }
+      return;
     }
     this._spawnJson(textModelArgs, (payload) => {
       if (this.textModelMenuRefreshToken !== refreshToken) {
