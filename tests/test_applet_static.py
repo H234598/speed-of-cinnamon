@@ -1144,7 +1144,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter, autoPasteTarget);', source)
         self.assertIn('_preparedTranscriptText: function(transcript, suppressAutoPasteEnter, autoPasteTargetMatch)', source)
         self.assertIn('typeof autoPasteTargetMatch === "boolean"', source)
-        self.assertIn('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot)', source)
+        self.assertIn('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot, keyboardProgram)', source)
         self.assertIn('_pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {', source)
         self.assertIn("completeOnce(pasteCompleted);", source)
         self.assertIn('_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard)', source)
@@ -1173,7 +1173,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof delay === "number" && isFinite(delay)', source)
         self.assertIn("_normalizeTypingDelayMs(this.typingDelayMs)", source)
         self.assertIn('"--typing-delay-ms", String(this._normalizeTypingDelayMs(this.typingDelayMs))', source)
-        self.assertIn('_typeTextAfterFocus: function(text, completionCallback, operationGuard) {', source)
+        self.assertIn('_typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath) {', source)
 
     def test_recording_progress_path_uses_recording_limit_normalizer(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1541,13 +1541,62 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         for signature in [
-            "_pasteClipboardAfterFocus: function(sendEnter, expectedClipboardText, completionCallback, operationGuard)",
-            "_typeTextAfterFocus: function(text, completionCallback, operationGuard)",
+            "_pasteClipboardAfterFocus: function(sendEnter, expectedClipboardText, completionCallback, operationGuard, keyboardProgram)",
+            "_typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath)",
             "_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard)",
             "_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard)",
             "_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard)",
         ]:
             self.assertIn(signature, source)
+        focus_start = source.index("_spawnKeyboardAfterFocus: function(")
+        focus_end = source.index("\n  _spawnKeyboardWhenClipboardReady:", focus_start)
+        focus_block = source[focus_start:focus_end]
+        ready_start = source.index("_spawnKeyboardWhenClipboardReady: function(")
+        ready_end = source.index("\n  _spawnKeyboardArgs:", ready_start)
+        ready_block = source[ready_start:ready_end]
+        args_start = source.index("_spawnKeyboardArgs: function(")
+        args_end = source.index("\n  _finishAppletTextInsert:", args_start)
+        args_block = source[args_start:args_end]
+        self.assertEqual(source.count("this._spawnKeyboardArgs("), 3)
+        self.assertIn("let completed = false;", focus_block)
+        self.assertIn("if (completed) {", focus_block)
+        self.assertIn("completed = true;", focus_block)
+        self.assertIn(
+            "expectedTargetWindow, complete, isCurrentOperation);",
+            focus_block,
+        )
+        self.assertRegex(
+            ready_block,
+            r"(?s)this\._spawnKeyboardArgs\([^;]*"
+            r"completionCallback,\s*isCurrentOperation\s*\);",
+        )
+        self.assertIn(
+            "let retryDelayMs = clipboardDeadlineMs - Date.now();",
+            args_block,
+        )
+        self.assertIn(
+            "retryDelayMs = Math.min(CLIPBOARD_READY_RETRY_MS, retryDelayMs);",
+            args_block,
+        )
+        retry_budget = args_block.index(
+            "let retryDelayMs = clipboardDeadlineMs - Date.now();"
+        )
+        retry_empty = args_block.index("if (retryDelayMs <= 0)", retry_budget)
+        retry_clamp = args_block.index(
+            "retryDelayMs = Math.min(CLIPBOARD_READY_RETRY_MS, retryDelayMs);",
+            retry_empty,
+        )
+        retry_schedule = args_block.index(
+            'this._scheduleTrackedTimer("paste", retryDelayMs,',
+            retry_clamp,
+        )
+        self.assertLess(retry_budget, retry_empty)
+        self.assertLess(retry_empty, retry_clamp)
+        self.assertLess(retry_clamp, retry_schedule)
+        self.assertEqual(
+            args_block.count("completionCallback, isCurrentOperation"),
+            2,
+        )
         self.assertIn("if (!isCurrentOperation() || !this._lifecycleAllowsWork()", source)
         self.assertIn("if (this.appletRemoved || !isCurrentOperation())", source)
         self.assertIn("completionCallback, isCurrentOperation", source)
@@ -1586,6 +1635,124 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn('this._findTrustedProgramInPath("xdotool")', block)
             self.assertIn('this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);', block)
             self.assertIn("return false;", block)
+
+    def test_insert_forwards_single_trusted_keyboard_program(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        insert_start = source.index(
+            "_insertTranscriptText: function(transcript, completionCallback, protectedInsertFingerprint)"
+        )
+        insert_end = source.index("\n  _restartRelistenRecording:", insert_start)
+        insert_block = source[insert_start:insert_end]
+
+        resolver_start = insert_block.index("let keyboardProgram = null;")
+        resolver_end = insert_block.index("let submitWithReturn", resolver_start)
+        resolver_block = insert_block[resolver_start:resolver_end]
+        self.assertEqual(
+            resolver_block.count('this._findTrustedProgramInPath("xdotool")'),
+            1,
+        )
+        self.assertEqual(
+            resolver_block.count('this._findTrustedProgramInPath("wtype")'),
+            1,
+        )
+        self.assertIn("let canPasteWithKeyboard = Boolean(keyboardProgram);", resolver_block)
+
+        type_start = insert_block.index('if (method === "type")')
+        type_end = insert_block.index('if (method !== "clipboard-paste")', type_start)
+        type_block = insert_block[type_start:type_end]
+        self.assertEqual(type_block.count('this._findTrustedProgramInPath("xdotool")'), 1)
+        self.assertIn("isCurrentInsert, xdotoolPath))", type_block)
+
+        paste_start = insert_block.index('if (method !== "clipboard-paste")')
+        paste_block = insert_block[paste_start:]
+        self.assertEqual(
+            paste_block.count(
+                "                clipboardSnapshot,\n"
+                "                keyboardProgram\n"
+                "              );"
+            ),
+            1,
+        )
+        self.assertEqual(
+            paste_block.count(
+                "            clipboardSnapshot,\n"
+                "            keyboardProgram\n"
+                "          );"
+            ),
+            1,
+        )
+        self.assertIn(
+            "              isCurrentInsert,\n"
+            "              keyboardProgram\n"
+            "            );",
+            paste_block,
+        )
+
+        copy_start = source.index(
+            "_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot, keyboardProgram)"
+        )
+        copy_end = source.index("\n  _confirmClipboardOverwriteForPaste:", copy_start)
+        copy_block = source[copy_start:copy_end]
+        self.assertIn("}, isCurrentOperation, keyboardProgram)) {", copy_block)
+
+        confirm_start = source.index(
+            "_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, keyboardProgram)"
+        )
+        confirm_end = source.index("\n  _pasteClipboardAfterFocus:", confirm_start)
+        confirm_block = source[confirm_start:confirm_end]
+        self.assertIn(
+            "        operationGuard,\n"
+            "        approvedSnapshot,\n"
+            "        keyboardProgram",
+            confirm_block,
+        )
+
+        paste_helper_start = source.index(
+            "_pasteClipboardAfterFocus: function(sendEnter, expectedClipboardText, completionCallback, operationGuard, keyboardProgram)"
+        )
+        paste_helper_end = source.index("\n  _typeTextAfterFocus:", paste_helper_start)
+        paste_helper = source[paste_helper_start:paste_helper_end]
+        self.assertIn(
+            "    if (keyboardProgram &&\n"
+            '        keyboardProgram.kind === "xdotool"',
+            paste_helper,
+        )
+        self.assertIn("hasXdotool = keyboardProgram.path;", paste_helper)
+        self.assertIn("hasWtype = keyboardProgram.path;", paste_helper)
+        self.assertEqual(
+            paste_helper.count('this._findTrustedProgramInPath("xdotool")'), 1
+        )
+        self.assertEqual(
+            paste_helper.count('this._findTrustedProgramInPath("wtype")'), 1
+        )
+        self.assertIn(
+            "    } else {\n"
+            "      try {\n"
+            '        hasXdotool = this._findTrustedProgramInPath("xdotool");\n'
+            '        hasWtype = this._findTrustedProgramInPath("wtype");',
+            paste_helper,
+        )
+        self.assertIn("return false;", paste_helper)
+
+        type_helper_start = source.index(
+            "_typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath)"
+        )
+        type_helper_end = source.index("\n  _coerceTypeText:", type_helper_start)
+        type_helper = source[type_helper_start:type_helper_end]
+        self.assertIn(
+            'if (typeof xdotoolPath === "string" && xdotoolPath !== "")',
+            type_helper,
+        )
+        self.assertIn("xdotool = xdotoolPath;", type_helper)
+        self.assertEqual(
+            type_helper.count('this._findTrustedProgramInPath("xdotool")'), 1
+        )
+        self.assertIn(
+            "    } else {\n"
+            "      try {\n"
+            '        xdotool = this._findTrustedProgramInPath("xdotool");',
+            type_helper,
+        )
 
     def test_menu_payload_arrays_and_entries_are_shape_safe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -4928,6 +5095,29 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let timerIsCurrent = registryOwnsTimer && (!propertyName || propertyOwnsTimer);", block)
         self.assertIn("if (!timerIsCurrent) {", block)
         self.assertIn("let timerWasReplaced = !(", block)
+
+        replacement_expression_start = block.index("let timerWasReplaced = !(")
+        replacement_guard_start = block.index(
+            "if (timerWasReplaced) {",
+            replacement_expression_start,
+        )
+        retirement_start = block.index("if (!keepTimer) {", replacement_guard_start)
+        replacement_expression = block[
+            replacement_expression_start:replacement_guard_start
+        ]
+        replacement_guard = block[replacement_guard_start:retirement_start]
+
+        self.assertIn("this._resourceRegistry.timers[key] === sourceId", replacement_expression)
+        self.assertIn("(!propertyName || this[propertyName] === sourceId)", replacement_expression)
+        self.assertRegex(
+            replacement_guard,
+            r"(?s)^if \(timerWasReplaced\) \{\s*"
+            r"(?:(?://[^\n]*\n|/\*.*?\*/)\s*)*"
+            r"return false;\s*"
+            r"(?:(?://[^\n]*\n|/\*.*?\*/)\s*)*"
+            r"\}\s*$",
+        )
+        self.assertNotIn("retireTimer(", replacement_guard)
         self.assertIn("if (timerWasReplaced) {", block)
         self.assertIn("if (!keepTimer) {", block)
         self.assertIn("let retireTimer = (sourceRemovedOnFailure) => {", block)
@@ -5079,7 +5269,10 @@ class AppletStaticTest(unittest.TestCase):
         args_start = source.index("_spawnKeyboardArgs: function(")
         args_end = source.index("\n  _finishAppletTextInsert:", args_start)
         args_block = source[args_start:args_end]
-        self.assertIn('this._completeKeyboardInsertFailure(completionCallback, _("Clipboard could not be verified before automatic paste"));', args_block)
+        self.assertIn(
+            'failAsync(null, _("Clipboard could not be verified before automatic paste"));',
+            args_block,
+        )
         self.assertLess(args_block.index("try {"), args_block.index("this.clipboard.get_text"))
 
     def test_timer_reschedule_aborts_when_previous_timer_cannot_be_removed(self) -> None:
@@ -6642,6 +6835,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let completeOnce = (result) =>", keyboard_block)
         self.assertIn("if (!handle) {\n        completeOnce(false);", keyboard_block)
         self.assertIn("result.cancelled", keyboard_block)
+        self.assertRegex(
+            keyboard_block,
+            r"(?s)if \(!this\._lifecycleAllowsWork\(\)\) \{\s*"
+            r"completeOnce\(false\);\s*return false;\s*\}",
+        )
+        self.assertRegex(
+            keyboard_block,
+            r"(?s)if \(!handle\) \{\s*"
+            r"completeOnce\(false\);\s*return false;\s*\}",
+        )
+        self.assertRegex(
+            keyboard_block,
+            r"(?s)catch \(error\) \{\s*"
+            r'this\._recordLifecycleError\("keyboard-process", error\);\s*'
+            r"completeOnce\(false\);\s*return false;\s*\}",
+        )
 
     def test_target_capture_fails_closed_when_insert_cleanup_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6711,6 +6920,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (name !== "timeout" && name !== "xdotool")', x11_block)
         self.assertIn("let trustedProgram = this._findTrustedProgramInPath(name);", x11_block)
         self.assertEqual(x11_block.count("resolveTrustedProgram);"), 3)
+        self.assertIn("this.targetWindowXTitle = title;", x11_block)
+        self.assertNotIn("this.targetWindowXTitle = this._shortMenuText", x11_block)
+        self.assertIn("if (activeRemainingMs <= 0)", x11_block)
+        self.assertIn("if (titleRemainingMs <= 0)", x11_block)
+        self.assertIn("if (classRemainingMs <= 0)", x11_block)
+        self.assertIn("if (!isCurrent() || Date.now() >= deadlineMs)", x11_block)
+        self.assertNotIn("Math.max(1, deadlineMs", x11_block)
 
         auto_paste_start = source.index("_windowTitleMatchesAutoPaste: function()")
         auto_paste_end = source.index("\n  _updateOpenAiFlexProcessingItem:", auto_paste_start)
@@ -6732,11 +6948,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let expectedTitle = String(snapshot.windowTitle || "").trim().toLowerCase();', match_block)
         self.assertIn('if (expectedClass === "" && expectedTitle === "")', match_block)
         self.assertIn("complete(false);\n      return false;", match_block)
+        self.assertIn("if (activeRemainingMs <= 0)", match_block)
+        self.assertIn("if (classRemainingMs <= 0)", match_block)
+        self.assertIn("if (!Number.isFinite(titleRemainingMs) || titleRemainingMs <= 0)", match_block)
+        self.assertIn("if (titleDeadlineMs !== null && Date.now() >= titleDeadlineMs)", match_block)
+        self.assertNotIn("Math.max(1, deadlineMs", match_block)
 
         title_start = source.index("_targetXWindowMatchesSnapshotTitle: function(snapshot, xid, completionCallback, deadlineMs)")
         title_end = source.index("\n  _windowProbeValue:", title_start)
         title_block = source[title_start:title_end]
         self.assertIn('this._xdotoolOutput(["getwindowname", xid]', title_block)
+        self.assertIn('let activeTitle = String(titleOutput || "").trim().toLowerCase();', title_block)
+        self.assertNotIn("this._shortMenuText", title_block)
         self.assertIn("this._xWindowLooksLikeSpeedOfCinnamon(activeTitle, snapshot.windowClass)", title_block)
         self.assertIn('if (expectedTitle === "")', title_block)
 
@@ -7503,6 +7726,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let callbackDelivered = false;", restore_block)
         self.assertIn("callbackDelivered = true;\n          complete(true);", restore_block)
         self.assertIn("if (!callbackDelivered) {\n          complete(false);", restore_block)
+        self.assertIn("global.display.focus_window === this.targetWindow", restore_block)
+        self.assertIn("return completeFocusedTarget();", restore_block)
+        self.assertLess(
+            restore_block.index("global.display.focus_window === this.targetWindow"),
+            restore_block.index("Main.activateWindow("),
+        )
         self.assertLess(restore_block.index("if (!this._lifecycleAllowsWork())"), restore_block.index("this._isUsableTargetWindow(this.targetWindow)"))
         self.assertIn("return this._activateTargetXWindow(complete);", source)
         self.assertIn('if (!expectedTargetWindow) {', source)
@@ -7531,6 +7760,8 @@ class AppletStaticTest(unittest.TestCase):
         keyboard_args_block = source[keyboard_args_start:keyboard_args_end]
         self.assertIn("this._spawnKeyboardProcess(args, (firstCompleted) => {\n          try {", keyboard_args_block)
         self.assertIn("this._spawnKeyboardProcess(followUpArgs, (submitCompleted) => {\n                      try {", keyboard_args_block)
+        self.assertNotIn("if (!this._spawnKeyboardProcess(args,", keyboard_args_block)
+        self.assertNotIn("if (!this._spawnKeyboardProcess(followUpArgs,", keyboard_args_block)
         self.assertIn("this._targetXWindowMatchesSnapshot(expectedTargetWindow, (matches) => {\n      try {", keyboard_args_block)
         self.assertIn("this._completeKeyboardInsertFailure(completionCallback, _", keyboard_args_block)
         self.assertIn('complete(targetGeneration === Number(this.targetWindowGeneration || 0) && output !== null);', source)
@@ -7610,7 +7841,13 @@ class AppletStaticTest(unittest.TestCase):
         reserve_index = source.index("let reservation = this._reserveAutoInsertFingerprint(insertFingerprint);", finish_index)
         insert_index = source.index("this._insertTranscriptText(transcript,", finish_index)
         self.assertLess(reserve_index, insert_index)
-        self.assertIn("if (result === null) {\n        return;\n      }", source[finish_index:source.index("_finishPendingRelisten: function()", finish_index)])
+        self.assertIn(
+            "if (result === null) {\n"
+            "        insertOwnerToken = this.textInsertToken;\n"
+            "        return;\n"
+            "      }",
+            source[finish_index:source.index("_finishPendingRelisten: function()", finish_index)],
+        )
         duplicate_index = source.index("if (!reservation) {", reserve_index)
         duplicate_finish_index = source.index("this._finishPendingRelisten();", duplicate_index)
         duplicate_return_index = source.index("return;", duplicate_index)
@@ -8305,8 +8542,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]', source)
         self.assertIn("_isTerminalTargetWindow: function()", source)
         self.assertIn('let autoPasteTarget = method === "clipboard-paste" && this._windowTitleMatchesAutoPaste();', source)
-        self.assertIn('let canPasteWithKeyboard = method === "clipboard-paste" &&', source)
-        self.assertIn('(this._findTrustedProgramInPath("xdotool") || this._findTrustedProgramInPath("wtype"));', source)
+        self.assertIn("let keyboardProgram = null;", source)
+        self.assertIn('let xdotoolPath = this._findTrustedProgramInPath("xdotool");', source)
+        self.assertIn('let wtypePath = this._findTrustedProgramInPath("wtype");', source)
+        self.assertIn('keyboardProgram = { kind: "xdotool", path: xdotoolPath };', source)
+        self.assertIn('keyboardProgram = { kind: "wtype", path: wtypePath };', source)
+        self.assertIn("let canPasteWithKeyboard = Boolean(keyboardProgram);", source)
         self.assertIn('let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;', source)
         self.assertIn('let terminalPaste = this._isTerminalTargetWindow();', source)
         self.assertIn('let hasXdotool;', source)
@@ -8334,7 +8575,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText], null, null, expectedTargetWindow, completionCallback, isCurrentOperation)', source)
         self.assertIn('if (!isCurrentOperation() || !this._lifecycleAllowsWork()) {', source)
         self.assertIn("this._completeKeyboardInsertFailure(", source)
-        self.assertIn('this._setStatus("error", _("Clipboard did not confirm new text before automatic paste"), this.lastTranscript);', source)
+        args_start = source.index("_spawnKeyboardArgs: function(")
+        args_end = source.index("\n  _finishAppletTextInsert:", args_start)
+        args_block = source[args_start:args_end]
+        self.assertIn(
+            'failAsync(null, _("Clipboard did not confirm new text before automatic paste"));',
+            args_block,
+        )
         self.assertIn("return false;", source)
         self.assertIn("return true;", source)
 
@@ -8386,8 +8633,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_clipboardPayloadDescriptionFromTargets: function(nonTextTargets)", source)
         self.assertIn("nonTextTargets.slice(0, 6).join(\", \")", source)
         self.assertIn("this._shortMenuText(description, 160)", source)
-        self.assertIn("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot)", source)
-        copy_index = source.index("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot)")
+        self.assertIn("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot, keyboardProgram)", source)
+        copy_index = source.index("_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot, keyboardProgram)")
         copy_end = source.index("_confirmClipboardOverwriteForPaste: function", copy_index)
         copy_body = source[copy_index:copy_end]
         write_start = copy_body.index("let writeClipboardAndPaste = (restored) => {")
@@ -8420,7 +8667,7 @@ class AppletStaticTest(unittest.TestCase):
         )
         self.assertIn(mismatch_block, copy_body)
         self.assertIn('  _describeNonTextClipboardPayload: function(completionCallback) {', source)
-        self.assertIn('_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)', source)
+        self.assertIn('_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, keyboardProgram)', source)
         self.assertNotIn('if (method === "clipboard-paste" && !canPasteWithKeyboard) {', source)
         self.assertIn('this._setStatus("done", _("Copied to clipboard; install xdotool or wtype for automatic paste"), transcript);', source)
         self.assertIn('this._clipboardPayloadSnapshotAsync((clipboardSnapshot) => {', source)
@@ -8485,7 +8732,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (canPasteWithKeyboard) {\n              continueWithApprovedSnapshot(clipboardSnapshot);", source)
         self.assertIn('if (!this._dialogOpen(dialog, "clipboard-overwrite")) {', source)
         self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);', source)
-        self.assertIn("if (result === null) {\n        return;\n      }", source)
+        self.assertIn(
+            "if (result === null) {\n"
+            "        insertOwnerToken = this.textInsertToken;\n"
+            "        return;\n"
+            "      }",
+            source,
+        )
 
     def test_applet_tracks_explicit_clipboard_overwrite_approval_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -8571,24 +8824,59 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._spawnKeyboardArgs(", ready_block)
         self.assertEqual(args_block.count("this.clipboard.get_text(St.ClipboardType.CLIPBOARD"), 1)
         self.assertIn('if (expectedClipboardText !== undefined && expectedClipboardText !== null) {', source)
-        self.assertIn('String(clipboardText || "") !== expected', source)
+        self.assertIn("let clipboardDeadlineMs = Number(expectedClipboardDeadlineMs);", args_block)
+        self.assertIn("let readSettled = false;", args_block)
+        self.assertIn("let readWatchdogId = 0;", args_block)
+        self.assertIn("let settleReadAndClearWatchdog = () => {", args_block)
         self.assertIn(
-            'this._setStatus("error", _("Clipboard did not confirm new text before automatic paste"), this.lastTranscript);',
-            source,
+            'this._trackedTimerOwnedBy("paste", readWatchdogId, "pasteTimer")',
+            args_block,
+        )
+        self.assertIn(
+            'readWatchdogId = this._scheduleTrackedTimer(\n'
+            '        "paste",\n'
+            '        Math.max(1, clipboardDeadlineMs - Date.now()),',
+            args_block,
+        )
+        self.assertLess(
+            args_block.index("readWatchdogId = this._scheduleTrackedTimer("),
+            args_block.index(
+                "this.clipboard.get_text(St.ClipboardType.CLIPBOARD"
+            ),
+        )
+        self.assertIn('String(clipboardText || "") !== expected', source)
+        deadline_index = args_block.index("if (Date.now() >= clipboardDeadlineMs) {")
+        compare_index = args_block.index(
+            'if (String(clipboardText || "") !== expected) {'
+        )
+        self.assertLess(deadline_index, compare_index)
+        self.assertIn(
+            'failAsync(null, _("Clipboard did not confirm new text before automatic paste"));',
+            args_block,
         )
         self.assertIn(
             'this._setStatus("error", _("Keyboard insert failed: retry timer could not be scheduled"), this.lastTranscript);',
             args_block,
         )
+        self.assertIn(
+            'this._scheduleTrackedTimer("paste", retryDelayMs,',
+            args_block,
+        )
+        self.assertIn(
+            'this._scheduleTrackedTimer("paste", PASTE_SUBMIT_DELAY_MS,',
+            args_block,
+        )
+        self.assertIn("if (readSettled) {", args_block)
+        self.assertIn("this._clearPasteTimer() === false", args_block)
         self.assertIn('failAsync(error, _("Clipboard could not be verified before automatic paste"));', args_block)
 
     def test_applet_prevents_false_success_when_automatic_paste_could_not_start(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         fn_index = source.index(
-            "_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot)"
+            "_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot, keyboardProgram)"
         )
         confirm_index = source.index(
-            "_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard)",
+            "_confirmClipboardOverwriteForPaste: function(clipboardSnapshot, transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, keyboardProgram)",
             fn_index,
         )
         fn_body = source[fn_index:confirm_index]
@@ -8817,7 +9105,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('_windowIdentityMatchesAutoPaste: function(marker)', source)
         self.assertIn('windowTitle: String(this.targetWindowXTitle || "").trim().toLowerCase(),', source)
         self.assertIn('let expectedTitle = String(snapshot.windowTitle || "").trim().toLowerCase();', source)
-        self.assertIn('let activeTitle = this._shortMenuText(String(titleOutput || "").trim(), 160).toLowerCase();', source)
+        self.assertIn('let activeTitle = String(titleOutput || "").trim().toLowerCase();', source)
 
     def test_applet_marks_text_uri_clipboard_targets_as_non_text(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -9254,7 +9542,12 @@ class AppletStaticTest(unittest.TestCase):
         failure_start = block.index("let failPreparation = (error, notifyCompletion) => {")
         failure_end = block.index('    if (this._isEmptyTranscriptText(transcript)', failure_start)
         failure_block = block[failure_start:failure_end]
-        self.assertIn("release();", failure_block)
+        self.assertIn(
+            "if (!release()) {\n"
+            "        return false;\n"
+            "      }",
+            failure_block,
+        )
         self.assertIn('this._recordLifecycleError("text-insert", error);', block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Could not prepare text insertion")', block)
         self.assertIn("return false;", block)
@@ -9482,6 +9775,344 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('args.push("--confirm-plaintext");', block)
         self.assertIn('args.push("--json");', block)
         self.assertIn("return args;", block)
+
+    def test_done_payload_does_not_overwrite_active_insert_owner(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        finish_start = source.index("_finishAppletTextInsert: function(payload)")
+        finish_end = source.index(
+            "\n  _ensureAutoRelistenPendingForDonePayload:",
+            finish_start,
+        )
+        finish_block = source[finish_start:finish_end]
+        empty_busy_index = finish_block.index(
+            "if (this.textInsertToken && this._isEmptyTranscriptText(transcript)) {"
+        )
+        empty_finish_index = finish_block.index(
+            "this._finishEmptyRelistenDone(payload);",
+            empty_busy_index,
+        )
+        fingerprint_index = finish_block.index(
+            "let insertFingerprint = this._autoInsertFingerprint(payload, transcript);"
+        )
+        busy_start = finish_block.index("if (this.textInsertToken) {", fingerprint_index)
+        ensure_index = finish_block.index(
+            "this._ensureAutoRelistenPendingForDonePayload(payload);",
+            busy_start,
+        )
+        reservation_index = finish_block.index(
+            "this._reserveAutoInsertFingerprint(insertFingerprint);",
+            ensure_index,
+        )
+        busy_block = finish_block[busy_start:ensure_index]
+        duplicate_start = finish_block.index("if (!reservation) {")
+        duplicate_end = finish_block.index("\n    let clearPendingFingerprint", duplicate_start)
+        duplicate_block = finish_block[duplicate_start:duplicate_end]
+
+        self.assertIn(
+            "if (this.textInsertToken && this._isEmptyTranscriptText(transcript)) {\n"
+            "      return;\n"
+            "    }",
+            finish_block,
+        )
+        self.assertIn(
+            "if (this.autoInsertPendingFingerprint === insertFingerprint) {\n"
+            "        return;\n"
+            "      }",
+            busy_block,
+        )
+        self.assertLess(empty_busy_index, empty_finish_index)
+        self.assertLess(empty_finish_index, busy_start)
+        self.assertIn("this.autoRelistenPending = false;", busy_block)
+        self.assertIn("this.autoRelistenPendingToken = \"\";", busy_block)
+        self.assertIn("this.autoRelistenPendingLanguage = \"\";", busy_block)
+        self.assertIn("this.autoRelistenManualStopRequested = true;", busy_block)
+        self.assertIn(
+            "this.autoInsertConflictToken = this.textInsertToken;",
+            busy_block,
+        )
+        self.assertIn(
+            '_("Another transcript completed while text insertion was still running")',
+            busy_block,
+        )
+        self.assertIn("transcript\n      );\n      return;", busy_block)
+        self.assertLess(busy_start, ensure_index)
+        self.assertLess(ensure_index, reservation_index)
+        self.assertIn("let insertOwnerToken = null;", finish_block)
+
+        insert_start = source.index(
+            "_insertTranscriptText: function(transcript, completionCallback, protectedInsertFingerprint)"
+        )
+        helper_start = source.index(
+            "let finishManualInsertConflict = () => {",
+            insert_start,
+        )
+        complete_start = source.index("let complete = (result) => {", helper_start)
+        complete_end = source.index("\n    let failPreparation", complete_start)
+        helper_block = source[helper_start:complete_start]
+        complete_block = source[complete_start:complete_end]
+
+        self.assertIn(
+            'if (typeof completionCallback === "function" ||\n'
+            "          this.autoInsertConflictToken !== insertToken) {\n"
+            "        return false;\n"
+            "      }",
+            helper_block,
+        )
+        self.assertIn(
+            "this.autoInsertConflictToken = null;\n"
+            "      this._setStatusPreservingRecording(\n"
+            '        "error",\n'
+            '        _("Another transcript completed while text insertion was still running"),\n'
+            "        this.lastTranscript\n"
+            "      );\n"
+            "      return true;",
+            helper_block,
+        )
+        self.assertEqual(
+            helper_block.count("this.autoInsertConflictToken = null;"), 1
+        )
+
+        callback_index = complete_block.index(
+            'if (typeof completionCallback === "function") {'
+        )
+        callback_call_index = complete_block.index(
+            "completionCallback(result === true);",
+            callback_index,
+        )
+        manual_call_index = complete_block.index(
+            "finishManualInsertConflict();",
+            callback_call_index,
+        )
+        self.assertLess(
+            complete_block.index("if (!release()) {"),
+            callback_index,
+        )
+        self.assertLess(callback_index, callback_call_index)
+        self.assertLess(callback_call_index, manual_call_index)
+        self.assertEqual(
+            complete_block.count("finishManualInsertConflict();"), 1
+        )
+        self.assertTrue(
+            complete_block.rstrip().endswith(
+                "        }\n"
+                "      }\n"
+                "      finishManualInsertConflict();\n"
+                "    };"
+            )
+        )
+        self.assertNotIn("this.autoInsertConflictToken = null;", complete_block)
+        self.assertNotIn(
+            '_("Another transcript completed while text insertion was still running")',
+            complete_block,
+        )
+        self.assertNotIn("finishInsertConflict", complete_block)
+        self.assertEqual(finish_block.count("if (finishInsertConflict()) {"), 1)
+        self.assertLess(
+            finish_block.index("if (finishInsertConflict()) {"),
+            finish_block.index("let relistenStarted = this._finishPendingRelisten();"),
+        )
+
+        for owner_start in (
+            "_clearDialogReferences: function(dialog)",
+            "_cancelTextInsertForSettingsChange: function()",
+            "_insertTranscriptText: function(transcript, completionCallback, protectedInsertFingerprint)",
+        ):
+            owner_index = source.index(owner_start)
+            token_index = source.index("this.textInsertToken = null;", owner_index)
+            owner_prefix = source[owner_index:token_index]
+            self.assertIn(
+                "this.autoInsertConflictToken === this.textInsertToken) {",
+                owner_prefix,
+            )
+            self.assertIn("this.autoInsertConflictToken = null;", owner_prefix)
+
+        conflict_start = finish_block.index("let finishInsertConflict = () => {")
+        conflict_end = finish_block.index(
+            "\n      this.autoInsertPendingFingerprint = insertFingerprint;",
+            conflict_start,
+        )
+        conflict_block = finish_block[conflict_start:conflict_end]
+        callback_start = finish_block.index(
+            "result = this._insertTranscriptText(transcript, (completed) => {",
+            conflict_end,
+        )
+        callback_end = finish_block.index(
+            "\n        }, insertFingerprint);",
+            callback_start,
+        )
+        callback_block = finish_block[callback_start:callback_end]
+        self.assertIn(
+            "if (!insertOwnerToken || "
+            "this.autoInsertConflictToken !== insertOwnerToken) {\n"
+            "          return false;\n"
+            "        }",
+            conflict_block,
+        )
+        self.assertIn(
+            "this.autoInsertConflictToken = null;\n"
+            "        this._setStatusPreservingRecording(\n"
+            '          "error",\n'
+            '          _("Another transcript completed while text insertion was still running"),\n'
+            "          this.lastTranscript\n"
+            "        );\n"
+            "        return true;",
+            conflict_block,
+        )
+        self.assertTrue(conflict_block.rstrip().endswith("return true;\n      };"))
+        self.assertIn(
+            "finishInsertConflict();\n"
+            "            return;",
+            callback_block,
+        )
+        self.assertIn(
+            "clearPendingFingerprint();\n"
+            "          if (finishInsertConflict()) {\n"
+            "            return;\n"
+            "          }\n"
+            "          let relistenStarted = this._finishPendingRelisten();",
+            callback_block,
+        )
+        self.assertIn(
+            "if (!relistenStarted &&\n"
+            '              (this.status === "recording" || this.status === "recorded" || '
+            'this.status === "processing") &&\n'
+            "              !this.isCommandRunning && !this._hasLocalProcessingWorkflow()) {\n"
+            '              this._setStatus("done", '
+            'this._payloadMessage(payload, _("Transcript inserted")), transcript);\n'
+            "          }",
+            callback_block,
+        )
+        self.assertIn(
+            "if (result === null) {\n"
+            "        insertOwnerToken = this.textInsertToken;\n"
+            "        return;\n"
+            "      }",
+            finish_block,
+        )
+        self.assertIn(
+            "this._finishPendingRelisten();\n"
+            "      return;",
+            duplicate_block,
+        )
+        self.assertEqual(duplicate_block.count("this._finishPendingRelisten();"), 1)
+
+    def test_text_insert_completion_requires_current_owner_release(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        insert_start = source.index("_insertTranscriptText: function(")
+        insert_end = source.index("\n  _restartRelistenRecording:", insert_start)
+        insert_block = source[insert_start:insert_end]
+        release_start = source.index("let release = () => {", insert_start)
+        helper_start = source.index(
+            "let finishManualInsertConflict = () => {",
+            release_start,
+        )
+        complete_start = source.index("let complete = (result) => {", helper_start)
+        complete_end = source.index(
+            "let failPreparation = (error, notifyCompletion) => {",
+            complete_start,
+        )
+        fail_start = complete_end
+        fail_end = source.index(
+            "\n    if (this._isEmptyTranscriptText(transcript)",
+            fail_start,
+        )
+        release_block = source[release_start:helper_start]
+        complete_block = source[complete_start:complete_end]
+        fail_block = source[fail_start:fail_end]
+
+        self.assertIn(
+            "if (this.textInsertToken === insertToken) {\n"
+            "        this.textInsertToken = null;\n"
+            "        return true;\n"
+            "      }\n"
+            "      return false;",
+            release_block,
+        )
+        failed_release_guard = (
+            "if (!release()) {\n"
+            "        return;\n"
+            "      }\n"
+            '      if (typeof completionCallback === "function") {'
+        )
+        callback_call = "completionCallback(result === true);"
+        self.assertIn(failed_release_guard, complete_block)
+        self.assertEqual(complete_block.count(callback_call), 1)
+        self.assertLess(
+            complete_block.index(failed_release_guard),
+            complete_block.index(callback_call),
+        )
+        complete_manual_index = complete_block.index(
+            "finishManualInsertConflict();",
+            complete_block.index(callback_call),
+        )
+        self.assertLess(
+            complete_block.index(callback_call),
+            complete_manual_index,
+        )
+        self.assertEqual(
+            complete_block.count("finishManualInsertConflict();"), 1
+        )
+
+        owner_guard = (
+            "if (this.textInsertToken !== insertToken) {\n"
+            "        return false;\n"
+            "      }"
+        )
+        failed_fail_release_guard = (
+            "if (!release()) {\n"
+            "        return false;\n"
+            "      }"
+        )
+        optional_callback_guard = (
+            'if (notifyCompletion === true && typeof completionCallback === "function") {'
+        )
+        self.assertIn(owner_guard, fail_block)
+        self.assertIn(failed_fail_release_guard, fail_block)
+        self.assertIn(optional_callback_guard, fail_block)
+        self.assertEqual(fail_block.count("completionCallback(false);"), 1)
+        self.assertEqual(
+            fail_block.count("finishManualInsertConflict();"), 1
+        )
+
+        owner_index = fail_block.index(owner_guard)
+        release_index = fail_block.index(
+            failed_fail_release_guard,
+            owner_index,
+        )
+        failure_status_index = fail_block.index(
+            'this._setStatusPreservingRecording("error", _("Could not prepare text insertion")',
+            release_index,
+        )
+        callback_guard_index = fail_block.index(
+            optional_callback_guard,
+            failure_status_index,
+        )
+        callback_index = fail_block.index(
+            "completionCallback(false);",
+            callback_guard_index,
+        )
+        manual_index = fail_block.index(
+            "finishManualInsertConflict();",
+            callback_index,
+        )
+        self.assertLess(owner_index, release_index)
+        self.assertLess(release_index, failure_status_index)
+        self.assertLess(failure_status_index, callback_guard_index)
+        self.assertLess(callback_guard_index, callback_index)
+        self.assertLess(callback_index, manual_index)
+        self.assertNotIn("this.autoInsertConflictToken = null;", fail_block)
+        self.assertTrue(
+            fail_block.rstrip().endswith(
+                "        }\n"
+                "      }\n"
+                "      finishManualInsertConflict();\n"
+                "      return false;\n"
+                "    };"
+            )
+        )
+        self.assertEqual(
+            insert_block.count("finishManualInsertConflict();"), 2
+        )
 
     def test_dynamic_panel_text_does_not_reapply_unchanged_icon_or_style(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -9938,7 +10569,7 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_clipboard_paste_without_keyboard_helpers_copies_first(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        copy_start = source.index('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot)')
+        copy_start = source.index('_copyAndMaybePasteTranscriptText: function(transcript, text, method, canPasteWithKeyboard, submitWithReturn, completionCallback, operationGuard, expectedClipboardSnapshot, keyboardProgram)')
         copy_end = source.index("_confirmClipboardOverwriteForPaste: function", copy_start)
         copy_block = source[copy_start:copy_end]
         self.assertIn('if (!this._setClipboardText(text)) {', copy_block)

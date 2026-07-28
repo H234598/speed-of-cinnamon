@@ -16,6 +16,7 @@ check: test lint lint-workflows-check verify-authorship smoke-doctor security-sc
 
 test:
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests
+	node --test tests/test_applet_keyboard.mjs
 
 coverage:
 	mkdir -p reports
@@ -63,6 +64,7 @@ smoke-backend:
 applet-safety-check:
 	node --check files/speed-of-cinnamon@H234598/applet.js
 	PYTHONPATH=src $(PYTHON) -m unittest tests.test_applet_static
+	node --test tests/test_applet_keyboard.mjs
 
 applet-crash-safety: applet-safety-check
 	APPLET_CRASH_SAFETY_REPO="$$(pwd -P)" bash scripts/applet-crash-safety.sh
