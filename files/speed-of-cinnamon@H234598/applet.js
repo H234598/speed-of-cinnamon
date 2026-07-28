@@ -150,7 +150,6 @@ function utf8ByteLength(value) {
 
 const MIN_TRANSCRIPT_FILES = 1;
 const MAX_TRANSCRIPT_FILES = 1000;
-const TRANSCRIPT_STORAGE_LIMITS = [20, 50, 100, 200, 500, 1000];
 const DEFAULT_AUTO_PASTE_TITLE = "codex";
 const AUTO_PASTE_TITLE_PRESETS = [
   "codex",
@@ -4863,7 +4862,6 @@ MyApplet.prototype = {
     this.autoPastePromptToken = null;
     let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
     this.maxTranscriptFiles = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
-    this._populateTranscriptStorageMenu();
     this._updatePanel();
     if (!promptCleanupSucceeded) {
       this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
@@ -5693,123 +5691,6 @@ MyApplet.prototype = {
       return null;
     }
     return seconds;
-  },
-
-  _transcriptStorageLabel: function() {
-    return _("Store transcripts: ") + String(this._normalizeTranscriptLimit(this.maxTranscriptFiles));
-  },
-
-  _updateTranscriptStorageItem: function() {
-    this._setMenuItemLabelSafely(this.transcriptStorageItem, this._transcriptStorageLabel());
-  },
-
-  _populateTranscriptStorageMenu: function() {
-    if (!this._canMutateMenu(this.transcriptStorageItem)) {
-      return;
-    }
-    if (!this._clearMenuItems(this.transcriptStorageItem.menu)) {
-      return;
-    }
-    let current = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
-    let hasPreset = TRANSCRIPT_STORAGE_LIMITS.indexOf(current) >= 0;
-    if (!hasPreset) {
-      let currentItem = new PopupMenu.PopupMenuItem("[x] " + _("Keep a maximum of ") + String(current) + _(" transcript files"));
-      currentItem.setSensitive(false);
-      this.transcriptStorageItem.menu.addMenuItem(currentItem);
-      this.transcriptStorageItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-    }
-    for (let limit of TRANSCRIPT_STORAGE_LIMITS) {
-      let label = (current === limit ? "[x] " : "[ ] ") + _("Keep a maximum of ") + String(limit) + _(" transcript files");
-      let item = new PopupMenu.PopupMenuItem(label);
-      this._connectSafe(item, "activate", () => this._selectTranscriptStorageLimit(limit));
-      this.transcriptStorageItem.menu.addMenuItem(item);
-    }
-    this.transcriptStorageItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-    let custom = new PopupMenu.PopupIconMenuItem((hasPreset ? "[ ] " : "[x] ") + _("Custom transcript limit..."), "document-edit-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(custom, "activate", () => this._promptCustomTranscriptLimit());
-    this.transcriptStorageItem.menu.addMenuItem(custom);
-    this._updateTranscriptStorageItem();
-  },
-
-  _selectTranscriptStorageLimit: function(limit) {
-    let nextLimit = this._normalizeTranscriptLimit(limit);
-    if (!this._commitSettingValue("maxTranscriptFiles", "max-transcript-files", nextLimit, "settings-transcript-limit", _("Transcript storage setting could not be saved"))) {
-      return;
-    }
-    this._populateTranscriptStorageMenu();
-    this._setStatusPreservingRecording("ready", _("Keep a maximum of ") + String(this.maxTranscriptFiles) + _(" transcript files"), this.lastTranscript);
-  },
-
-  _customTranscriptLimitPromptArgs: function() {
-    let current = String(this._normalizeTranscriptLimit(this.maxTranscriptFiles));
-    return [
-      "zenity",
-      "--entry",
-      "--title=Store transcripts",
-      "--text=Keep a maximum of this many transcript files (1-1000).",
-      "--entry-text=" + current
-    ];
-  },
-
-  _promptCustomTranscriptLimit: function() {
-    if (this.customLimitPromptToken) {
-      return;
-    }
-    if (!this._findTrustedProgramInPath("zenity")) {
-      this.lastMessage = _("Install zenity to enter a custom transcript limit.");
-      this._setStatusPreservingRecording("ready", this.lastMessage, this.lastTranscript);
-      return;
-    }
-    let promptToken = {};
-    this.customLimitPromptToken = promptToken;
-    let transcriptPromptArgs;
-    try {
-      transcriptPromptArgs = this._customTranscriptLimitPromptArgs();
-    } catch (error) {
-      if (this.customLimitPromptToken === promptToken) {
-        this.customLimitPromptToken = null;
-      }
-      this._recordLifecycleError("transcript-limit-prompt", error);
-      this._setStatusPreservingRecording("error", _("Could not prepare custom transcript limit prompt"), this.lastTranscript);
-      return;
-    }
-    this._spawnText(transcriptPromptArgs, (output, result) => {
-      if (this.customLimitPromptToken !== promptToken || !this._lifecycleAllowsWork()) {
-        return;
-      }
-      this.customLimitPromptToken = null;
-      if (result && result.startupFailed === true) {
-        this._setStatusPreservingRecording("error", _("Could not open custom transcript limit prompt"), this.lastTranscript);
-        return;
-      }
-      if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
-        return;
-      }
-      let limit = this._parseCustomTranscriptLimit(output);
-      if (limit === null) {
-        return;
-      }
-      this._selectTranscriptStorageLimit(limit);
-    }, { resourceGroup: "settings-prompt" });
-  },
-
-  _parseCustomTranscriptLimit: function(value) {
-    let text = String(value === undefined || value === null ? "" : value).trim();
-    if (text === "") {
-      return null;
-    }
-    if (!/^[0-9]+$/.test(text)) {
-      this.lastMessage = _("Transcript limit must be a whole number.");
-      this._setStatusPreservingRecording("ready", this.lastMessage, this.lastTranscript);
-      return null;
-    }
-    let limit = Math.floor(Number(text));
-    if (!isFinite(limit) || limit < MIN_TRANSCRIPT_FILES || limit > MAX_TRANSCRIPT_FILES) {
-      this.lastMessage = _("Transcript limit must be between 1 and 1000.");
-      this._setStatusPreservingRecording("ready", this.lastMessage, this.lastTranscript);
-      return null;
-    }
-    return limit;
   },
 
   _populateRecordingOptionsMenu: function() {
@@ -11648,7 +11529,6 @@ MyApplet.prototype = {
     this.maxTranscriptFiles = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
     this.artifactEncryption = this._normalizeArtifactEncryption(this.artifactEncryption);
     this._populateRecordingLimitMenu();
-    this._populateTranscriptStorageMenu();
     this._populateRecordingOptionsMenu();
     this._populateNotificationOptionsMenu();
     this._populateArtifactEncryptionMenu();
@@ -15949,7 +15829,6 @@ MyApplet.prototype = {
       let modelText = this._voiceBackendLabel();
       let textModelText = this._textModelLabel();
       let autoPasteText = this._autoPasteLabel();
-      let transcriptStorageText = this._transcriptStorageLabel();
       let doctorSummaryText = this.doctorSummaryText || _("Doctor: not checked");
       let languageText = _("Language: ") + this._currentLanguage();
       let recorderText = _("Recorder: ") + this._recorderLabel(this._normalizeRecorder(this.recorder));
@@ -15966,7 +15845,60 @@ MyApplet.prototype = {
         typeof this.set_applet_label === "function" &&
         typeof this.set_applet_tooltip === "function"
       );
-      let nextFingerprint = JSON.stringify({
+      let styleClass = this._panelStyleClassForStatus(this.status);
+      let previousFingerprint = this._panelRenderFingerprint;
+      if (
+        previousFingerprint &&
+        previousFingerprint.status === this.status &&
+        previousFingerprint.showPanelLabel === Boolean(this.showPanelLabel) &&
+        previousFingerprint.panelLabel === panelLabel &&
+        previousFingerprint.tooltipText === tooltipText &&
+        previousFingerprint.statusText === statusText &&
+        previousFingerprint.toggleText === toggleText &&
+        previousFingerprint.microphoneText === microphoneText &&
+        previousFingerprint.doctorSummaryText === doctorSummaryText &&
+        previousFingerprint.languageText === languageText &&
+        previousFingerprint.recorderText === recorderText &&
+        previousFingerprint.recordingLimitText === recordingLimitText &&
+        previousFingerprint.recordingOptionsText === recordingOptionsText &&
+        previousFingerprint.notificationOptionsText === notificationOptionsText &&
+        previousFingerprint.outputMethodText === outputMethodText &&
+        previousFingerprint.textOptionsText === textOptionsText &&
+        previousFingerprint.inputSourceText === inputSourceText &&
+        previousFingerprint.modelText === modelText &&
+        previousFingerprint.textModelText === textModelText &&
+        previousFingerprint.transcriptText === transcriptText &&
+        previousFingerprint.autoPasteText === autoPasteText &&
+        previousFingerprint.progressText === progressText &&
+        previousFingerprint.statusIcon === statusIcon &&
+        previousFingerprint.styleClass === styleClass &&
+        previousFingerprint.panelActorReady === panelActorReady
+      ) {
+        return;
+      }
+      this._applyPanelIcon(this.status);
+      this._applyPanelStyle(this.status);
+      if (panelActorReady) {
+        this.set_applet_label(panelLabel);
+        this.set_applet_tooltip(tooltipText);
+      }
+      this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
+      this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
+      this._setMenuItemLabelSafely(this.doctorSummaryItem, doctorSummaryText);
+      this._setMenuItemLabelSafely(this.languageItem, languageText);
+      this._setMenuItemLabelSafely(this.recorderItem, recorderText);
+      this._setMenuItemLabelSafely(this.recordingLimitItem, recordingLimitText);
+      this._setMenuItemLabelSafely(this.recordingOptionsItem, recordingOptionsText);
+      this._setMenuItemLabelSafely(this.notificationOptionsItem, notificationOptionsText);
+      this._setMenuItemLabelSafely(this.outputMethodItem, outputMethodText);
+      this._setMenuItemLabelSafely(this.textOptionsItem, textOptionsText);
+      this._updateAutoPasteItem();
+      this._setMenuItemLabelSafely(this.inputSourceItem, inputSourceText);
+      this._setMenuItemLabelSafely(this.modelItem, modelText);
+      this._setMenuItemLabelSafely(this.textModelItem, textModelText);
+      this._setMenuItemLabelSafely(this.transcriptItem, transcriptText);
+      this._setMenuItemLabelSafely(this.toggleItem, toggleText);
+      this._panelRenderFingerprint = panelActorReady ? {
         status: this.status,
         showPanelLabel: Boolean(this.showPanelLabel),
         panelLabel: panelLabel,
@@ -15987,39 +15919,11 @@ MyApplet.prototype = {
         textModelText: textModelText,
         transcriptText: transcriptText,
         autoPasteText: autoPasteText,
-        transcriptStorageText: transcriptStorageText,
         progressText: progressText,
         statusIcon: statusIcon,
-        styleClass: this._panelStyleClassForStatus(this.status),
+        styleClass: styleClass,
         panelActorReady: panelActorReady,
-      });
-      if (this._panelRenderFingerprint === nextFingerprint) {
-        return;
-      }
-      this._applyPanelIcon(this.status);
-      this._applyPanelStyle(this.status);
-      if (panelActorReady) {
-        this.set_applet_label(panelLabel);
-        this.set_applet_tooltip(tooltipText);
-      }
-      this._setMenuItemLabelSafely(this.statusItem, _("Status: ") + statusText);
-      this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);
-      this._setMenuItemLabelSafely(this.doctorSummaryItem, doctorSummaryText);
-      this._setMenuItemLabelSafely(this.languageItem, languageText);
-      this._setMenuItemLabelSafely(this.recorderItem, recorderText);
-      this._setMenuItemLabelSafely(this.recordingLimitItem, recordingLimitText);
-      this._setMenuItemLabelSafely(this.recordingOptionsItem, recordingOptionsText);
-      this._setMenuItemLabelSafely(this.notificationOptionsItem, notificationOptionsText);
-      this._setMenuItemLabelSafely(this.outputMethodItem, outputMethodText);
-      this._setMenuItemLabelSafely(this.textOptionsItem, textOptionsText);
-      this._updateAutoPasteItem();
-      this._updateTranscriptStorageItem();
-      this._setMenuItemLabelSafely(this.inputSourceItem, inputSourceText);
-      this._setMenuItemLabelSafely(this.modelItem, modelText);
-      this._setMenuItemLabelSafely(this.textModelItem, textModelText);
-      this._setMenuItemLabelSafely(this.transcriptItem, transcriptText);
-      this._setMenuItemLabelSafely(this.toggleItem, toggleText);
-      this._panelRenderFingerprint = panelActorReady ? nextFingerprint : null;
+      } : null;
     }, undefined);
   }
 };

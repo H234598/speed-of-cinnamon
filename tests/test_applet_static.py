@@ -1281,7 +1281,6 @@ class AppletStaticTest(unittest.TestCase):
 
         for method, next_method, guard in [
             ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:", "this.customLimitPromptToken"),
-            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:", "this.customLimitPromptToken"),
             ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:", "this.autoPastePromptToken"),
             ("_selectBenchmarkAudioFile: function()", "\n  _benchmarkDownloadedModels:", "this.benchmarkFlowToken"),
             ("_activateOllamaTextModelFlow: function()", "\n  _ollamaModelPromptArgs:", "this.ollamaModelFlowToken"),
@@ -1297,7 +1296,6 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method, args_name, builder_name, token_name, error_group in [
             ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:", "recordingPromptArgs", "_customRecordingLimitPromptArgs", "customLimitPromptToken", "recording-limit-prompt"),
-            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:", "transcriptPromptArgs", "_customTranscriptLimitPromptArgs", "customLimitPromptToken", "transcript-limit-prompt"),
             ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:", "promptArgs", "_autoPastePromptArgs", "autoPastePromptToken", "auto-paste-prompt"),
         ]:
             start = source.index(method)
@@ -1440,7 +1438,6 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method in [
             ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:"),
-            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:"),
             ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:"),
         ]:
             start = source.index(method)
@@ -4687,7 +4684,6 @@ class AppletStaticTest(unittest.TestCase):
         for method, next_method, property_name in [
             ("_selectRecorder: function(method)", "\n  _normalizeRecordingLimit:", "recorder"),
             ("_selectRecordingLimit: function(seconds)", "\n  _customRecordingLimitPromptArgs:", "maxSeconds"),
-            ("_selectTranscriptStorageLimit: function(limit)", "\n  _customTranscriptLimitPromptArgs:", "maxTranscriptFiles"),
             ("_selectInputSource: function(name, label)", "\n  _selectDefaultInputSource:", "inputDevice"),
             ("_selectOutputMethod: function(method)", "\n  _optionLabel:", "insertMethod"),
             ("_setAutoPasteTitles: function(values)", "\n  _toggleAutoPasteTitle:", "autoPasteWindowTitle"),
@@ -5551,7 +5547,6 @@ class AppletStaticTest(unittest.TestCase):
 
         for method, next_method in [
             ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:"),
-            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:"),
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
@@ -5576,7 +5571,6 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method, args_name, message in [
             ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:", "recordingPromptArgs", "Could not open custom duration prompt"),
-            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:", "transcriptPromptArgs", "Could not open custom transcript limit prompt"),
             ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:", "promptArgs", "Could not open Auto-Submit prompt"),
         ]:
             start = source.index(method)
@@ -5591,7 +5585,6 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method, apply_marker in [
             ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:", "this._parseCustomRecordingLimit(output)"),
-            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:", "this._parseCustomTranscriptLimit(output)"),
             ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:", "this._setAutoPasteTitles(this._autoPasteTitleValues(output))"),
         ]:
             start = source.index(method)
@@ -7772,7 +7765,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertEqual(schema["max-transcript-files"]["max"], 1000)
         self.assertIn("After each successful transcription", schema["max-transcript-files"]["tooltip"])
         self.assertIn("const DEFAULT_MAX_TRANSCRIPT_FILES = 500;", source)
-        self.assertIn("const TRANSCRIPT_STORAGE_LIMITS = [20, 50, 100, 200, 500, 1000];", source)
+        self.assertNotIn("TRANSCRIPT_STORAGE_LIMITS", source)
         self.assertIn("this.maxTranscriptFiles = DEFAULT_MAX_TRANSCRIPT_FILES;", source)
         self.assertIn('["max-transcript-files", "maxTranscriptFiles"]', source)
         self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "max-transcript-files", "maxTranscriptFiles", this._onTranscriptRetentionSettingsChanged, null)', source)
@@ -7925,7 +7918,6 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         for method, next_method in [
-            ("_selectTranscriptStorageLimit: function(limit)", "\n  _customTranscriptLimitPromptArgs:"),
             ("_selectArtifactEncryptionMode: function(mode)", "\n  _selectOutputMethod:"),
             ("_selectOutputMethod: function(method)", "\n  _optionLabel:"),
             ("_selectInputSource: function(name, label)", "\n  _selectDefaultInputSource:"),
@@ -7936,9 +7928,7 @@ class AppletStaticTest(unittest.TestCase):
             ("_toggleTextPolishingSafetyFlag: function(settingKey, propertyName, label)", "\n  _selectTextModelBackend:"),
             ("_selectTextModelBackend: function(backend, model, message, preserveRecording)", "\n  _activateOllamaTextModelFlow:"),
             ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:"),
-            ("_parseCustomRecordingLimit: function(value)", "\n  _transcriptStorageLabel:"),
-            ("_promptCustomTranscriptLimit: function()", "\n  _parseCustomTranscriptLimit:"),
-            ("_parseCustomTranscriptLimit: function(value)", "\n  _populateRecordingOptionsMenu:"),
+            ("_parseCustomRecordingLimit: function(value)", "\n  _populateRecordingOptionsMenu:"),
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
@@ -8402,8 +8392,7 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method, item in [
             ("_populateRecorderMenu: function()", "_populateRecordingLimitMenu", "recorderItem"),
-            ("_populateRecordingLimitMenu: function()", "_populateTranscriptStorageMenu", "recordingLimitItem"),
-            ("_populateTranscriptStorageMenu: function()", "_populateRecordingOptionsMenu", "transcriptStorageItem"),
+            ("_populateRecordingLimitMenu: function()", "_populateRecordingOptionsMenu", "recordingLimitItem"),
             ("_populateRecordingOptionsMenu: function()", "_populateNotificationOptionsMenu", "recordingOptionsItem"),
             ("_populateNotificationOptionsMenu: function()", "_populateOutputMethodMenu", "notificationOptionsItem"),
             ("_populateOutputMethodMenu: function()", "_populateArtifactEncryptionMenu", "outputMethodItem"),
