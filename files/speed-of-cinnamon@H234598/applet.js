@@ -8144,27 +8144,27 @@ MyApplet.prototype = {
   },
 
   _refreshInputSourceMenu: function() {
-    if (!this._canMutateMenu(this.inputSourceItem)) {
-      return;
+    if (!this._canMutateMenu(this.inputSourceItem) || this.inputSourceItem.menu.isOpen !== true) {
+      return true;
     }
     let canReportInputSourceStatus = () => !this.isCommandRunning &&
       !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     if (this.inputSourceMenuRefreshToken) {
-      return;
+      return true;
     }
     if (this._terminateProcessesByGroup("input-source-refresh") === false) {
       if (canReportInputSourceStatus()) {
         this._setStatusPreservingRecording("error", _("Input source refresh could not be stopped"), this.lastTranscript);
       }
-      return;
+      return false;
     }
     let refreshToken = {};
     this.inputSourceMenuRefreshToken = refreshToken;
-    if (this._inputSourceMenuFingerprint === null) {
-      this._populateInputSourceMenu([], _("Loading input sources..."));
-    }
     let inputSourceArgs;
     try {
+      if (this._inputSourceMenuFingerprint === null) {
+        this._populateInputSourceMenu([], _("Loading input sources..."));
+      }
       inputSourceArgs = this._listInputsArgs();
     } catch (error) {
       if (this.inputSourceMenuRefreshToken === refreshToken) {
@@ -8175,9 +8175,9 @@ MyApplet.prototype = {
       if (canReportInputSourceStatus()) {
         this._setStatusPreservingRecording("error", _("Could not prepare input source list"), this.lastTranscript);
       }
-      return;
+      return false;
     }
-    this._spawnJson(inputSourceArgs, (payload) => {
+    let refreshProcess = this._spawnJson(inputSourceArgs, (payload) => {
       if (this.inputSourceMenuRefreshToken !== refreshToken) {
         return;
       }
@@ -8204,6 +8204,16 @@ MyApplet.prototype = {
         }
       }
     }, { resourceGroup: "input-source-refresh" });
+    if (!refreshProcess) {
+      if (this.inputSourceMenuRefreshToken === refreshToken) {
+        this.inputSourceMenuRefreshToken = null;
+      }
+      if (canReportInputSourceStatus()) {
+        this._setStatusPreservingRecording("error", _("Could not start input source refresh"), this.lastTranscript);
+      }
+      return false;
+    }
+    return true;
   },
 
   _populateInputSourceMenu: function(sources, message) {
@@ -8313,7 +8323,9 @@ MyApplet.prototype = {
     if (!this._commitSettingValue("inputDevice", "input-device", nextInputDevice, "settings-input-source", _("Input source setting could not be saved"))) {
       return;
     }
-    this._refreshInputSourceMenu();
+    if (this._refreshInputSourceMenu() === false) {
+      return;
+    }
     let safeLabel = typeof label === "string" ? label : "";
     let message = this.inputDevice === ""
       ? _("Input device: system default")
@@ -8335,7 +8347,7 @@ MyApplet.prototype = {
     }
     let canReportModelStatus = () => !this.isCommandRunning &&
       !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
-    if (this.modelMenuRefreshToken || this.voiceModelActionToken) {
+    if (this.modelMenuRefreshToken || this.voiceModelActionToken || this.voiceModelCleanupFailed === true) {
       return;
     }
     if (this._terminateProcessesByGroup("model-menu-refresh") === false) {
@@ -8711,6 +8723,9 @@ MyApplet.prototype = {
   },
 
   _commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording) {
+    if (this.voiceModelCleanupFailed === true) {
+      return false;
+    }
     let setStatus = preserveRecording === false
       ? this._setStatus.bind(this)
       : this._setStatusPreservingRecording.bind(this);
@@ -8781,6 +8796,7 @@ MyApplet.prototype = {
 
   _downloadVoiceModel: function(model) {
     if (this.isCommandRunning || this.voiceModelActionToken || this.modelMenuRefreshToken ||
+        this.voiceModelCleanupFailed === true ||
         this._hasActiveRecordingState() || this._hasLocalProcessingWorkflow()) {
       return;
     }
@@ -8837,7 +8853,8 @@ MyApplet.prototype = {
 
   _removeVoiceModel: function(model) {
     if (this.isCommandRunning || this._hasActiveRecordingState() || this.voiceModelActionToken ||
-        this.modelMenuRefreshToken || this._hasLocalProcessingWorkflow()) {
+        this.modelMenuRefreshToken || this.voiceModelCleanupFailed === true ||
+        this._hasLocalProcessingWorkflow()) {
       return;
     }
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
@@ -8908,7 +8925,7 @@ MyApplet.prototype = {
     let setStatus = preserveRecording === false
       ? this._setStatus.bind(this)
       : this._setStatusPreservingRecording.bind(this);
-    if (this.voiceModelActionToken) {
+    if (this.voiceModelActionToken || this.voiceModelCleanupFailed === true) {
       return false;
     }
     let path = this._modelPathFromPayload(model);
@@ -8935,7 +8952,7 @@ MyApplet.prototype = {
   },
 
   _selectAutomaticVoiceBackend: function() {
-    if (this.voiceModelActionToken) {
+    if (this.voiceModelActionToken || this.voiceModelCleanupFailed === true) {
       return;
     }
     if (!this._commitVoiceBackendSettings(
@@ -8952,7 +8969,7 @@ MyApplet.prototype = {
   },
 
   _selectStaticVoiceBackend: function(transcriber, message) {
-    if (this.voiceModelActionToken) {
+    if (this.voiceModelActionToken || this.voiceModelCleanupFailed === true) {
       return;
     }
     if (!this._commitVoiceBackendSettings(
@@ -9636,6 +9653,9 @@ MyApplet.prototype = {
   _selectExternalApiVoiceBackend: function() {
     if (this.voiceModelActionToken) {
       this._setStatusPreservingRecording("error", _("Voice model operation is still running"), this.lastTranscript);
+      return false;
+    }
+    if (this.voiceModelCleanupFailed === true) {
       return false;
     }
     if (!this._commitVoiceBackendSettings(

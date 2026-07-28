@@ -1797,7 +1797,8 @@ class AppletStaticTest(unittest.TestCase):
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
-            self.assertIn("if (this.voiceModelActionToken)", block)
+            self.assertIn("if (this.voiceModelActionToken", block)
+            self.assertIn("this.voiceModelCleanupFailed === true", block)
             self.assertIn(result, block)
 
         voice_start = source.index("_selectExternalApiVoiceBackend: function()")
@@ -1920,7 +1921,8 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_removeVoiceModel: function(model)")
         end = source.index("\n  _selectVoiceModel:", start)
         block = source[start:end]
-        self.assertIn("this.modelMenuRefreshToken || this._hasLocalProcessingWorkflow()", block)
+        self.assertIn("this.modelMenuRefreshToken || this.voiceModelCleanupFailed === true ||", block)
+        self.assertIn("this._hasLocalProcessingWorkflow()", block)
         self.assertIn("let actionToken = {};", block)
         self.assertIn("this.voiceModelActionToken = actionToken;", block)
         self.assertIn("this.voiceModelActionToken !== actionToken", block)
@@ -1935,10 +1937,11 @@ class AppletStaticTest(unittest.TestCase):
         refresh_start = source.index("_refreshModelMenu: function()")
         refresh_end = source.index("\n  _populateModelMenu:", refresh_start)
         refresh_block = source[refresh_start:refresh_end]
-        self.assertIn("if (this.modelMenuRefreshToken || this.voiceModelActionToken)", refresh_block)
+        refresh_guard = "if (this.modelMenuRefreshToken || this.voiceModelActionToken || this.voiceModelCleanupFailed === true)"
+        self.assertIn(refresh_guard, refresh_block)
         self.assertIn('this._terminateProcessesByGroup("model-menu-refresh")', refresh_block)
         self.assertIn("this.modelMenuRefreshToken = null;", refresh_block)
-        self.assertLess(refresh_block.index("if (this.modelMenuRefreshToken || this.voiceModelActionToken)"), refresh_block.index("let refreshToken = {};"))
+        self.assertLess(refresh_block.index(refresh_guard), refresh_block.index("let refreshToken = {};"))
         self.assertLess(refresh_block.index('this._terminateProcessesByGroup("model-menu-refresh")'), refresh_block.index("let refreshToken = {};"))
         self.assertLess(refresh_block.index("this.modelMenuRefreshToken = null;"), refresh_block.index("if (payload.error)"))
 
@@ -2238,6 +2241,61 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(block.index("if (this.inputSourceMenuRefreshToken)"), block.index("let refreshToken = {};"))
         self.assertLess(block.index('this._terminateProcessesByGroup("input-source-refresh")'), block.index("let refreshToken = {};"))
         self.assertLess(block.index("this.inputSourceMenuRefreshToken = null;"), block.index("if (payload.error)"))
+
+    def test_input_source_refresh_avoids_closed_work_and_reports_sync_start_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        start = source.index("_refreshInputSourceMenu: function()")
+        end = source.index("\n  _populateInputSourceMenu:", start)
+        block = source[start:end]
+        open_guard = (
+            "!this._canMutateMenu(this.inputSourceItem) || "
+            "this.inputSourceItem.menu.isOpen !== true"
+        )
+        self.assertIn(open_guard, block)
+        self.assertLess(block.index(open_guard), block.index("this.inputSourceMenuRefreshToken"))
+        self.assertGreaterEqual(block.count("return true;"), 3)
+        self.assertGreaterEqual(block.count("return false;"), 3)
+
+        argument_try = block.index("try {", block.index("let inputSourceArgs;"))
+        loading = block.index('this._populateInputSourceMenu([], _("Loading input sources..."));')
+        argument_build = block.index("inputSourceArgs = this._listInputsArgs();")
+        spawn = block.index("let refreshProcess = this._spawnJson(inputSourceArgs")
+        spawn_check = block.index("if (!refreshProcess)")
+        self.assertLess(argument_try, loading)
+        self.assertLess(loading, argument_build)
+        self.assertLess(argument_build, spawn)
+        self.assertLess(spawn, spawn_check)
+        self.assertIn('_("Could not start input source refresh")', block)
+
+        select_start = source.index("_selectInputSource: function(name, label)")
+        select_end = source.index("\n  _selectDefaultInputSource:", select_start)
+        select_block = source[select_start:select_end]
+        refresh_check = "if (this._refreshInputSourceMenu() === false)"
+        self.assertIn(refresh_check, select_block)
+        self.assertLess(select_block.index(refresh_check), select_block.index("let safeLabel"))
+
+    def test_voice_model_cleanup_failure_blocks_all_model_entry_points(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        side_effects = {
+            "_commitVoiceBackendSettings": "let settingsWrites = [",
+            "_refreshModelMenu": "let refreshToken = {};",
+            "_downloadVoiceModel": "let actionToken = {};",
+            "_removeVoiceModel": "let actionToken = {};",
+            "_selectVoiceModel": "this._commitVoiceBackendSettings",
+            "_selectAutomaticVoiceBackend": "this._commitVoiceBackendSettings",
+            "_selectStaticVoiceBackend": "this._commitVoiceBackendSettings",
+            "_selectExternalApiVoiceBackend": "this._commitVoiceBackendSettings",
+        }
+        for method, side_effect in side_effects.items():
+            marker = f"{method}: function"
+            start = source.index(marker)
+            end = source.index("\n  _", start + len(marker))
+            block = source[start:end]
+            cleanup_guard = "this.voiceModelCleanupFailed === true"
+            self.assertIn(cleanup_guard, block, method)
+            self.assertLess(block.index(cleanup_guard), block.index(side_effect), method)
 
     def test_alarm_refresh_queues_one_fresh_reopen_request(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
