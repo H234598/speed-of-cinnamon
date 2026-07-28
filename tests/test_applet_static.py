@@ -2336,6 +2336,53 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(loading, loading_error)
         self.assertIn("this.textModelMenuRefreshToken = null;", text_block[loading_try:loading_error])
 
+    def test_ollama_catalog_and_install_payloads_fail_closed(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        validator_start = source.index("_isValidOllamaCatalogPayload: function(payload)")
+        validator_end = source.index("\n  _ollamaCleanupStillPending:", validator_start)
+        validator = source[validator_start:validator_end]
+        self.assertIn('typeof payload.available !== "boolean"', validator)
+        self.assertIn("payload.available === true && !Array.isArray(payload.models)", validator)
+        self.assertIn('typeof model.name !== "string" || model.name.trim() === ""', validator)
+
+        for method, next_method in [
+            ("_activateOllamaTextModelFlow: function()", "\n  _ollamaModelPromptArgs:"),
+            ("_chooseOllamaTextModel: function()", "\n  _promptChooseOllamaTextModel:"),
+            ("_scheduleOllamaInstallWatchPoll: function(watchToken)", "\n  _scheduleSetupCheck:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn("this._isValidOllamaCatalogPayload(payload)", block)
+            self.assertIn("this._clearOllamaModelFlowOrReport", block)
+
+        install_start = source.index("_installOllamaTextModel: function(model)")
+        install_end = source.index("\n  _refreshHistory:", install_start)
+        install = source[install_start:install_end]
+        self.assertIn("let installConfirmed = (!hasInstalledModel || hasCompatibleInstalledModel) &&", install)
+        self.assertIn("payload.status === undefined && hasCompatibleInstalledModel", install)
+        self.assertIn('Object.prototype.hasOwnProperty.call(payload, "model")', install)
+        success_message = install.index('let message = _("Ollama model installed: ")')
+        cleanup = install.index("this._clearOllamaModelFlowOrReport(flowToken)", success_message)
+        select = install.index('this._selectTextModelBackend("ollama", installedModel')
+        self.assertLess(cleanup, select)
+
+    def test_ollama_install_watch_propagates_scheduler_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        schedule_start = source.index("_scheduleOllamaInstallWatchPoll: function(watchToken)")
+        schedule_end = source.index("\n  _scheduleSetupCheck:", schedule_start)
+        schedule = source[schedule_start:schedule_end]
+        self.assertIn("return false;", schedule)
+        self.assertIn("return Boolean(timerId);", schedule)
+        self.assertIn("if (!this._clearOllamaModelFlowOrReport())", schedule)
+
+        watch_start = source.index("_watchOllamaInstallThenChoose: function()")
+        watch_end = source.index("\n  _scheduleOllamaInstallWatchPoll:", watch_start)
+        watch = source[watch_start:watch_end]
+        self.assertIn("return this._scheduleOllamaInstallWatchPoll(watchToken) === true;", watch)
+
     def test_alarm_refresh_queues_one_fresh_reopen_request(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
@@ -2497,7 +2544,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this._clearOllamaModelFlow();", watch_block)
         self.assertIn('this._setStatus("error", _("Ollama operation could not be stopped")', watch_block)
         self.assertIn("return false;", watch_block)
-        self.assertIn("return true;", watch_block)
+        self.assertIn("return this._scheduleOllamaInstallWatchPoll(watchToken) === true;", watch_block)
         self.assertIn("let watchToken = {};", watch_block)
         self.assertIn("this.ollamaInstallWatchToken = watchToken;", watch_block)
         self.assertIn("this.ollamaInstallWatchToken !== watchToken", watch_block)
@@ -5063,8 +5110,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("--entry-text=llama3.2:3b", source)
         self.assertIn("_installOllamaTextModel: function(model)", source)
         self.assertIn('"install-text-model", "--backend", "ollama", "--model", safeModel, "--json"', source)
-        self.assertIn('typeof payload.model === "string" && payload.model.trim() !== ""', source)
-        self.assertIn('let installedModel = payload && typeof payload.model === "string"', source)
+        self.assertIn("let installConfirmed = (!hasInstalledModel || hasCompatibleInstalledModel) &&", source)
+        self.assertIn("payload.status === undefined && hasCompatibleInstalledModel", source)
+        self.assertIn('Object.prototype.hasOwnProperty.call(payload, "model")', source)
+        self.assertIn('let installedModel = hasCompatibleInstalledModel', source)
         self.assertIn('String(model || "").trim()', source)
         self.assertIn('if (!this._selectTextModelBackend("ollama", installedModel, message, false))', source)
         self.assertIn('this._notify(_("Ollama model installation failed"), safeError, true)', source)
@@ -5211,7 +5260,7 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn("this._spawnJson(textModelArgs, (payload) => {\n      try {", block)
-            self.assertIn("if (this.ollamaModelFlowToken === flowToken) {\n          this.ollamaModelFlowToken = null;", block)
+            self.assertIn("this.ollamaModelFlowToken !== flowToken ||\n            !this._clearOllamaModelFlowOrReport(flowToken)", block)
             self.assertIn('this._recordLifecycleError("ollama-flow", error);', block)
             self.assertIn(f'this._setStatus("error", _("{message}")', block)
 
@@ -5326,7 +5375,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (!flowToken || this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork())", install_block)
         self.assertIn("this.ollamaModelInstallRunning = true;", install_block)
         self.assertIn("this.ollamaModelInstallRunning = false;", install_block)
-        self.assertIn("this._clearOllamaModelFlow(flowToken);", install_block)
+        self.assertIn("this._clearOllamaModelFlowOrReport(flowToken)", install_block)
         callback_guard = install_block.index("if (this.ollamaModelInstallToken !== installToken)")
         callback_reset = install_block.index("this.isCommandRunning = false;", callback_guard)
         self.assertLess(callback_guard, callback_reset)
@@ -5334,7 +5383,7 @@ class AppletStaticTest(unittest.TestCase):
         watch_start = source.index("_scheduleOllamaInstallWatchPoll: function(watchToken)")
         watch_end = source.index("\n  _scheduleSetupCheck:", watch_start)
         watch_block = source[watch_start:watch_end]
-        self.assertIn("this._clearOllamaModelFlow();", watch_block)
+        self.assertIn("this._clearOllamaModelFlowOrReport()", watch_block)
 
         retry_start = source.index("_scheduleProcessCleanupRetry: function()")
         retry_end = source.index("\n  _clearProcessCleanupRetryTimer:", retry_start)
@@ -6359,7 +6408,7 @@ class AppletStaticTest(unittest.TestCase):
             block = source[start:end]
             self.assertIn(f"let {args_name};", block)
             self.assertIn(f"{args_name} = this.{builder_name}(", block)
-            self.assertIn("this._clearOllamaModelFlow(flowToken);", block)
+            self.assertIn("this._clearOllamaModelFlowOrReport(flowToken)", block)
             self.assertIn('this._recordLifecycleError("ollama-flow", error);', block)
             self.assertIn(f'_("{message}")', block)
 
@@ -6370,7 +6419,7 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let zenity;", block)
         self.assertIn('zenity = this._findTrustedProgramInPath("zenity");', block)
-        self.assertIn("this._clearOllamaModelFlow(flowToken);", block)
+        self.assertIn("this._clearOllamaModelFlowOrReport(flowToken)", block)
         self.assertIn('this._recordLifecycleError("ollama-flow", error);', block)
         self.assertIn('_("Could not prepare Ollama model prompt")', block)
         self.assertIn("if (!zenity)", block)
@@ -6382,7 +6431,7 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
 
         self.assertIn("this._spawnJson(installArgs, (payload) => {\n      try {", block)
-        self.assertIn("if (this.ollamaModelFlowToken === flowToken) {\n          this.ollamaModelFlowToken = null;\n        }", block)
+        self.assertIn("this.ollamaModelFlowToken !== flowToken ||\n            !this._clearOllamaModelFlowOrReport(flowToken)", block)
         self.assertIn('this._recordLifecycleError("ollama-flow", error);', block)
         self.assertIn('this._setStatus("error", _("Could not complete Ollama model installation")', block)
 
