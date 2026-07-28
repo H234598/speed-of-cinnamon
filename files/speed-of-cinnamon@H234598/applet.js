@@ -6410,15 +6410,22 @@ MyApplet.prototype = {
   },
 
   _startWithLanguage: function(language, preserveTargetOnFailure) {
-    if (!this._hasActiveRecordingState()) {
-      if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure))) {
-        return;
-      }
-      this.activeLanguage = this._normalizeLanguage(language, this._primaryLanguage());
-      this.activeLanguageExplicit = true;
-      this._updatePanel();
+    if (this._hasActiveRecordingState() || this.isCommandRunning || this._recordingCommandToken) {
+      this._setStatusPreservingRecording(
+        this.status,
+        _("Finish the current recording or operation before starting another language"),
+        this.lastTranscript
+      );
+      return false;
     }
-    this._toggleRecording();
+    if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure))) {
+      return false;
+    }
+    this.activeLanguage = this._normalizeLanguage(language, this._primaryLanguage());
+    this.activeLanguageExplicit = true;
+    this._toggleRecording("start");
+    this._updatePanel();
+    return true;
   },
 
   _populateLanguageMenu: function() {
@@ -6649,6 +6656,7 @@ MyApplet.prototype = {
         } catch (err) {
           if (this._statusCommandToken === statusCommandToken) {
             let safeError = this._sanitizeErrorMessage(err);
+            this.microphoneLevel = null;
             this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
           }
         } finally {
@@ -6671,6 +6679,7 @@ MyApplet.prototype = {
       this._statusCommandToken = null;
       this._statusCommandRunning = false;
       let safeError = this._sanitizeErrorMessage(err);
+      this.microphoneLevel = null;
       this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
       if (this.status === "recording" || this.status === "processing") {
         if (fromStatusTimer === true) {
@@ -11694,7 +11703,13 @@ MyApplet.prototype = {
     if (!Array.isArray(args) || args.length === 0) {
       return args;
     }
-    let setsid = this._findTrustedProgramInPath("setsid");
+    let setsid = this._trustedSetsidPath;
+    if (!setsid) {
+      setsid = this._findTrustedProgramInPath("setsid");
+      if (setsid) {
+        this._trustedSetsidPath = setsid;
+      }
+    }
     if (!setsid) {
       throw new Error("setsid is unavailable; refusing ungrouped subprocess");
     }
@@ -11965,6 +11980,7 @@ MyApplet.prototype = {
       let spawnArgs = this._wrapSubprocessArgs(args);
       process = launcher.spawnv(spawnArgs);
     } catch (error) {
+      this._trustedSetsidPath = null;
       this._recordLifecycleError("process-spawn", error);
       return null;
     }
@@ -12510,6 +12526,7 @@ MyApplet.prototype = {
         if (preserveRecordingOnError) {
           this.recordingArtifactsPresent = true;
         }
+        this.microphoneLevel = null;
         this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
         this._scheduleStatusPoll();
       } else {
@@ -12529,6 +12546,9 @@ MyApplet.prototype = {
     this._updateRecordingTiming(payload, status);
     this._applyMicrophoneLevel(payload.microphone_level, status);
     let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);
+    if (status === "done" && hasTranscript) {
+      this.lastTranscript = payload.transcript;
+    }
     if (status === "done") {
       this._maybeWarnUnencryptedArtifactStorage(payload, status);
     }
@@ -12909,10 +12929,9 @@ MyApplet.prototype = {
         this.alarmCheckToken || this.alarmActionToken || this.alarmMenuRefreshToken ||
         this._hasLocalProcessingWorkflow();
       if (setupBusy || this._hasActiveRecordingState()) {
-        this._scheduleSetupCheck();
-      } else {
-        this._runDoctor(true);
+        return true;
       }
+      this._runDoctor(true);
       return false;
     }, true, "setupCheckTimer");
     if (!timerId && this._lifecycleAllowsWork() && !this.appletRemoved) {
@@ -12941,11 +12960,14 @@ MyApplet.prototype = {
   },
 
   _scheduleStatusPoll: function() {
-    this._clearStatusTimer();
     if (this.appletRemoved) {
       return;
     }
     if (this.status !== "recording" && this.status !== "processing") {
+      this._clearStatusTimer();
+      return;
+    }
+    if (this.statusTimer) {
       return;
     }
     let timerId = this._scheduleTrackedTimer("status", 2, () => {
@@ -12957,19 +12979,20 @@ MyApplet.prototype = {
   },
 
   _scheduleDisplayTick: function() {
-    this._clearDisplayTimer();
     if (this.appletRemoved) {
       return;
     }
     if (this.status !== "recording") {
+      this._clearDisplayTimer();
+      return;
+    }
+    if (this.displayTimer) {
       return;
     }
     let timerId = this._scheduleTrackedTimer("display", 1, () => {
       if (this.status === "recording") {
         this._updateRecordingDisplay();
-        if (!this.appletRemoved) {
-          this._scheduleDisplayTick();
-        }
+        return !this.appletRemoved;
       }
       return false;
     }, true, "displayTimer");
@@ -15240,13 +15263,23 @@ MyApplet.prototype = {
   },
 
   _restartRelistenRecording: function() {
-    if (!this.notificationSessionActive || this.isCommandRunning) {
+    if (!this.notificationSessionActive) {
       return false;
     }
     if (!this.autoRelisten) {
       return false;
     }
-    if (this._hasLocalProcessingWorkflow() || this.textInsertToken) {
+    if (this._recordingCommandToken) {
+      return false;
+    }
+    if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {
+      this.terminalWorkflowToken = null;
+    }
+    let backgroundCleanupSucceeded = this._invalidateBackgroundCallbacksForRecording();
+    if (!backgroundCleanupSucceeded) {
+      return false;
+    }
+    if (this.isCommandRunning || this._hasLocalProcessingWorkflow() || this.textInsertToken) {
       return false;
     }
     let relistenLanguage = this._normalizeLanguage(this.autoRelistenPendingLanguage, this._currentLanguage());
@@ -15774,7 +15807,7 @@ MyApplet.prototype = {
       let nextIconId = this._statusIconSettingForStatus(status);
       let nextIconPath = this._statusIconPathForId(nextIconId, this._statusIconDefaultForStatus(status));
       let nextIcon = nextIconPath || nextIconName;
-      if (this._statusIconCache && this._statusIconCache.status === status && this._statusIconCache.icon === nextIcon) {
+      if (this._statusIconCache && this._statusIconCache.icon === nextIcon) {
         return;
       }
       let applied = false;

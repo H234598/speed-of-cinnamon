@@ -1330,6 +1330,19 @@ class AppletStaticTest(unittest.TestCase):
         finish_start = source.index("_finishAppletTextInsert: function(payload)")
         finish_end = source.index("\n  _ensureAutoRelistenPendingForDonePayload:", finish_start)
         finish_block = source[finish_start:finish_end]
+        payload_start = source.index("_applyPayload: function(payload, statusRefreshToken)")
+        payload_end = source.index("\n  _artifactEncryptionWarningKey:", payload_start)
+        payload_block = source[payload_start:payload_end]
+        self.assertIn('if (status === "done" && hasTranscript) {', payload_block)
+        self.assertIn("this.lastTranscript = payload.transcript;", payload_block)
+        self.assertLess(
+            payload_block.index("this.lastTranscript = payload.transcript;"),
+            payload_block.index("if (this.cancelPendingWhileCommandRunning && status === \"done\")"),
+        )
+        self.assertLess(
+            payload_block.index("this.lastTranscript = payload.transcript;"),
+            payload_block.index("this._finishAppletTextInsert(payload);"),
+        )
         self.assertIn("this.autoInsertPendingFingerprint = insertFingerprint;", finish_block)
         self.assertIn("let clearPendingFingerprint = () =>", finish_block)
         self.assertIn("let releaseFingerprint = () =>", finish_block)
@@ -2397,7 +2410,7 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         silent_index = source.index('if (status === "done" && payload.silence_detected === true)')
-        transcript_index = source.index('if (status === "done" && hasTranscript)')
+        transcript_index = source.index('if (status === "done" && hasTranscript)', silent_index)
         empty_index = source.index('if (status === "done" && this.autoRelistenPending)')
         finish_index = source.index("_finishPendingRelisten: function()")
         restart_index = source.index("relistenStarted = this._restartRelistenRecording();", finish_index)
@@ -4086,6 +4099,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('(preserveRecordingOnError || (typeof statusRefreshToken === "number" && this._hasActiveRecordingState()))', error_block)
         self.assertIn('(preserveRecordingOnError && activeBackendStatus);', error_block)
         self.assertIn('(typeof statusRefreshToken === "number" && this._hasActiveRecordingState())', error_block)
+        self.assertIn("this.microphoneLevel = null;", error_block)
         self.assertIn('this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);', error_block)
         self.assertIn("this._scheduleStatusPoll();", error_block)
         self.assertIn('this._setStatus("error", errorMessage, this.lastTranscript);', error_block)
@@ -4409,6 +4423,8 @@ class AppletStaticTest(unittest.TestCase):
         poll_block = source[poll_start:poll_end]
         self.assertIn('let timerId = this._scheduleTrackedTimer("status"', poll_block)
         self.assertIn("return this._refreshStatus(true) === true;", poll_block)
+        self.assertIn("if (this.statusTimer)", poll_block)
+        self.assertLess(poll_block.index("this.status !== \"recording\""), poll_block.index("if (this.statusTimer)"))
         self.assertIn("if (!timerId && (this.status === \"recording\" || this.status === \"processing\"))", poll_block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Status polling timer could not be scheduled")', poll_block)
 
@@ -4416,8 +4432,11 @@ class AppletStaticTest(unittest.TestCase):
         display_end = source.index("\n  _isUsableTargetWindow:", display_start)
         display_block = source[display_start:display_end]
         self.assertIn('let timerId = this._scheduleTrackedTimer("display"', display_block)
+        self.assertIn("if (this.displayTimer)", display_block)
         self.assertIn("this._updateRecordingDisplay();", display_block)
         self.assertNotIn("this._updatePanel();", display_block)
+        self.assertNotIn("this._scheduleDisplayTick();", display_block)
+        self.assertIn("return !this.appletRemoved;", display_block)
         self.assertIn('_runGuarded("recording-display-update"', display_block)
         self.assertIn("this._recordingDisplayFingerprint === nextFingerprint", display_block)
         self.assertIn("this._setMenuItemLabelSafely(this.microphoneLevelItem, microphoneText);", display_block)
@@ -4429,8 +4448,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let timerId = this._scheduleTrackedTimer("setup"', setup_block)
         self.assertIn("let setupBusy = this._statusCommandRunning || this.isCommandRunning ||", setup_block)
         self.assertIn("this.alarmCheckToken || this.alarmActionToken || this.alarmMenuRefreshToken ||", setup_block)
-        self.assertIn("if (setupBusy || this._hasActiveRecordingState()) {\n        this._scheduleSetupCheck();", setup_block)
+        self.assertIn("if (setupBusy || this._hasActiveRecordingState()) {\n        return true;", setup_block)
+        self.assertNotIn("this._scheduleSetupCheck();", setup_block)
         self.assertIn("this._runDoctor(true);", setup_block)
+        self.assertLess(setup_block.index("return true;"), setup_block.index("this._runDoctor(true);"))
         self.assertIn('this._setStatusPreservingRecording("setup", _("Setup check timer could not be scheduled")', setup_block)
 
         alarm_start = source.index("_scheduleAlarmCheck: function(delaySeconds)")
@@ -5733,9 +5754,13 @@ class AppletStaticTest(unittest.TestCase):
         wrap_start = source.index("_wrapSubprocessArgs: function(args)")
         wrap_end = source.index("\n  _coerceCliTextArg:", wrap_start)
         wrap_block = source[wrap_start:wrap_end]
+        self.assertIn("let setsid = this._trustedSetsidPath;", wrap_block)
+        self.assertIn("if (!setsid) {", wrap_block)
         self.assertIn('this._findTrustedProgramInPath("setsid")', wrap_block)
+        self.assertIn("this._trustedSetsidPath = setsid;", wrap_block)
         self.assertIn('throw new Error("setsid is unavailable; refusing ungrouped subprocess");', wrap_block)
         self.assertIn('return [setsid, "--"].concat(args);', wrap_block)
+        self.assertIn("this._trustedSetsidPath = null;\n      this._recordLifecycleError(\"process-spawn\", error);", source)
 
         identity_start = source.index("_readProcessGroupIdentity: function(process)")
         identity_end = source.index("\n  _killProcessGroup:", identity_start)
@@ -5839,8 +5864,13 @@ class AppletStaticTest(unittest.TestCase):
         language_start = source.index("_startWithLanguage: function(language, preserveTargetOnFailure)")
         language_end = source.index("\n  _populateLanguageMenu:", language_start)
         language_block = source[language_start:language_end]
+        self.assertIn("if (this._hasActiveRecordingState() || this.isCommandRunning || this._recordingCommandToken)", language_block)
+        self.assertLess(language_block.index("this._hasActiveRecordingState()"), language_block.index("this._rememberFocusedWindow"))
         self.assertIn("if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure)))", language_block)
-        self.assertIn("return;", language_block)
+        self.assertIn("this._toggleRecording(\"start\");", language_block)
+        self.assertNotIn("this._toggleRecording();", language_block)
+        self.assertLess(language_block.index("this._toggleRecording(\"start\");"), language_block.index("this._updatePanel();"))
+        self.assertIn("return true;", language_block)
 
     def test_target_window_generation_invalidates_stale_insert_resources(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6941,7 +6971,7 @@ class AppletStaticTest(unittest.TestCase):
         block = source[apply_index:apply_end]
 
         cancel_done_index = block.index('if (this.cancelPendingWhileCommandRunning && status === "done")')
-        finish_insert_index = block.index('if (status === "done" && hasTranscript)')
+        finish_insert_index = block.index('if (status === "done" && hasTranscript)', cancel_done_index)
         self.assertLess(cancel_done_index, finish_insert_index)
         self.assertIn('this._setStatus("ready", _("Cancel applied; transcript not inserted"), this.lastTranscript);', block)
         self.assertIn("this.cancelPendingWhileCommandRunning = false;", block)
@@ -7046,14 +7076,20 @@ class AppletStaticTest(unittest.TestCase):
         apply_index = restart_block.index("this._applyPayloadSafely(payload);")
         self.assertNotIn("this.autoRelistenManualStopRequested = false;", restart_block[:apply_index])
 
-    def test_relisten_restart_does_not_compete_with_local_processing_workflow(self) -> None:
+    def test_relisten_restart_cleans_unrelated_processing_before_start(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         start = source.index("_restartRelistenRecording: function()")
         end = source.index("\n  _preparedTranscriptText: function", start)
         block = source[start:end]
-        self.assertIn("this._hasLocalProcessingWorkflow()", block)
-        self.assertIn("this.textInsertToken", block)
-        self.assertIn("return false;", block)
+        cleanup = block.index("let backgroundCleanupSucceeded = this._invalidateBackgroundCallbacksForRecording();")
+        remaining_work = block.index("if (this.isCommandRunning || this._hasLocalProcessingWorkflow() || this.textInsertToken)")
+        start_args = block.index('startArgs = this._baseArgs("start", relistenLanguage);')
+        self.assertIn("if (this._recordingCommandToken) {\n      return false;", block)
+        self.assertIn("if (this.terminalWorkflowRunning || this.terminalWorkflowToken) {\n      this.terminalWorkflowToken = null;", block)
+        self.assertIn("if (!backgroundCleanupSucceeded) {\n      return false;", block)
+        self.assertLess(cleanup, remaining_work)
+        self.assertLess(remaining_work, start_args)
+        self.assertNotIn("if (!this.notificationSessionActive || this.isCommandRunning)", block)
 
     def test_silent_and_empty_done_keep_relisten_start_errors(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -8772,3 +8808,5 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let validatedId = this._validatedStatusIconId(iconId, fallbackId);', source)
         self.assertIn('if (!this.metadata || !this.metadata.path) {', source)
         self.assertIn('return this.metadata.path + "/assets/status-icons/" + validatedId + ".png";', source)
+        self.assertIn("if (this._statusIconCache && this._statusIconCache.icon === nextIcon)", source)
+        self.assertNotIn("this._statusIconCache.status === status && this._statusIconCache.icon === nextIcon", source)
