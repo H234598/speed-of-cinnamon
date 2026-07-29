@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import fcntl
+import re
 import stat
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field, fields
@@ -27,8 +28,20 @@ def now_iso() -> str:
 MAX_STATE_FILE_BYTES = 1_000_000
 MAX_STATE_STRING_CHARS = 1_000_000
 MAX_STATE_PATH_CHARS = 4_096
+MAX_PENDING_CLEANUP_OWNER_PATHS = 128
+MAX_PENDING_CLEANUP_OWNER_PATH_CHARS = 240
+MAX_PENDING_CLEANUP_BACKUP_ENTRIES = 4_096
+MAX_PENDING_CLEANUP_BACKUP_ENTRY_CHARS = 256
+MAX_CLEANUP_BACKUP_IDENTITY_VALUE = 18_446_744_073_709_551_615
 MAX_STATE_INT = 2_147_483_647
 VALID_STATE_STATUSES = frozenset({"idle", "recording", "recorded", "processing", "finalizing", "done", "error"})
+_CLEANUP_BACKUP_BASENAME_PATTERN = re.compile(
+    r"(?:"
+    r"\.cleanup\.[0-9a-f]{16}\.[0-9a-f]{16}"
+    r"|"
+    r"\.cleanup\.v2\.[0-9a-f]{32}\.[0-9a-f]{32}\.[0-9a-f]{32}"
+    r")\.bak"
+)
 _STATE_READ_ERRORS = frozenset(
     {
         "state file could not be read",
@@ -115,6 +128,11 @@ class RecordingState:
     inserted: bool = False
     error: str = ""
     updated_at: str = field(default_factory=now_iso)
+    pending_cleanup_owner_paths: tuple[str, ...] = ()
+    pending_cleanup_restore_owner_paths: tuple[str, ...] = ()
+    pending_cleanup_backup_entries: tuple[str, ...] = ()
+    cleanup_backup_journal_overflow: bool = False
+    cleanup_backup_journal_restore: bool = False
 
 
 class StateStore:
@@ -254,9 +272,150 @@ class StateStore:
         return text
 
     @staticmethod
-    def _coerce_boolean(value: Any) -> bool:
+    def _sanitize_pending_cleanup_owner_paths(
+        value: Any,
+        *,
+        field_name: str = "pending_cleanup_owner_paths",
+    ) -> tuple[str, ...]:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(f"state {field_name} must be a list")
+        if len(value) > MAX_PENDING_CLEANUP_OWNER_PATHS:
+            raise ValueError(
+                f"state {field_name} contains too many paths "
+                f"(max {MAX_PENDING_CLEANUP_OWNER_PATHS})"
+            )
+
+        normalized: list[str] = []
+        seen: set[Path] = set()
+        for item in value:
+            text = StateStore._sanitize_text_field(
+                item,
+                field_name=f"{field_name} entry",
+            )
+            if text is None or not text:
+                raise ValueError(
+                    f"state {field_name} contains an empty path"
+                )
+            if len(text) > MAX_PENDING_CLEANUP_OWNER_PATH_CHARS:
+                raise ValueError(
+                    f"state {field_name} contains an oversized path"
+                )
+            if (
+                _utf8_byte_count(
+                    text,
+                    field_name=f"state {field_name} entry",
+                )
+                > MAX_PENDING_CLEANUP_OWNER_PATH_CHARS
+            ):
+                raise ValueError(
+                    f"state {field_name} contains an oversized path"
+                )
+
+            owner_path = Path(text)
+            if (
+                not owner_path.is_absolute()
+                or not owner_path.name
+                or ".." in owner_path.parts
+                or str(owner_path) != text
+            ):
+                raise ValueError(
+                    f"state {field_name} contains an invalid path"
+                )
+            if owner_path in seen:
+                raise ValueError(
+                    f"state {field_name} contains a duplicate path"
+                )
+            seen.add(owner_path)
+            normalized.append(text)
+
+        return tuple(normalized)
+
+    @staticmethod
+    def _sanitize_pending_cleanup_backup_entries(
+        value: Any,
+    ) -> tuple[str, ...]:
+        if not isinstance(value, (list, tuple)):
+            raise ValueError(
+                "state pending_cleanup_backup_entries must be a list"
+            )
+        if len(value) > MAX_PENDING_CLEANUP_BACKUP_ENTRIES:
+            raise ValueError(
+                "state pending_cleanup_backup_entries contains too many "
+                f"entries (max {MAX_PENDING_CLEANUP_BACKUP_ENTRIES})"
+            )
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        seen_basenames: set[str] = set()
+        for item in value:
+            text = StateStore._sanitize_text_field(
+                item,
+                field_name="pending_cleanup_backup_entries entry",
+            )
+            if (
+                text is None
+                or not text
+                or len(text) > MAX_PENDING_CLEANUP_BACKUP_ENTRY_CHARS
+                or _utf8_byte_count(
+                    text,
+                    field_name="state pending_cleanup_backup_entries entry",
+                )
+                > MAX_PENDING_CLEANUP_BACKUP_ENTRY_CHARS
+            ):
+                raise ValueError(
+                    "state pending_cleanup_backup_entries contains an "
+                    "invalid entry"
+                )
+            parts = text.split("|")
+            if (
+                len(parts) != 8
+                or _CLEANUP_BACKUP_BASENAME_PATTERN.fullmatch(parts[0])
+                is None
+            ):
+                raise ValueError(
+                    "state pending_cleanup_backup_entries contains an "
+                    "invalid entry"
+                )
+            for identity_value in parts[1:]:
+                if (
+                    not identity_value
+                    or not identity_value.isascii()
+                    or not identity_value.isdecimal()
+                ):
+                    raise ValueError(
+                        "state pending_cleanup_backup_entries contains an "
+                        "invalid identity"
+                    )
+                parsed_identity = int(identity_value)
+                if (
+                    str(parsed_identity) != identity_value
+                    or parsed_identity > MAX_CLEANUP_BACKUP_IDENTITY_VALUE
+                ):
+                    raise ValueError(
+                        "state pending_cleanup_backup_entries contains an "
+                        "invalid identity"
+                    )
+            if text in seen or parts[0] in seen_basenames:
+                raise ValueError(
+                    "state pending_cleanup_backup_entries contains a "
+                    "duplicate entry"
+                )
+            seen.add(text)
+            seen_basenames.add(parts[0])
+            normalized.append(text)
+
+        return tuple(normalized)
+
+    @staticmethod
+    def _coerce_boolean(
+        value: Any,
+        *,
+        field_name: str = "inserted",
+    ) -> bool:
         if not isinstance(value, bool):
-            raise ValueError("state inserted contains invalid boolean value")
+            raise ValueError(
+                f"state {field_name} contains invalid boolean value"
+            )
         return value
 
     @staticmethod
@@ -316,6 +475,20 @@ class StateStore:
                 normalized[field_name] = StateStore._sanitize_text_field(value, field_name=field_name)
             elif field_name == "transcript":
                 normalized[field_name] = StateStore._sanitize_transcript_field(value)
+            elif field_name in {
+                "pending_cleanup_owner_paths",
+                "pending_cleanup_restore_owner_paths",
+            }:
+                normalized[field_name] = (
+                    StateStore._sanitize_pending_cleanup_owner_paths(
+                        value,
+                        field_name=field_name,
+                    )
+                )
+            elif field_name == "pending_cleanup_backup_entries":
+                normalized[field_name] = (
+                    StateStore._sanitize_pending_cleanup_backup_entries(value)
+                )
             elif field_name in optional_text_fields:
                 normalized[field_name] = StateStore._sanitize_text_field(
                     value, field_name=field_name, allow_null=True
@@ -334,8 +507,69 @@ class StateStore:
                     min_value=0,
                     max_value=MAX_STATE_INT,
                 )
-            elif field_name == "inserted":
-                normalized[field_name] = StateStore._coerce_boolean(value)
+            elif field_name in {
+                "inserted",
+                "cleanup_backup_journal_overflow",
+                "cleanup_backup_journal_restore",
+            }:
+                normalized[field_name] = StateStore._coerce_boolean(
+                    value,
+                    field_name=field_name,
+                )
+        pending_entries = normalized.get(
+            "pending_cleanup_backup_entries",
+            (),
+        )
+        restore_owners = normalized.get(
+            "pending_cleanup_restore_owner_paths",
+            (),
+        )
+        if restore_owners and (
+            len(restore_owners) != len(pending_entries)
+            or any(
+                not entry.split("|", 1)[0].startswith(".cleanup.v2.")
+                for entry in pending_entries
+            )
+            or normalized.get("pending_cleanup_owner_paths", ())
+            or normalized.get(
+                "cleanup_backup_journal_overflow",
+                False,
+            )
+            or normalized["status"] not in {"finalizing", "error"}
+            or normalized.get("pid") is not None
+            or bool(normalized.get("process_identity", ""))
+            or not (
+                normalized.get("audio_path")
+                or normalized.get("log_path")
+            )
+        ):
+            raise ValueError(
+                "state cleanup backup restore owner journal is invalid"
+            )
+        if normalized.get("cleanup_backup_journal_restore", False):
+            pending_owners = normalized.get(
+                "pending_cleanup_owner_paths",
+                (),
+            )
+            if (
+                not restore_owners
+                or len(pending_entries) > MAX_PENDING_CLEANUP_OWNER_PATHS
+                or pending_owners
+                or normalized.get(
+                    "cleanup_backup_journal_overflow",
+                    False,
+                )
+                or normalized["status"] not in {"finalizing", "error"}
+                or normalized.get("pid") is not None
+                or bool(normalized.get("process_identity", ""))
+                or not (
+                    normalized.get("audio_path")
+                    or normalized.get("log_path")
+                )
+            ):
+                raise ValueError(
+                    "state cleanup backup restore journal is invalid"
+                )
         return normalized
 
     def read(self) -> RecordingState:

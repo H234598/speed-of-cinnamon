@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import json
 import os
 import tempfile
 import unittest
@@ -8,6 +9,9 @@ from unittest import mock
 from pathlib import Path
 
 from speed_of_cinnamon.state import (
+    MAX_PENDING_CLEANUP_BACKUP_ENTRIES,
+    MAX_PENDING_CLEANUP_OWNER_PATH_CHARS,
+    MAX_PENDING_CLEANUP_OWNER_PATHS,
     MAX_STATE_INT,
     MAX_STATE_FILE_BYTES,
     MAX_STATE_STRING_CHARS,
@@ -90,6 +94,356 @@ class StateStoreTest(unittest.TestCase):
             state = StateStore(Path(tmp) / "state.json").read()
         self.assertEqual(state.status, "idle")
         self.assertEqual(state.transcript, "")
+        self.assertEqual(state.pending_cleanup_owner_paths, ())
+
+    def test_pending_cleanup_owner_paths_round_trip_as_immutable_tuple(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            owners = (
+                str(Path(tmp) / "recordings" / "recording.trimmed-retry.wav"),
+                str(Path(tmp) / "recordings" / "recording.encoded-retry.flac"),
+            )
+            store = StateStore(path)
+
+            store.write(
+                RecordingState(
+                    status="error",
+                    pending_cleanup_owner_paths=owners,
+                )
+            )
+            rendered = json.loads(path.read_text(encoding="utf-8"))
+            loaded = store.read()
+
+        self.assertEqual(rendered["pending_cleanup_owner_paths"], list(owners))
+        self.assertEqual(loaded.pending_cleanup_owner_paths, owners)
+        self.assertIsInstance(loaded.pending_cleanup_owner_paths, tuple)
+
+    def test_read_rejects_malformed_pending_cleanup_owner_paths(self) -> None:
+        oversized_text = "/" + ("a" * MAX_PENDING_CLEANUP_OWNER_PATH_CHARS)
+        oversized_bytes = "/" + (
+            "é" * (MAX_PENDING_CLEANUP_OWNER_PATH_CHARS // 2)
+        )
+        invalid_values = {
+            "scalar": "/tmp/artifact.wav",
+            "object": {"owner": "/tmp/artifact.wav"},
+            "non-text entry": [1],
+            "empty entry": [""],
+            "relative entry": ["artifact.wav"],
+            "parent traversal": ["/tmp/../artifact.wav"],
+            "non-canonical entry": ["/tmp//artifact.wav"],
+            "duplicate entry": ["/tmp/artifact.wav", "/tmp/artifact.wav"],
+            "oversized entry": [oversized_text],
+            "oversized bytes": [oversized_bytes],
+            "too many entries": [
+                f"/tmp/artifact-{index}.wav"
+                for index in range(MAX_PENDING_CLEANUP_OWNER_PATHS + 1)
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            for case, value in invalid_values.items():
+                with self.subTest(case=case):
+                    path.write_text(
+                        json.dumps(
+                            {
+                                "status": "error",
+                                "pending_cleanup_owner_paths": value,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    path.chmod(0o600)
+
+                    state = store.read()
+
+                    self.assertEqual(state.error, "state file could not be read")
+                    self.assertEqual(state.pending_cleanup_owner_paths, ())
+
+    def test_pending_cleanup_owner_path_accepts_exact_shared_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            owner = "/" + (
+                "a" * (MAX_PENDING_CLEANUP_OWNER_PATH_CHARS - 1)
+            )
+            store = StateStore(path)
+
+            store.write(
+                RecordingState(
+                    status="error",
+                    pending_cleanup_owner_paths=(owner,),
+                )
+            )
+            loaded = store.read()
+
+        self.assertEqual(loaded.pending_cleanup_owner_paths, (owner,))
+
+    def test_pending_cleanup_backup_entries_round_trip(self) -> None:
+        entry = (
+            ".cleanup.0123456789abcdef.fedcba9876543210.bak"
+            "|1|2|33152|1|6|7|8"
+        )
+        v2_entry = (
+            ".cleanup.v2."
+            "0123456789abcdef0123456789abcdef."
+            "fedcba9876543210fedcba9876543210."
+            "00112233445566778899aabbccddeeff.bak"
+            "|9|10|33152|1|11|12|13"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+
+            store.write(
+                RecordingState(
+                    status="error",
+                    pending_cleanup_backup_entries=(entry, v2_entry),
+                    cleanup_backup_journal_overflow=True,
+                )
+            )
+            rendered = json.loads(path.read_text(encoding="utf-8"))
+            loaded = store.read()
+
+        self.assertEqual(
+            rendered["pending_cleanup_backup_entries"],
+            [entry, v2_entry],
+        )
+        self.assertIs(rendered["cleanup_backup_journal_overflow"], True)
+        self.assertEqual(
+            loaded.pending_cleanup_backup_entries,
+            (entry, v2_entry),
+        )
+        self.assertIsInstance(loaded.pending_cleanup_backup_entries, tuple)
+        self.assertIs(loaded.cleanup_backup_journal_overflow, True)
+
+    def test_cleanup_backup_restore_journal_round_trip(self) -> None:
+        audio_entry = (
+            ".cleanup.v2."
+            f"{'1' * 32}.{'2' * 32}.{'3' * 32}.bak"
+            "|1|2|33152|1|6|7|8"
+        )
+        log_entry = (
+            ".cleanup.v2."
+            f"{'1' * 32}.{'4' * 32}.{'5' * 32}.bak"
+            "|9|10|33152|1|11|12|13"
+        )
+        owners = (
+            "/tmp/recording.wav",
+            "/tmp/recording.log",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            store.write(
+                RecordingState(
+                    status="finalizing",
+                    audio_path="/tmp/recording.wav",
+                    pending_cleanup_restore_owner_paths=owners,
+                    pending_cleanup_backup_entries=(
+                        audio_entry,
+                        log_entry,
+                    ),
+                    cleanup_backup_journal_restore=True,
+                )
+            )
+            rendered = json.loads(path.read_text(encoding="utf-8"))
+            loaded = store.read()
+
+        self.assertIs(rendered["cleanup_backup_journal_restore"], True)
+        self.assertIs(loaded.cleanup_backup_journal_restore, True)
+        self.assertEqual(
+            loaded.pending_cleanup_restore_owner_paths,
+            owners,
+        )
+        self.assertEqual(
+            loaded.pending_cleanup_backup_entries,
+            (audio_entry, log_entry),
+        )
+
+    def test_read_rejects_non_boolean_cleanup_backup_journal_restore(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "finalizing",
+                        "audio_path": "/tmp/recording.wav",
+                        "cleanup_backup_journal_restore": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
+
+            state = StateStore(path).read()
+
+        self.assertEqual(state.error, "state file could not be read")
+        self.assertIs(state.cleanup_backup_journal_restore, False)
+
+    def test_read_rejects_invalid_cleanup_backup_restore_combinations(
+        self,
+    ) -> None:
+        entry = (
+            ".cleanup.v2."
+            f"{'1' * 32}.{'2' * 32}.{'3' * 32}.bak"
+            "|1|2|33152|1|6|7|8"
+        )
+        legacy_entry = (
+            ".cleanup.0123456789abcdef.fedcba9876543210.bak"
+            "|1|2|33152|1|6|7|8"
+        )
+        invalid_values = {
+            "missing-entry": {},
+            "legacy-entry": {
+                "pending_cleanup_backup_entries": [legacy_entry],
+                "pending_cleanup_restore_owner_paths": [
+                    "/tmp/recording.wav"
+                ],
+            },
+            "missing-owner": {
+                "pending_cleanup_backup_entries": [entry],
+            },
+            "owner-count-mismatch": {
+                "pending_cleanup_backup_entries": [entry],
+                "pending_cleanup_restore_owner_paths": [
+                    "/tmp/recording.wav",
+                    "/tmp/recording.log",
+                ],
+            },
+            "overflow": {
+                "pending_cleanup_backup_entries": [entry],
+                "pending_cleanup_restore_owner_paths": [
+                    "/tmp/recording.wav"
+                ],
+                "cleanup_backup_journal_overflow": True,
+            },
+            "active-process": {
+                "pending_cleanup_backup_entries": [entry],
+                "pending_cleanup_restore_owner_paths": [
+                    "/tmp/recording.wav"
+                ],
+                "pid": 1234,
+                "process_identity": "owner-identity",
+            },
+            "idle": {
+                "status": "idle",
+                "pending_cleanup_backup_entries": [entry],
+                "pending_cleanup_restore_owner_paths": [
+                    "/tmp/recording.wav"
+                ],
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            for case, values in invalid_values.items():
+                with self.subTest(case=case):
+                    payload = {
+                        "status": "finalizing",
+                        "audio_path": "/tmp/recording.wav",
+                        "cleanup_backup_journal_restore": True,
+                        **values,
+                    }
+                    path.write_text(
+                        json.dumps(payload),
+                        encoding="utf-8",
+                    )
+                    path.chmod(0o600)
+
+                    state = StateStore(path).read()
+
+                    self.assertEqual(
+                        state.error,
+                        "state file could not be read",
+                    )
+                    self.assertIs(
+                        state.cleanup_backup_journal_restore,
+                        False,
+                    )
+
+    def test_read_rejects_malformed_pending_cleanup_backup_entries(self) -> None:
+        valid_name = ".cleanup.0123456789abcdef.fedcba9876543210.bak"
+        valid_entry = f"{valid_name}|1|2|33152|1|6|7|8"
+        invalid_values = {
+            "scalar": valid_entry,
+            "non-text": [1],
+            "bad basename": [f"../{valid_name}|1|2|33152|1|6|7|8"],
+            "uppercase hex": [
+                ".cleanup.0123456789ABCDEF.fedcba9876543210.bak"
+                "|1|2|33152|1|6|7|8"
+            ],
+            "missing identity": [valid_name],
+            "extra identity": [f"{valid_entry}|9"],
+            "negative identity": [f"{valid_name}|-1|2|33152|1|6|7|8"],
+            "noncanonical identity": [
+                f"{valid_name}|01|2|33152|1|6|7|8"
+            ],
+            "oversized identity": [
+                f"{valid_name}|18446744073709551616|2|33152|1|6|7|8"
+            ],
+            "duplicate": [valid_entry, valid_entry],
+            "duplicate basename": [
+                valid_entry,
+                f"{valid_name}|9|2|33152|1|6|7|8",
+            ],
+            "too many entries": [
+                (
+                    f".cleanup.{index:016x}.fedcba9876543210.bak"
+                    "|1|2|33152|1|6|7|8"
+                )
+                for index in range(MAX_PENDING_CLEANUP_BACKUP_ENTRIES + 1)
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            store = StateStore(path)
+            for case, value in invalid_values.items():
+                with self.subTest(case=case):
+                    path.write_text(
+                        json.dumps(
+                            {
+                                "status": "error",
+                                "pending_cleanup_backup_entries": value,
+                            }
+                        ),
+                        encoding="utf-8",
+                    )
+                    path.chmod(0o600)
+
+                    state = store.read()
+
+                    self.assertEqual(
+                        state.error,
+                        "state file could not be read",
+                    )
+                    self.assertEqual(
+                        state.pending_cleanup_backup_entries,
+                        (),
+                    )
+
+    def test_read_rejects_non_boolean_cleanup_backup_journal_overflow(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "status": "error",
+                        "cleanup_backup_journal_overflow": 1,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
+
+            state = StateStore(path).read()
+
+        self.assertEqual(state.error, "state file could not be read")
+        self.assertIs(state.cleanup_backup_journal_overflow, False)
 
     def test_read_rejects_existing_state_without_status(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

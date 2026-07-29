@@ -609,8 +609,8 @@ for (const terminalStatus of ["done", "idle"]) {
   });
 }
 
-for (const terminalStatus of ["done", "idle"]) {
-  test(`queued cancel behind stop retries terminal ${terminalStatus} without cleanup evidence`, () => {
+for (const stopStatus of ["done", "idle", "recorded"]) {
+  test(`queued cancel behind stop routes ${stopStatus} through one cancel`, () => {
     const harness = makeRecordingApplet({ realStopPayload: true });
     const { applet } = harness;
     applet.status = "recording";
@@ -624,7 +624,7 @@ for (const terminalStatus of ["done", "idle"]) {
     applet.lastTranscript = "previous transcript";
     applet._cancelRecording();
     harness.requests[0].callback({
-      status: terminalStatus,
+      status: stopStatus,
       transcript: "must not escape",
     });
 
