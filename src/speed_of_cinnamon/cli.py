@@ -3972,6 +3972,23 @@ def _stabilize_recording_artifact_path(
                 pass
 
 
+def _safe_regular_leaf_probe(
+    path: Path,
+) -> tuple[bool | None, os.stat_result | None]:
+    try:
+        file_stat = path.lstat()
+    except FileNotFoundError:
+        return False, None
+    except OSError:
+        return None, None
+    if (
+        not stat_module.S_ISREG(file_stat.st_mode)
+        or getattr(file_stat, "st_nlink", 1) != 1
+    ):
+        return True, None
+    return True, file_stat
+
+
 def _recording_artifact_stat(path: Path) -> os.stat_result | None:
     try:
         file_stat = path.lstat()
@@ -4108,7 +4125,13 @@ def _inflight_recording_artifact_paths(audio_path: Path) -> set[Path]:
     }
 
 
-def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState) -> set[Path]:
+def _finalizing_inflight_artifact_paths(
+    state_path: Path,
+    state: RecordingState,
+    *,
+    known_audio_path: Path | None = None,
+    include_recording_inflight: bool = True,
+) -> set[Path]:
     recover_cleanup_paths = (
         state.status == "error"
         and state.error == "failed to discard recording artifacts"
@@ -4117,12 +4140,14 @@ def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState)
         return set()
 
     in_flight_paths: set[Path] = set()
-    audio_path = _normalized_state_recording_artifact_path(
-        state.audio_path,
-        suffix=(".wav", ".flac", ".socenc"),
-        state_path=state_path,
-        require_recordings_dir=True,
-    )
+    audio_path = known_audio_path
+    if audio_path is None:
+        audio_path = _normalized_state_recording_artifact_path(
+            state.audio_path,
+            suffix=(".wav", ".flac", ".socenc"),
+            state_path=state_path,
+            require_recordings_dir=True,
+        )
     if audio_path is None:
         try:
             raw_audio_value = _assert_clean_text(
@@ -4160,7 +4185,10 @@ def _finalizing_inflight_artifact_paths(state_path: Path, state: RecordingState)
             recovery_audio_path = audio_path.with_suffix(".flac")
             in_flight_paths.add(recovery_audio_path)
             in_flight_paths.add(encrypted_path_for(recovery_audio_path))
-    in_flight_paths.update(_inflight_recording_artifact_paths(audio_path))
+    if include_recording_inflight:
+        in_flight_paths.update(
+            _inflight_recording_artifact_paths(audio_path)
+        )
     return in_flight_paths
 
 
@@ -4863,12 +4891,19 @@ def _cleanup_backup_state_namespace(state_path: Path) -> str:
     ).hexdigest()[:32]
 
 
-def _cleanup_backup_v2_prefix(path: Path, state_path: Path) -> str:
-    state_namespace = _cleanup_backup_state_namespace(state_path)
+def _cleanup_backup_v2_prefix(
+    path: Path,
+    state_path: Path,
+    *,
+    state_namespace: str | None = None,
+) -> str:
+    effective_namespace = state_namespace
+    if effective_namespace is None:
+        effective_namespace = _cleanup_backup_state_namespace(state_path)
     owner_digest = hashlib.sha256(
         str(path).encode("utf-8")
     ).hexdigest()[:32]
-    return f".cleanup.v2.{state_namespace}.{owner_digest}."
+    return f".cleanup.v2.{effective_namespace}.{owner_digest}."
 
 
 def _cleanup_backup_journal_entry_belongs_to_state(
@@ -4877,6 +4912,9 @@ def _cleanup_backup_journal_entry_belongs_to_state(
     legacy_owner_paths: (
         tuple[Path, ...] | set[Path] | frozenset[Path]
     ) = frozenset(),
+    *,
+    legacy_owner_prefixes: frozenset[str] | None = None,
+    state_namespace: str | None = None,
 ) -> bool:
     backup_name = entry.split("|", 1)[0]
     parts = backup_name.split(".")
@@ -4885,16 +4923,23 @@ def _cleanup_backup_journal_entry_belongs_to_state(
         return (
             _is_cleanup_backup_journal_basename(backup_name)
             and owner_prefix is not None
-            and any(
-                _cleanup_backup_prefix(owner_path) == owner_prefix
-                for owner_path in legacy_owner_paths
+            and (
+                owner_prefix in legacy_owner_prefixes
+                if legacy_owner_prefixes is not None
+                else any(
+                    _cleanup_backup_prefix(owner_path) == owner_prefix
+                    for owner_path in legacy_owner_paths
+                )
             )
         )
+    effective_namespace = state_namespace
+    if effective_namespace is None:
+        effective_namespace = _cleanup_backup_state_namespace(state_path)
     return (
         _is_cleanup_backup_journal_basename(backup_name)
         and len(parts) == 7
         and parts[2] == "v2"
-        and parts[3] == _cleanup_backup_state_namespace(state_path)
+        and parts[3] == effective_namespace
     )
 
 
@@ -5038,6 +5083,7 @@ def _cleanup_backup_restore_journal_pairs(
     state: RecordingState,
     *,
     state_path: Path,
+    state_namespace: str | None = None,
 ) -> tuple[tuple[Path, str], ...]:
     owners = state.pending_cleanup_restore_owner_paths
     entries = state.pending_cleanup_backup_entries
@@ -5058,6 +5104,7 @@ def _cleanup_backup_restore_journal_pairs(
         expected_prefix = _cleanup_backup_v2_prefix(
             owner_path,
             state_path,
+            state_namespace=state_namespace,
         )
         if (
             not backup_name.startswith(expected_prefix)
@@ -5109,6 +5156,15 @@ def finalize_recording(
     trimmed_audio_path: Path | None = None
     stabilized_audio_path: Path | None = None
     transcript_encryption = ARTIFACT_ENCRYPTION_OFF
+    cleanup_state_namespace: str | None = None
+
+    def current_cleanup_state_namespace() -> str:
+        nonlocal cleanup_state_namespace
+        if cleanup_state_namespace is None:
+            cleanup_state_namespace = (
+                _cleanup_backup_state_namespace(store.path)
+            )
+        return cleanup_state_namespace
 
     def _persist_cleanup_backup_journal() -> None:
         nonlocal cleanup_backup_journal_persisted
@@ -5182,7 +5238,11 @@ def finalize_recording(
             return None
         source = Path(path_text)
         backup = source.with_name(
-            f"{_cleanup_backup_v2_prefix(source, store.path)}"
+            f"{_cleanup_backup_v2_prefix(
+                source,
+                store.path,
+                state_namespace=current_cleanup_state_namespace(),
+            )}"
             f"{secrets.token_hex(16)}.bak"
         )
         try:
@@ -5387,7 +5447,11 @@ def finalize_recording(
             if _recording_artifact_stat(path) is None:
                 raise RuntimeError(f"recording cleanup source is not a safe regular file: {path}")
         legacy_prefix = _cleanup_backup_prefix(path)
-        v2_prefix = _cleanup_backup_v2_prefix(path, store.path)
+        v2_prefix = _cleanup_backup_v2_prefix(
+            path,
+            store.path,
+            state_namespace=current_cleanup_state_namespace(),
+        )
         restore_entry_name = ""
         restore_identity: tuple[int, int, int, int, int, int, int] | None = None
         if restore_entry is not None:
@@ -5586,6 +5650,11 @@ def finalize_recording(
         restore_pairs = _cleanup_backup_restore_journal_pairs(
             state,
             state_path=store.path,
+            state_namespace=(
+                current_cleanup_state_namespace()
+                if state.pending_cleanup_restore_owner_paths
+                else None
+            ),
         )
         cleanup_backup_restore_pairs[:] = restore_pairs
         if (
@@ -6532,6 +6601,48 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
 def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     store = build_store(args)
+    cleanup_state_namespace: str | None = None
+    legacy_cleanup_prefixes: dict[Path, str] = {}
+    v2_cleanup_prefixes: dict[Path, str] = {}
+    persisted_legacy_owner_prefixes: frozenset[str] | None = None
+
+    def current_cleanup_state_namespace() -> str:
+        nonlocal cleanup_state_namespace
+        if cleanup_state_namespace is None:
+            cleanup_state_namespace = (
+                _cleanup_backup_state_namespace(store.path)
+            )
+        return cleanup_state_namespace
+
+    def current_legacy_cleanup_prefix(path: Path) -> str:
+        prefix = legacy_cleanup_prefixes.get(path)
+        if prefix is None:
+            prefix = _cleanup_backup_prefix(path)
+            legacy_cleanup_prefixes[path] = prefix
+        return prefix
+
+    def current_v2_cleanup_prefix(path: Path) -> str:
+        prefix = v2_cleanup_prefixes.get(path)
+        if prefix is None:
+            prefix = _cleanup_backup_v2_prefix(
+                path,
+                store.path,
+                state_namespace=current_cleanup_state_namespace(),
+            )
+            v2_cleanup_prefixes[path] = prefix
+        return prefix
+
+    def current_persisted_legacy_owner_prefixes(
+        owner_paths: set[Path],
+    ) -> frozenset[str]:
+        nonlocal persisted_legacy_owner_prefixes
+        if persisted_legacy_owner_prefixes is None:
+            persisted_legacy_owner_prefixes = frozenset(
+                current_legacy_cleanup_prefix(path)
+                for path in owner_paths
+            )
+        return persisted_legacy_owner_prefixes
+
     lock_path = _acquire_finalization_lock(store.path)
     if lock_path is None:
         return {
@@ -6554,6 +6665,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 _cleanup_backup_restore_journal_pairs(
                     state,
                     state_path=store.path,
+                    state_namespace=(
+                        current_cleanup_state_namespace()
+                        if state.pending_cleanup_restore_owner_paths
+                        else None
+                    ),
                 )
             )
         except RuntimeError as exc:
@@ -6572,29 +6688,39 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     cleanup_backup_journal_restore=False,
                     error="discarding recording artifacts",
                 )
+            restore_directory_entries_by_parent: dict[
+                Path,
+                list[tuple[Path, os.stat_result]],
+            ] = {}
             for owner_path, entry in tuple(pending_restore_pairs):
                 try:
                     backup_name, expected_identity = (
                         _parse_cleanup_backup_journal_entry(entry)
                     )
                     backup_path = owner_path.with_name(backup_name)
-                    owner_prefix = _cleanup_backup_v2_prefix(
-                        owner_path,
-                        store.path,
-                    )
-                    try:
-                        restore_directory_entries = (
-                            _safe_directory_entries(
-                                owner_path.parent,
-                                field_name=(
-                                    "recording cleanup restore directory"
-                                ),
-                            )
+                    owner_prefix = current_v2_cleanup_prefix(owner_path)
+                    restore_directory_entries = (
+                        restore_directory_entries_by_parent.get(
+                            owner_path.parent
                         )
-                    except DirectoryScanError as exc:
-                        raise RuntimeError(
-                            "failed to scan cleanup restore directory"
-                        ) from exc
+                    )
+                    if restore_directory_entries is None:
+                        try:
+                            restore_directory_entries = (
+                                _safe_directory_entries(
+                                    owner_path.parent,
+                                    field_name=(
+                                        "recording cleanup restore directory"
+                                    ),
+                                )
+                            )
+                        except DirectoryScanError as exc:
+                            raise RuntimeError(
+                                "failed to scan cleanup restore directory"
+                            ) from exc
+                        restore_directory_entries_by_parent[
+                            owner_path.parent
+                        ] = restore_directory_entries
                     if any(
                         candidate.name.startswith(owner_prefix)
                         and candidate.name != backup_name
@@ -6603,8 +6729,12 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         raise RuntimeError(
                             "cleanup restore delete state is ambiguous"
                         )
-                    backup_presence = _safe_leaf_presence(backup_path)
-                    owner_presence = _safe_leaf_presence(owner_path)
+                    backup_presence, backup_stat = (
+                        _safe_regular_leaf_probe(backup_path)
+                    )
+                    owner_presence, owner_stat = (
+                        _safe_regular_leaf_probe(owner_path)
+                    )
                     if backup_presence is None or owner_presence is None:
                         raise RuntimeError(
                             "cleanup restore artifact presence is unsafe"
@@ -6614,7 +6744,6 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                             "cleanup restore delete state is ambiguous"
                         )
                     if backup_presence:
-                        backup_stat = _recording_artifact_stat(backup_path)
                         if backup_stat is None or not (
                             _cleanup_backup_journal_identity_matches(
                                 backup_stat,
@@ -6633,7 +6762,6 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                                 "cleanup restore backup disappeared"
                             )
                     elif owner_presence:
-                        owner_stat = _recording_artifact_stat(owner_path)
                         owner_claim = (
                             (
                                 owner_stat.st_dev,
@@ -6701,6 +6829,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         "inflight_artifacts_deleted": False,
                         "cleanup_backups_deleted": False,
                         "transcript_deleted": False,
+                        **(
+                            {"exit_code": 0}
+                            if initial_status == "finalizing"
+                            else {}
+                        ),
                     }
                 pending_restore_pairs.remove((owner_path, entry))
                 state = store.update(
@@ -6810,7 +6943,16 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             suffix=".log",
             state_path=store.path,
         )
-        discarded_finalizing_paths = _finalizing_inflight_artifact_paths(store.path, state)
+        discarded_finalizing_paths = (
+            _finalizing_inflight_artifact_paths(
+                store.path,
+                state,
+                known_audio_path=discarded_audio_path,
+                include_recording_inflight=(
+                    discarded_audio_path is None
+                ),
+            )
+        )
         discarded_finalizing_transcript_paths = {
             path for path in discarded_finalizing_paths if _is_transcript_artifact(path)
         }
@@ -6840,7 +6982,15 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             for owner_path in group_paths
         }
         selected_inflight_groups: dict[Path, set[Path]] = {}
-        reserved_cleanup_owner_paths = set(persisted_cleanup_owner_paths)
+        direct_cleanup_owner_paths = {
+            path
+            for path in (discarded_audio_path, discarded_log_path)
+            if path is not None
+        }
+        reserved_cleanup_owner_paths = (
+            set(persisted_cleanup_owner_paths)
+            | direct_cleanup_owner_paths
+        )
         deferred_inflight_group_paths: set[Path] = set()
         for group_path, group_paths in sorted(
             discarded_inflight_groups.items(),
@@ -6882,8 +7032,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 {},
             )
             for owner_prefix in (
-                _cleanup_backup_prefix(owner_path),
-                _cleanup_backup_v2_prefix(owner_path, store.path),
+                current_legacy_cleanup_prefix(owner_path),
+                current_v2_cleanup_prefix(owner_path),
             ):
                 owner_prefixes.setdefault(
                     owner_prefix,
@@ -7035,6 +7185,18 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 persisted_entry,
                 store.path,
                 persisted_cleanup_owner_paths,
+                legacy_owner_prefixes=(
+                    current_persisted_legacy_owner_prefixes(
+                        persisted_cleanup_owner_paths
+                    )
+                    if not persisted_entry.startswith(".cleanup.v2.")
+                    else None
+                ),
+                state_namespace=(
+                    current_cleanup_state_namespace()
+                    if persisted_entry.startswith(".cleanup.v2.")
+                    else None
+                ),
             ):
                 error_text = (
                     "cleanup backup journal entry belongs to another state"
@@ -7083,7 +7245,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     cleanup_backup.name
                 ] = cleanup_backup
         for owner_path in unsafe_cleanup_backup_owner_paths:
-            prefix = _cleanup_backup_prefix(owner_path)
+            prefix = current_legacy_cleanup_prefix(owner_path)
             for candidate, file_stat in (
                 cleanup_directory_entries_by_parent.get(
                     owner_path.parent,
@@ -7211,6 +7373,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             return {
                 "status": "error",
                 "message": error_message,
+                "error": error_message,
                 "discarded_audio_path_present": bool(state.audio_path),
                 "audio_deleted": False,
                 "log_deleted": False,
@@ -7220,6 +7383,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "inflight_artifacts_deleted": False,
                 "cleanup_backups_deleted": False,
                 "transcript_deleted": False,
+                **(
+                    {"exit_code": 0}
+                    if initial_status == "finalizing"
+                    else {}
+                ),
             }
         store.write(
             RecordingState(
@@ -7307,6 +7475,33 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             except RuntimeError:
                 deleted = False
             cleanup_backup_delete_results[cleanup_backup] = deleted
+        failed_direct_cleanup_owner_paths = {
+            owner_path
+            for owner_path, owner_backups, owner_is_unsafe in (
+                (
+                    discarded_audio_path,
+                    discarded_audio_cleanup_backups,
+                    discarded_audio_cleanup_backup_unsafe,
+                ),
+                (
+                    discarded_log_path,
+                    discarded_log_cleanup_backups,
+                    discarded_log_cleanup_backup_unsafe,
+                ),
+            )
+            if owner_path is not None
+            and (
+                owner_is_unsafe
+                or any(
+                    not backup.name.startswith(".cleanup.v2.")
+                    and not cleanup_backup_delete_results.get(
+                        backup,
+                        False,
+                    )
+                    for backup in owner_backups
+                )
+            )
+        }
         failed_owner_paths = (
             {
                 owner_path
@@ -7322,9 +7517,12 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 )
             }
             | selected_unsafe_cleanup_backup_owner_paths
+            | failed_direct_cleanup_owner_paths
         )
         persistable_cleanup_owner_paths = (
-            inflight_group_owner_paths | persisted_cleanup_owner_paths
+            inflight_group_owner_paths
+            | persisted_cleanup_owner_paths
+            | direct_cleanup_owner_paths
         )
         pending_cleanup_owner_paths = (
             failed_owner_paths & persistable_cleanup_owner_paths
@@ -7390,22 +7588,24 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         if state.transcript_path:
             transcript_present_before = False
             transcript_sibling_present_before = False
-            transcript_expected_stat: os.stat_result | None = None
-            transcript_sibling_expected_stat: os.stat_result | None = None
             try:
                 transcript_path = _normalized_state_artifact_path(
                     _assert_clean_text(state.transcript_path, field_name="transcript path", max_chars=MAX_PATH_CHARS),
                     state_path=store.path,
                 )
-                transcript_presence = _safe_leaf_presence(transcript_path) if transcript_path is not None else False
+                transcript_presence, transcript_expected_stat = (
+                    _safe_regular_leaf_probe(transcript_path)
+                    if transcript_path is not None
+                    else (False, None)
+                )
                 if transcript_presence is None:
                     raise RuntimeError(f"transcript file presence could not be verified: {transcript_path}")
                 transcript_present_before = transcript_presence
-                if transcript_present_before and transcript_path is not None:
-                    transcript_expected_stat = _recording_artifact_stat(transcript_path)
                 transcript_sibling_path = _transcript_sibling_path(transcript_path)
-                transcript_sibling_presence = (
-                    _safe_leaf_presence(transcript_sibling_path) if transcript_sibling_path is not None else False
+                transcript_sibling_presence, transcript_sibling_expected_stat = (
+                    _safe_regular_leaf_probe(transcript_sibling_path)
+                    if transcript_sibling_path is not None
+                    else (False, None)
                 )
                 if transcript_sibling_presence is None:
                     raise RuntimeError(
@@ -7421,8 +7621,6 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     )
                 else:
                     transcript_deleted = False
-                if transcript_sibling_present_before and transcript_sibling_path is not None:
-                    transcript_sibling_expected_stat = _recording_artifact_stat(transcript_sibling_path)
                 if not transcript_deleted and not transcript_present_before:
                     transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
                 if transcript_sibling_path is not None and transcript_sibling_present_before:
@@ -7540,6 +7738,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             payload = {
                 "status": "error",
                 "message": error_message,
+                "error": error_message,
                 "discarded_audio_path_present": bool(state.audio_path),
                 "audio_deleted": audio_deleted,
                 "log_deleted": log_deleted,

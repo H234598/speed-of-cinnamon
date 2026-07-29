@@ -6455,7 +6455,9 @@ class CliTest(unittest.TestCase):
             )
             remove_file = cli.remove_file
             rename_without_replacing = cli._rename_without_replacing
+            real_namespace = cli._cleanup_backup_state_namespace
             rollback_state: RecordingState | None = None
+            first_finalize_namespace_calls = 0
             rollback_prefix = cli._cleanup_backup_v2_prefix(
                 audio,
                 state_file,
@@ -6550,12 +6552,20 @@ class CliTest(unittest.TestCase):
                     "speed_of_cinnamon.cli._rename_without_replacing",
                     side_effect=interrupt_after_rollback_activation,
                 ),
+                mock.patch(
+                    "speed_of_cinnamon.cli."
+                    "_cleanup_backup_state_namespace",
+                    wraps=real_namespace,
+                ) as namespace_mock,
             ):
                 with self.assertRaisesRegex(
                     RuntimeError,
                     "rollback activation interrupted",
                 ):
                     cli.finalize_recording(args, store, store.read())
+                first_finalize_namespace_calls = (
+                    namespace_mock.call_count
+                )
 
             failed_state = store.read()
             restored_contents = audio.read_bytes()
@@ -6645,6 +6655,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(cleanup_backups, [])
         self.assertFalse(audio.exists())
         self.assertFalse(log.exists())
+        self.assertEqual(first_finalize_namespace_calls, 1)
 
     def test_finalize_does_not_restore_replaced_cleanup_backup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -14357,7 +14368,7 @@ class CliTest(unittest.TestCase):
             store = StateStore(state_file)
             store.write(
                 RecordingState(
-                    status="error",
+                    status="finalizing",
                     audio_path=str(audio_path),
                     pending_cleanup_restore_owner_paths=(
                         str(owner_path),
@@ -14387,6 +14398,7 @@ class CliTest(unittest.TestCase):
             )
 
         self.assertEqual(result["status"], "error")
+        self.assertEqual(result.get("exit_code"), 0)
         self.assertTrue(cleanup_exists)
         self.assertTrue(additional_exists)
         self.assertEqual(cleanup_contents, b"journaled")
@@ -14404,6 +14416,392 @@ class CliTest(unittest.TestCase):
             False,
         )
 
+    def test_cancel_scans_restore_parent_once_for_multiple_pairs(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            recordings.parent.chmod(0o700)
+            audio_path = recordings / "recording.wav"
+            audio_path.write_bytes(b"audio")
+            state_file = recordings.parent / "state.json"
+            owners = (
+                recordings / "orphan-a.wav",
+                recordings / "orphan-b.log",
+            )
+            backups = tuple(
+                recordings
+                / (
+                    f"{cli._cleanup_backup_v2_prefix(owner, state_file)}"
+                    f"{index:032x}.bak"
+                )
+                for index, owner in enumerate(owners, start=1)
+            )
+            for backup in backups:
+                backup.write_bytes(b"backup")
+            entries = tuple(
+                cli._cleanup_backup_journal_entry(
+                    backup,
+                    backup.stat(),
+                )
+                for backup in backups
+            )
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="error",
+                    audio_path=str(audio_path),
+                    pending_cleanup_restore_owner_paths=tuple(
+                        str(owner) for owner in owners
+                    ),
+                    pending_cleanup_backup_entries=entries,
+                    cleanup_backup_journal_restore=True,
+                )
+            )
+            real_scan = cli._safe_directory_entries
+            real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+            real_namespace = cli._cleanup_backup_state_namespace
+            restore_scan_count = 0
+            deleted_restore_backups: set[Path] = set()
+
+            def count_restore_scan(
+                directory: Path,
+                *,
+                field_name: str,
+                missing_ok: bool = False,
+            ) -> list[tuple[Path, os.stat_result]]:
+                nonlocal restore_scan_count
+                if (
+                    directory == recordings
+                    and len(deleted_restore_backups) < len(backups)
+                ):
+                    restore_scan_count += 1
+                return real_scan(
+                    directory,
+                    field_name=field_name,
+                    missing_ok=missing_ok,
+                )
+
+            def track_restore_unlink(
+                path: Path,
+                **kwargs: object,
+            ) -> bool:
+                result = real_unlink(path, **kwargs)
+                if result and path in backups:
+                    deleted_restore_backups.add(path)
+                return result
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp},
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli._safe_directory_entries",
+                    side_effect=count_restore_scan,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli."
+                    "_unlink_regular_leaf_with_parent_fsync",
+                    side_effect=track_restore_unlink,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli."
+                    "_cleanup_backup_state_namespace",
+                    wraps=real_namespace,
+                ) as namespace_mock,
+            ):
+                result = cli.command_cancel(
+                    argparse.Namespace(state_file=str(state_file))
+                )
+
+        self.assertEqual(result["status"], "idle")
+        self.assertEqual(restore_scan_count, 1)
+        self.assertEqual(deleted_restore_backups, set(backups))
+        self.assertEqual(namespace_mock.call_count, 1)
+        self.assertEqual(namespace_mock.call_args.args, (state_file,))
+
+    def test_cancel_idle_does_not_compute_cleanup_state_namespace(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "speed-of-cinnamon"
+            state_dir.mkdir()
+            state_dir.chmod(0o700)
+            state_file = state_dir / "state.json"
+            StateStore(state_file).write(RecordingState(status="idle"))
+            real_namespace = cli._cleanup_backup_state_namespace
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp},
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli."
+                    "_cleanup_backup_state_namespace",
+                    wraps=real_namespace,
+                ) as namespace_mock,
+            ):
+                result = cli.command_cancel(
+                    argparse.Namespace(state_file=str(state_file))
+                )
+
+        self.assertEqual(result["status"], "idle")
+        self.assertEqual(namespace_mock.call_count, 0)
+
+    def test_cancel_discovers_recording_inflight_once(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            recordings.parent.chmod(0o700)
+            audio_path = recordings / "recording.wav"
+            audio_path.write_bytes(b"audio")
+            state_file = recordings.parent / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="finalizing",
+                    audio_path=str(audio_path),
+                )
+            )
+            real_discovery = cli._inflight_recording_artifact_paths
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp},
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli."
+                    "_inflight_recording_artifact_paths",
+                    wraps=real_discovery,
+                ) as discovery_mock,
+            ):
+                result = cli.command_cancel(
+                    argparse.Namespace(state_file=str(state_file))
+                )
+
+        self.assertEqual(result["status"], "idle")
+        self.assertEqual(discovery_mock.call_count, 1)
+        self.assertEqual(discovery_mock.call_args.args, (audio_path,))
+
+    def test_cancel_finalizing_overflow_has_error_payload(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            recordings.parent.chmod(0o700)
+            audio_path = recordings / "recording.wav"
+            audio_path.write_bytes(b"audio")
+            state_file = recordings.parent / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="finalizing",
+                    audio_path=str(audio_path),
+                    cleanup_backup_journal_overflow=True,
+                )
+            )
+
+            with mock.patch.dict(
+                os.environ,
+                {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp},
+            ):
+                result = cli.command_cancel(
+                    argparse.Namespace(state_file=str(state_file))
+                )
+            final_state = StateStore(state_file).read()
+            audio_exists = audio_path.exists()
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(
+            result.get("error"),
+            "recording cleanup journal capacity exceeded",
+        )
+        self.assertEqual(result.get("exit_code"), 0)
+        self.assertTrue(final_state.cleanup_backup_journal_overflow)
+        self.assertTrue(audio_exists)
+
+    def test_cancel_finalizing_cleanup_failure_has_error_payload(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            recordings.parent.chmod(0o700)
+            audio_path = recordings / "recording.wav"
+            audio_path.write_bytes(b"audio")
+            state_file = recordings.parent / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="finalizing",
+                    audio_path=str(audio_path),
+                )
+            )
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp},
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli."
+                    "_remove_recording_artifact",
+                    return_value=False,
+                ),
+            ):
+                result = cli.command_cancel(
+                    argparse.Namespace(state_file=str(state_file))
+                )
+            final_state = StateStore(state_file).read()
+            audio_exists = audio_path.exists()
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(
+            result.get("error"),
+            "failed to discard recording artifacts",
+        )
+        self.assertEqual(result.get("exit_code"), 0)
+        self.assertEqual(final_state.audio_path, str(audio_path))
+        self.assertTrue(audio_exists)
+
+    def test_cancel_hashes_pending_cleanup_owner_once(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            recordings.parent.chmod(0o700)
+            owner_path = recordings / "recording.wav"
+            prefix = cli._cleanup_backup_prefix(owner_path)
+            backups = tuple(
+                recordings / f"{prefix}{index:016x}.bak"
+                for index in range(2)
+            )
+            for backup in backups:
+                backup.write_bytes(b"backup")
+            entries = tuple(
+                cli._cleanup_backup_journal_entry(
+                    backup,
+                    backup.stat(),
+                )
+                for backup in backups
+            )
+            state_file = recordings.parent / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="error",
+                    pending_cleanup_owner_paths=(str(owner_path),),
+                    pending_cleanup_backup_entries=entries,
+                )
+            )
+            real_prefix = cli._cleanup_backup_prefix
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp},
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli._cleanup_backup_prefix",
+                    wraps=real_prefix,
+                ) as prefix_mock,
+            ):
+                result = cli.command_cancel(
+                    argparse.Namespace(state_file=str(state_file))
+                )
+
+        self.assertEqual(result["status"], "idle")
+        self.assertEqual(prefix_mock.call_count, 1)
+        self.assertEqual(prefix_mock.call_args.args, (owner_path,))
+
+    def test_cancel_retries_direct_legacy_cleanup_backup(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            recordings.parent.chmod(0o700)
+            audio_path = recordings / "recording.wav"
+            audio_path.write_bytes(b"audio")
+            cleanup_backup = recordings / (
+                f"{cli._cleanup_backup_prefix(audio_path)}"
+                f"{'0' * 16}.bak"
+            )
+            cleanup_backup.write_bytes(b"backup")
+            journal_entry = cli._cleanup_backup_journal_entry(
+                cleanup_backup,
+                cleanup_backup.stat(),
+            )
+            state_file = recordings.parent / "state.json"
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="finalizing",
+                    audio_path=str(audio_path),
+                )
+            )
+            real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+
+            def fail_cleanup_backup(
+                path: Path,
+                **kwargs: object,
+            ) -> bool:
+                if path == cleanup_backup:
+                    return False
+                return real_unlink(path, **kwargs)
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp},
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli."
+                    "_unlink_regular_leaf_with_parent_fsync",
+                    side_effect=fail_cleanup_backup,
+                ),
+            ):
+                first = cli.command_cancel(
+                    argparse.Namespace(state_file=str(state_file))
+                )
+            first_state = store.read()
+            backup_exists_after_first = cleanup_backup.exists()
+
+            with mock.patch.dict(
+                os.environ,
+                {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp},
+            ):
+                second = cli.command_cancel(
+                    argparse.Namespace(state_file=str(state_file))
+                )
+            second_state = store.read()
+            backup_exists_after_second = cleanup_backup.exists()
+
+        self.assertEqual(first["status"], "error")
+        self.assertEqual(
+            first_state.pending_cleanup_owner_paths,
+            (str(audio_path),),
+        )
+        self.assertEqual(
+            first_state.pending_cleanup_backup_entries,
+            (journal_entry,),
+        )
+        self.assertTrue(backup_exists_after_first)
+        self.assertEqual(second["status"], "idle")
+        self.assertEqual(
+            second_state.pending_cleanup_owner_paths,
+            (),
+        )
+        self.assertEqual(
+            second_state.pending_cleanup_backup_entries,
+            (),
+        )
+        self.assertFalse(backup_exists_after_second)
+
     def test_cleanup_backup_v2_prefix_is_state_scoped(self) -> None:
         owner_path = Path("/tmp/recordings/recording.wav")
         state_a = Path("/tmp/state-a.json")
@@ -14420,6 +14818,114 @@ class CliTest(unittest.TestCase):
                 r"[0-9a-f]{32}\.[0-9a-f]{32}\.bak$"
             ),
         )
+
+    def test_safe_regular_leaf_probe_uses_one_lstat(
+        self,
+    ) -> None:
+        probe = getattr(
+            cli,
+            "_safe_regular_leaf_probe",
+            None,
+        )
+        self.assertIsNotNone(probe)
+
+        class CountingPath:
+            def __init__(
+                self,
+                path: Path,
+                error: OSError | None = None,
+            ) -> None:
+                self.path = path
+                self.error = error
+                self.calls = 0
+
+            def lstat(self) -> os.stat_result:
+                self.calls += 1
+                if self.error is not None:
+                    raise self.error
+                return self.path.lstat()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            regular = root / "regular.wav"
+            regular.write_bytes(b"audio")
+            missing = root / "missing.wav"
+            directory = root / "directory"
+            directory.mkdir()
+            symlink = root / "symlink.wav"
+            symlink.symlink_to(regular)
+            hardlink_source = root / "hardlink-source.wav"
+            hardlink_source.write_bytes(b"audio")
+            hardlink = root / "hardlink.wav"
+            os.link(hardlink_source, hardlink)
+            cases = (
+                ("regular", CountingPath(regular), True, True),
+                ("missing", CountingPath(missing), False, False),
+                ("permission", CountingPath(regular, PermissionError()), None, False),
+                ("directory", CountingPath(directory), True, False),
+                ("symlink", CountingPath(symlink), True, False),
+                ("hardlink", CountingPath(hardlink), True, False),
+            )
+
+            for case, path, expected_presence, expected_safe in cases:
+                with self.subTest(case=case):
+                    presence, file_stat = probe(path)
+
+                    self.assertIs(presence, expected_presence)
+                    self.assertEqual(file_stat is not None, expected_safe)
+                    self.assertEqual(path.calls, 1)
+
+    def test_cancel_probes_transcript_artifacts_once(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_dir = Path(tmp) / "speed-of-cinnamon"
+            transcripts = state_dir / "transcripts"
+            transcripts.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            transcript = transcripts / "recording.txt"
+            transcript.write_text("transcript", encoding="utf-8")
+            sibling = cli._transcript_sibling_path(transcript)
+            self.assertIsNotNone(sibling)
+            state_file = state_dir / "state.json"
+            StateStore(state_file).write(
+                RecordingState(
+                    status="done",
+                    transcript_path=str(transcript),
+                )
+            )
+            real_probe = getattr(
+                cli,
+                "_safe_regular_leaf_probe",
+                None,
+            )
+            self.assertIsNotNone(real_probe)
+            probed_paths: list[Path] = []
+
+            def count_probe(
+                path: Path,
+            ) -> tuple[bool | None, os.stat_result | None]:
+                probed_paths.append(path)
+                return real_probe(path)
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp},
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli."
+                    "_safe_regular_leaf_probe",
+                    side_effect=count_probe,
+                ),
+            ):
+                result = cli.command_cancel(
+                    argparse.Namespace(state_file=str(state_file))
+                )
+
+        self.assertEqual(result["status"], "idle")
+        self.assertIs(result["transcript_deleted"], True)
+        self.assertEqual(probed_paths, [transcript, sibling])
 
     def test_cancel_ignores_other_state_v2_cleanup_backup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
