@@ -17,6 +17,7 @@ check: test lint lint-workflows-check verify-authorship smoke-doctor security-sc
 test:
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests
 	node --test tests/test_applet_keyboard.mjs
+	node --test tests/test_applet_recording.mjs
 
 coverage:
 	mkdir -p reports

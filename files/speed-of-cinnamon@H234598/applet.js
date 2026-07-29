@@ -54,6 +54,7 @@ const MAX_CLIPBOARD_TARGET_OUTPUT_BYTES = 65536;
 const MAX_XDOTOOL_TARGET_OUTPUT_BYTES = 4096;
 const X11_COMMAND_TIMEOUT_MS = 2000;
 const MAX_KEYBOARD_COMMAND_TIMEOUT_MS = 300000;
+const MAX_CANCEL_RECOVERY_ATTEMPTS = 3;
 const ALARM_CHECK_SECONDS = 60;
 const MAX_ALARM_MENU_ENTRIES = 128;
 const MAX_ALARM_NOTIFICATIONS = 32;
@@ -3962,6 +3963,8 @@ MyApplet.prototype = {
     this.terminalWorkflowToken = null;
     this.settingsWindowToken = null;
     this.cancelPendingWhileCommandRunning = false;
+    this.cancelIntentActive = false;
+    this.cancelRecoveryAttempts = 0;
     this.stopPendingWhileCommandRunning = false;
     this._statusRefreshToken = 0;
     this._statusCommandToken = null;
@@ -6907,12 +6910,12 @@ MyApplet.prototype = {
       }
       return true;
     }
-    let backgroundCleanupSucceeded = this._invalidateBackgroundCallbacksForRecording();
-    if (!backgroundCleanupSucceeded && !hasExistingRecordingWork) {
-      return false;
-    }
+    let backgroundCleanupSucceeded = this._invalidateBackgroundCallbacksForRecording(true);
     let textInsertCleanupSucceeded = this._cancelTextInsertForSettingsChange();
-    if (!textInsertCleanupSucceeded && !hasExistingRecordingWork) {
+    if (
+      (!backgroundCleanupSucceeded || !textInsertCleanupSucceeded) &&
+      !hasExistingRecordingWork
+    ) {
       return false;
     }
     if (this.isCommandRunning) {
@@ -6931,12 +6934,20 @@ MyApplet.prototype = {
       return false;
     }
     let manualRelistenStopRequested = Boolean(
-      this.autoRelisten &&
-      this.notificationSessionActive &&
-      (this.status === "recording" || this.status === "recorded" || this.autoRelistenPending)
+      commandAction === "stop" &&
+      (
+        this.autoRelistenManualStopRequested ||
+        (
+          this.autoRelisten &&
+          this.notificationSessionActive &&
+          (this.status === "recording" || this.status === "recorded" || this.autoRelistenPending)
+        )
+      )
     );
     this.notificationSessionActive = true;
     if (commandAction === "start") {
+      this.cancelIntentActive = false;
+      this.cancelRecoveryAttempts = 0;
       this.lastNotificationKey = "";
     }
     this.autoTranscribeRecordingKey = "";
@@ -6977,7 +6988,8 @@ MyApplet.prototype = {
       this._applyPayloadSafely(
         payload,
         undefined,
-        true
+        true,
+        commandAction
       );
     });
     if (!toggleHandle) {
@@ -7020,6 +7032,10 @@ MyApplet.prototype = {
   },
 
   _refreshStatus: function(fromStatusTimer) {
+    if (this.cancelIntentActive &&
+        this.cancelRecoveryAttempts >= MAX_CANCEL_RECOVERY_ATTEMPTS) {
+      return false;
+    }
     if (this._statusCommandRunning) {
       return this.status === "recording" || this.status === "processing";
     }
@@ -7038,8 +7054,20 @@ MyApplet.prototype = {
         } catch (err) {
           if (this._statusCommandToken === statusCommandToken) {
             let safeError = this._sanitizeErrorMessage(err);
+            let refreshError = _("Status refresh failed: ") + safeError;
             this.microphoneLevel = null;
-            this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
+            if (this.cancelIntentActive) {
+              if (this.cancelRecoveryAttempts < MAX_CANCEL_RECOVERY_ATTEMPTS) {
+                this.cancelRecoveryAttempts += 1;
+              }
+              if (this.cancelRecoveryAttempts >= MAX_CANCEL_RECOVERY_ATTEMPTS) {
+                this._failCancelRecovery(refreshError);
+              } else {
+                this._setStatusPreservingRecording("error", refreshError, this.lastTranscript);
+              }
+            } else {
+              this._setStatusPreservingRecording("error", refreshError, this.lastTranscript);
+            }
           }
         } finally {
           if (this._statusCommandToken !== statusCommandToken) {
@@ -7064,8 +7092,18 @@ MyApplet.prototype = {
       this._statusCommandToken = null;
       this._statusCommandRunning = false;
       let safeError = this._sanitizeErrorMessage(err);
+      let refreshError = _("Status refresh failed: ") + safeError;
       this.microphoneLevel = null;
-      this._setStatusPreservingRecording("error", _("Status refresh failed: ") + safeError, this.lastTranscript);
+      if (this.cancelIntentActive) {
+        if (this.cancelRecoveryAttempts < MAX_CANCEL_RECOVERY_ATTEMPTS) {
+          this.cancelRecoveryAttempts += 1;
+        }
+        if (this.cancelRecoveryAttempts >= MAX_CANCEL_RECOVERY_ATTEMPTS) {
+          this._failCancelRecovery(refreshError);
+          return false;
+        }
+      }
+      this._setStatusPreservingRecording("error", refreshError, this.lastTranscript);
       if (this.status === "recording" || this.status === "processing") {
         if (fromStatusTimer === true) {
           return true;
@@ -7093,7 +7131,7 @@ MyApplet.prototype = {
 
   _updateRecordingArtifactState: function(payload, status) {
     if (!payload || typeof payload !== "object") {
-      return;
+      return false;
     }
     let hasPresenceFields = [
       "audio_path_present",
@@ -7103,21 +7141,37 @@ MyApplet.prototype = {
       "process_identity_present"
     ] 
       .some((field) => Object.prototype.hasOwnProperty.call(payload, field));
+    let artifactPresenceReported = Boolean(
+      payload.audio_path_present === true ||
+      payload.log_path_present === true ||
+      payload.transcript_path_present === true ||
+      payload.pid_present === true ||
+      payload.process_identity_present === true
+    );
     if (hasPresenceFields) {
-      this.recordingArtifactsPresent = Boolean(
-        payload.audio_path_present === true ||
-        payload.log_path_present === true ||
-        payload.transcript_path_present === true ||
-        payload.pid_present === true ||
-        payload.process_identity_present === true
-      );
+      this.recordingArtifactsPresent = artifactPresenceReported;
     }
     let cleanupFailurePresent = payload.audio_deleted === false ||
       payload.log_deleted === false ||
-      payload.transcript_deleted === false;
+      payload.transcript_deleted === false ||
+      payload.inflight_artifacts_deleted === false ||
+      payload.cleanup_backups_deleted === false;
+    let hasTerminalCleanupResult = [
+      "audio_deleted",
+      "log_deleted",
+      "transcript_deleted",
+      "inflight_artifacts_deleted",
+      "cleanup_backups_deleted"
+    ].every((field) => {
+      return Object.prototype.hasOwnProperty.call(payload, field) &&
+        typeof payload[field] === "boolean";
+    });
+    let terminalArtifactEvidence = artifactPresenceReported || cleanupFailurePresent;
     if (status === "idle" || status === "done") {
-      this.recordingArtifactsPresent = false;
-      return;
+      if (hasTerminalCleanupResult) {
+        this.recordingArtifactsPresent = terminalArtifactEvidence;
+      }
+      return hasTerminalCleanupResult;
     }
     if (
       payload.discarded_audio_path_present === true ||
@@ -7128,6 +7182,18 @@ MyApplet.prototype = {
     if (status === "recording" || status === "recorded" || status === "processing") {
       this.recordingArtifactsPresent = true;
     }
+    return hasTerminalCleanupResult;
+  },
+
+  _failCancelRecovery: function(message) {
+    this.cancelPendingWhileCommandRunning = false;
+    this.cancelRecoveryAttempts = MAX_CANCEL_RECOVERY_ATTEMPTS;
+    this.recordingArtifactsPresent = true;
+    this.microphoneLevel = null;
+    let failureMessage = typeof message === "string" && message.trim() !== ""
+      ? message
+      : _("Could not cancel recording");
+    this._setStatus("error", failureMessage, this.lastTranscript);
   },
 
   _cancelRecording: function(statusOverride) {
@@ -7141,59 +7207,79 @@ MyApplet.prototype = {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenPendingLanguage = "";
-      this.autoRelistenManualStopRequested = true;
+      this.autoRelistenManualStopRequested = false;
+      this.cancelIntentActive = false;
+      this.cancelPendingWhileCommandRunning = false;
+      this.cancelRecoveryAttempts = 0;
       this._setStatus("ready", _("Auto Relisten cancelled"), this.lastTranscript);
       return;
     }
-    if (this.isCommandRunning) {
-      this.autoTranscribeRecordingKey = "";
-      this.stopPendingWhileCommandRunning = false;
-      this.cancelPendingWhileCommandRunning = true;
-      this.autoRelistenPending = false;
-      this.autoRelistenPendingToken = "";
-      this.autoRelistenPendingLanguage = "";
-      this.autoRelistenManualStopRequested = true;
-      this._setStatus("processing", _("Stopping Auto Relisten..."), this.lastTranscript);
-      return;
+    let explicitCancel = arguments.length === 0;
+    let activeAction = String(this._recordingCommandToken && this._recordingCommandToken.action || "");
+    if ((explicitCancel && activeAction !== "cancel") || !this.cancelIntentActive) {
+      this.cancelIntentActive = true;
+      this.cancelRecoveryAttempts = 0;
     }
-    let cancelArgs;
-    try {
-      cancelArgs = this._cancelArgs();
-    } catch (error) {
-      let safeError = this._sanitizeErrorMessage(error);
-      this._setStatusPreservingRecording("error", _("Could not prepare cancellation command: ") + safeError, this.lastTranscript);
-      return;
-    }
-    let recordingCommandToken = { action: "cancel" };
-    this._recordingCommandToken = recordingCommandToken;
-    this.isCommandRunning = true;
     this.autoTranscribeRecordingKey = "";
-    this.cancelPendingWhileCommandRunning = false;
     this.stopPendingWhileCommandRunning = false;
     this.autoRelistenPending = false;
     this.autoRelistenPendingToken = "";
     this.autoRelistenPendingLanguage = "";
     this.autoRelistenManualStopRequested = true;
+    if (this.isCommandRunning) {
+      this.cancelPendingWhileCommandRunning = activeAction !== "cancel";
+      this._setStatus(
+        "processing",
+        this.autoRelisten ? _("Stopping Auto Relisten...") : _("Cancelling..."),
+        this.lastTranscript
+      );
+      return;
+    }
+    this.cancelPendingWhileCommandRunning = false;
+    if (this.cancelRecoveryAttempts >= MAX_CANCEL_RECOVERY_ATTEMPTS) {
+      this._failCancelRecovery();
+      return;
+    }
+    this.cancelRecoveryAttempts += 1;
     this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
+    let cancelArgs;
+    try {
+      cancelArgs = this._cancelArgs();
+    } catch (error) {
+      let safeError = this._sanitizeErrorMessage(error);
+      let cancelError = _("Could not prepare cancellation command: ") + safeError;
+      if (this.cancelRecoveryAttempts >= MAX_CANCEL_RECOVERY_ATTEMPTS) {
+        this._failCancelRecovery(cancelError);
+      } else {
+        this._setStatusPreservingRecording("error", cancelError, this.lastTranscript);
+        this._scheduleStatusPoll();
+      }
+      return;
+    }
+    let recordingCommandToken = { action: "cancel" };
+    this._recordingCommandToken = recordingCommandToken;
+    this.isCommandRunning = true;
     let cancelHandle = this._spawnJson(cancelArgs, (payload) => {
       if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
         return;
       }
       this._recordingCommandToken = null;
       this.isCommandRunning = false;
-      this._applyPayloadSafely(payload, undefined, true);
+      this._applyPayloadSafely(payload, undefined, true, "cancel");
     });
     if (!cancelHandle && this._recordingCommandToken === recordingCommandToken) {
       this._recordingCommandToken = null;
       this.isCommandRunning = false;
-      this._setStatusPreservingRecording("error", _("Could not cancel recording"), this.lastTranscript);
-      if (this.status === "recording" || this.status === "processing") {
+      if (this.cancelRecoveryAttempts >= MAX_CANCEL_RECOVERY_ATTEMPTS) {
+        this._failCancelRecovery();
+      } else {
+        this._setStatusPreservingRecording("error", _("Could not cancel recording"), this.lastTranscript);
         this._scheduleStatusPoll();
       }
     }
   },
 
-  _invalidateBackgroundCallbacksForRecording: function() {
+  _invalidateBackgroundCallbacksForRecording: function(skipTextInsertProcesses) {
     this._statusRefreshToken++;
     this._statusCommandToken = null;
     this._statusCommandRunning = false;
@@ -7341,9 +7427,11 @@ MyApplet.prototype = {
       );
     }
     let textInsertProcessCleanupSucceeded = true;
-    for (let group of ["keyboard", "clipboard", "x11"]) {
-      if (this._terminateProcessesByGroup(group) === false) {
-        textInsertProcessCleanupSucceeded = false;
+    if (skipTextInsertProcesses !== true) {
+      for (let group of ["keyboard", "clipboard", "x11"]) {
+        if (this._terminateProcessesByGroup(group) === false) {
+          textInsertProcessCleanupSucceeded = false;
+        }
       }
     }
     if (!textInsertProcessCleanupSucceeded) {
@@ -13107,15 +13195,31 @@ MyApplet.prototype = {
 
   _applyPayloadSafely: function(payload, statusRefreshToken) {
     try {
-      if (arguments.length > 2) {
+      if (arguments.length > 3) {
+        this._applyPayload(payload, statusRefreshToken, arguments[2], arguments[3]);
+      } else if (arguments.length > 2) {
         this._applyPayload(payload, statusRefreshToken, arguments[2]);
       } else {
         this._applyPayload(payload, statusRefreshToken);
       }
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
-      this._setStatusPreservingRecording("error", _("Backend response handling failed: ") + safeError, this.lastTranscript);
-      if (!this.isCommandRunning && (this.status === "recording" || this.status === "processing")) {
+      let handlingError = _("Backend response handling failed: ") + safeError;
+      if (this.cancelIntentActive &&
+          typeof statusRefreshToken === "number" &&
+          this.cancelRecoveryAttempts < MAX_CANCEL_RECOVERY_ATTEMPTS) {
+        this.cancelRecoveryAttempts += 1;
+      }
+      if (this.cancelIntentActive &&
+          this.cancelRecoveryAttempts >= MAX_CANCEL_RECOVERY_ATTEMPTS) {
+        this._failCancelRecovery(handlingError);
+      } else {
+        this._setStatusPreservingRecording("error", handlingError, this.lastTranscript);
+      }
+      if (!this.isCommandRunning &&
+          (this.status === "recording" || this.status === "processing") &&
+          (!this.cancelIntentActive ||
+           this.cancelRecoveryAttempts < MAX_CANCEL_RECOVERY_ATTEMPTS)) {
         this._scheduleStatusPoll();
       }
     }
@@ -13128,10 +13232,32 @@ MyApplet.prototype = {
     if (typeof statusRefreshToken !== "number") {
       this._statusRefreshToken++;
     }
+    let hasSourceCommandAction = arguments.length > 3;
+    let sourceCommandAction = hasSourceCommandAction ? String(arguments[3] || "") : "";
+    if (sourceCommandAction === "cancel") {
+      this.cancelIntentActive = true;
+    }
+    let cancelIntentActive = this.cancelIntentActive === true;
     let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));
-    this._updateRecordingArtifactState(payload, status);
+    let hasTerminalCleanupResult = this._updateRecordingArtifactState(payload, status);
     if (payload.error || status === "error") {
       let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));
+      if (cancelIntentActive) {
+        this.cancelPendingWhileCommandRunning = false;
+        if (typeof statusRefreshToken === "number" &&
+            this.cancelRecoveryAttempts < MAX_CANCEL_RECOVERY_ATTEMPTS) {
+          this.cancelRecoveryAttempts += 1;
+        }
+        this.microphoneLevel = null;
+        if (this.cancelRecoveryAttempts >= MAX_CANCEL_RECOVERY_ATTEMPTS) {
+          this._failCancelRecovery(errorMessage);
+        } else {
+          this._setStatusPreservingRecording("error", errorMessage, this.lastTranscript);
+          this._scheduleStatusPoll();
+        }
+        this._maybeWarnRejectedArtifactPassphrase(errorMessage);
+        return;
+      }
       let preserveRecordingOnError = arguments.length > 2 && arguments[2] === true;
       let activeBackendStatus = status === "recording" || status === "recorded" || status === "processing";
       let preserveActiveRecordingState = (
@@ -13162,35 +13288,66 @@ MyApplet.prototype = {
     this._updateRecordingTiming(payload, status);
     this._applyMicrophoneLevel(payload.microphone_level, status);
     let hasTranscript = typeof payload.transcript === "string" && !this._isEmptyTranscriptText(payload.transcript);
-    if (status === "done" && hasTranscript) {
+    if (!cancelIntentActive && status === "done" && hasTranscript) {
       this.lastTranscript = payload.transcript;
     }
-    if (status === "done") {
+    if (!cancelIntentActive && status === "done") {
       this._maybeWarnUnencryptedArtifactStorage(payload, status);
     }
-    if (this.cancelPendingWhileCommandRunning && status === "done") {
+    if (cancelIntentActive && (status === "done" || status === "idle")) {
+      if (!hasTerminalCleanupResult) {
+        this.cancelPendingWhileCommandRunning = false;
+        this.recordingArtifactsPresent = true;
+        if (sourceCommandAction !== "cancel" &&
+            this.cancelRecoveryAttempts < MAX_CANCEL_RECOVERY_ATTEMPTS) {
+          this._cancelRecording("recorded");
+        } else {
+          this._failCancelRecovery();
+        }
+        return;
+      }
+      if (this.recordingArtifactsPresent) {
+        this._failCancelRecovery();
+        return;
+      }
+      this.cancelIntentActive = false;
       this.cancelPendingWhileCommandRunning = false;
+      this.cancelRecoveryAttempts = 0;
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
-      this.autoRelistenManualStopRequested = true;
+      this.autoRelistenPendingLanguage = "";
+      this.autoRelistenManualStopRequested = false;
       this._setStatus("ready", _("Cancel applied; transcript not inserted"), this.lastTranscript);
       return;
     }
-    if (
-      this.cancelPendingWhileCommandRunning &&
-      (status === "recording" || status === "recorded") &&
-      !this.isCommandRunning
-    ) {
-      this.cancelPendingWhileCommandRunning = false;
-      this._cancelRecording(status);
+    if (cancelIntentActive && status === "setup") {
+      this._failCancelRecovery();
       return;
     }
-    if (
-      this.cancelPendingWhileCommandRunning &&
-      !this.isCommandRunning &&
-      status !== "processing"
-    ) {
+    if (cancelIntentActive) {
+      let backendStillActive = status === "recording" || status === "recorded";
+      let cameFromStatusPoll = typeof statusRefreshToken === "number";
+      let wasWaitingForCommand = this.cancelPendingWhileCommandRunning;
       this.cancelPendingWhileCommandRunning = false;
+      if (backendStillActive &&
+          !this.isCommandRunning &&
+          (wasWaitingForCommand || cameFromStatusPoll) &&
+          this.cancelRecoveryAttempts < MAX_CANCEL_RECOVERY_ATTEMPTS) {
+        this._cancelRecording(status);
+        return;
+      }
+      if (cameFromStatusPoll &&
+          status === "processing" &&
+          this.cancelRecoveryAttempts < MAX_CANCEL_RECOVERY_ATTEMPTS) {
+        this.cancelRecoveryAttempts += 1;
+      }
+      if (this.cancelRecoveryAttempts < MAX_CANCEL_RECOVERY_ATTEMPTS) {
+        this._setStatus("processing", _("Cancelling..."), this.lastTranscript);
+        this._scheduleStatusPoll();
+      } else {
+        this._failCancelRecovery();
+      }
+      return;
     }
     if (status === "done" && payload.silence_detected === true) {
       this._finishSilentRelistenSkip(payload);
@@ -13217,8 +13374,12 @@ MyApplet.prototype = {
       : this.lastTranscript || "";
     this._setStatus(status, message, transcript);
     if (
-      (status === "recording" || status === "recorded") &&
+      status === "recording" &&
       this.autoRelistenManualStopRequested &&
+      (
+        !hasSourceCommandAction ||
+        sourceCommandAction === "start"
+      ) &&
       !this.isCommandRunning
     ) {
       this._toggleRecording("stop");
@@ -13385,6 +13546,9 @@ MyApplet.prototype = {
   },
 
   _maybeAutoTranscribeRecorded: function(payload, statusOverride) {
+    if (this.cancelIntentActive) {
+      return;
+    }
     if ((!this.autoTranscribeTimeout && !this.autoRelisten) || !this.notificationSessionActive ||
         this.isCommandRunning || this._hasLocalProcessingWorkflow(false)) {
       return;
@@ -13425,7 +13589,7 @@ MyApplet.prototype = {
       if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {
         this.isCommandRunning = false;
         if (this.cancelPendingWhileCommandRunning) {
-          this._applyPayloadSafely(nextPayload, undefined, true);
+          this._applyPayloadSafely(nextPayload, undefined, true, "stop");
         }
         return;
       }
@@ -13433,7 +13597,7 @@ MyApplet.prototype = {
         this.autoTranscribeRecordingKey = "";
       }
       this.isCommandRunning = false;
-      this._applyPayloadSafely(nextPayload, undefined, true);
+      this._applyPayloadSafely(nextPayload, undefined, true, "stop");
     });
   },
 
@@ -13606,6 +13770,11 @@ MyApplet.prototype = {
 
   _scheduleStatusPoll: function() {
     if (this.appletRemoved) {
+      return;
+    }
+    if (this.cancelIntentActive &&
+        this.cancelRecoveryAttempts >= MAX_CANCEL_RECOVERY_ATTEMPTS) {
+      this._clearStatusTimer();
       return;
     }
     if (this.status !== "recording" && this.status !== "processing") {
@@ -15798,6 +15967,12 @@ MyApplet.prototype = {
   },
 
   _finishPendingRelisten: function() {
+    if (this.cancelIntentActive) {
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenPendingLanguage = "";
+      return false;
+    }
     let shouldRelisten = this.autoRelistenPending;
     let previousNotificationSessionActive = this.notificationSessionActive;
     let relistenStarted = false;
@@ -16248,6 +16423,9 @@ MyApplet.prototype = {
   },
 
   _restartRelistenRecording: function() {
+    if (this.cancelIntentActive) {
+      return false;
+    }
     if (!this.notificationSessionActive) {
       return false;
     }
@@ -16302,7 +16480,7 @@ MyApplet.prototype = {
           this.autoRelistenPending = false;
           this.autoRelistenPendingToken = "";
           this.autoRelistenPendingLanguage = "";
-          this._applyPayloadSafely(payload, undefined, true);
+          this._applyPayloadSafely(payload, undefined, true, "start");
           return;
         }
         let nextStatus = this._normalizePayloadStatus(payload && payload.status, Boolean(payload && payload.error));
@@ -16311,7 +16489,7 @@ MyApplet.prototype = {
           this.autoRelistenPendingToken = "";
           this.autoRelistenPendingLanguage = "";
         }
-        this._applyPayloadSafely(payload);
+        this._applyPayloadSafely(payload, undefined, undefined, "start");
       } catch (error) {
         if (this._recordingCommandToken === recordingCommandToken) {
           this._recordingCommandToken = null;

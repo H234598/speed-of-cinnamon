@@ -6159,10 +6159,32 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         discarded_inflight_expected_stats = {
             path: snapshot_recording_artifact_paths(path) for path in discarded_inflight_paths
         }
-        has_artifacts = bool(state.audio_path or state.log_path or state.transcript_path)
-        has_recording_state = state.status in {"recording", "recorded", "processing", "finalizing", "error"}
+        has_artifacts = bool(
+            state.audio_path
+            or state.log_path
+            or state.transcript_path
+            or state.transcript
+        )
+        has_recording_state = state.status in {
+            "recording",
+            "recorded",
+            "processing",
+            "finalizing",
+            "done",
+            "error",
+        }
         if not has_artifacts and not has_recording_state:
-            return {"status": "idle", "message": "nothing to cancel"}
+            return {
+                "status": "idle",
+                "message": "nothing to cancel",
+                "discarded_audio_path_present": False,
+                "audio_deleted": True,
+                "log_deleted": True,
+                "inflight_artifact_count": 0,
+                "inflight_artifacts_deleted": True,
+                "cleanup_backups_deleted": True,
+                "transcript_deleted": True,
+            }
 
         error_message = "discarding recording artifacts"
         store.write(
@@ -6181,14 +6203,18 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             )
         )
 
-        audio_deleted = _remove_recording_artifact(
-            str(discarded_audio_path) if discarded_audio_path else None,
-            expected_stats=discarded_audio_expected_stats,
+        audio_deleted = (
+            _remove_recording_artifact(
+                str(discarded_audio_path),
+                expected_stats=discarded_audio_expected_stats,
+            )
+            if discarded_audio_path
+            else not bool(state.audio_path)
         )
         log_deleted = (
             remove_file(str(discarded_log_path), suffix=".log", expected_stat=discarded_log_stat)
             if discarded_log_path and discarded_log_present_before
-            else False
+            else not bool(state.log_path)
         )
         if not audio_deleted and discarded_audio_path and not discarded_audio_present_before:
             if Path(str(discarded_audio_path)).name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES):
@@ -6366,7 +6392,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "inflight_artifact_count": len(discarded_inflight_paths),
                 "inflight_artifacts_deleted": inflight_deleted,
                 "cleanup_backups_deleted": cleanup_backups_deleted,
-                "transcript_deleted": transcript_deleted,
+                "transcript_deleted": bool(transcript_deleted and not state.transcript),
             }
             if initial_status == "finalizing":
                 payload["exit_code"] = 0
