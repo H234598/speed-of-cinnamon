@@ -3906,6 +3906,11 @@ MyApplet.prototype = {
     this._textModelMenuFingerprint = null;
     this._textModelMenuProvider = "";
     this._alarmMenuFingerprint = null;
+    this._alarmMenuPool = null;
+    this._inputSourceMenuPool = null;
+    this._modelMenuPool = null;
+    this._textModelMenuPool = null;
+    this._historyMenuPool = null;
     this.toggleKeybinding = "<Super>z::";
     this.primaryLanguageKeybinding = "";
     this.secondaryLanguageKeybinding = "";
@@ -8408,6 +8413,86 @@ MyApplet.prototype = {
     }, { resourceGroup: "alarm-menu-refresh", invalidatesStatus: false });
   },
 
+  _setPooledMenuItemVisible: function(item, visible) {
+    try {
+      let actor = item && item.actor;
+      if (!actor || (typeof actor.is_finalized === "function" && actor.is_finalized())) {
+        return false;
+      }
+      if (visible) {
+        actor.show();
+      } else {
+        actor.hide();
+      }
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("menu-pool", error);
+      return false;
+    }
+  },
+
+  _ensureAlarmMenuPool: function() {
+    if (this._alarmMenuPool) {
+      return this._alarmMenuPool;
+    }
+    let menu = this.alarmItem.menu;
+    let summary = this._selectionInfoItem("");
+    menu.addMenuItem(summary);
+    let checkNow = new PopupMenu.PopupIconMenuItem(_("Check alarms now"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(checkNow, "activate", () => this._checkAlarms(true));
+    menu.addMenuItem(checkNow);
+    let copyCommands = new PopupMenu.PopupIconMenuItem(_("Copy alarm commands"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(copyCommands, "activate", () => this._copyAlarmCommands());
+    menu.addMenuItem(copyCommands);
+    let openFolder = new PopupMenu.PopupIconMenuItem(_("Open alarm store"), "folder-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(openFolder, "activate", () => {
+      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon"]), _("Opened alarm store"));
+    });
+    menu.addMenuItem(openFolder);
+    menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let empty = this._selectionInfoItem(_("No alarms configured"));
+    menu.addMenuItem(empty);
+    let truncated = this._selectionInfoItem(_("Alarm list truncated for safety"));
+    menu.addMenuItem(truncated);
+    this._alarmMenuPool = { summary: summary, empty: empty, truncated: truncated, rows: [] };
+    this._setPooledMenuItemVisible(empty, false);
+    this._setPooledMenuItemVisible(truncated, false);
+    return this._alarmMenuPool;
+  },
+
+  _hydrateAlarmMenuPoolRow: function(row) {
+    if (!row || !row._socData) {
+      return;
+    }
+    if (!row._socDetails) {
+      row._socDetails = new PopupMenu.PopupMenuItem("");
+      row._socDetails.setSensitive(false);
+      row.menu.addMenuItem(row._socDetails);
+      row._socToggle = new PopupMenu.PopupIconMenuItem("", "media-playback-start-symbolic", St.IconType.SYMBOLIC);
+      this._connectSafe(row._socToggle, "activate", () => {
+        let data = row._socData;
+        if (data) {
+          this._setAlarmEnabled(data.id, data.enabled !== true);
+        }
+      });
+      row.menu.addMenuItem(row._socToggle);
+      row._socRemove = new PopupMenu.PopupIconMenuItem(_("Remove alarm"), "edit-delete-symbolic", St.IconType.SYMBOLIC);
+      this._connectSafe(row._socRemove, "activate", () => {
+        let data = row._socData;
+        if (data) {
+          this._removeAlarm(data.id);
+        }
+      });
+      row.menu.addMenuItem(row._socRemove);
+    }
+    let data = row._socData;
+    this._setMenuItemLabelSafely(row._socDetails, this._uiMessageText(data.id));
+    this._setMenuItemLabelSafely(row._socToggle, data.enabled === true ? _("Disable alarm") : _("Enable alarm"));
+    if (row._socToggle._icon) {
+      row._socToggle._icon.icon_name = data.enabled === true ? "media-playback-pause-symbolic" : "media-playback-start-symbolic";
+    }
+  },
+
   _populateAlarmMenu: function(alarms, summary, message) {
     if (!this._canMutateMenu(this.alarmItem)) {
       return;
@@ -8429,52 +8514,48 @@ MyApplet.prototype = {
     if (this._alarmMenuFingerprint === nextFingerprint) {
       return;
     }
-    if (!this._clearMenuItems(this.alarmItem.menu)) {
-      return;
-    }
-
+    let pool = this._ensureAlarmMenuPool();
     let summaryLabel = messageText || summaryText || _("No alarms configured");
     summaryLabel = this._uiMessageText(summaryLabel);
-    let summaryItem = new PopupMenu.PopupMenuItem(summaryLabel);
-    summaryItem.setSensitive(false);
-    this.alarmItem.menu.addMenuItem(summaryItem);
-
-    let checkNow = new PopupMenu.PopupIconMenuItem(_("Check alarms now"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(checkNow, "activate", () => this._checkAlarms(true));
-    this.alarmItem.menu.addMenuItem(checkNow);
-
-    let copyCommands = new PopupMenu.PopupIconMenuItem(_("Copy alarm commands"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(copyCommands, "activate", () => this._copyAlarmCommands());
-    this.alarmItem.menu.addMenuItem(copyCommands);
-
-    let openFolder = new PopupMenu.PopupIconMenuItem(_("Open alarm store"), "folder-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(openFolder, "activate", () => {
-      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon"]), _("Opened alarm store"));
-    });
-    this.alarmItem.menu.addMenuItem(openFolder);
-
-    this.alarmItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-    if (messageText !== "") {
-      this._alarmMenuFingerprint = nextFingerprint;
-      return;
+    this._setMenuItemLabelSafely(pool.summary, summaryLabel);
+    let visibleAlarms = messageText === "" ? alarms : [];
+    while (pool.rows.length < visibleAlarms.length) {
+      let row = new PopupMenu.PopupSubMenuMenuItem("");
+      row._socData = null;
+      this._connectSafe(row.menu, "open-state-changed", (_menu, isOpen) => {
+        if (isOpen) {
+          this._hydrateAlarmMenuPoolRow(row);
+        }
+      });
+      this.alarmItem.menu.addMenuItem(row);
+      pool.rows.push(row);
     }
-    if (!alarms || alarms.length === 0) {
-      let empty = new PopupMenu.PopupMenuItem(_("No alarms configured"));
-      empty.setSensitive(false);
-      this.alarmItem.menu.addMenuItem(empty);
-      this._alarmMenuFingerprint = nextFingerprint;
-      return;
-    }
-    for (let alarm of alarms) {
-      if (!alarm || typeof alarm !== "object") {
+    for (let index = 0; index < pool.rows.length; index++) {
+      let row = pool.rows[index];
+      let alarm = visibleAlarms[index];
+      if (!alarm) {
+        row._socData = null;
+        this._setPooledMenuItemVisible(row, false);
         continue;
       }
-      this._addAlarmMenuEntry(alarm);
+      let id = this._coerceCliTextArg(alarm.id, "alarm id").trim();
+      let enabled = alarm.enabled === true;
+      let alarmLabel = typeof alarm.label === "string" ? alarm.label.trim() : "";
+      let alarmTime = typeof alarm.time === "string" ? alarm.time.trim() : "";
+      let label = (enabled ? "[x] " : "[ ] ") + (alarmLabel || alarmTime || id);
+      let alarmSummary = typeof alarm.summary === "string" ? alarm.summary.trim() : "";
+      if (alarmSummary !== "") {
+        label += " - " + alarmSummary;
+      }
+      row._socData = { id: id, enabled: enabled };
+      this._setMenuItemLabelSafely(row, this._uiMessageText(label));
+      this._setPooledMenuItemVisible(row, true);
+      if (row._socDetails || row.menu.isOpen === true) {
+        this._hydrateAlarmMenuPoolRow(row);
+      }
     }
-    if (alarmsWereTruncated) {
-      this.alarmItem.menu.addMenuItem(this._selectionInfoItem(_("Alarm list truncated for safety")));
-    }
+    this._setPooledMenuItemVisible(pool.empty, messageText === "" && visibleAlarms.length === 0);
+    this._setPooledMenuItemVisible(pool.truncated, messageText === "" && alarmsWereTruncated);
     this._alarmMenuFingerprint = nextFingerprint;
   },
 
@@ -8799,6 +8880,34 @@ MyApplet.prototype = {
     return true;
   },
 
+  _ensureInputSourceMenuPool: function() {
+    if (this._inputSourceMenuPool) {
+      return this._inputSourceMenuPool;
+    }
+    let menu = this.inputSourceItem.menu;
+    let defaultItem = this._selectionMenuItem("");
+    this._connectSafe(defaultItem, "activate", () => this._selectInputSource("", _("system default")));
+    menu.addMenuItem(defaultItem);
+    let custom = this._selectionMenuItem("");
+    custom._socData = null;
+    this._connectSafe(custom, "activate", () => {
+      let data = custom._socData;
+      if (data) {
+        this._selectInputSource(data.name, data.label);
+      }
+    });
+    menu.addMenuItem(custom);
+    let info = this._selectionInfoItem("");
+    menu.addMenuItem(info);
+    let truncated = this._selectionInfoItem(_("Input source list truncated for safety"));
+    menu.addMenuItem(truncated);
+    this._inputSourceMenuPool = { defaultItem: defaultItem, custom: custom, info: info, truncated: truncated, rows: [] };
+    this._setPooledMenuItemVisible(custom, false);
+    this._setPooledMenuItemVisible(info, false);
+    this._setPooledMenuItemVisible(truncated, false);
+    return this._inputSourceMenuPool;
+  },
+
   _populateInputSourceMenu: function(sources, message) {
     if (!this._canMutateMenu(this.inputSourceItem)) {
       return;
@@ -8825,38 +8934,11 @@ MyApplet.prototype = {
     if (this._inputSourceMenuFingerprint === nextFingerprint) {
       return;
     }
-    if (!this._clearMenuItems(this.inputSourceItem.menu)) {
-      return;
-    }
+    let pool = this._ensureInputSourceMenuPool();
     let currentWasListed = current === "";
     let defaultLabel = (current === "" ? "[x] " : "[ ] ") + _("System default");
-    let defaultItem = this._selectionMenuItem(defaultLabel);
-    this._connectSafe(defaultItem, "activate", () => this._selectInputSource("", _("system default")));
-    this.inputSourceItem.menu.addMenuItem(defaultItem);
-
-    let addCurrentCustomInput = () => {
-      if (current === "" || currentWasListed) {
-        return;
-      }
-      let label = _("Current custom input source: ") + this._shortMenuText(current, 96);
-      let item = this._selectionMenuItem("[x] " + label);
-      this._connectSafe(item, "activate", () => this._selectInputSource(current, label));
-      this.inputSourceItem.menu.addMenuItem(item);
-      currentWasListed = true;
-    };
-
-    if (messageText !== "") {
-      addCurrentCustomInput();
-      this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(messageText));
-      this._inputSourceMenuFingerprint = nextFingerprint;
-      return;
-    }
-    if (!sources || sources.length === 0) {
-      addCurrentCustomInput();
-      this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(_("No input sources found")));
-      this._inputSourceMenuFingerprint = nextFingerprint;
-      return;
-    }
+    this._setMenuItemLabelSafely(pool.defaultItem, defaultLabel);
+    let visibleSources = [];
     for (let source of sources) {
       if (!source || typeof source !== "object") {
         continue;
@@ -8880,14 +8962,48 @@ MyApplet.prototype = {
         currentWasListed = true;
       }
       let itemLabel = (current === sourceName ? "[x] " : "[ ] ") + this._shortMenuText(label + " - " + sourceName, 96);
-      let item = this._selectionMenuItem(itemLabel);
-      this._connectSafe(item, "activate", () => this._selectInputSource(sourceName, label));
-      this.inputSourceItem.menu.addMenuItem(item);
+      visibleSources.push({ name: sourceName, label: label, itemLabel: itemLabel });
     }
-    addCurrentCustomInput();
-    if (sourcesWereTruncated) {
-      this.inputSourceItem.menu.addMenuItem(this._selectionInfoItem(_("Input source list truncated for safety")));
+    if (messageText !== "") {
+      visibleSources = [];
     }
+    while (pool.rows.length < visibleSources.length) {
+      let row = this._selectionMenuItem("");
+      row._socData = null;
+      this._connectSafe(row, "activate", () => {
+        let data = row._socData;
+        if (data) {
+          this._selectInputSource(data.name, data.label);
+        }
+      });
+      this.inputSourceItem.menu.addMenuItem(row);
+      pool.rows.push(row);
+    }
+    for (let index = 0; index < pool.rows.length; index++) {
+      let row = pool.rows[index];
+      let data = visibleSources[index];
+      if (!data) {
+        row._socData = null;
+        this._setPooledMenuItemVisible(row, false);
+        continue;
+      }
+      row._socData = data;
+      this._setMenuItemLabelSafely(row, data.itemLabel);
+      this._setPooledMenuItemVisible(row, true);
+    }
+    let customVisible = current !== "" && !currentWasListed;
+    if (customVisible) {
+      let customLabel = _("Current custom input source: ") + this._shortMenuText(current, 96);
+      pool.custom._socData = { name: current, label: customLabel };
+      this._setMenuItemLabelSafely(pool.custom, "[x] " + customLabel);
+    } else {
+      pool.custom._socData = null;
+    }
+    this._setPooledMenuItemVisible(pool.custom, customVisible);
+    let infoText = messageText || (sources.length === 0 ? _("No input sources found") : "");
+    this._setMenuItemLabelSafely(pool.info, infoText);
+    this._setPooledMenuItemVisible(pool.info, infoText !== "");
+    this._setPooledMenuItemVisible(pool.truncated, messageText === "" && sourcesWereTruncated);
     this._inputSourceMenuFingerprint = nextFingerprint;
   },
 
@@ -8992,6 +9108,142 @@ MyApplet.prototype = {
     }, { resourceGroup: "model-menu-refresh", invalidatesStatus: false });
   },
 
+  _ensureModelMenuPool: function() {
+    if (this._modelMenuPool) {
+      return this._modelMenuPool;
+    }
+    let menu = this.modelItem.menu;
+    let automatic = this._selectionMenuItem("");
+    this._connectSafe(automatic, "activate", () => this._selectAutomaticVoiceBackend());
+    menu.addMenuItem(automatic);
+    let whisperCommand = this._selectionMenuItem("");
+    this._connectSafe(whisperCommand, "activate", () => this._selectStaticVoiceBackend("whisper", _("Voice model: OpenAI Whisper command")));
+    menu.addMenuItem(whisperCommand);
+    let customCommand = this._selectionMenuItem("");
+    this._connectSafe(customCommand, "activate", () => {
+      if (String(this.transcriberCommand || "").trim() !== "") {
+        this._selectStaticVoiceBackend("command", _("Voice model: custom command"));
+        return;
+      }
+      this._openAppletSettings();
+      this._setStatusPreservingRecording("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);
+    });
+    menu.addMenuItem(customCommand);
+    let active = this._selectionInfoItem("");
+    menu.addMenuItem(active);
+    let download = this._styleMenuItemLabel(
+      new PopupMenu.PopupIconMenuItem("", "folder-download-symbolic", St.IconType.SYMBOLIC)
+    );
+    this._connectSafe(download, "activate", () => this._downloadStarterModel());
+    menu.addMenuItem(download);
+    let openFolder = new PopupMenu.PopupIconMenuItem(_("Open GGML model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(openFolder, "activate", () => {
+      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"]), _("Opened model folder"));
+    });
+    menu.addMenuItem(openFolder);
+    let openCt2Folder = new PopupMenu.PopupIconMenuItem(_("Open CTranslate2 model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(openCt2Folder, "activate", () => {
+      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "ctranslate2"]), _("Opened model folder"));
+    });
+    menu.addMenuItem(openCt2Folder);
+    menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let message = this._selectionInfoItem("");
+    menu.addMenuItem(message);
+    let empty = this._selectionInfoItem(_("No models in catalog"));
+    menu.addMenuItem(empty);
+    let ct2Menu = new PopupMenu.PopupSubMenuMenuItem(_("CTranslate2"));
+    let ggmlMenu = new PopupMenu.PopupSubMenuMenuItem(_("GGML"));
+    let externalMenu = new PopupMenu.PopupSubMenuMenuItem(_("External API"));
+    for (let item of [ct2Menu, ggmlMenu, externalMenu]) {
+      this._styleMenuItemLabel(item);
+      this._styleSelectionSubmenu(item);
+      menu.addMenuItem(item);
+    }
+    let ct2Empty = this._selectionInfoItem(_("No CTranslate2 models in catalog"));
+    ct2Menu.menu.addMenuItem(ct2Empty);
+    let ggmlEmpty = this._selectionInfoItem(_("No GGML models in catalog"));
+    ggmlMenu.menu.addMenuItem(ggmlEmpty);
+    let externalUse = new PopupMenu.PopupIconMenuItem("", "network-server-symbolic", St.IconType.SYMBOLIC);
+    this._styleMenuItemLabel(externalUse);
+    this._connectSafe(externalUse, "activate", () => this._openExternalApiEnvEditor("voice"));
+    externalMenu.menu.addMenuItem(externalUse);
+    let externalEndpoint = this._selectionInfoItem("");
+    externalMenu.menu.addMenuItem(externalEndpoint);
+    let externalModel = this._selectionInfoItem("");
+    externalMenu.menu.addMenuItem(externalModel);
+    externalMenu.menu.addMenuItem(this._selectionInfoItem(_("Configure URL, model, and optional API key in applet settings.")));
+    let truncated = this._selectionInfoItem(_("Voice model list truncated for safety"));
+    menu.addMenuItem(truncated);
+    this._modelMenuPool = {
+      automatic: automatic,
+      whisperCommand: whisperCommand,
+      customCommand: customCommand,
+      active: active,
+      download: download,
+      message: message,
+      empty: empty,
+      ct2Menu: ct2Menu,
+      ggmlMenu: ggmlMenu,
+      externalMenu: externalMenu,
+      ct2Empty: ct2Empty,
+      ggmlEmpty: ggmlEmpty,
+      externalUse: externalUse,
+      externalEndpoint: externalEndpoint,
+      externalModel: externalModel,
+      truncated: truncated,
+      ct2Rows: [],
+      ggmlRows: [],
+    };
+    for (let item of [message, empty, ct2Menu, ggmlMenu, externalMenu, ct2Empty, ggmlEmpty, truncated]) {
+      this._setPooledMenuItemVisible(item, false);
+    }
+    return this._modelMenuPool;
+  },
+
+  _hydrateModelMenuPoolRow: function(row) {
+    if (!row || !row._socData) {
+      return;
+    }
+    if (!row._socDetails) {
+      row._socDetails = this._selectionInfoItem("");
+      row.menu.addMenuItem(row._socDetails);
+      row._socIncompatible = this._selectionInfoItem("");
+      row.menu.addMenuItem(row._socIncompatible);
+      row._socUse = this._styleMenuItemLabel(new PopupMenu.PopupIconMenuItem(_("Use this model"), "emblem-ok-symbolic", St.IconType.SYMBOLIC));
+      this._connectSafe(row._socUse, "activate", () => {
+        let data = row._socData;
+        if (data) {
+          this._selectVoiceModel(data.model);
+        }
+      });
+      row.menu.addMenuItem(row._socUse);
+      row._socRemove = new PopupMenu.PopupIconMenuItem(_("Remove model"), "edit-delete-symbolic", St.IconType.SYMBOLIC);
+      this._connectSafe(row._socRemove, "activate", () => {
+        let data = row._socData;
+        if (data) {
+          this._removeVoiceModel(data.model);
+        }
+      });
+      row.menu.addMenuItem(row._socRemove);
+      row._socDownload = this._styleMenuItemLabel(new PopupMenu.PopupIconMenuItem(_("Download model"), "folder-download-symbolic", St.IconType.SYMBOLIC));
+      this._connectSafe(row._socDownload, "activate", () => {
+        let data = row._socData;
+        if (data) {
+          this._downloadVoiceModel(data.model);
+        }
+      });
+      row.menu.addMenuItem(row._socDownload);
+    }
+    let data = row._socData;
+    this._setMenuItemLabelSafely(row._socDetails, data.description);
+    this._setMenuItemLabelSafely(row._socIncompatible, _("Not suitable for primary language: ") + this._voiceModelLanguage());
+    this._setPooledMenuItemVisible(row._socIncompatible, !data.compatible);
+    this._setPooledMenuItemVisible(row._socUse, data.downloaded);
+    this._setPooledMenuItemVisible(row._socRemove, data.downloaded);
+    this._setPooledMenuItemVisible(row._socDownload, !data.downloaded);
+    this._setMenuItemSensitiveSafely(row._socUse, !data.current && data.compatible && data.usable);
+  },
+
   _populateModelMenu: function(models, message) {
     if (!this._canMutateMenu(this.modelItem)) {
       return;
@@ -9018,83 +9270,26 @@ MyApplet.prototype = {
     if (this._modelMenuFingerprint === nextFingerprint) {
       return;
     }
-    if (!this._clearMenuItems(this.modelItem.menu)) {
-      return;
-    }
-
+    let pool = this._ensureModelMenuPool();
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
-    let automatic = this._selectionMenuItem((autoActive ? "[x] " : "[ ] ") + _("Automatic voice model"));
-    this._connectSafe(automatic, "activate", () => this._selectAutomaticVoiceBackend());
-    this.modelItem.menu.addMenuItem(automatic);
-
     let whisperCommandActive = String(this.transcriber || "") === "whisper" && String(this.whisperModel || "") === "";
-    let whisperCommand = this._selectionMenuItem((whisperCommandActive ? "[x] " : "[ ] ") + _("OpenAI Whisper command"));
-    this._connectSafe(whisperCommand, "activate", () => this._selectStaticVoiceBackend("whisper", _("Voice model: OpenAI Whisper command")));
-    this.modelItem.menu.addMenuItem(whisperCommand);
-
     let customCommandActive = String(this.transcriber || "") === "command" && String(this.whisperModel || "") === "";
     let customCommandConfigured = String(this.transcriberCommand || "").trim() !== "";
     let customCommandLabel = _("Custom command") + (customCommandConfigured ? "" : _(" - configure in settings"));
-    let customCommand = this._selectionMenuItem((customCommandActive ? "[x] " : "[ ] ") + customCommandLabel);
-    this._connectSafe(customCommand, "activate", () => {
-      if (customCommandConfigured) {
-        this._selectStaticVoiceBackend("command", _("Voice model: custom command"));
-        return;
-      }
-      this._openAppletSettings();
-      this._setStatusPreservingRecording("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);
-    });
-    this.modelItem.menu.addMenuItem(customCommand);
-
-    this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("Active: ") + this._activeVoiceModelSummary()));
-
-    let download = this._styleMenuItemLabel(
-      new PopupMenu.PopupIconMenuItem(_("Download starter model") + ": " + this._starterVoiceModelName(), "folder-download-symbolic", St.IconType.SYMBOLIC)
-    );
-    this._connectSafe(download, "activate", () => this._downloadStarterModel());
-    this.modelItem.menu.addMenuItem(download);
-
-    let openFolder = new PopupMenu.PopupIconMenuItem(_("Open GGML model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(openFolder, "activate", () => {
-      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"]), _("Opened model folder"));
-    });
-    this.modelItem.menu.addMenuItem(openFolder);
-
-    let openCt2Folder = new PopupMenu.PopupIconMenuItem(_("Open CTranslate2 model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(openCt2Folder, "activate", () => {
-      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "ctranslate2"]), _("Opened model folder"));
-    });
-    this.modelItem.menu.addMenuItem(openCt2Folder);
-
-    this.modelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-    if (messageText !== "") {
-      this.modelItem.menu.addMenuItem(this._selectionInfoItem(messageText));
-      this._modelMenuFingerprint = nextFingerprint;
-      return;
-    }
-    if (!models || models.length === 0) {
-      this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("No models in catalog")));
-      this._modelMenuFingerprint = nextFingerprint;
-      return;
-    }
-    let ct2Menu = new PopupMenu.PopupSubMenuMenuItem(_("CTranslate2"));
-    let ggmlMenu = new PopupMenu.PopupSubMenuMenuItem(_("GGML"));
-    let externalMenu = new PopupMenu.PopupSubMenuMenuItem(_("External API"));
-    this._styleMenuItemLabel(ct2Menu);
-    this._styleMenuItemLabel(ggmlMenu);
-    this._styleMenuItemLabel(externalMenu);
-    this._styleSelectionSubmenu(ct2Menu);
-    this._styleSelectionSubmenu(ggmlMenu);
-    this._styleSelectionSubmenu(externalMenu);
-    this.modelItem.menu.addMenuItem(ct2Menu);
-    this.modelItem.menu.addMenuItem(ggmlMenu);
-    this.modelItem.menu.addMenuItem(externalMenu);
-
-    this._populateExternalApiVoiceMenu(externalMenu.menu);
-
-    let ct2Count = 0;
-    let ggmlCount = 0;
+    this._setMenuItemLabelSafely(pool.automatic, (autoActive ? "[x] " : "[ ] ") + _("Automatic voice model"));
+    this._setMenuItemLabelSafely(pool.whisperCommand, (whisperCommandActive ? "[x] " : "[ ] ") + _("OpenAI Whisper command"));
+    this._setMenuItemLabelSafely(pool.customCommand, (customCommandActive ? "[x] " : "[ ] ") + customCommandLabel);
+    this._setMenuItemLabelSafely(pool.active, _("Active: ") + this._activeVoiceModelSummary());
+    this._setMenuItemLabelSafely(pool.download, _("Download starter model") + ": " + this._starterVoiceModelName());
+    this._setMenuItemLabelSafely(pool.message, messageText);
+    let externalActive = String(this.transcriber || "") === "openai-compatible";
+    let externalModel = this._shortMenuText(String(this.openaiCompatibleModel || "").trim(), 96);
+    let externalUrl = this._shortMenuText(String(this.openaiCompatibleUrl || "").trim(), 96);
+    this._setMenuItemLabelSafely(pool.externalUse, (externalActive ? "[x] " : "[ ] ") + _("Use OpenAI-compatible API"));
+    this._setMenuItemLabelSafely(pool.externalEndpoint, _("Endpoint: ") + (externalUrl || _("not configured")));
+    this._setMenuItemLabelSafely(pool.externalModel, _("Model: ") + (externalModel || _("not configured")));
+    let ct2Models = [];
+    let ggmlModels = [];
     for (let model of models) {
       if (!model || typeof model !== "object") {
         continue;
@@ -9102,22 +9297,72 @@ MyApplet.prototype = {
       let modelFormat = typeof model.model_format === "string" ? model.model_format.trim().toLowerCase() : "";
       let modelBackend = typeof model.backend === "string" ? model.backend.trim().toLowerCase() : "";
       if (modelFormat === "ctranslate2" || modelBackend === "faster-whisper") {
-        this._addModelMenuEntry(model, ct2Menu.menu);
-        ct2Count++;
+        ct2Models.push(model);
       } else {
-        this._addModelMenuEntry(model, ggmlMenu.menu);
-        ggmlCount++;
+        ggmlModels.push(model);
       }
     }
-    if (ct2Count === 0) {
-      ct2Menu.menu.addMenuItem(this._selectionInfoItem(_("No CTranslate2 models in catalog")));
+    let updateRows = (modelList, rows, parentMenu) => {
+      while (rows.length < modelList.length) {
+        let row = new PopupMenu.PopupSubMenuMenuItem("");
+        row._socData = null;
+        this._styleMenuItemLabel(row);
+        this._styleSelectionSubmenu(row);
+        this._connectSafe(row.menu, "open-state-changed", (_menu, isOpen) => {
+          if (isOpen) {
+            this._hydrateModelMenuPoolRow(row);
+          }
+        });
+        parentMenu.addMenuItem(row);
+        rows.push(row);
+      }
+      for (let index = 0; index < rows.length; index++) {
+        let row = rows[index];
+        let model = modelList[index];
+        if (!model) {
+          row._socData = null;
+          this._setPooledMenuItemVisible(row, false);
+          continue;
+        }
+        let name = typeof model.name === "string" ? model.name.trim() : "";
+        let path = this._modelPathFromPayload(model);
+        let downloaded = model.downloaded === true;
+        let usable = downloaded && this._isUsableVoiceModelPayload(model);
+        let current = usable && this.whisperModel && path === String(this.whisperModel);
+        let compatible = this._voiceModelSupportsCurrentLanguage(model);
+        let size = typeof model.size === "string" ? model.size.trim() : "";
+        let description = typeof model.description === "string" ? model.description.trim() : "";
+        description = this._uiMessageText(description);
+        let label = (current ? "[x] " : "[ ] ") + name + " (" + (size || "?") + ")";
+        if (!compatible) label += _(" - English only");
+        if (!downloaded) label += _(" - not downloaded");
+        else if (!usable) label += _(" - invalid metadata");
+        row._socData = {
+          model: model,
+          downloaded: downloaded,
+          usable: usable,
+          current: current,
+          compatible: compatible,
+          description: description,
+        };
+        this._setMenuItemLabelSafely(row, this._uiMessageText(label));
+        this._setPooledMenuItemVisible(row, true);
+        if (row._socDetails || row.menu.isOpen === true) {
+          this._hydrateModelMenuPoolRow(row);
+        }
+      }
+    };
+    updateRows(ct2Models, pool.ct2Rows, pool.ct2Menu.menu);
+    updateRows(ggmlModels, pool.ggmlRows, pool.ggmlMenu.menu);
+    let catalogVisible = messageText === "" && models.length > 0;
+    this._setPooledMenuItemVisible(pool.message, messageText !== "");
+    this._setPooledMenuItemVisible(pool.empty, messageText === "" && models.length === 0);
+    for (let item of [pool.ct2Menu, pool.ggmlMenu, pool.externalMenu]) {
+      this._setPooledMenuItemVisible(item, catalogVisible);
     }
-    if (ggmlCount === 0) {
-      ggmlMenu.menu.addMenuItem(this._selectionInfoItem(_("No GGML models in catalog")));
-    }
-    if (voiceModelsWereTruncated) {
-      this.modelItem.menu.addMenuItem(this._selectionInfoItem(_("Voice model list truncated for safety")));
-    }
+    this._setPooledMenuItemVisible(pool.ct2Empty, catalogVisible && ct2Models.length === 0);
+    this._setPooledMenuItemVisible(pool.ggmlEmpty, catalogVisible && ggmlModels.length === 0);
+    this._setPooledMenuItemVisible(pool.truncated, catalogVisible && voiceModelsWereTruncated);
     this._modelMenuFingerprint = nextFingerprint;
   },
 
@@ -10387,6 +10632,91 @@ MyApplet.prototype = {
     return true;
   },
 
+  _ensureTextModelMenuPool: function() {
+    if (this._textModelMenuPool) {
+      return this._textModelMenuPool;
+    }
+    let menu = this.textModelItem.menu;
+    let disabled = this._selectionMenuItem("");
+    this._connectSafe(disabled, "activate", () => this._selectTextModelBackend("none", "", _("Text polishing disabled")));
+    menu.addMenuItem(disabled);
+    let custom = this._selectionMenuItem("");
+    this._connectSafe(custom, "activate", () => {
+      if (String(this.postProcessCommand || "").trim() !== "") {
+        this._selectTextModelBackend("command", "", _("Text polishing: custom command"));
+        return;
+      }
+      this._openAppletSettings();
+      this._setStatusPreservingRecording("ready", _("Configure custom text command in applet settings"), this.lastTranscript);
+    });
+    menu.addMenuItem(custom);
+    menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let ollama = this._selectionMenuItem("");
+    this._connectSafe(ollama, "activate", () => this._activateOllamaTextModelFlow());
+    menu.addMenuItem(ollama);
+    let openaiCompatible = this._selectionMenuItem("");
+    this._connectSafe(openaiCompatible, "activate", () => this._openExternalApiEnvEditor("text"));
+    menu.addMenuItem(openaiCompatible);
+    menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let presetMenu = new PopupMenu.PopupSubMenuMenuItem("");
+    this._styleMenuItemLabel(presetMenu);
+    this._styleSelectionSubmenu(presetMenu);
+    menu.addMenuItem(presetMenu);
+    let presetRows = [];
+    for (let preset of TEXT_POLISHING_PRESETS) {
+      let item = this._selectionMenuItem("");
+      this._connectSafe(item, "activate", () => this._selectTextPolishingPreset(preset));
+      presetMenu.menu.addMenuItem(item);
+      presetRows.push({ preset: preset, item: item });
+    }
+    let safetyMenu = new PopupMenu.PopupSubMenuMenuItem(_("Polishing safety"));
+    this._styleMenuItemLabel(safetyMenu);
+    this._styleSelectionSubmenu(safetyMenu);
+    menu.addMenuItem(safetyMenu);
+    let safetyRows = [];
+    for (let spec of [
+      ["post-process-preserve-code", "postProcessPreserveCode", _("Preserve commands and code")],
+      ["post-process-never-add-content", "postProcessNeverAddContent", _("Never add content")],
+      ["post-process-mask-sensitive-data", "postProcessMaskSensitiveData", _("Mask sensitive data")],
+    ]) {
+      let item = this._selectionMenuItem("");
+      this._connectSafe(item, "activate", () => this._toggleTextPolishingSafetyFlag(spec[0], spec[1], spec[2]));
+      safetyMenu.menu.addMenuItem(item);
+      safetyRows.push({ settingKey: spec[0], propertyName: spec[1], label: spec[2], item: item });
+    }
+    menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let reset = this._selectionMenuItem(_("Reset polishing defaults"));
+    this._connectSafe(reset, "activate", () => this._resetTextPolishingDefaults());
+    menu.addMenuItem(reset);
+    menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
+    let message = this._selectionInfoItem("");
+    menu.addMenuItem(message);
+    let empty = this._selectionInfoItem("");
+    menu.addMenuItem(empty);
+    let temporary = this._selectionInfoItem(_("Model list is temporarily empty; using selected Ollama model"));
+    menu.addMenuItem(temporary);
+    let truncated = this._selectionInfoItem(_("Model list truncated for safety"));
+    menu.addMenuItem(truncated);
+    this._textModelMenuPool = {
+      disabled: disabled,
+      custom: custom,
+      ollama: ollama,
+      openaiCompatible: openaiCompatible,
+      presetMenu: presetMenu,
+      presetRows: presetRows,
+      safetyRows: safetyRows,
+      message: message,
+      empty: empty,
+      temporary: temporary,
+      truncated: truncated,
+      rows: [],
+    };
+    for (let item of [message, empty, temporary, truncated]) {
+      this._setPooledMenuItemVisible(item, false);
+    }
+    return this._textModelMenuPool;
+  },
+
   _populateTextModelMenu: function(models, message, provider) {
     if (!this._canMutateMenu(this.textModelItem)) {
       return;
@@ -10439,94 +10769,86 @@ MyApplet.prototype = {
     if (this._textModelMenuFingerprint === nextFingerprint) {
       return;
     }
-    if (!this._clearMenuItems(this.textModelItem.menu)) {
-      return;
-    }
-
-    let disabled = this._selectionMenuItem((backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
-    this._connectSafe(disabled, "activate", () => this._selectTextModelBackend("none", "", _("Text polishing disabled")));
-    this.textModelItem.menu.addMenuItem(disabled);
-
+    let pool = this._ensureTextModelMenuPool();
+    this._setMenuItemLabelSafely(pool.disabled, (backend === "none" ? "[x] " : "[ ] ") + _("Disabled"));
     let textCommandConfigured = String(this.postProcessCommand || "").trim() !== "";
     let customLabel = _("Custom command") + (textCommandConfigured ? "" : _(" - configure in settings"));
-    let custom = this._selectionMenuItem((backend === "command" || backend === "custom" ? "[x] " : "[ ] ") + customLabel);
-    this._connectSafe(custom, "activate", () => {
-      if (textCommandConfigured) {
-        this._selectTextModelBackend("command", "", _("Text polishing: custom command"));
-        return;
-      }
-      this._openAppletSettings();
-      this._setStatusPreservingRecording("ready", _("Configure custom text command in applet settings"), this.lastTranscript);
-    });
-    this.textModelItem.menu.addMenuItem(custom);
-
-    this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-    let ollama = this._selectionMenuItem((backend === "ollama" ? "[x] " : "[ ] ") + _("Ollama local model"));
-    this._connectSafe(ollama, "activate", () => this._activateOllamaTextModelFlow());
-    this.textModelItem.menu.addMenuItem(ollama);
-
-    let openaiCompatible = this._selectionMenuItem((backend === "openai-compatible" ? "[x] " : "[ ] ") + _("OpenAI-compatible API"));
-    this._connectSafe(openaiCompatible, "activate", () => this._openExternalApiEnvEditor("text"));
-    this.textModelItem.menu.addMenuItem(openaiCompatible);
-
-    this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-    let presetMenu = new PopupMenu.PopupSubMenuMenuItem(_("Polishing preset: ") + this._textPolishingPresetLabel(this.postProcessPreset));
-    this._styleMenuItemLabel(presetMenu);
-    this._styleSelectionSubmenu(presetMenu);
-    this.textModelItem.menu.addMenuItem(presetMenu);
-    this._populateTextPolishingPresetMenu(presetMenu.menu);
-
-    let safetyMenu = new PopupMenu.PopupSubMenuMenuItem(_("Polishing safety"));
-    this._styleMenuItemLabel(safetyMenu);
-    this._styleSelectionSubmenu(safetyMenu);
-    this.textModelItem.menu.addMenuItem(safetyMenu);
-    this._populateTextPolishingSafetyMenu(safetyMenu.menu);
-
-    this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-    let reset = this._selectionMenuItem(_("Reset polishing defaults"));
-    this._connectSafe(reset, "activate", () => this._resetTextPolishingDefaults());
-    this.textModelItem.menu.addMenuItem(reset);
-
-    this.textModelItem.menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
-
-    if (messageText !== "") {
-      this.textModelItem.menu.addMenuItem(this._selectionInfoItem(messageText));
-      this._textModelMenuFingerprint = nextFingerprint;
-      this._textModelMenuProvider = activeProvider;
-      return;
+    this._setMenuItemLabelSafely(pool.custom, (backend === "command" || backend === "custom" ? "[x] " : "[ ] ") + customLabel);
+    this._setMenuItemLabelSafely(pool.ollama, (backend === "ollama" ? "[x] " : "[ ] ") + _("Ollama local model"));
+    this._setMenuItemLabelSafely(pool.openaiCompatible, (backend === "openai-compatible" ? "[x] " : "[ ] ") + _("OpenAI-compatible API"));
+    let currentPreset = this._normalizeTextPolishingPreset(this.postProcessPreset);
+    this._setMenuItemLabelSafely(pool.presetMenu, _("Polishing preset: ") + this._textPolishingPresetLabel(currentPreset));
+    for (let presetRow of pool.presetRows) {
+      this._setMenuItemLabelSafely(
+        presetRow.item,
+        (currentPreset === presetRow.preset ? "[x] " : "[ ] ") + this._textPolishingPresetLabel(presetRow.preset)
+      );
     }
-    if (!models || models.length === 0) {
+    for (let safetyRow of pool.safetyRows) {
+      this._setMenuItemLabelSafely(safetyRow.item, this._optionLabel(Boolean(this[safetyRow.propertyName]), safetyRow.label));
+    }
+    let visibleModels = models;
+    let temporarySelectedModel = false;
+    let emptyLabel = "";
+    if (messageText !== "") {
+      visibleModels = [];
+    } else if (models.length === 0) {
       if (activeProvider === "ollama" && backend === "ollama" && selectedOllamaModel !== "") {
-        this._addTextModelMenuEntry({
+        visibleModels = [{
           name: selectedOllamaModel,
           model: selectedOllamaModel,
           description: _("selected")
-        }, "ollama");
-        this.textModelItem.menu.addMenuItem(this._selectionInfoItem(_("Model list is temporarily empty; using selected Ollama model")));
-        this._textModelMenuFingerprint = nextFingerprint;
-        this._textModelMenuProvider = activeProvider;
-        return;
+        }];
+        temporarySelectedModel = true;
+      } else {
+        emptyLabel = activeProvider === "openai-compatible"
+          ? _("No OpenAI-compatible text models found")
+          : _("No local Ollama models found");
       }
-      let emptyLabel = activeProvider === "openai-compatible"
-        ? _("No OpenAI-compatible text models found")
-        : _("No local Ollama models found");
-      this.textModelItem.menu.addMenuItem(this._selectionInfoItem(emptyLabel));
-      this._textModelMenuFingerprint = nextFingerprint;
-      this._textModelMenuProvider = activeProvider;
-      return;
     }
-    for (let model of models) {
-      if (!model || typeof model !== "object") {
+    while (pool.rows.length < visibleModels.length) {
+      let row = this._selectionMenuItem("");
+      row._socData = null;
+      this._connectSafe(row, "activate", () => {
+        let data = row._socData;
+        if (data) {
+          this._selectTextModelBackend(data.provider, data.name, _("Text model: ") + data.name);
+        }
+      });
+      this.textModelItem.menu.addMenuItem(row);
+      pool.rows.push(row);
+    }
+    for (let index = 0; index < pool.rows.length; index++) {
+      let row = pool.rows[index];
+      let model = visibleModels[index];
+      if (!model) {
+        row._socData = null;
+        this._setPooledMenuItemVisible(row, false);
         continue;
       }
-      this._addTextModelMenuEntry(model, activeProvider);
+      let name = typeof model.name === "string" ? model.name.trim() : "";
+      let currentModel = activeProvider === "openai-compatible"
+        ? String(this.openaiCompatibleTextModel || this.openaiCompatibleModel || "")
+        : String(this.ollamaModel || "");
+      let current = backend === activeProvider && currentModel === name;
+      let detailsValue = typeof model.description === "string"
+        ? model.description
+        : (typeof model.size_label === "string" ? model.size_label : "");
+      let details = detailsValue.trim();
+      let label = (current ? "[x] " : "[ ] ") + name;
+      if (details !== "") {
+        label += " (" + details + ")";
+      }
+      row._socData = { provider: activeProvider, name: name };
+      this._setMenuItemLabelSafely(row, this._shortMenuText(label, 96));
+      this._setPooledMenuItemVisible(row, true);
     }
-    if (modelListWasTruncated) {
-      this.textModelItem.menu.addMenuItem(this._selectionInfoItem(_("Model list truncated for safety")));
-    }
+    this._setMenuItemLabelSafely(pool.message, messageText);
+    this._setMenuItemLabelSafely(pool.empty, emptyLabel);
+    this._setPooledMenuItemVisible(pool.message, messageText !== "");
+    this._setPooledMenuItemVisible(pool.empty, emptyLabel !== "");
+    this._setPooledMenuItemVisible(pool.temporary, temporarySelectedModel);
+    this._setPooledMenuItemVisible(pool.truncated, messageText === "" && modelListWasTruncated);
     this._textModelMenuFingerprint = nextFingerprint;
     this._textModelMenuProvider = activeProvider;
   },
@@ -16583,6 +16905,51 @@ MyApplet.prototype = {
     this._insertTranscriptText(this.lastTranscript);
   },
 
+  _ensureHistoryMenuPool: function() {
+    if (this._historyMenuPool) {
+      return this._historyMenuPool;
+    }
+    let menu = this.historyItem.menu;
+    let empty = this._selectionInfoItem(_("No transcripts yet"));
+    menu.addMenuItem(empty);
+    let truncated = this._selectionInfoItem(_("Transcript list truncated for safety"));
+    menu.addMenuItem(truncated);
+    this._historyMenuPool = { empty: empty, truncated: truncated, rows: [] };
+    this._setPooledMenuItemVisible(empty, false);
+    this._setPooledMenuItemVisible(truncated, false);
+    return this._historyMenuPool;
+  },
+
+  _hydrateHistoryMenuPoolRow: function(row) {
+    if (!row || !row._socData) {
+      return;
+    }
+    if (!row._socInsert) {
+      row._socInsert = new PopupMenu.PopupIconMenuItem(_("Insert transcript"), "edit-paste-symbolic", St.IconType.SYMBOLIC);
+      this._connectSafe(row._socInsert, "activate", () => {
+        let data = row._socData;
+        if (data) {
+          this._insertHistoryTranscript(data.text);
+        }
+      });
+      row.menu.addMenuItem(row._socInsert);
+      row._socCopy = new PopupMenu.PopupIconMenuItem(_("Copy transcript"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
+      this._connectSafe(row._socCopy, "activate", () => {
+        let data = row._socData;
+        if (data) {
+          this._copyHistoryTranscript(data.text);
+        }
+      });
+      row.menu.addMenuItem(row._socCopy);
+      row._socHiddenInfo = this._selectionInfoItem(_("Transcript content hidden; use List all Transcripts"));
+      row.menu.addMenuItem(row._socHiddenInfo);
+    }
+    let data = row._socData;
+    row._socInsert.setSensitive(data.hasTranscriptText);
+    row._socCopy.setSensitive(data.hasTranscriptText);
+    this._setPooledMenuItemVisible(row._socHiddenInfo, !data.hasTranscriptText);
+  },
+
   _populateHistoryMenu: function(transcripts) {
     if (!this._canMutateMenu(this.historyItem)) {
       return;
@@ -16613,18 +16980,24 @@ MyApplet.prototype = {
     if (this._historyMenuFingerprint === nextFingerprint) {
       return;
     }
-    if (!this._clearMenuItems(this.historyItem.menu)) {
-      return;
+    let pool = this._ensureHistoryMenuPool();
+    while (pool.rows.length < transcripts.length) {
+      let row = new PopupMenu.PopupSubMenuMenuItem("");
+      row._socData = null;
+      this._connectSafe(row.menu, "open-state-changed", (_menu, isOpen) => {
+        if (isOpen) {
+          this._hydrateHistoryMenuPoolRow(row);
+        }
+      });
+      this.historyItem.menu.addMenuItem(row);
+      pool.rows.push(row);
     }
-    if (!transcripts || transcripts.length === 0) {
-      let empty = new PopupMenu.PopupMenuItem(_("No transcripts yet"));
-      empty.setSensitive(false);
-      this.historyItem.menu.addMenuItem(empty);
-      this._historyMenuFingerprint = nextFingerprint;
-      return;
-    }
-    for (let transcript of transcripts) {
-      if (!transcript || typeof transcript !== "object") {
+    for (let index = 0; index < pool.rows.length; index++) {
+      let row = pool.rows[index];
+      let transcript = transcripts[index];
+      if (!transcript) {
+        row._socData = null;
+        this._setPooledMenuItemVisible(row, false);
         continue;
       }
       let preview = typeof transcript.preview === "string" ? transcript.preview.trim() : "";
@@ -16632,25 +17005,15 @@ MyApplet.prototype = {
       let transcriptText = typeof transcript.text === "string" ? transcript.text : "";
       let hasTranscriptText = transcriptText !== "" && !this._isEmptyTranscriptText(transcriptText);
       let label = this._shortMenuText(preview || name || _("Transcript"), 80);
-      let entry = new PopupMenu.PopupSubMenuMenuItem(label);
-      this.historyItem.menu.addMenuItem(entry);
-
-      let insertItem = new PopupMenu.PopupIconMenuItem(_("Insert transcript"), "edit-paste-symbolic", St.IconType.SYMBOLIC);
-      insertItem.setSensitive(hasTranscriptText);
-      this._connectSafe(insertItem, "activate", () => this._insertHistoryTranscript(transcriptText));
-      entry.menu.addMenuItem(insertItem);
-
-      let copyItem = new PopupMenu.PopupIconMenuItem(_("Copy transcript"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
-      copyItem.setSensitive(hasTranscriptText);
-      this._connectSafe(copyItem, "activate", () => this._copyHistoryTranscript(transcriptText));
-      entry.menu.addMenuItem(copyItem);
-      if (!hasTranscriptText) {
-        entry.menu.addMenuItem(this._selectionInfoItem(_("Transcript content hidden; use List all Transcripts")));
+      row._socData = { text: transcriptText, hasTranscriptText: hasTranscriptText };
+      this._setMenuItemLabelSafely(row, label);
+      this._setPooledMenuItemVisible(row, true);
+      if (row._socInsert || row.menu.isOpen === true) {
+        this._hydrateHistoryMenuPoolRow(row);
       }
     }
-    if (historyWasTruncated) {
-      this.historyItem.menu.addMenuItem(this._selectionInfoItem(_("Transcript list truncated for safety")));
-    }
+    this._setPooledMenuItemVisible(pool.empty, transcripts.length === 0);
+    this._setPooledMenuItemVisible(pool.truncated, historyWasTruncated);
     this._historyMenuFingerprint = nextFingerprint;
   },
 
