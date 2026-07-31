@@ -14400,11 +14400,11 @@ class CliTest(unittest.TestCase):
             cleanup_backups = {
                 owner_path: recordings
                 / (
-                    f"{cli._cleanup_backup_v2_prefix(
+                    cli._cleanup_backup_v2_prefix(
                         owner_path,
                         recordings.parent / 'state.json',
-                    )}"
-                    f"{'0' * 32}.bak"
+                    )
+                    + f"{'0' * 32}.bak"
                 )
                 for owner_path in owner_paths
             }
@@ -14581,11 +14581,11 @@ class CliTest(unittest.TestCase):
             cleanup_backups = {
                 owner_path: recordings
                 / (
-                    f"{cli._cleanup_backup_v2_prefix(
+                    cli._cleanup_backup_v2_prefix(
                         owner_path,
                         recordings.parent / 'state.json',
-                    )}"
-                    f"{'f' * 32}.bak"
+                    )
+                    + f"{'f' * 32}.bak"
                 )
                 for owner_path in owner_paths
             }
