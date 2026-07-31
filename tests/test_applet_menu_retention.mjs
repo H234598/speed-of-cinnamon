@@ -14,10 +14,15 @@ const appletSource = fs.readFileSync(
 let constructors = 0;
 
 class Actor {
-  constructor() { this.visible = true; }
+  constructor() { this.visible = true; this.focusGrabCount = 0; }
   show() { this.visible = true; }
   hide() { this.visible = false; }
   is_finalized() { return false; }
+  contains(actor) { return actor === this; }
+  grab_key_focus() {
+    this.focusGrabCount += 1;
+    methodContext.global.stage.keyFocus = this;
+  }
 }
 
 class Menu {
@@ -33,10 +38,23 @@ class Menu {
   connect(signal, callback) { this.handlers.push({ signal, callback }); return this.handlers.length; }
   open() {
     this.isOpen = true;
+    this.actor.show();
     for (const handler of this.handlers) {
       if (handler.signal === "open-state-changed") handler.callback(this, true);
     }
   }
+  close() {
+    this.isOpen = false;
+    if (this._activeMenuItem && this._activeMenuItem.setActive) {
+      this._activeMenuItem.setActive(false);
+    }
+    this._activeMenuItem = null;
+    this.actor.hide();
+    for (const handler of this.handlers) {
+      if (handler.signal === "open-state-changed") handler.callback(this, false);
+    }
+  }
+  _getMenuItems() { return this.items; }
 }
 
 class PopupMenuItem {
@@ -45,6 +63,7 @@ class PopupMenuItem {
     this.actor = new Actor();
     this.label = { text: label };
     this.sensitive = true;
+    this.active = false;
     this.handlers = [];
   }
   connect(signal, callback) { this.handlers.push({ signal, callback }); return this.handlers.length; }
@@ -54,6 +73,7 @@ class PopupMenuItem {
     }
   }
   setSensitive(value) { this.sensitive = Boolean(value); }
+  setActive(value) { this.active = Boolean(value); }
 }
 
 class PopupSubMenuMenuItem extends PopupMenuItem {
@@ -79,6 +99,12 @@ const methodContext = {
   PopupMenu: { PopupMenuItem, PopupSubMenuMenuItem, PopupIconMenuItem, PopupSeparatorMenuItem },
   St: { IconType: { SYMBOLIC: 1 } },
   GLib: { build_filenamev: (parts) => parts.join("/"), get_user_data_dir: () => "/data" },
+  global: {
+    stage: {
+      keyFocus: null,
+      get_key_focus() { return this.keyFocus; },
+    },
+  },
   _: (value) => value,
 };
 
@@ -102,6 +128,8 @@ function commonState() {
     _setMenuItemLabelSafely(item, text) { item.label.text = text; return true; },
     _setMenuItemSensitiveSafely(item, value) { item.setSensitive(value); return true; },
     _setPooledMenuItemVisible: loadMethod("_setPooledMenuItemVisible", "_ensureAlarmMenuPool"),
+    _closeNestedMenusSafely: loadMethod("_closeNestedMenusSafely", "_closeMenuSafely"),
+    _closeMenuSafely: loadMethod("_closeMenuSafely", "_clearMenuItems"),
     _styleMenuItemLabel(item) { return item; },
     _styleSelectionSubmenu() {},
     _shortMenuText(value, limit) { return String(value).slice(0, limit); },
@@ -138,6 +166,77 @@ test("alarm menu reuses parent rows and current row data", () => {
   row.menu.open();
   row._socToggle.activate();
   assert.deepEqual(state.alarmToggle, { id: "alarm-0", enabled: true });
+});
+
+test("hiding a pooled submenu closes it and hands focus to the applet", () => {
+  constructors = 0;
+  const state = {
+    ...commonState(),
+    actor: new Actor(),
+    alarmItem: { actor: new Actor(), menu: new Menu() },
+    _alarmMenuFingerprint: null,
+    _alarmMenuPool: null,
+    _checkAlarms() {},
+    _copyAlarmCommands() {},
+    _openFolder() {},
+    _setAlarmEnabled() {},
+    _removeAlarm() {},
+    _ensureAlarmMenuPool: loadMethod("_ensureAlarmMenuPool", "_hydrateAlarmMenuPoolRow"),
+    _hydrateAlarmMenuPoolRow: loadMethod("_hydrateAlarmMenuPoolRow", "_populateAlarmMenu"),
+    _populateAlarmMenu: loadMethod("_populateAlarmMenu", "_addAlarmMenuEntry"),
+    _coerceCliTextArg(value) { return String(value); },
+  };
+  state._populateAlarmMenu([{ id: "alarm-1", label: "Alarm", enabled: true }], "summary");
+  const row = state._alarmMenuPool.rows[0];
+  row.menu.open();
+  row.setActive(true);
+  methodContext.global.stage.keyFocus = row.menu.actor;
+
+  state._populateAlarmMenu([], "", "refresh failed");
+
+  assert.equal(row.menu.isOpen, false);
+  assert.equal(row.menu.actor.visible, false);
+  assert.equal(row.actor.visible, false);
+  assert.equal(row.active, false);
+  assert.equal(methodContext.global.stage.keyFocus, state.actor);
+  assert.equal(state.actor.focusGrabCount, 1);
+});
+
+test("failed pooled submenu close preserves row data and fingerprint", () => {
+  constructors = 0;
+  const state = {
+    ...commonState(),
+    actor: new Actor(),
+    alarmItem: { actor: new Actor(), menu: new Menu() },
+    _alarmMenuFingerprint: null,
+    _alarmMenuPool: null,
+    lifecycleErrors: [],
+    _recordLifecycleError(channel, error) { this.lifecycleErrors.push({ channel, error }); },
+    _checkAlarms() {},
+    _copyAlarmCommands() {},
+    _openFolder() {},
+    _setAlarmEnabled() {},
+    _removeAlarm() {},
+    _ensureAlarmMenuPool: loadMethod("_ensureAlarmMenuPool", "_hydrateAlarmMenuPoolRow"),
+    _hydrateAlarmMenuPoolRow: loadMethod("_hydrateAlarmMenuPoolRow", "_populateAlarmMenu"),
+    _populateAlarmMenu: loadMethod("_populateAlarmMenu", "_addAlarmMenuEntry"),
+    _coerceCliTextArg(value) { return String(value); },
+  };
+  state._populateAlarmMenu([{ id: "alarm-1", label: "Alarm", enabled: true }], "summary");
+  const row = state._alarmMenuPool.rows[0];
+  const previousData = row._socData;
+  const previousFingerprint = state._alarmMenuFingerprint;
+  row.menu.open();
+  row.menu.close = () => { throw new Error("injected close failure"); };
+
+  state._populateAlarmMenu([], "", "refresh failed");
+
+  assert.equal(row.actor.visible, true);
+  assert.equal(row.menu.isOpen, true);
+  assert.equal(row._socData, previousData);
+  assert.equal(state._alarmMenuFingerprint, previousFingerprint);
+  assert.equal(state.lifecycleErrors.length, 1);
+  assert.equal(state.lifecycleErrors[0].channel, "menu-pool");
 });
 
 test("input source menu reuses rows and actions read current data", () => {

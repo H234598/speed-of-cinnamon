@@ -8422,6 +8422,55 @@ MyApplet.prototype = {
       if (visible) {
         actor.show();
       } else {
+        let submenu = item && item.menu;
+        let submenuActor = submenu && submenu.actor;
+        let keyFocus = null;
+        let ownsFocus = false;
+        let stage = typeof global !== "undefined" && global ? global.stage : null;
+        if (stage && typeof stage.get_key_focus === "function") {
+          keyFocus = stage.get_key_focus();
+          ownsFocus = Boolean(keyFocus && (
+            keyFocus === actor ||
+            (typeof actor.contains === "function" && actor.contains(keyFocus)) ||
+            keyFocus === submenuActor ||
+            (submenuActor && typeof submenuActor.contains === "function" && submenuActor.contains(keyFocus))
+          ));
+        }
+        if (submenu) {
+          if (!this._closeNestedMenusSafely(submenu) ||
+              !this._closeMenuSafely(submenu, false, false)) {
+            throw new Error("Pooled submenu could not be closed");
+          }
+          if (submenuActor && typeof submenuActor.hide === "function") {
+            submenuActor.hide();
+          }
+        }
+        if (item && typeof item.setActive === "function") {
+          item.setActive(false);
+        }
+        if (ownsFocus) {
+          let rootMenuActor = this.menu && this.menu.actor;
+          let focusTarget = rootMenuActor &&
+            (typeof rootMenuActor.is_finalized !== "function" || !rootMenuActor.is_finalized()) &&
+            rootMenuActor.visible !== false && typeof rootMenuActor.grab_key_focus === "function"
+            ? rootMenuActor
+            : this.actor;
+          if (!focusTarget || typeof focusTarget.grab_key_focus !== "function") {
+            throw new Error("Visible focus target is unavailable for pooled menu hide");
+          }
+          focusTarget.grab_key_focus();
+          if (stage && typeof stage.get_key_focus === "function") {
+            let nextFocus = stage.get_key_focus();
+            if (nextFocus && (
+              nextFocus === actor ||
+              (typeof actor.contains === "function" && actor.contains(nextFocus)) ||
+              nextFocus === submenuActor ||
+              (submenuActor && typeof submenuActor.contains === "function" && submenuActor.contains(nextFocus))
+            )) {
+              throw new Error("Keyboard focus remained inside hidden pooled menu item");
+            }
+          }
+        }
         actor.hide();
       }
       return true;
@@ -8534,8 +8583,10 @@ MyApplet.prototype = {
       let row = pool.rows[index];
       let alarm = visibleAlarms[index];
       if (!alarm) {
+        if (!this._setPooledMenuItemVisible(row, false)) {
+          return;
+        }
         row._socData = null;
-        this._setPooledMenuItemVisible(row, false);
         continue;
       }
       let id = this._coerceCliTextArg(alarm.id, "alarm id").trim();
@@ -9320,8 +9371,10 @@ MyApplet.prototype = {
         let row = rows[index];
         let model = modelList[index];
         if (!model) {
+          if (!this._setPooledMenuItemVisible(row, false)) {
+            return false;
+          }
           row._socData = null;
-          this._setPooledMenuItemVisible(row, false);
           continue;
         }
         let name = typeof model.name === "string" ? model.name.trim() : "";
@@ -9351,14 +9404,19 @@ MyApplet.prototype = {
           this._hydrateModelMenuPoolRow(row);
         }
       }
+      return true;
     };
-    updateRows(ct2Models, pool.ct2Rows, pool.ct2Menu.menu);
-    updateRows(ggmlModels, pool.ggmlRows, pool.ggmlMenu.menu);
+    if (!updateRows(ct2Models, pool.ct2Rows, pool.ct2Menu.menu) ||
+        !updateRows(ggmlModels, pool.ggmlRows, pool.ggmlMenu.menu)) {
+      return;
+    }
     let catalogVisible = messageText === "" && models.length > 0;
     this._setPooledMenuItemVisible(pool.message, messageText !== "");
     this._setPooledMenuItemVisible(pool.empty, messageText === "" && models.length === 0);
     for (let item of [pool.ct2Menu, pool.ggmlMenu, pool.externalMenu]) {
-      this._setPooledMenuItemVisible(item, catalogVisible);
+      if (!this._setPooledMenuItemVisible(item, catalogVisible)) {
+        return;
+      }
     }
     this._setPooledMenuItemVisible(pool.ct2Empty, catalogVisible && ct2Models.length === 0);
     this._setPooledMenuItemVisible(pool.ggmlEmpty, catalogVisible && ggmlModels.length === 0);
@@ -16996,8 +17054,10 @@ MyApplet.prototype = {
       let row = pool.rows[index];
       let transcript = transcripts[index];
       if (!transcript) {
+        if (!this._setPooledMenuItemVisible(row, false)) {
+          return;
+        }
         row._socData = null;
-        this._setPooledMenuItemVisible(row, false);
         continue;
       }
       let preview = typeof transcript.preview === "string" ? transcript.preview.trim() : "";
