@@ -41,14 +41,65 @@ jobs:
         ./
   scan-pr:
     if: ${{ github.event_name == 'pull_request' || github.event_name == 'merge_group' }}
+    runs-on: ubuntu-24.04
     permissions:
       actions: read
       contents: read
-    uses: "google/osv-scanner-action/.github/workflows/osv-scanner-reusable-pr.yml@3adb4b14a2b0623876d18d863a498b785fb3752d" # v2.3.8
-    with:
-      upload-sarif: false
-      # Example of specifying custom arguments
-      scan-args: |-
-        --include-git-root
-        -r
-        ./
+    env:
+      OSV_BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
+    steps:
+      - name: Checkout complete comparison history
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate comparison revisions
+        shell: bash
+        run: |
+          if [[ ! "${OSV_BASE_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            printf 'Invalid OSV base revision.\n' >&2
+            exit 1
+          fi
+          if [[ ! "${GITHUB_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            printf 'Invalid OSV head revision.\n' >&2
+            exit 1
+          fi
+
+      - name: Scan base revision
+        run: git checkout --detach "${OSV_BASE_SHA}"
+
+      - name: Run OSV scanner on base revision
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --format=json
+            --output=old-results.json
+            --include-git-root
+            -r
+            ./
+
+      - name: Scan proposed revision
+        run: git checkout --detach "${GITHUB_SHA}"
+
+      - name: Run OSV scanner on proposed revision
+        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        continue-on-error: true
+        with:
+          scan-args: |-
+            --format=json
+            --output=new-results.json
+            --include-git-root
+            -r
+            ./
+
+      - name: Report newly introduced vulnerabilities
+        uses: google/osv-scanner-action/osv-reporter-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        with:
+          scan-args: |-
+            --output=results.sarif
+            --old=old-results.json
+            --new=new-results.json
+            --gh-annotations=true
+            --fail-on-vuln=true
