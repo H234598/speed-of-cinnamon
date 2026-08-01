@@ -6361,6 +6361,116 @@ class CliTest(unittest.TestCase):
                     False,
                 )
 
+    def test_finalize_resumes_error_restore_without_reinsert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            state_dir = tmp_path / "speed-of-cinnamon"
+            recordings_dir = state_dir / "recordings"
+            state_dir.mkdir(parents=True)
+            state_dir.chmod(0o700)
+            recordings_dir.mkdir(parents=True)
+            original = recordings_dir / "recording.wav"
+            state_file = state_dir / "state.json"
+            cleanup_backup = recordings_dir / (
+                f"{cli._cleanup_backup_v2_prefix(original, state_file)}"
+                "0123456789abcdef0123456789abcdef.bak"
+            )
+            cleanup_backup.write_bytes(b"recovered recording")
+            journal_entry = cli._cleanup_backup_journal_entry(
+                cleanup_backup,
+                cleanup_backup.stat(),
+            )
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="error",
+                    audio_path=str(original),
+                    transcript="transcript",
+                    inserted=True,
+                    error="failed to discard recording artifacts",
+                    pending_cleanup_restore_owner_paths=(str(original),),
+                    pending_cleanup_backup_entries=(journal_entry,),
+                    cleanup_backup_journal_restore=True,
+                )
+            )
+            args = self._build_finalize_args(
+                keep_recording_artifacts=True
+            )
+            validated_paths: list[Path] = []
+
+            def validate_restored(path: Path) -> Path:
+                validated_paths.append(path)
+                self.assertTrue(original.exists())
+                return original
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp},
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli.validate_audio_file",
+                    side_effect=validate_restored,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(
+                        False,
+                        False,
+                        2.0,
+                        1.0,
+                        1.0,
+                        0.1,
+                        "speech detected",
+                    ),
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli.trim_recording_silence",
+                    side_effect=cli.RecorderError("skip trim"),
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli.reencode_recording_to_flac",
+                    side_effect=cli.RecorderError("skip encode"),
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli.transcribe",
+                    return_value="transcript",
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli.post_process_text",
+                    return_value="transcript",
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli.insert_text",
+                    return_value=True,
+                ) as mocked_insert,
+            ):
+                self.assertFalse(original.exists())
+                first_result = cli.finalize_recording(
+                    args,
+                    store,
+                    store.read(),
+                )
+                first_state = store.read()
+                second_result = cli.finalize_recording(
+                    args,
+                    store,
+                    first_state,
+                )
+
+            final_state = store.read()
+
+        self.assertEqual(first_result["status"], "done")
+        self.assertIs(first_result["inserted"], True)
+        self.assertEqual(first_result["transcript"], "transcript")
+        self.assertEqual(second_result["status"], "done")
+        self.assertEqual(final_state.status, "done")
+        self.assertIs(final_state.inserted, True)
+        self.assertEqual(final_state.transcript, "transcript")
+        self.assertEqual(validated_paths, [original])
+        self.assertFalse(cleanup_backup.exists())
+        mocked_insert.assert_not_called()
+
     def test_finalize_does_not_restore_before_restore_journal_commit(
         self,
     ) -> None:
@@ -10074,6 +10184,50 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("audio file is missing or empty", payload["error"])
 
+    def test_transcribe_file_redacts_transient_transcript_owner_write_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            internal_error = "failed to write transient transcript owner: /secret/transcript.owner"
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                mock.patch.object(cli, "_prepare_transient_transcript_path", side_effect=RuntimeError(internal_error)),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--json",
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                ])
+            payload = json.loads(stdout.getvalue())
+
+            self.assertEqual(code, 1)
+            self.assertEqual(payload["error"], "failed to write transcript file")
+            self.assertNotIn("transient transcript owner", payload["error"])
+            self.assertNotIn("/secret/transcript.owner", payload["error"])
+
+            args = cli.build_parser().parse_args([
+                "transcribe-file",
+                str(audio),
+                "--transcriber",
+                "command",
+                "--transcriber-command",
+                "printf transcript",
+            ])
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                mock.patch.object(cli, "_prepare_transient_transcript_path", side_effect=RuntimeError(internal_error)),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "^failed to write transcript file$") as caught:
+                    cli.command_transcribe_file(args)
+            self.assertIsInstance(caught.exception.__cause__, RuntimeError)
+            self.assertEqual(str(caught.exception.__cause__), internal_error)
+
     def test_transcribe_file_rejects_directory_as_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp)
@@ -12298,6 +12452,128 @@ class CliTest(unittest.TestCase):
             self.assertEqual(final_state.transcript_path, "")
             self.assertEqual(list(transcript_root.glob("*.txt")), [])
 
+    def test_finalize_does_not_store_backend_plaintext_when_processing_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcript_root = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings_root.mkdir(parents=True)
+            transcript_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            secret = "backend transcript secret"
+            transcript_path = transcript_root / "recording.txt"
+            backend_paths: list[Path] = []
+
+            def transcribe_with_secret(*, text_path: Path, **kwargs: object) -> str:
+                del kwargs
+                backend_path = Path(text_path)
+                backend_paths.append(backend_path)
+                backend_path.write_text(secret, encoding="utf-8")
+                return "safe transcript"
+
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=transcribe_with_secret),
+                mock.patch("speed_of_cinnamon.cli._process_transcript", side_effect=RuntimeError("processing failed")),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(
+                    [
+                        "stop",
+                        "--state-file",
+                        str(state_file),
+                        "--insert-method",
+                        "none",
+                        "--transcriber",
+                        "command",
+                        "--transcriber-command",
+                        "printf ignored",
+                        "--artifact-encryption",
+                        "off",
+                        "--json",
+                    ]
+                )
+
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            transcript_files = list(transcript_root.iterdir())
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(final_state.status, "error")
+        self.assertFalse(final_state.transcript_path)
+        self.assertEqual(transcript_files, [])
+        self.assertEqual(len(backend_paths), 1)
+        self.assertEqual(backend_paths[0].parent, transcript_root)
+        self.assertTrue(backend_paths[0].name.startswith("."))
+        self.assertTrue(backend_paths[0].name.endswith(".tmp.txt"))
+        self.assertNotEqual(backend_paths[0], transcript_path)
+        self.assertNotIn(secret, final_state.error)
+        self.assertNotIn(secret, json.dumps(payload))
+        self.assertNotIn(secret, stdout.getvalue())
+
+    def test_finalize_cleans_backend_plaintext_when_processing_is_interrupted(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            transcript_root = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings_root.mkdir(parents=True)
+            transcript_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            secret = "backend interrupted secret"
+
+            def transcribe_with_secret(*, text_path: Path, **kwargs: object) -> str:
+                del kwargs
+                Path(text_path).write_text(secret, encoding="utf-8")
+                return "safe transcript"
+
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            args.artifact_encryption = cli.ARTIFACT_ENCRYPTION_OFF
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("skip trim")),
+                mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=transcribe_with_secret),
+                mock.patch(
+                    "speed_of_cinnamon.cli._process_transcript",
+                    side_effect=KeyboardInterrupt("processing interrupted"),
+                ),
+            ):
+                with self.assertRaisesRegex(KeyboardInterrupt, "processing interrupted") as raised:
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            transcript_files = list(transcript_root.iterdir())
+
+        self.assertEqual(final_state.status, "error")
+        self.assertFalse(final_state.transcript_path)
+        self.assertEqual(transcript_files, [])
+        self.assertNotIn(secret, final_state.error)
+        self.assertNotIn(secret, str(raised.exception))
+
     def test_finalize_preserves_primary_error_if_transcript_cleanup_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
@@ -12387,10 +12663,19 @@ class CliTest(unittest.TestCase):
             args = self._build_finalize_args(keep_recording_artifacts=True)
             update_calls: list[dict[str, object]] = []
             original_update = store.update
+            real_unlink = cli._unlink_regular_leaf_with_parent_fsync
 
             def tracking_update(**kwargs: object) -> RecordingState:
                 update_calls.append(kwargs)
                 return original_update(**kwargs)
+
+            def fail_stored_transcript_unlink(
+                path_value: Path,
+                **kwargs: object,
+            ) -> bool:
+                if path_value == transcript_root / "recording.txt":
+                    raise RuntimeError("unlink failed")
+                return real_unlink(path_value, **kwargs)
 
             with (
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
@@ -12402,7 +12687,10 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.insert_text", side_effect=RuntimeError("paste failed")),
                 mock.patch("speed_of_cinnamon.cli.transcribe", return_value="transcript"),
                 mock.patch.object(store, "update", side_effect=tracking_update),
-                mock.patch("speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync", side_effect=RuntimeError("unlink failed")),
+                mock.patch(
+                    "speed_of_cinnamon.cli._unlink_regular_leaf_with_parent_fsync",
+                    side_effect=fail_stored_transcript_unlink,
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "failed to delete transcript file"):
                     cli.finalize_recording(args, store, store.read())
@@ -15759,6 +16047,130 @@ class CliTest(unittest.TestCase):
         self.assertFalse(cleanup_backup.exists())
         self.assertEqual(final_state.pending_cleanup_owner_paths, ())
         self.assertEqual(final_state.pending_cleanup_backup_entries, ())
+
+    def test_cancel_preserves_sorted_journal_key_order_on_unsorted_input_with_failed_delete(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
+            recordings.mkdir(parents=True)
+            recordings.parent.chmod(0o700)
+            state_file = recordings.parent / "state.json"
+            audio_path = recordings / "recording.wav"
+            owners = (
+                recordings / "recording.trimmed-b.wav",
+                recordings / "recording.trimmed-a.wav",
+                recordings / "recording.trimmed-c.wav",
+            )
+            audio_path.write_bytes(b"audio")
+            for owner in owners:
+                owner.write_bytes(b"inflight")
+            backup_suffixes = ("f" * 16, "a" * 16, "c" * 16)
+            backups = tuple(
+                recordings
+                / (
+                    f"{cli._cleanup_backup_prefix(owner)}"
+                    f"{suffix}.bak"
+                )
+                for owner, suffix in zip(owners, backup_suffixes, strict=True)
+            )
+            failed_backups = (backups[1], backups[0])
+            failed_backup_names = tuple(sorted(path.name for path in failed_backups))
+            for backup in backups:
+                backup.write_bytes(b"backup")
+
+            pending_entries = [
+                cli._cleanup_backup_journal_entry(backup, backup.stat())
+                for backup in backups
+            ]
+            unsorted_journal_entries = (
+                pending_entries[2],
+                pending_entries[0],
+                pending_entries[1],
+            )
+            sorted_pending_journal_names = tuple(
+                sorted(entry.split("|", 1)[0] for entry in unsorted_journal_entries)
+            )
+            store = StateStore(state_file)
+            store.write(
+                RecordingState(
+                    status="finalizing",
+                    audio_path=str(audio_path),
+                    pending_cleanup_owner_paths=tuple(str(owner) for owner in owners),
+                    pending_cleanup_backup_entries=unsorted_journal_entries,
+                )
+            )
+
+            real_unlink = cli._unlink_regular_leaf_with_parent_fsync
+            real_write = StateStore.write
+            write_snapshots: list[RecordingState] = []
+
+            def track_write(
+                target_store: StateStore,
+                next_state: RecordingState,
+            ) -> None:
+                if target_store.path == state_file:
+                    write_snapshots.append(next_state)
+                return real_write(target_store, next_state)
+
+            def fail_one_delete(
+                path: Path,
+                *,
+                field_name: str,
+                expected_stat: object = None,
+            ) -> bool:
+                if path in failed_backups:
+                    return False
+                return real_unlink(path=path, field_name=field_name, expected_stat=expected_stat)
+
+            with (
+                mock.patch.dict(
+                    os.environ,
+                    {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp},
+                ),
+                mock.patch.object(
+                    StateStore,
+                    "write",
+                    autospec=True,
+                    side_effect=track_write,
+                ),
+                mock.patch.object(
+                    cli,
+                    "_unlink_regular_leaf_with_parent_fsync",
+                    side_effect=fail_one_delete,
+                ),
+            ):
+                result = cli.command_cancel(
+                    argparse.Namespace(state_file=str(state_file))
+                )
+
+            pre_delete_state = next(
+                snapshot
+                for snapshot in write_snapshots
+                if snapshot.status == "finalizing"
+                and snapshot.pending_cleanup_backup_entries
+            )
+            final_error_state = next(
+                snapshot
+                for snapshot in reversed(write_snapshots)
+                if snapshot.status == "error"
+            )
+            pre_delete_journal_names = tuple(
+                entry.split("|", 1)[0]
+                for entry in pre_delete_state.pending_cleanup_backup_entries
+            )
+            final_journal_names = tuple(
+                entry.split("|", 1)[0]
+                for entry in final_error_state.pending_cleanup_backup_entries
+            )
+
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(pre_delete_journal_names, sorted_pending_journal_names)
+        self.assertEqual(
+            final_journal_names,
+            failed_backup_names,
+        )
+        self.assertFalse(result["cleanup_backups_deleted"])
 
     def test_cleanup_backup_v2_prefix_is_state_scoped(self) -> None:
         owner_path = Path("/tmp/recordings/recording.wav")

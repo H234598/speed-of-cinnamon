@@ -1869,8 +1869,6 @@ def _transcript_payload_text(text: str, transcript_encryption: str, args: argpar
 
 
 def _transcript_work_path(storage_path: Path, encryption_mode: str) -> Path:
-    if encryption_mode == ARTIFACT_ENCRYPTION_OFF:
-        return storage_path
     return storage_path.with_name(f".{storage_path.stem}.{secrets.token_hex(8)}.tmp.txt")
 
 
@@ -5810,10 +5808,18 @@ def finalize_recording(
                 process_identity="",
                 stopped_at=state.stopped_at or now_iso(),
                 error="",
-                inserted=False,
+                inserted=(
+                    state.inserted
+                    if cleanup_backup_restore_pending
+                    else False
+                ),
             )
             state_marked_finalizing = True
-            inserted = False
+            inserted = (
+                state.inserted
+                if cleanup_backup_restore_pending
+                else False
+            )
         else:
             if state.pid is not None or state.process_identity:
                 state = store.update(pid=None, process_identity="")
@@ -7392,9 +7398,12 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     set(),
                 ).add(owner_path)
                 cleanup_journal_identity_failed_names.add(candidate.name)
+        sorted_cleanup_journal_names = tuple(
+            sorted(cleanup_journal_entries_by_name)
+        )
         pending_cleanup_backup_entries_before_delete = tuple(
             cleanup_journal_entries_by_name[name]
-            for name in sorted(cleanup_journal_entries_by_name)
+            for name in sorted_cleanup_journal_names
         )
         pending_cleanup_owner_paths_before_delete = (
             set(persisted_cleanup_owner_paths)
@@ -7680,7 +7689,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         )
         pending_cleanup_backup_entries = tuple(
             cleanup_journal_entries_by_name[name]
-            for name in sorted(cleanup_journal_entries_by_name)
+            for name in sorted_cleanup_journal_names
             if (
                 name in cleanup_journal_identity_failed_names
                 or not cleanup_backup_delete_results.get(
@@ -7704,10 +7713,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             and not cleanup_backup_journal_overflow
         )
         inflight_deleted = not deferred_inflight_group_paths
-        for inflight_path, inflight_group_paths in sorted(
-            discarded_inflight_groups.items(),
-            key=lambda item: str(item[0]),
-        ):
+        for inflight_path, inflight_group_paths in discarded_inflight_groups.items():
             if failed_owner_paths.intersection(inflight_group_paths):
                 inflight_deleted = False
                 continue
@@ -8869,10 +8875,13 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
     artifact_encryption = _artifact_encryption_mode(args)
     transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
-    transient_text_fd, transient_owner_stat = _prepare_transient_transcript_path(
-        transcriber_text_path,
-        text_path,
-    )
+    try:
+        transient_text_fd, transient_owner_stat = _prepare_transient_transcript_path(
+            transcriber_text_path,
+            text_path,
+        )
+    except Exception as exc:
+        raise RuntimeError("failed to write transcript file") from exc
     transcription_error: BaseException | None = None
     try:
         text = transcribe(
