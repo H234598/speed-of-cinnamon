@@ -157,6 +157,9 @@ DEFAULT_RECORDING_MAX_AGE_DAYS = 7
 MAX_TEMP_RECORDING_FILES = 20
 TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS = 3600
 TRANSIENT_TRANSCRIPT_OWNER_SUFFIX = ".owner"
+TRANSIENT_TRANSCRIPT_WRITE_ERROR = "failed to write transcript file"
+TRANSIENT_TRANSCRIPT_CLEANUP_ERROR = "failed to clean up transcript file"
+TRANSIENT_TRANSCRIPT_INTERRUPT_ERROR = "transcript operation interrupted"
 RECORDING_ARTIFACT_EXTENSIONS = (".wav", ".flac", ".log", ".socenc")
 ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES = (".wav.socenc", ".flac.socenc")
 TRANSCRIPT_ARTIFACT_SUFFIXES = (".txt", ".socenc")
@@ -1193,6 +1196,36 @@ def _redact_error_for_user(error: object) -> str:
     return sanitize_error_message(error, max_chars=MAX_LOG_EXCERPT_CHARS)
 
 
+def _clear_transient_exception_metadata(error: BaseException) -> BaseException:
+    for attribute, value in (
+        ("__cause__", None),
+        ("__context__", None),
+        ("__traceback__", None),
+        ("__suppress_context__", True),
+        ("__notes__", []),
+    ):
+        try:
+            setattr(error, attribute, value)
+        except BaseException:
+            pass
+    return error
+
+
+def _sanitize_transient_exception(
+    error: BaseException,
+    *,
+    message: str = TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+) -> BaseException:
+    """Build safe native exception outside active exception handling."""
+    if isinstance(error, KeyboardInterrupt):
+        sanitized: BaseException = KeyboardInterrupt(TRANSIENT_TRANSCRIPT_INTERRUPT_ERROR)
+    elif isinstance(error, SystemExit):
+        sanitized = SystemExit(1)
+    else:
+        sanitized = RuntimeError(message)
+    return _clear_transient_exception_metadata(sanitized)
+
+
 def _redact_error_payload(value: object) -> object:
     if isinstance(value, dict):
         clean: dict[object, object] = {}
@@ -1596,11 +1629,13 @@ def _write_transient_transcript_owner(path: Path) -> os.stat_result:
             content,
             field_name="transient transcript owner",
         )
-    except (OSError, RuntimeError) as exc:
-        raise RuntimeError(f"failed to write transient transcript owner: {owner_path}") from exc
+    except KeyboardInterrupt:
+        raise
+    except (OSError, RuntimeError):
+        raise RuntimeError("failed to write transient transcript owner") from None
     owner_stat = _recording_artifact_stat(owner_path)
     if owner_stat is None:
-        raise RuntimeError(f"transient transcript owner is not a safe regular file: {owner_path}")
+        raise RuntimeError("failed to write transient transcript owner") from None
     return owner_stat
 
 
@@ -1876,6 +1911,23 @@ def _prepare_transient_transcript_path(
     path: Path,
     storage_path: Path,
 ) -> tuple[int | None, os.stat_result | None]:
+    captured_error: BaseException | None = None
+    result: tuple[int | None, os.stat_result | None] | None = None
+    try:
+        result = _prepare_transient_transcript_path_impl(path, storage_path)
+    except BaseException as exc:
+        captured_error = exc
+    if captured_error is not None:
+        raise _sanitize_transient_exception(captured_error) from None
+    if result is None:
+        raise RuntimeError(TRANSIENT_TRANSCRIPT_WRITE_ERROR)
+    return result
+
+
+def _prepare_transient_transcript_path_impl(
+    path: Path,
+    storage_path: Path,
+) -> tuple[int | None, os.stat_result | None]:
     if path == storage_path:
         return None, None
     try:
@@ -1904,10 +1956,11 @@ def _prepare_transient_transcript_path(
                     expected_owner_stat=expected_owner_stat,
                 )
         except BaseException as cleanup_error:
-            if not isinstance(primary_error, Exception):
-                primary_error.add_note(f"transient transcript cleanup failed: {cleanup_error}")
-                raise primary_error.with_traceback(primary_error.__traceback__)
-            raise RuntimeError(f"{primary_error}; {cleanup_error}") from cleanup_error
+            if isinstance(primary_error, KeyboardInterrupt) or isinstance(cleanup_error, KeyboardInterrupt):
+                raise _sanitize_transient_exception(cleanup_error) from None
+            if isinstance(primary_error, Exception):
+                raise RuntimeError(TRANSIENT_TRANSCRIPT_WRITE_ERROR) from None
+            raise _sanitize_transient_exception(primary_error) from None
 
     try:
         _prepare_private_file(path, field_name="transient transcript file")
@@ -1917,7 +1970,7 @@ def _prepare_transient_transcript_path(
         raise
     except BaseException as exc:
         cleanup_created_path(exc, getattr(exc, "_speed_of_cinnamon_created_stat", None))
-        raise
+        raise _sanitize_transient_exception(exc) from None
     nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     fd: int | None = None
@@ -1939,7 +1992,7 @@ def _prepare_transient_transcript_path(
             except BaseException:
                 pass
         cleanup_created_path(exc, file_stat, owner_stat)
-        raise RuntimeError(f"failed to open transient transcript file identity: {path}") from exc
+        raise RuntimeError(TRANSIENT_TRANSCRIPT_WRITE_ERROR) from None
     except RuntimeError as exc:
         if fd is not None:
             try:
@@ -1947,7 +2000,7 @@ def _prepare_transient_transcript_path(
             except BaseException:
                 pass
         cleanup_created_path(exc, file_stat, owner_stat)
-        raise
+        raise RuntimeError(TRANSIENT_TRANSCRIPT_WRITE_ERROR) from None
     except BaseException as exc:
         if fd is not None:
             try:
@@ -1955,7 +2008,7 @@ def _prepare_transient_transcript_path(
             except BaseException:
                 pass
         cleanup_created_path(exc, file_stat, owner_stat)
-        raise
+        raise _sanitize_transient_exception(exc) from None
 
 
 def _same_leaf_identity(current: os.stat_result, expected: os.stat_result) -> bool:
@@ -2141,11 +2194,13 @@ def _remove_transient_transcript_path(
             field_name="transient transcript file",
             expected_stat=expected_stat,
         )
+        owner_path = _transient_transcript_owner_path(path)
         if expected_owner_stat is None:
-            _remove_transient_transcript_owner(path)
+            owner_presence = _safe_leaf_presence(owner_path)
+            if owner_presence is None or owner_presence:
+                raise RuntimeError(f"failed to delete transient transcript owner: {owner_path}")
         else:
             _remove_transient_transcript_owner(path, expected_stat=expected_owner_stat)
-        owner_path = _transient_transcript_owner_path(path)
         owner_presence = _safe_leaf_presence(owner_path)
         if owner_presence is None or owner_presence:
             raise RuntimeError(f"failed to delete transient transcript owner: {owner_path}")
@@ -2162,16 +2217,38 @@ def _remove_transient_transcript_path(
                 pass
 
 
-def _raise_transcription_cleanup_failure(
+def _transcription_cleanup_exception(
     transcription_error: BaseException | None,
     cleanup_error: BaseException,
-) -> None:
+    *,
+    stable_public_error: bool = False,
+) -> BaseException:
+    cleanup_message = (
+        TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
+        if stable_public_error or not isinstance(cleanup_error, Exception)
+        else _redact_error_for_user(str(cleanup_error))
+    )
+    if stable_public_error:
+        if isinstance(transcription_error, Exception):
+            transcription_message = _redact_error_for_user(str(transcription_error))
+            return _sanitize_transient_exception(
+                RuntimeError(),
+                message=f"{transcription_message}; {cleanup_message}",
+            )
+        return _sanitize_transient_exception(RuntimeError(), message=cleanup_message)
+    if not isinstance(cleanup_error, Exception):
+        return _sanitize_transient_exception(cleanup_error)
     if transcription_error is None:
-        raise cleanup_error
+        return _sanitize_transient_exception(cleanup_error, message=cleanup_message)
     if isinstance(transcription_error, Exception):
-        raise RuntimeError(f"{transcription_error}; {cleanup_error}") from cleanup_error
-    transcription_error.add_note(f"transcript cleanup failed: {cleanup_error}")
-    raise transcription_error.with_traceback(transcription_error.__traceback__)
+        return _sanitize_transient_exception(
+            transcription_error,
+            message=(
+                f"{_redact_error_for_user(str(transcription_error))}; "
+                f"{cleanup_message}"
+            ),
+        )
+    return _sanitize_transient_exception(cleanup_error, message=cleanup_message)
 
 
 def _raise_recording_cleanup_failure(
@@ -6054,6 +6131,7 @@ def finalize_recording(
         except RecorderError:
             transcript_audio_path = audio_path
         transcription_error: BaseException | None = None
+        cleanup_error: BaseException | None = None
         try:
             text = transcribe(
                 audio_path=transcript_audio_path,
@@ -6068,33 +6146,54 @@ def finalize_recording(
             )
         except BaseException as exc:
             transcription_error = exc
-            raise
-        finally:
-            try:
-                _remove_transient_transcript_path(
-                    transcriber_text_path,
-                    text_path,
-                    expected_fd=transient_text_fd,
-                    expected_owner_stat=transient_owner_stat,
-                )
-                if trimmed_audio_path is not None and trimmed_audio_path != audio_path and not keep_recording_artifacts:
-                    if not _remove_recording_artifact_if_present(
-                        trimmed_audio_path,
-                        suffix=trimmed_audio_path.suffix.lower(),
-                        expected_stat=trimmed_audio_stat,
-                    ):
-                        raise RuntimeError(f"failed to delete transient trimmed recording artifact: {trimmed_audio_path}")
-            except BaseException as cleanup_exc:
-                _raise_transcription_cleanup_failure(transcription_error, cleanup_exc)
+            text = ""
+        try:
+            _remove_transient_transcript_path(
+                transcriber_text_path,
+                text_path,
+                expected_fd=transient_text_fd,
+                expected_owner_stat=transient_owner_stat,
+            )
+            if trimmed_audio_path is not None and trimmed_audio_path != audio_path and not keep_recording_artifacts:
+                if not _remove_recording_artifact_if_present(
+                    trimmed_audio_path,
+                    suffix=trimmed_audio_path.suffix.lower(),
+                    expected_stat=trimmed_audio_stat,
+                ):
+                    raise RuntimeError(f"failed to delete transient trimmed recording artifact: {trimmed_audio_path}")
+        except BaseException as cleanup_exc:
+            cleanup_error = cleanup_exc
+        if cleanup_error is not None:
+            raise _transcription_cleanup_exception(transcription_error, cleanup_error) from None
+        if transcription_error is not None:
+            transcription_message = (
+                _redact_error_for_user(str(transcription_error))
+                if isinstance(transcription_error, Exception)
+                else TRANSIENT_TRANSCRIPT_WRITE_ERROR
+            )
+            raise _sanitize_transient_exception(
+                transcription_error,
+                message=transcription_message,
+            ) from None
 
         if _is_empty_transcript_text(text):
             text = ""
             security_post_processing = _empty_security_post_processing()
         else:
             text, security_post_processing = _process_transcript(text, args, language)
-        stored_text_path, transcript_encryption = _write_stored_transcript(text_path, text.strip() + "\n", args)
-        written_text_path = stored_text_path
-        written_text_stat = _recording_artifact_stat(stored_text_path)
+        stripped_text = text.strip()
+        if not stripped_text:
+            text = ""
+        stored_text_path: Path | None = None
+        transcript_encryption = ARTIFACT_ENCRYPTION_OFF
+        if stripped_text:
+            stored_text_path, transcript_encryption = _write_stored_transcript(
+                text_path,
+                stripped_text + "\n",
+                args,
+            )
+            written_text_path = stored_text_path
+            written_text_stat = _recording_artifact_stat(stored_text_path)
         stored_transcript_text = text
         append_space = _coerce_bool(args.append_space, field_name="append_space")
         sanitize_special_chars = _coerce_bool(
@@ -6102,7 +6201,7 @@ def finalize_recording(
             field_name="sanitize_special_chars",
         )
         text_to_insert = ""
-        if text.strip():
+        if stripped_text:
             text_to_insert = prepare_output_text(text, append_space, sanitize_special_chars)
         typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
         if text_to_insert and not inserted:
@@ -6225,7 +6324,7 @@ def finalize_recording(
             audio_path=done_audio_path,
             log_path=done_log_path,
             transcript=text if transcript_encryption == ARTIFACT_ENCRYPTION_OFF else "",
-            transcript_path=str(stored_text_path),
+            transcript_path=str(stored_text_path) if stored_text_path is not None else "",
             inserted=inserted,
             error="",
         )
@@ -6257,7 +6356,7 @@ def finalize_recording(
             transcript_cleanup,
             transient_transcript_cleanup,
         )
-        message = "recording finished without transcript" if not text.strip() else "transcription completed"
+        message = "recording finished without transcript" if not stripped_text else "transcription completed"
         if cleanup_failed_paths:
             _persist_cleanup_failure_state(store, cleanup_failed_paths, artifact_state=done_candidate)
             status = "error"
@@ -6295,7 +6394,7 @@ def finalize_recording(
             **({"error": message, "cleanup_failed_path_count": len(cleanup_failed_paths)} if cleanup_failed_paths else {}),
             "transcript": _transcript_payload_text(text, transcript_encryption, args),
             "transcript_output_redacted": bool(text) and not _confirm_plaintext_transcript_output(args),
-            "transcript_path_present": bool(stored_text_path),
+            "transcript_path_present": stored_text_path is not None,
             "artifact_encryption": artifact_encryption,
             "transcript_encryption": transcript_encryption,
             "transcript_encrypted": transcript_encryption != ARTIFACT_ENCRYPTION_OFF,
@@ -8875,14 +8974,20 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     text_path = transcript_dir() / f"{audio_path.stem}.txt"
     artifact_encryption = _artifact_encryption_mode(args)
     transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
+    preparation_error: BaseException | None = None
+    transient_text_fd: int | None = None
+    transient_owner_stat: os.stat_result | None = None
     try:
         transient_text_fd, transient_owner_stat = _prepare_transient_transcript_path(
             transcriber_text_path,
             text_path,
         )
-    except Exception as exc:
-        raise RuntimeError("failed to write transcript file") from exc
+    except BaseException as exc:
+        preparation_error = exc
+    if preparation_error is not None:
+        raise _sanitize_transient_exception(preparation_error) from None
     transcription_error: BaseException | None = None
+    cleanup_error: BaseException | None = None
     try:
         text = transcribe(
             audio_path=audio_path,
@@ -8897,23 +9002,48 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         )
     except BaseException as exc:
         transcription_error = exc
-        raise
-    finally:
-        try:
-            _remove_transient_transcript_path(
-                transcriber_text_path,
-                text_path,
-                expected_fd=transient_text_fd,
-                expected_owner_stat=transient_owner_stat,
-            )
-        except BaseException as cleanup_exc:
-            _raise_transcription_cleanup_failure(transcription_error, cleanup_exc)
+        text = ""
+    try:
+        _remove_transient_transcript_path(
+            transcriber_text_path,
+            text_path,
+            expected_fd=transient_text_fd,
+            expected_owner_stat=transient_owner_stat,
+        )
+    except BaseException as cleanup_exc:
+        cleanup_error = cleanup_exc
+    if cleanup_error is not None:
+        raise _transcription_cleanup_exception(
+            transcription_error,
+            cleanup_error,
+            stable_public_error=True,
+        ) from None
+    if transcription_error is not None:
+        transcription_message = (
+            _redact_error_for_user(str(transcription_error))
+            if isinstance(transcription_error, Exception)
+            else TRANSIENT_TRANSCRIPT_WRITE_ERROR
+        )
+        raise _sanitize_transient_exception(
+            transcription_error,
+            message=transcription_message,
+        ) from None
     if _is_empty_transcript_text(text):
         text = ""
         security_post_processing = _empty_security_post_processing()
     else:
         text, security_post_processing = _process_transcript(text, args, args.language)
-    stored_text_path, transcript_encryption = _write_stored_transcript(text_path, text.strip() + "\n", args)
+    stripped_text = text.strip()
+    if not stripped_text:
+        text = ""
+    stored_text_path: Path | None = None
+    transcript_encryption = ARTIFACT_ENCRYPTION_OFF
+    if stripped_text:
+        stored_text_path, transcript_encryption = _write_stored_transcript(
+            text_path,
+            stripped_text + "\n",
+            args,
+        )
     keep_transcripts = _coerce_int(
         getattr(args, "keep_transcripts", DEFAULT_KEEP_TRANSCRIPTS),
         field_name="keep-transcripts",
@@ -8924,14 +9054,14 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     transcript_cleanup = prune_files_by_mtime(
         transcript_files,
         keep_transcripts,
-        {stored_text_path},
+        {stored_text_path} if stored_text_path is not None else set(),
         False,
         expected_stats=transcript_stats,
     )
     transient_transcript_cleanup = prune_stale_transient_transcripts(False)
     cleanup_failed_paths = _cleanup_failed_paths(transcript_cleanup, transient_transcript_cleanup)
     status = "done"
-    message = "transcription completed"
+    message = "recording finished without transcript" if not stripped_text else "transcription completed"
     if cleanup_failed_paths:
         status = "error"
         message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
@@ -8942,7 +9072,11 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         **({"error": message, "cleanup_failed_path_count": len(cleanup_failed_paths)} if cleanup_failed_paths else {}),
         "transcript": text if reveal_transcript else "",
         "transcript_output_redacted": bool(text) and not reveal_transcript,
-        **({"transcript_path": str(stored_text_path)} if reveal_transcript else {"transcript_path_present": bool(stored_text_path)}),
+        **(
+            {"transcript_path": str(stored_text_path)}
+            if stored_text_path is not None and reveal_transcript
+            else {"transcript_path_present": stored_text_path is not None}
+        ),
         "security": _public_security_post_processing(security_post_processing),
         "transcript_file_cap": _public_cleanup_result(transcript_cleanup),
         "transient_transcript_cleanup": _public_cleanup_result(transient_transcript_cleanup),

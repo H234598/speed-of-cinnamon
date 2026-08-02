@@ -11,6 +11,7 @@ import time
 import tomllib
 import tempfile
 import threading
+import traceback
 import unittest
 import wave
 from contextlib import redirect_stdout
@@ -543,7 +544,7 @@ class CliTest(unittest.TestCase):
                 mock.patch.object(cli, "_write_transient_transcript_owner", side_effect=RuntimeError("owner failed")),
                 mock.patch.object(cli.os, "close", side_effect=OSError("close failed")),
             ):
-                with self.assertRaisesRegex(RuntimeError, "owner failed"):
+                with self.assertRaisesRegex(RuntimeError, "^failed to write transcript file$"):
                     cli._prepare_transient_transcript_path(path, storage_path)
 
     def test_prepare_transient_transcript_preserves_owner_error_when_cleanup_is_interrupted(self) -> None:
@@ -561,8 +562,11 @@ class CliTest(unittest.TestCase):
                 mock.patch.object(cli.os, "close"),
                 mock.patch.object(cli, "_remove_transient_transcript_path", side_effect=KeyboardInterrupt("cleanup interrupted")),
             ):
-                with self.assertRaisesRegex(RuntimeError, "owner failed; cleanup interrupted"):
+                with self.assertRaisesRegex(KeyboardInterrupt, "^transcript operation interrupted$") as caught:
                     cli._prepare_transient_transcript_path(path, storage_path)
+
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertFalse(getattr(caught.exception, "__notes__", ()))
 
     def test_prepare_transient_transcript_preserves_owner_interrupt_when_cleanup_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -587,10 +591,11 @@ class CliTest(unittest.TestCase):
                     side_effect=KeyboardInterrupt("cleanup interrupted"),
                 ),
             ):
-                with self.assertRaisesRegex(KeyboardInterrupt, "owner interrupted") as caught:
+                with self.assertRaisesRegex(KeyboardInterrupt, "^transcript operation interrupted$") as caught:
                     cli._prepare_transient_transcript_path(path, storage_path)
 
-            self.assertIn("transient transcript cleanup failed: cleanup interrupted", caught.exception.__notes__)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertFalse(getattr(caught.exception, "__notes__", ()))
 
     def test_prepare_transient_transcript_removes_file_after_private_prepare_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -601,7 +606,7 @@ class CliTest(unittest.TestCase):
                 mock.patch.object(cli, "transcript_dir", return_value=root),
                 mock.patch.object(cli.os, "fdopen", side_effect=ValueError("invalid descriptor mode")),
             ):
-                with self.assertRaisesRegex(cli._PrivateFilePrepareError, "failed to prepare transient transcript file"):
+                with self.assertRaisesRegex(RuntimeError, "^failed to write transcript file$"):
                     cli._prepare_transient_transcript_path(path, storage_path)
 
             self.assertFalse(path.exists())
@@ -615,7 +620,7 @@ class CliTest(unittest.TestCase):
                 mock.patch.object(cli, "transcript_dir", return_value=root),
                 mock.patch.object(cli, "_write_transient_transcript_owner", side_effect=RuntimeError("owner failed")),
             ):
-                with self.assertRaisesRegex(RuntimeError, "owner failed"):
+                with self.assertRaisesRegex(RuntimeError, "^failed to write transcript file$"):
                     cli._prepare_transient_transcript_path(path, storage_path)
 
             self.assertFalse(path.exists())
@@ -635,7 +640,7 @@ class CliTest(unittest.TestCase):
                 mock.patch.object(cli, "_prepare_private_file", side_effect=fake_prepare),
                 mock.patch.object(cli.os, "fstat", side_effect=OSError("identity stat failed")),
             ):
-                with self.assertRaisesRegex(RuntimeError, "failed to open transient transcript file identity"):
+                with self.assertRaisesRegex(RuntimeError, "^failed to write transcript file$"):
                     cli._prepare_transient_transcript_path(path, storage_path)
 
             self.assertEqual(path.read_text(encoding="utf-8"), "private transcript\n")
@@ -663,7 +668,7 @@ class CliTest(unittest.TestCase):
                 mock.patch.object(cli, "_write_transient_transcript_owner", side_effect=RuntimeError("owner failed")),
                 mock.patch.object(cli, "_unlink_regular_leaf_with_parent_fsync", side_effect=replace_before_unlink),
             ):
-                with self.assertRaisesRegex(RuntimeError, "owner failed"):
+                with self.assertRaisesRegex(RuntimeError, "^failed to write transcript file$"):
                     cli._prepare_transient_transcript_path(path, storage_path)
 
             self.assertEqual(path.read_text(encoding="utf-8"), "replacement\n")
@@ -699,7 +704,9 @@ class CliTest(unittest.TestCase):
             root = Path(tmp)
             path = root / ".transcript.tmp.txt"
             storage_path = root / "transcript.txt"
+            owner_path = cli._transient_transcript_owner_path(path)
             path.write_text("temporary transcript\n", encoding="utf-8")
+            owner_path.write_text("owner\n", encoding="utf-8")
             with (
                 mock.patch.object(cli, "transcript_dir", return_value=root),
                 mock.patch.object(
@@ -709,7 +716,11 @@ class CliTest(unittest.TestCase):
                 ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "failed to delete transient transcript file"):
-                    cli._remove_transient_transcript_path(path, storage_path)
+                    cli._remove_transient_transcript_path(
+                        path,
+                        storage_path,
+                        expected_owner_stat=owner_path.stat(),
+                    )
 
             self.assertFalse(path.exists())
 
@@ -744,7 +755,10 @@ class CliTest(unittest.TestCase):
             root = Path(tmp)
             path = root / ".transcript.tmp.txt"
             storage_path = root / "transcript.txt"
+            owner_path = cli._transient_transcript_owner_path(path)
             path.write_text("temporary transcript\n", encoding="utf-8")
+            owner_path.write_text("owner\n", encoding="utf-8")
+            owner_stat = owner_path.stat()
             parent_fd = os.open(root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             real_close = os.close
 
@@ -753,18 +767,30 @@ class CliTest(unittest.TestCase):
                     raise KeyboardInterrupt
                 real_close(fd)
 
+            def remove_owner(candidate: Path, *, expected_stat: os.stat_result | None = None) -> bool:
+                self.assertEqual(candidate, path)
+                self.assertEqual(expected_stat, owner_stat)
+                owner_path.unlink()
+                return True
+
             try:
                 with (
                     mock.patch.object(cli, "transcript_dir", return_value=root),
                     mock.patch.object(cli, "ensure_directory_without_following_symlinks", return_value=parent_fd),
-                    mock.patch.object(cli, "_remove_transient_transcript_owner", return_value=True) as mocked_owner,
+                    mock.patch.object(cli, "_remove_transient_transcript_owner", side_effect=remove_owner) as mocked_owner,
                     mock.patch.object(cli.os, "close", side_effect=close_wrapper),
                 ):
-                    self.assertTrue(cli._remove_transient_transcript_path(path, storage_path))
+                    self.assertTrue(
+                        cli._remove_transient_transcript_path(
+                            path,
+                            storage_path,
+                            expected_owner_stat=owner_stat,
+                        )
+                    )
             finally:
                 real_close(parent_fd)
 
-            mocked_owner.assert_called_once_with(path)
+            mocked_owner.assert_called_once_with(path, expected_stat=owner_stat)
             self.assertFalse(path.exists())
 
     def test_remove_transient_transcript_preserves_replaced_owner(self) -> None:
@@ -811,6 +837,118 @@ class CliTest(unittest.TestCase):
 
         self.assertFalse(path.exists())
         self.assertEqual(owner_contents, "foreign owner\n")
+
+    def test_remove_transient_transcript_succeeds_when_owner_is_safely_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / ".transcript.tmp.txt"
+            storage_path = root / "transcript.txt"
+            path.write_text("temporary transcript\n", encoding="utf-8")
+            expected_stat = path.stat()
+
+            with mock.patch.object(cli, "transcript_dir", return_value=root):
+                self.assertTrue(
+                    cli._remove_transient_transcript_path(
+                        path,
+                        storage_path,
+                        expected_stat=expected_stat,
+                        expected_owner_stat=None,
+                    )
+                )
+
+            self.assertFalse(path.exists())
+            self.assertFalse(cli._transient_transcript_owner_path(path).exists())
+
+    def test_remove_transient_transcript_never_unlinks_unknown_owner_replacement(self) -> None:
+        for replacement_kind in ("regular", "symlink", "hardlink"):
+            with self.subTest(replacement_kind=replacement_kind):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    path = root / ".transcript.tmp.txt"
+                    storage_path = root / "transcript.txt"
+                    owner_path = cli._transient_transcript_owner_path(path)
+                    replacement_target = root / "foreign-owner-target"
+                    path.write_text("temporary transcript\n", encoding="utf-8")
+                    expected_stat = path.stat()
+                    probe_count = 0
+                    real_presence = cli._safe_leaf_presence
+
+                    def race_probe(candidate: Path) -> bool | None:
+                        nonlocal probe_count
+                        if candidate == owner_path:
+                            probe_count += 1
+                            if probe_count == 2:
+                                if replacement_kind == "regular":
+                                    owner_path.write_text("foreign owner\n", encoding="utf-8")
+                                elif replacement_kind == "symlink":
+                                    replacement_target.write_text("foreign owner\n", encoding="utf-8")
+                                    owner_path.symlink_to(replacement_target)
+                                else:
+                                    replacement_target.write_text("foreign owner\n", encoding="utf-8")
+                                    os.link(replacement_target, owner_path)
+                        return real_presence(candidate)
+
+                    with (
+                        mock.patch.object(cli, "transcript_dir", return_value=root),
+                        mock.patch.object(cli, "_safe_leaf_presence", side_effect=race_probe),
+                    ):
+                        with self.assertRaisesRegex(RuntimeError, "failed to delete transient transcript file"):
+                            cli._remove_transient_transcript_path(
+                                path,
+                                storage_path,
+                                expected_stat=expected_stat,
+                                expected_owner_stat=None,
+                            )
+
+                    self.assertFalse(path.exists())
+                    self.assertTrue(os.path.lexists(owner_path))
+                    if replacement_kind == "regular":
+                        self.assertEqual(owner_path.read_text(encoding="utf-8"), "foreign owner\n")
+                    elif replacement_kind == "symlink":
+                        self.assertTrue(owner_path.is_symlink())
+                        self.assertTrue(replacement_target.exists())
+                    else:
+                        self.assertEqual(owner_path.read_text(encoding="utf-8"), "foreign owner\n")
+                        self.assertTrue(replacement_target.exists())
+
+    def test_remove_transient_transcript_owner_probe_failure_is_fail_closed(self) -> None:
+        cases = (
+            (RuntimeError, "owner probe failed"),
+            (KeyboardInterrupt, "owner probe interrupted"),
+            (SystemExit, 23),
+        )
+        for exception_type, exception_value in cases:
+            with self.subTest(exception_type=exception_type.__name__):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    path = root / ".transcript.tmp.txt"
+                    storage_path = root / "transcript.txt"
+                    path.write_text("temporary transcript\n", encoding="utf-8")
+                    expected_stat = path.stat()
+
+                    with (
+                        mock.patch.object(cli, "transcript_dir", return_value=root),
+                        mock.patch.object(
+                            cli,
+                            "_safe_leaf_presence",
+                            side_effect=exception_type(exception_value),
+                        ),
+                    ):
+                        with self.assertRaises(exception_type) as caught:
+                            cli._remove_transient_transcript_path(
+                                path,
+                                storage_path,
+                                expected_stat=expected_stat,
+                                expected_owner_stat=None,
+                            )
+
+                    self.assertFalse(path.exists())
+                    if exception_type is SystemExit:
+                        self.assertEqual(caught.exception.code, 23)
+                    elif exception_type is RuntimeError:
+                        self.assertIn("failed to delete transient transcript file", str(caught.exception))
+                    else:
+                        self.assertIn(str(exception_value), str(caught.exception))
 
     def test_ensure_transcript_export_dir_preserves_success_when_fd_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2326,7 +2464,7 @@ class CliTest(unittest.TestCase):
             replacement_exists = captured_path[0].exists() if captured_path else False
 
         self.assertNotEqual(code, 0)
-        self.assertIn("failed to delete transient transcript file", payload["error"])
+        self.assertEqual(payload["error"], "failed to clean up transcript file")
         self.assertEqual(len(captured_path), 1)
         self.assertTrue(replacement_exists)
 
@@ -2367,11 +2505,10 @@ class CliTest(unittest.TestCase):
             payload = json.loads(stdout.getvalue())
 
         self.assertNotEqual(code, 0)
-        self.assertIn("transcriber failed", payload["error"])
-        self.assertIn("failed to delete transient transcript file", payload["error"])
+        self.assertEqual(payload["error"], "transcriber failed; failed to clean up transcript file")
 
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
-    def test_transcribe_file_preserves_interrupt_when_cleanup_also_fails(
+    def test_transcribe_file_cleanup_error_overrides_transcriber_interrupt(
         self,
         mocked_validate: mock.Mock,
     ) -> None:
@@ -2387,18 +2524,54 @@ class CliTest(unittest.TestCase):
                     side_effect=OSError("cleanup failed"),
                 ),
             ):
-                with self.assertRaises(KeyboardInterrupt) as context:
-                    cli.run([
+                with redirect_stdout(io.StringIO()) as stdout:
+                    code = cli.run([
                         "transcribe-file",
                         str(audio),
                         "--transcriber",
                         "command",
                         "--transcriber-command",
                         "printf test",
+                        "--json",
                     ])
 
-        self.assertEqual(str(context.exception), "transcriber interrupted")
-        self.assertIn("cleanup failed", "\n".join(context.exception.__notes__))
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], "failed to clean up transcript file")
+
+    @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
+    def test_transcribe_file_cleanup_error_overrides_transcriber_system_exit(
+        self,
+        mocked_validate: mock.Mock,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            mocked_validate.return_value = audio
+            args = cli.build_parser().parse_args([
+                "transcribe-file",
+                str(audio),
+                "--transcriber",
+                "command",
+                "--transcriber-command",
+                "printf test",
+            ])
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}, clear=False),
+                mock.patch.object(cli, "transcribe", side_effect=SystemExit("/secret/transcriber")),
+                mock.patch.object(
+                    cli,
+                    "_remove_transient_transcript_path",
+                    side_effect=OSError("cleanup failed"),
+                ),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "^failed to clean up transcript file$") as caught:
+                    cli.command_transcribe_file(args)
+
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("/secret", str(caught.exception))
 
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="encrypted ok")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
@@ -2435,6 +2608,93 @@ class CliTest(unittest.TestCase):
         self.assertFalse(payload["transcript_output_redacted"])
         self.assertTrue(payload["transcript_encrypted"])
 
+    def test_sanitize_transient_custom_base_exception_is_native_and_secret_free(self) -> None:
+        class SecretBaseException(BaseException):
+            def __init__(self) -> None:
+                super().__init__("/secret/owner-token")
+                self.add_note("/secret/notes-token")
+
+            def __repr__(self) -> str:
+                return "SecretBaseException('/secret/repr-token')"
+
+        class BlockedMetadataBaseException(BaseException):
+            def __setattr__(self, name: str, value: object) -> None:
+                if name in {
+                    "__cause__",
+                    "__context__",
+                    "__traceback__",
+                    "__notes__",
+                    "__suppress_context__",
+                }:
+                    raise RuntimeError("secret metadata mutation blocked")
+                super().__setattr__(name, value)
+
+            def __repr__(self) -> str:
+                return "BlockedMetadataBaseException('/secret/repr-token')"
+
+        for original in (SecretBaseException(), BlockedMetadataBaseException("/secret/owner-token")):
+            with self.subTest(exception=type(original).__name__):
+                sanitized = cli._sanitize_transient_exception(original)
+                self.assertIs(type(sanitized), RuntimeError)
+                self.assertEqual(str(sanitized), "failed to write transcript file")
+                self.assertNotIn("/secret/", repr(sanitized))
+                self.assertIsNone(sanitized.__cause__)
+                self.assertIsNone(sanitized.__context__)
+                self.assertEqual(getattr(sanitized, "__notes__", []), [])
+                with self.assertRaises(RuntimeError) as caught:
+                    raise sanitized
+                rendered = "".join(traceback.format_exception(caught.exception))
+                self.assertNotIn("/secret/", rendered)
+                self.assertIsNone(caught.exception.__cause__)
+                self.assertIsNone(caught.exception.__context__)
+                self.assertEqual(getattr(caught.exception, "__notes__", []), [])
+
+    def test_transcribe_file_sanitizes_custom_transcription_exception_without_stringifying(self) -> None:
+        class SecretBaseException(BaseException):
+            def __str__(self) -> str:
+                return "/secret/str-token"
+
+            def __repr__(self) -> str:
+                return "SecretBaseException('/secret/repr-token')"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            args = cli.build_parser().parse_args([
+                "transcribe-file",
+                str(audio),
+                "--transcriber",
+                "command",
+                "--transcriber-command",
+                "printf transcript",
+            ])
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(cli, "transcribe", side_effect=SecretBaseException("/secret/args-token")),
+                mock.patch.object(cli, "_remove_transient_transcript_path", return_value=True),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "^failed to write transcript file$") as caught:
+                    cli.command_transcribe_file(args)
+
+        self.assertIs(type(caught.exception), RuntimeError)
+        self.assertNotIn("/secret/", str(caught.exception))
+        self.assertNotIn("/secret/", repr(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn("/secret/", "".join(traceback.format_exception(caught.exception)))
+        self.assertEqual(getattr(caught.exception, "__notes__", []), [])
+
+    def test_transient_prepare_exception_matrix_has_no_context_or_secret_traceback(self) -> None:
+        class SecretBaseException(BaseException):
+            pass
+
+        cases = (
+            (RuntimeError("/secret/owner-token"), RuntimeError, "failed to write transcript file"),
+            (KeyboardInterrupt("/secret/owner-token"), KeyboardInterrupt, "transcript operation interrupted"),
+            (SystemExit("/secret/owner-token"), SystemExit, "1"),
+            (SecretBaseException("/secret/owner-token"), RuntimeError, "failed to write transcript file"),
+        )
+
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="plaintext ok")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
     def test_transcribe_file_redacts_plaintext_output_when_artifact_encryption_off_without_confirm(
@@ -2461,16 +2721,15 @@ class CliTest(unittest.TestCase):
             transcript_path = Path(tmp) / "speed-of-cinnamon" / "transcripts" / "input.txt"
             transcript_file = transcript_path.read_text(encoding="utf-8").strip()
             transcript_exists = transcript_path.exists()
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["transcript"], "")
-        self.assertTrue(payload["transcript_output_redacted"])
-        self.assertTrue(payload["transcript_path_present"])
-        self.assertNotIn("transcript_path", payload)
-        self.assertNotIn(str(transcript_path), json.dumps(payload))
-        self.assertNotIn("input.txt", json.dumps(payload))
-        self.assertFalse(payload["transcript_encrypted"])
-        self.assertTrue(transcript_exists)
-        self.assertEqual(transcript_file, "plaintext ok")
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["transcript"], "")
+            self.assertTrue(payload["transcript_output_redacted"])
+            self.assertTrue(payload["transcript_path_present"])
+            self.assertEqual(transcript_file, "plaintext ok")
+            self.assertTrue(transcript_exists)
+            self.assertFalse(payload["transcript_encrypted"])
+            self.assertEqual(payload["transcript_encryption"], "off")
+            self.assertFalse(transcript_path.name.endswith(".socenc"))
 
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="plaintext ok")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
@@ -3020,13 +3279,161 @@ class CliTest(unittest.TestCase):
                 payload = cli.finalize_recording(args, store, store.read())
 
             final_state = store.read()
+            transcript_files = list(text_dir.iterdir())
 
-        self.assertEqual(payload["message"], "recording finished without transcript")
-        self.assertEqual(payload["transcript"], "")
-        self.assertEqual(final_state.transcript, "")
-        mocked_process.assert_not_called()
-        mocked_prepare.assert_not_called()
-        mocked_insert.assert_not_called()
+            self.assertEqual(payload["message"], "recording finished without transcript")
+            self.assertEqual(payload["transcript"], "")
+            self.assertFalse(payload["transcript_path_present"])
+            self.assertEqual(payload["transcript_encryption"], cli.ARTIFACT_ENCRYPTION_OFF)
+            self.assertFalse(payload["transcript_encrypted"])
+            self.assertFalse(payload["inserted"])
+            self.assertEqual(final_state.transcript, "")
+            self.assertEqual(final_state.transcript_path, "")
+            self.assertFalse(final_state.inserted)
+            self.assertEqual(transcript_files, [])
+            mocked_process.assert_not_called()
+            mocked_prepare.assert_not_called()
+            mocked_insert.assert_not_called()
+
+    def test_finalize_whitespace_postprocessing_has_no_transcript_artifact_or_insert(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            text_dir = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings_root.mkdir(parents=True)
+            text_dir.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(insert_method="clipboard-paste")
+            silence = cli.SilenceDetectionResult(False, False, 4.0, 0.0, 3.0, 0.0, "speech detected")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="raw transcript"),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.transcript_dir", return_value=text_dir),
+                mock.patch(
+                    "speed_of_cinnamon.cli._process_transcript",
+                    return_value=(" \t\n ", cli._empty_security_post_processing()),
+                ),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text") as mocked_prepare,
+                mock.patch("speed_of_cinnamon.cli.insert_text") as mocked_insert,
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            transcript_files = list(text_dir.iterdir())
+
+            self.assertEqual(payload["message"], "recording finished without transcript")
+            self.assertEqual(payload["transcript"], "")
+            self.assertFalse(payload["transcript_path_present"])
+            self.assertEqual(payload["transcript_encryption"], cli.ARTIFACT_ENCRYPTION_OFF)
+            self.assertFalse(payload["transcript_encrypted"])
+            self.assertFalse(payload["inserted"])
+            self.assertEqual(final_state.transcript, "")
+            self.assertEqual(final_state.transcript_path, "")
+            self.assertFalse(final_state.inserted)
+            self.assertEqual(transcript_files, [])
+            mocked_prepare.assert_not_called()
+            mocked_insert.assert_not_called()
+
+    def test_finalize_counts_postprocessed_strip_once_for_nonempty_transcript(self) -> None:
+        class CountedText(str):
+            strip_calls = 0
+
+            def strip(self) -> str:
+                type(self).strip_calls += 1
+                return super().strip()
+
+        CountedText.strip_calls = 0
+        processed = CountedText("counted transcript")
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            text_dir = tmp_path / "speed-of-cinnamon" / "transcripts"
+            recordings_root.mkdir(parents=True)
+            text_dir.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(insert_method="clipboard-paste")
+            silence = cli.SilenceDetectionResult(False, False, 4.0, 0.0, 3.0, 0.0, "speech detected")
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.detect_silent_recording", return_value=silence),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="raw transcript"),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.transcript_dir", return_value=text_dir),
+                mock.patch(
+                    "speed_of_cinnamon.cli._process_transcript",
+                    return_value=(processed, cli._empty_security_post_processing()),
+                ),
+                mock.patch("speed_of_cinnamon.cli.prepare_output_text", return_value="counted transcript"),
+                mock.patch("speed_of_cinnamon.cli.insert_text", return_value=True) as mocked_insert,
+            ):
+                payload = cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+            transcript_path = text_dir / "recording.txt"
+            transcript_file = transcript_path.read_text(encoding="utf-8")
+
+            self.assertEqual(CountedText.strip_calls, 1)
+            self.assertEqual(transcript_file, "counted transcript\n")
+            self.assertEqual(payload["message"], "transcription completed")
+            self.assertEqual(payload["transcript"], "counted transcript")
+            self.assertTrue(payload["transcript_path_present"])
+            self.assertFalse(payload["transcript_encrypted"])
+            self.assertEqual(final_state.transcript, "counted transcript")
+            self.assertEqual(final_state.transcript_path, str(transcript_path))
+            self.assertTrue(final_state.inserted)
+            mocked_insert.assert_called_once_with("counted transcript", "clipboard-paste", 0)
+
+    def test_transcribe_file_whitespace_postprocessing_has_no_transcript_artifact_or_path(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch("speed_of_cinnamon.cli.transcribe", return_value="raw transcript"),
+                mock.patch(
+                    "speed_of_cinnamon.cli._process_transcript",
+                    return_value=(" \t\n ", cli._empty_security_post_processing()),
+                ),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file",
+                    str(audio),
+                    "--transcriber",
+                    "command",
+                    "--transcriber-command",
+                    "printf transcript",
+                    "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            transcript_dir = Path(tmp) / "speed-of-cinnamon" / "transcripts"
+            transcript_files = list(transcript_dir.iterdir()) if transcript_dir.exists() else []
+
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["message"], "recording finished without transcript")
+            self.assertEqual(payload["transcript"], "")
+            self.assertFalse(payload["transcript_path_present"])
+            self.assertEqual(payload["transcript_encryption"], cli.ARTIFACT_ENCRYPTION_OFF)
+            self.assertFalse(payload["transcript_encrypted"])
+            self.assertEqual(transcript_files, [])
 
     @mock.patch("speed_of_cinnamon.cli.load_blacklist_file", return_value=[])
     @mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=mock.ANY)
@@ -10225,8 +10632,163 @@ class CliTest(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(RuntimeError, "^failed to write transcript file$") as caught:
                     cli.command_transcribe_file(args)
-            self.assertIsInstance(caught.exception.__cause__, RuntimeError)
-            self.assertEqual(str(caught.exception.__cause__), internal_error)
+            self.assertIsNone(caught.exception.__cause__)
+
+    def test_transcribe_file_sanitizes_prepare_interrupt_without_cause(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            args = cli.build_parser().parse_args([
+                "transcribe-file",
+                str(audio),
+                "--transcriber",
+                "command",
+                "--transcriber-command",
+                "printf transcript",
+            ])
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(
+                    cli,
+                    "_prepare_transient_transcript_path",
+                    side_effect=KeyboardInterrupt("/secret/transcript.tmp.txt"),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    KeyboardInterrupt,
+                    "^transcript operation interrupted$",
+                ) as caught:
+                    cli.command_transcribe_file(args)
+
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertNotIn("/secret", str(caught.exception))
+        self.assertFalse(getattr(caught.exception, "__notes__", ()))
+
+    def test_transcribe_file_sanitizes_cleanup_interrupt_after_cleanup_attempt(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            args = cli.build_parser().parse_args([
+                "transcribe-file",
+                str(audio),
+                "--transcriber",
+                "command",
+                "--transcriber-command",
+                "printf transcript",
+            ])
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(cli, "transcribe", return_value="transcript"),
+                mock.patch.object(
+                    cli,
+                    "_remove_transient_transcript_path",
+                    side_effect=KeyboardInterrupt("/secret/transcript.tmp.txt"),
+                ) as mocked_remove,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "^failed to clean up transcript file$",
+                ) as caught:
+                    cli.command_transcribe_file(args)
+
+        mocked_remove.assert_called_once()
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertNotIn("/secret", str(caught.exception))
+        self.assertFalse(getattr(caught.exception, "__notes__", ()))
+
+    def test_transient_prepare_exception_matrix_has_no_context_or_secret_traceback(self) -> None:
+        class SecretBaseException(BaseException):
+            pass
+
+        cases = (
+            (RuntimeError("/secret/owner-token"), RuntimeError, "failed to write transcript file"),
+            (KeyboardInterrupt("/secret/owner-token"), KeyboardInterrupt, "transcript operation interrupted"),
+            (SystemExit("/secret/owner-token"), SystemExit, "1"),
+            (SecretBaseException("/secret/owner-token"), RuntimeError, "failed to write transcript file"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            args = cli.build_parser().parse_args([
+                "transcribe-file",
+                str(audio),
+                "--transcriber",
+                "command",
+                "--transcriber-command",
+                "printf transcript",
+            ])
+            for original, expected_type, expected_message in cases:
+                with self.subTest(exception=type(original).__name__):
+                    with (
+                        mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                        mock.patch.object(
+                            cli,
+                            "_prepare_transient_transcript_path_impl",
+                            side_effect=original,
+                        ),
+                    ):
+                        with self.assertRaises(expected_type) as caught:
+                            cli.command_transcribe_file(args)
+
+                    sanitized = caught.exception
+                    self.assertEqual(str(sanitized), expected_message)
+                    self.assertNotIn("/secret/owner-token", repr(sanitized))
+                    self.assertIsNone(sanitized.__cause__)
+                    self.assertIsNone(sanitized.__context__)
+                    self.assertNotIn(
+                        "/secret/owner-token",
+                        "".join(traceback.format_exception(sanitized)),
+                    )
+                    if isinstance(sanitized, SystemExit):
+                        self.assertEqual(sanitized.code, 1)
+
+    def test_transient_cleanup_exception_matrix_runs_cleanup_before_safe_propagation(self) -> None:
+        class SecretBaseException(BaseException):
+            pass
+
+        cases = (
+            (RuntimeError("/secret/cleanup-token"), RuntimeError, "failed to clean up transcript file"),
+            (KeyboardInterrupt("/secret/cleanup-token"), RuntimeError, "failed to clean up transcript file"),
+            (SystemExit("/secret/cleanup-token"), RuntimeError, "failed to clean up transcript file"),
+            (SecretBaseException("/secret/cleanup-token"), RuntimeError, "failed to clean up transcript file"),
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            args = cli.build_parser().parse_args([
+                "transcribe-file",
+                str(audio),
+                "--transcriber",
+                "command",
+                "--transcriber-command",
+                "printf transcript",
+            ])
+            for cleanup_error, expected_type, expected_message in cases:
+                with self.subTest(exception=type(cleanup_error).__name__):
+                    with (
+                        mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                        mock.patch.object(cli, "transcribe", return_value="transcript"),
+                        mock.patch.object(
+                            cli,
+                            "_remove_transient_transcript_path",
+                            side_effect=cleanup_error,
+                        ) as mocked_remove,
+                    ):
+                        with self.assertRaises(expected_type) as caught:
+                            cli.command_transcribe_file(args)
+
+                    mocked_remove.assert_called_once()
+                    sanitized = caught.exception
+                    self.assertEqual(str(sanitized), expected_message)
+                    self.assertNotIn("/secret/cleanup-token", repr(sanitized))
+                    self.assertIsNone(sanitized.__cause__)
+                    self.assertIsNone(sanitized.__context__)
+                    self.assertNotIn(
+                        "/secret/cleanup-token",
+                        "".join(traceback.format_exception(sanitized)),
+                    )
+                    if isinstance(sanitized, SystemExit):
+                        self.assertEqual(sanitized.code, 1)
 
     def test_transcribe_file_rejects_directory_as_audio_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -20512,7 +21074,7 @@ class CliTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("trim failed")),
                 mock.patch("speed_of_cinnamon.cli.transcribe", side_effect=KeyboardInterrupt("transcription interrupted")),
             ):
-                with self.assertRaisesRegex(KeyboardInterrupt, "transcription interrupted"):
+                with self.assertRaisesRegex(KeyboardInterrupt, "transcript operation interrupted"):
                     cli.finalize_recording(args, store, store.read())
 
             final_state = store.read()
@@ -20520,7 +21082,7 @@ class CliTest(unittest.TestCase):
             log_exists = log.exists()
 
         self.assertEqual(final_state.status, "error")
-        self.assertIn("transcription interrupted", final_state.error)
+        self.assertIn("transcript operation interrupted", final_state.error)
         self.assertTrue(audio_exists)
         self.assertTrue(log_exists)
 
