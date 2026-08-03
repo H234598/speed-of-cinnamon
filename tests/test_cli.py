@@ -156,6 +156,165 @@ class CliTest(unittest.TestCase):
             dir=Path("/tmp"),
         )
 
+    def test_recorder_process_stop_failure_message_preserves_control_flow_exceptions(self) -> None:
+        process = mock.Mock()
+        process.poll.return_value = 0
+        cases = (
+            KeyboardInterrupt("/secret/keyboard-interrupt"),
+            SystemExit("/secret/system-exit"),
+        )
+
+        for control_flow_error in cases:
+            with self.subTest(type=type(control_flow_error)):
+                with mock.patch.object(
+                    cli,
+                    "process_group_has_live_processes",
+                    side_effect=control_flow_error,
+                ):
+                    with self.assertRaises(type(control_flow_error)) as caught:
+                        cli._recorder_process_stop_failure_message(process)
+                self.assertIs(caught.exception, control_flow_error)
+
+    def test_recorder_process_stop_failure_message_sanitizes_ordinary_errors(self) -> None:
+        process = mock.Mock()
+        process.poll.return_value = 0
+
+        with mock.patch.object(
+            cli,
+            "process_group_has_live_processes",
+            side_effect=RuntimeError("/secret/liveness-error"),
+        ):
+            message = cli._recorder_process_stop_failure_message(process)
+
+        self.assertEqual(
+            message,
+            "recording process liveness could not be verified; recording state preserved",
+        )
+
+    def test_recorder_process_failure_snapshot_reuses_one_group_probe(self) -> None:
+        process = mock.Mock()
+        process.poll.return_value = 1
+
+        with mock.patch.object(
+            cli,
+            "process_group_has_live_processes",
+            return_value=True,
+        ) as group_probe:
+            snapshot = cli._recorder_process_liveness_snapshot(process)
+            message = cli._recorder_process_stop_failure_message(
+                process,
+                liveness_snapshot=snapshot,
+            )
+
+        self.assertEqual(message, cli._RECORDING_PROCESS_GROUP_ACTIVE_ERROR)
+        self.assertEqual(group_probe.call_count, 1)
+
+    def test_recorder_process_liveness_snapshot_propagates_control_flow(self) -> None:
+        process = mock.Mock()
+        process.poll.return_value = 1
+
+        for control_flow_error in (
+            KeyboardInterrupt("/secret/keyboard-interrupt"),
+            SystemExit("/secret/system-exit"),
+        ):
+            with self.subTest(type=type(control_flow_error)):
+                with mock.patch.object(
+                    cli,
+                    "process_group_has_live_processes",
+                    side_effect=control_flow_error,
+                ):
+                    with self.assertRaises(type(control_flow_error)) as caught:
+                        cli._recorder_process_liveness_snapshot(process)
+                self.assertIs(caught.exception, control_flow_error)
+
+    def test_recorder_process_failure_retention_preserves_generator_exit(self) -> None:
+        process = mock.Mock()
+        process.pid = 23456
+        process.poll.return_value = 1
+
+        for retention_case in ("false", "exception"):
+            with self.subTest(retention_case=retention_case):
+                control_flow_error = GeneratorExit("/secret/generator-exit")
+                retention_error = RuntimeError("/secret/retention-error")
+                retention = (
+                    mock.patch(
+                        "speed_of_cinnamon.cli._retain_finalization_lock_for_process",
+                        return_value=False,
+                    )
+                    if retention_case == "false"
+                    else mock.patch(
+                        "speed_of_cinnamon.cli._retain_finalization_lock_for_process",
+                        side_effect=retention_error,
+                    )
+                )
+                with (
+                    mock.patch.object(
+                        cli,
+                        "process_group_has_live_processes",
+                        side_effect=control_flow_error,
+                    ),
+                    retention,
+                ):
+                    with self.assertRaises(GeneratorExit) as caught:
+                        cli._recorder_process_liveness_snapshot_for_failure(
+                            process,
+                            finalization_lock_path=None,
+                            process_identity=None,
+                        )
+
+                self.assertIs(caught.exception, control_flow_error)
+                self.assertIn(
+                    "recorder lifecycle lock could not be retained",
+                    getattr(control_flow_error, "__notes__", ()),
+                )
+                self.assertNotIn("/secret/", "\n".join(getattr(control_flow_error, "__notes__", ())))
+
+    def test_start_liveness_control_flow_retains_lifecycle_lock(self) -> None:
+        failed_proc = mock.Mock()
+        failed_proc.pid = 23456
+        failed_proc.poll.return_value = 1
+        failed_proc.returncode = 1
+        interrupt = KeyboardInterrupt("/secret/liveness-interrupt")
+
+        def fake_lock_identity(pid: int) -> str | None:
+            return "proc-identity" if pid == failed_proc.pid else "cli-identity"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch(
+                    "speed_of_cinnamon.cli.choose_recorder",
+                    return_value=RecorderCommand("pw-record", ["pw-record"]),
+                ),
+                mock.patch("speed_of_cinnamon.cli.start_recorder", return_value=failed_proc),
+                mock.patch(
+                    "speed_of_cinnamon.cli._recording_process_identity_for_pid",
+                    return_value="proc-identity",
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.cli._finalization_lock_identity_for_pid",
+                    side_effect=fake_lock_identity,
+                ),
+                mock.patch("speed_of_cinnamon.cli._process_is_running", return_value=False),
+                mock.patch(
+                    "speed_of_cinnamon.cli.process_group_has_live_processes",
+                    side_effect=interrupt,
+                ),
+                mock.patch("speed_of_cinnamon.cli.stop_process", return_value=False),
+                mock.patch("speed_of_cinnamon.cli.time.sleep"),
+            ):
+                with self.assertRaises(KeyboardInterrupt) as caught:
+                    cli.run(["start", "--state-file", str(state_file), "--json"])
+
+            lock_path = cli._finalization_lock_path(state_file)
+            self.assertIs(caught.exception, interrupt)
+            self.assertTrue(lock_path.exists())
+            self.assertEqual(
+                lock_path.read_text(encoding="ascii").splitlines(),
+                ["23456", "proc-identity"],
+            )
+
     def test_temporary_benchmark_path_preserves_result_on_fd_close_interruption(self) -> None:
         file_stat = os.stat(__file__)
         with (
@@ -13230,6 +13389,32 @@ class CliTest(unittest.TestCase):
 
         self.assertIsNone(acquired)
 
+    def test_finalization_lock_open_requests_cloexec(self) -> None:
+        cloexec_flag = getattr(os, "O_CLOEXEC", None)
+        if cloexec_flag is None:
+            self.skipTest("O_CLOEXEC is unavailable")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            lock_path = cli._finalization_lock_path(state_file)
+            real_open = os.open
+            lock_flags: list[int] = []
+
+            def capture_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+                if path == lock_path.name and kwargs.get("dir_fd") is not None:
+                    lock_flags.append(flags)
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch("speed_of_cinnamon.cli.os.open", side_effect=capture_open):
+                acquired = cli._acquire_finalization_lock(state_file)
+                try:
+                    self.assertEqual(acquired, lock_path)
+                finally:
+                    cli._release_finalization_lock(acquired)
+
+        self.assertTrue(lock_flags)
+        self.assertTrue(lock_flags[0] & cloexec_flag)
+
     def test_finalization_lock_reclaims_dead_owner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "state.json"
@@ -19935,8 +20120,8 @@ class CliTest(unittest.TestCase):
             ("1234", False, False),
             (1234, True, True),
             (1234, False, False),
-            (1234, None, True),
-            (1234, OSError("probe failed"), True),
+            (1234, None, None),
+            (1234, OSError("probe failed"), None),
         )
         for pid, group_result, expected in cases:
             with self.subTest(pid=pid, group_result=group_result):
@@ -20768,7 +20953,7 @@ class CliTest(unittest.TestCase):
             lock_lines = lock_path.read_text(encoding="ascii").splitlines()
 
         self.assertEqual(first_code, 1)
-        self.assertIn("could not be stopped safely", first_payload["error"])
+        self.assertIn(cli._RECORDING_PROCESS_GROUP_ACTIVE_ERROR, first_payload["error"])
         self.assertEqual(second_code, 0)
         self.assertEqual(second_payload["status"], "finalizing")
         self.assertEqual(lock_lines, ["23456", "proc-identity"])
@@ -20955,7 +21140,7 @@ class CliTest(unittest.TestCase):
             second_payload = json.loads(second_stdout.getvalue())
 
         self.assertEqual(code, 1)
-        self.assertIn("could not be stopped safely", payload["error"])
+        self.assertIn("recording process group is still active", payload["error"])
         self.assertEqual(second_code, 0)
         self.assertEqual(second_payload["status"], "finalizing")
         mocked_choose.assert_called_once()

@@ -277,10 +277,11 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
     if nofollow_flag is None:
         return None
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     fd: int | None = None
     try:
         assert_no_symlink_ancestors(lock_path, field_name="finalization lock")
-        fd = os.open(str(lock_path), os.O_RDONLY | nofollow_flag | nonblock_flag)
+        fd = os.open(str(lock_path), os.O_RDONLY | nofollow_flag | nonblock_flag | cloexec_flag)
         assert_fd_is_regular_private_file(fd, field_name="finalization lock", require_private_mode=True)
         handle = os.fdopen(fd, "rb")
         fd = None
@@ -499,6 +500,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         return None
+    cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     try:
         parent_fd = ensure_directory_without_following_symlinks(
             lock_path.parent,
@@ -514,7 +516,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
             try:
                 fd = os.open(
                     lock_path.name,
-                    os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow_flag,
+                    os.O_CREAT | os.O_EXCL | os.O_WRONLY | nofollow_flag | cloexec_flag,
                     0o600,
                     dir_fd=parent_fd,
                 )
@@ -3689,22 +3691,71 @@ def _recording_process_verified_active(state: RecordingState) -> bool:
     return group_live is not False
 
 
-def _recorder_process_is_gone(process: subprocess.Popen[bytes]) -> bool:
+def _recorder_process_liveness_snapshot(
+    process: subprocess.Popen[bytes],
+) -> tuple[bool, str]:
     try:
         if process.poll() is None:
-            return False
-        return process_group_has_live_processes(process.pid) is False
-    except BaseException:
-        return False
+            return False, "recording process could not be stopped safely"
+        group_live = process_group_has_live_processes(process.pid)
+    except Exception:
+        return False, "recording process liveness could not be verified; recording state preserved"
+    if group_live is True:
+        return False, _RECORDING_PROCESS_GROUP_ACTIVE_ERROR
+    if group_live is None:
+        return False, "recording process liveness could not be verified; recording state preserved"
+    if group_live is False:
+        return True, "recording process could not be stopped safely"
+    return False, "recording process could not be stopped safely"
 
 
-def _recording_process_group_is_active(pid: int | None) -> bool:
+def _recorder_process_is_gone(process: subprocess.Popen[bytes]) -> bool:
+    return _recorder_process_liveness_snapshot(process)[0]
+
+
+def _recorder_process_stop_failure_message(
+    process: subprocess.Popen[bytes],
+    *,
+    liveness_snapshot: tuple[bool, str] | None = None,
+) -> str:
+    """Return a precise fail-closed message after recorder cleanup failed."""
+    if liveness_snapshot is None:
+        liveness_snapshot = _recorder_process_liveness_snapshot(process)
+    return liveness_snapshot[1]
+
+
+def _recorder_process_liveness_snapshot_for_failure(
+    process: subprocess.Popen[bytes],
+    *,
+    finalization_lock_path: Path | None,
+    process_identity: str | None,
+) -> tuple[bool, str]:
+    try:
+        return _recorder_process_liveness_snapshot(process)
+    except BaseException as control_flow_error:
+        try:
+            retained = _retain_finalization_lock_for_process(
+                finalization_lock_path,
+                process.pid,
+                process_identity,
+            )
+        except BaseException:
+            retained = False
+        if not retained:
+            control_flow_error.add_note("recorder lifecycle lock could not be retained")
+        raise
+
+
+def _recording_process_group_is_active(pid: int | None) -> bool | None:
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return False
     try:
-        return process_group_has_live_processes(pid) is not False
+        group_live = process_group_has_live_processes(pid)
     except Exception:
-        return True
+        return None
+    if group_live is None:
+        return None
+    return bool(group_live)
 
 
 def _recording_process_absence_probe(pid: int) -> tuple[str | None, bool | None, str]:
@@ -5185,15 +5236,23 @@ def _command_start_locked(
                 raise RuntimeError(f"{startup_errors[-1]}; recorder process cleanup failed") from cleanup_error
             cleanup_error.add_note(f"recorder process cleanup failed: {cleanup_error}")
             raise
-        if not stopped and not _recorder_process_is_gone(candidate_proc):
-            error = RuntimeError(f"{startup_errors[-1]}; recorder process could not be stopped safely")
-            if not _retain_finalization_lock_for_process(
-                finalization_lock_path,
-                candidate_proc.pid,
-                candidate_process_identity,
-            ):
-                error.add_note("recorder lifecycle lock could not be retained")
-            raise error
+        if not stopped:
+            liveness_snapshot = _recorder_process_liveness_snapshot_for_failure(
+                candidate_proc,
+                finalization_lock_path=finalization_lock_path,
+                process_identity=candidate_process_identity,
+            )
+            if not liveness_snapshot[0]:
+                error = RuntimeError(
+                    f"{startup_errors[-1]}; {liveness_snapshot[1]}"
+                )
+                if not _retain_finalization_lock_for_process(
+                    finalization_lock_path,
+                    candidate_proc.pid,
+                    candidate_process_identity,
+                ):
+                    error.add_note("recorder lifecycle lock could not be retained")
+                raise error
         if args.recorder != "auto":
             if not cleanup_started_artifacts():
                 raise RuntimeError("failed to clean recording artifacts after recorder exited") from None
@@ -5238,15 +5297,23 @@ def _command_start_locked(
             ):
                 cleanup_error.add_note("recorder lifecycle lock could not be retained")
             raise RuntimeError(f"{state_error}; recorder process cleanup failed") from cleanup_error
-        if not stopped and not _recorder_process_is_gone(proc):
-            error = RuntimeError(f"{state_error}; recorder process could not be stopped safely")
-            if not _retain_finalization_lock_for_process(
-                finalization_lock_path,
-                proc.pid,
-                process_identity,
-            ):
-                error.add_note("recorder lifecycle lock could not be retained")
-            raise error from state_error
+        if not stopped:
+            liveness_snapshot = _recorder_process_liveness_snapshot_for_failure(
+                proc,
+                finalization_lock_path=finalization_lock_path,
+                process_identity=process_identity,
+            )
+            if not liveness_snapshot[0]:
+                error = RuntimeError(
+                    f"{state_error}; {liveness_snapshot[1]}"
+                )
+                if not _retain_finalization_lock_for_process(
+                    finalization_lock_path,
+                    proc.pid,
+                    process_identity,
+                ):
+                    error.add_note("recorder lifecycle lock could not be retained")
+                raise error from state_error
         if not cleanup_started_artifacts():
             raise RuntimeError(f"{state_error}; recorder artifacts could not be cleaned") from state_error
         raise
