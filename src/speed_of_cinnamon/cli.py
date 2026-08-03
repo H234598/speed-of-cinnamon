@@ -21,6 +21,7 @@ import urllib.parse
 from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import NoReturn
 
 from . import __version__
 from . import doctor
@@ -135,6 +136,7 @@ from .transcriber import (
     MAX_AUDIO_FILE_BYTES,
     MAX_AUDIO_PATH_CHARS,
     MAX_LANGUAGE_CODE_CHARS,
+    TranscriptionCleanupError,
     normalize_backend,
     validate_audio_file,
     transcribe,
@@ -151,6 +153,7 @@ from .profanity_filter import (
 )
 
 RECORDER_START_GRACE_SECONDS = 0.2
+RECORDER_PROCESS_RECONCILIATION_DELAY_SECONDS = 0.01
 DEFAULT_KEEP_TRANSCRIPTS = 500
 DEFAULT_KEEP_RECORDINGS = 20
 DEFAULT_RECORDING_MAX_AGE_DAYS = 7
@@ -159,7 +162,13 @@ TRANSIENT_TRANSCRIPT_MAX_AGE_SECONDS = 3600
 TRANSIENT_TRANSCRIPT_OWNER_SUFFIX = ".owner"
 TRANSIENT_TRANSCRIPT_WRITE_ERROR = "failed to write transcript file"
 TRANSIENT_TRANSCRIPT_CLEANUP_ERROR = "failed to clean up transcript file"
+TRANSIENT_TRANSCRIPT_PROCESSING_ERROR = "transcribe failed"
+TRANSIENT_TRANSCRIPT_INSERT_ERROR = "insert failed"
 TRANSIENT_TRANSCRIPT_INTERRUPT_ERROR = "transcript operation interrupted"
+TRANSIENT_RECORDING_PROCESS_ERROR = "recording process reconciliation failed"
+TRANSIENT_AUDIO_PATH_ERROR = "recording audio path validation failed"
+TRANSIENT_AUDIO_FILE_ERROR = "audio file validation failed"
+TRANSIENT_SILENCE_DETECTION_ERROR = "silence detection failed"
 RECORDING_ARTIFACT_EXTENSIONS = (".wav", ".flac", ".log", ".socenc")
 ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES = (".wav.socenc", ".flac.socenc")
 TRANSCRIPT_ARTIFACT_SUFFIXES = (".txt", ".socenc")
@@ -341,15 +350,15 @@ def _finalization_lock_identity_for_pid(pid: int) -> str | None:
     return f"{boot_id}:{start_time}"
 
 
-def _process_is_zombie(pid: int) -> bool:
+def _process_is_zombie(pid: int) -> bool | None:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
     try:
         raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
         close = raw.rindex(")")
         rest = raw[close + 2 :].split()
-    except (OSError, ValueError):
-        return False
+    except (OSError, UnicodeError, ValueError, IndexError):
+        return None
     return bool(rest and rest[0] in {"Z", "X", "x"})
 
 
@@ -1215,15 +1224,43 @@ def _sanitize_transient_exception(
     error: BaseException,
     *,
     message: str = TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+    system_exit_as_runtime: bool = False,
 ) -> BaseException:
     """Build safe native exception outside active exception handling."""
     if isinstance(error, KeyboardInterrupt):
         sanitized: BaseException = KeyboardInterrupt(TRANSIENT_TRANSCRIPT_INTERRUPT_ERROR)
-    elif isinstance(error, SystemExit):
+    elif isinstance(error, SystemExit) and not system_exit_as_runtime:
         sanitized = SystemExit(1)
     else:
         sanitized = RuntimeError(message)
     return _clear_transient_exception_metadata(sanitized)
+
+
+def _raise_sanitized_transient_exception(
+    error: BaseException,
+    *,
+    message: str = TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+    system_exit_as_runtime: bool = False,
+) -> NoReturn:
+    """Raise a sanitized exception without inheriting an active exception chain."""
+    sanitized = _sanitize_transient_exception(
+        error,
+        message=message,
+        system_exit_as_runtime=system_exit_as_runtime,
+    )
+    try:
+        raise sanitized from None
+    except BaseException as raised:
+        _clear_transient_exception_metadata(raised)
+        raise
+
+
+def _raise_backend_sanitized_exception(error: BaseException, *, message: str) -> NoReturn:
+    _raise_sanitized_transient_exception(
+        error,
+        message=message,
+        system_exit_as_runtime=True,
+    )
 
 
 def _redact_error_payload(value: object) -> object:
@@ -1856,9 +1893,11 @@ def _persist_cleanup_failure_state(
             if clear_transcript:
                 updates["transcript"] = ""
         store.update(**updates)
-    except Exception as exc:
-        update_error = _redact_error_for_user(str(exc))
-        raise RuntimeError(f"{error_text}; failed to persist cleanup error state: {update_error}") from exc
+    except BaseException as exc:
+        _raise_backend_sanitized_exception(
+            exc,
+            message="failed to persist error state",
+        )
 
 
 def _read_stored_transcript_text(path: Path) -> str:
@@ -1918,7 +1957,7 @@ def _prepare_transient_transcript_path(
     except BaseException as exc:
         captured_error = exc
     if captured_error is not None:
-        raise _sanitize_transient_exception(captured_error) from None
+        _raise_sanitized_transient_exception(captured_error)
     if result is None:
         raise RuntimeError(TRANSIENT_TRANSCRIPT_WRITE_ERROR)
     return result
@@ -1956,29 +1995,86 @@ def _prepare_transient_transcript_path_impl(
                     expected_owner_stat=expected_owner_stat,
                 )
         except BaseException as cleanup_error:
-            if isinstance(primary_error, KeyboardInterrupt) or isinstance(cleanup_error, KeyboardInterrupt):
-                raise _sanitize_transient_exception(cleanup_error) from None
+            interrupt_error = (
+                primary_error
+                if isinstance(primary_error, KeyboardInterrupt)
+                else cleanup_error
+                if isinstance(cleanup_error, KeyboardInterrupt)
+                else None
+            )
+            if interrupt_error is not None:
+                _raise_sanitized_transient_exception(interrupt_error)
             if isinstance(primary_error, Exception):
-                raise RuntimeError(TRANSIENT_TRANSCRIPT_WRITE_ERROR) from None
-            raise _sanitize_transient_exception(primary_error) from None
+                _raise_sanitized_transient_exception(
+                    primary_error,
+                    message=TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+                )
+            _raise_sanitized_transient_exception(primary_error)
 
-    try:
-        _prepare_private_file(path, field_name="transient transcript file")
-    except _PrivateFilePrepareError as exc:
-        if exc.created:
-            cleanup_created_path(exc, getattr(exc, "created_stat", None))
-        raise
-    except BaseException as exc:
-        cleanup_created_path(exc, getattr(exc, "_speed_of_cinnamon_created_stat", None))
-        raise _sanitize_transient_exception(exc) from None
     nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     fd: int | None = None
     file_stat: os.stat_result | None = None
     owner_stat: os.stat_result | None = None
     try:
-        fd = os.open(path, os.O_RDONLY | nofollow_flag | cloexec_flag)
-        file_stat = os.fstat(fd)
+        prepared = _prepare_private_file(
+            path,
+            field_name="transient transcript file",
+            _keep_fd=True,
+        )
+    except _PrivateFilePrepareError as exc:
+        if exc.created:
+            cleanup_created_path(exc, getattr(exc, "created_stat", None))
+        raise
+    except BaseException as exc:
+        cleanup_created_path(exc, getattr(exc, "_speed_of_cinnamon_created_stat", None))
+        _raise_sanitized_transient_exception(exc)
+
+    def finish_transient_prepare_failure(
+        primary_error: BaseException,
+        *,
+        expected_stat: os.stat_result | None,
+        expected_owner_stat: os.stat_result | None,
+        message: str = TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+    ) -> NoReturn:
+        close_error: BaseException | None = None
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            except BaseException as exc:
+                close_error = exc
+        cleanup_error: BaseException | None = None
+        try:
+            cleanup_created_path(primary_error, expected_stat, expected_owner_stat)
+        except BaseException as exc:
+            cleanup_error = exc
+        interrupt_error = next(
+            (
+                error
+                for error in (primary_error, close_error, cleanup_error)
+                if isinstance(error, KeyboardInterrupt)
+            ),
+            None,
+        )
+        if interrupt_error is not None:
+            _raise_sanitized_transient_exception(
+                interrupt_error,
+                message=TRANSIENT_TRANSCRIPT_INTERRUPT_ERROR,
+            )
+        if close_error is not None and isinstance(primary_error, Exception):
+            _raise_sanitized_transient_exception(close_error)
+        if cleanup_error is not None:
+            _raise_sanitized_transient_exception(cleanup_error, message=message)
+        _raise_sanitized_transient_exception(primary_error, message=message)
+
+    try:
+        if isinstance(prepared, tuple) and len(prepared) == 2:
+            fd, file_stat = prepared
+        else:
+            fd = os.open(path, os.O_RDONLY | nofollow_flag | cloexec_flag)
+            file_stat = os.fstat(fd)
         if not stat_module.S_ISREG(file_stat.st_mode):
             raise RuntimeError(f"transient transcript file must be a regular file: {path}")
         if getattr(file_stat, "st_nlink", 1) != 1:
@@ -1986,29 +2082,24 @@ def _prepare_transient_transcript_path_impl(
         owner_stat = _write_transient_transcript_owner(path)
         return fd, owner_stat
     except OSError as exc:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except BaseException:
-                pass
-        cleanup_created_path(exc, file_stat, owner_stat)
-        raise RuntimeError(TRANSIENT_TRANSCRIPT_WRITE_ERROR) from None
+        finish_transient_prepare_failure(
+            exc,
+            expected_stat=file_stat,
+            expected_owner_stat=owner_stat,
+        )
     except RuntimeError as exc:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except BaseException:
-                pass
-        cleanup_created_path(exc, file_stat, owner_stat)
-        raise RuntimeError(TRANSIENT_TRANSCRIPT_WRITE_ERROR) from None
+        finish_transient_prepare_failure(
+            exc,
+            expected_stat=file_stat,
+            expected_owner_stat=owner_stat,
+        )
     except BaseException as exc:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except BaseException:
-                pass
-        cleanup_created_path(exc, file_stat, owner_stat)
-        raise _sanitize_transient_exception(exc) from None
+        finish_transient_prepare_failure(
+            exc,
+            expected_stat=file_stat,
+            expected_owner_stat=owner_stat,
+            message=TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+        )
 
 
 def _same_leaf_identity(current: os.stat_result, expected: os.stat_result) -> bool:
@@ -2187,13 +2278,18 @@ def _remove_transient_transcript_path(
         return False
     try:
         assert_no_symlink_ancestors(path, field_name="transient transcript file")
-        if expected_fd is not None:
+        if expected_fd is not None and expected_stat is None:
             expected_stat = os.fstat(expected_fd)
-        _unlink_regular_leaf_with_parent_fsync(
-            path,
-            field_name="transient transcript file",
-            expected_stat=expected_stat,
-        )
+        try:
+            _unlink_regular_leaf_with_parent_fsync(
+                path,
+                field_name="transient transcript file",
+                expected_stat=expected_stat,
+            )
+        except FileNotFoundError:
+            path_presence = _safe_leaf_presence(path)
+            if path_presence is None or path_presence:
+                raise RuntimeError(f"failed to inspect deleted transient transcript file: {path}") from None
         owner_path = _transient_transcript_owner_path(path)
         if expected_owner_stat is None:
             owner_presence = _safe_leaf_presence(owner_path)
@@ -2223,32 +2319,20 @@ def _transcription_cleanup_exception(
     *,
     stable_public_error: bool = False,
 ) -> BaseException:
-    cleanup_message = (
-        TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
-        if stable_public_error or not isinstance(cleanup_error, Exception)
-        else _redact_error_for_user(str(cleanup_error))
+    del stable_public_error
+    interrupt_error = (
+        transcription_error
+        if isinstance(transcription_error, KeyboardInterrupt)
+        else cleanup_error
+        if isinstance(cleanup_error, KeyboardInterrupt)
+        else None
     )
-    if stable_public_error:
-        if isinstance(transcription_error, Exception):
-            transcription_message = _redact_error_for_user(str(transcription_error))
-            return _sanitize_transient_exception(
-                RuntimeError(),
-                message=f"{transcription_message}; {cleanup_message}",
-            )
-        return _sanitize_transient_exception(RuntimeError(), message=cleanup_message)
-    if not isinstance(cleanup_error, Exception):
-        return _sanitize_transient_exception(cleanup_error)
-    if transcription_error is None:
-        return _sanitize_transient_exception(cleanup_error, message=cleanup_message)
-    if isinstance(transcription_error, Exception):
-        return _sanitize_transient_exception(
-            transcription_error,
-            message=(
-                f"{_redact_error_for_user(str(transcription_error))}; "
-                f"{cleanup_message}"
-            ),
-        )
-    return _sanitize_transient_exception(cleanup_error, message=cleanup_message)
+    if interrupt_error is not None:
+        return _sanitize_transient_exception(interrupt_error)
+    return _sanitize_transient_exception(
+        RuntimeError(),
+        message=TRANSIENT_TRANSCRIPT_CLEANUP_ERROR,
+    )
 
 
 def _raise_recording_cleanup_failure(
@@ -2273,9 +2357,11 @@ def _raise_recording_cleanup_failure(
         error_update[field_name] = path_text
     try:
         store.update(**error_update)
-    except Exception as exc:
-        update_error = _redact_error_for_user(str(exc))
-        raise RuntimeError(f"{error_text}; failed to persist cleanup error state: {update_error}") from exc
+    except BaseException as exc:
+        _raise_backend_sanitized_exception(
+            exc,
+            message="failed to persist error state",
+        )
     raise RuntimeError(error_text)
 
 
@@ -2971,7 +3057,13 @@ class _PrivateFilePrepareError(RuntimeError):
         self.created_stat = created_stat
 
 
-def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True) -> None:
+def _prepare_private_file(
+    path: Path,
+    *,
+    field_name: str,
+    exclusive: bool = True,
+    _keep_fd: bool = False,
+) -> tuple[int, os.stat_result] | None:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
     assert_safe_path_components(path, field_name=field_name)
@@ -2997,7 +3089,7 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
         except BaseException:
             pass
     created_stat: os.stat_result | None = None
-    if exclusive:
+    if exclusive or _keep_fd:
         try:
             created_stat = os.fstat(fd)
         except OSError as exc:
@@ -3020,6 +3112,35 @@ def _prepare_private_file(path: Path, *, field_name: str, exclusive: bool = True
             except BaseException:
                 pass
             raise
+    if _keep_fd:
+        try:
+            os.fchmod(fd, 0o600)
+            created_stat = os.fstat(fd)
+        except (OSError, ValueError) as exc:
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
+            raise _PrivateFilePrepareError(
+                f"failed to prepare {field_name}: {path}",
+                created=exclusive,
+                errno_value=getattr(exc, "errno", None),
+                created_stat=created_stat,
+            ) from exc
+        except BaseException as exc:
+            if exclusive:
+                try:
+                    setattr(exc, "_speed_of_cinnamon_created_stat", created_stat)
+                except BaseException:
+                    pass
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
+            raise
+        result = (fd, created_stat)
+        fd = -1
+        return result
     try:
         with os.fdopen(fd, "ab") as handle:
             os.fchmod(handle.fileno(), 0o600)
@@ -3458,16 +3579,84 @@ def _recording_process_identity_for_pid(pid: int) -> str | None:
     return _finalization_lock_identity_for_pid(pid)
 
 
+_RECORDING_PROCESS_IDENTITY_INVALID_ERROR = (
+    "recording process identity is missing or invalid; recording state preserved"
+)
+_RECORDING_PROCESS_GROUP_ACTIVE_ERROR = (
+    "recording process group is still active; recording state preserved"
+)
+
+
+def _validated_recording_process_identity(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, str):
+        return None
+    if not value or len(value) > 256:
+        return None
+    if value != value.strip(" \t"):
+        return None
+    if any(not 0x20 <= ord(character) <= 0x7E for character in value):
+        return None
+    return value
+
+
+def _recording_process_identity_for_lifecycle(value: object) -> str | None:
+    """Validate identity while retaining legacy blank-as-missing semantics."""
+    identity = _validated_recording_process_identity(value)
+    if identity is not None:
+        return identity
+    if value is None or value == "":
+        return ""
+    return None
+
+
+_RECORDING_PROCESS_IDENTITY_ABSENT = "absent"
+_RECORDING_PROCESS_IDENTITY_PRESENT = "present"
+_RECORDING_PROCESS_IDENTITY_UNKNOWN = "unknown"
+
+
+def _recording_process_identity_probe(pid: int) -> tuple[str | None, str]:
+    try:
+        identity = _recording_process_identity_for_pid(pid)
+    except (FileNotFoundError, ProcessLookupError):
+        return None, _RECORDING_PROCESS_IDENTITY_ABSENT
+    except Exception:
+        return None, _RECORDING_PROCESS_IDENTITY_UNKNOWN
+    if isinstance(identity, str) and identity:
+        return identity, _RECORDING_PROCESS_IDENTITY_PRESENT
+    try:
+        os.kill(pid, 0)
+    except (FileNotFoundError, ProcessLookupError):
+        return None, _RECORDING_PROCESS_IDENTITY_ABSENT
+    except (OSError, OverflowError, ValueError):
+        return None, _RECORDING_PROCESS_IDENTITY_UNKNOWN
+    return None, _RECORDING_PROCESS_IDENTITY_UNKNOWN
+
+
 def _recording_process_verified_alive(state: RecordingState) -> bool:
     pid = state.pid
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return False
-    if not process_is_alive(pid):
+    expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)
+    if expected_identity is None:
+        raise RuntimeError(_RECORDING_PROCESS_IDENTITY_INVALID_ERROR)
+    try:
+        leader_alive = process_is_alive(pid)
+    except Exception:
+        raise RuntimeError(
+            "recording process liveness could not be verified; refusing to signal pid"
+        ) from None
+    if not leader_alive:
         return False
-    expected_identity = str(state.process_identity or "").strip()
     if not expected_identity:
-        raise RuntimeError("recording process identity is missing; refusing to signal pid")
-    current_identity = _recording_process_identity_for_pid(pid)
+        raise RuntimeError(_RECORDING_PROCESS_IDENTITY_INVALID_ERROR)
+    try:
+        current_identity = _recording_process_identity_for_pid(pid)
+    except Exception:
+        raise RuntimeError(
+            "recording process identity could not be verified; refusing to signal pid"
+        ) from None
     if current_identity is None:
         raise RuntimeError("recording process identity could not be verified; refusing to signal pid")
     return current_identity == expected_identity
@@ -3476,12 +3665,28 @@ def _recording_process_verified_alive(state: RecordingState) -> bool:
 def _recording_process_verified_active(state: RecordingState) -> bool:
     if not _recording_process_verified_alive(state):
         return False
-    if not _process_is_zombie(state.pid):
+    try:
+        is_zombie = _process_is_zombie(state.pid)
+    except Exception:
+        raise RuntimeError(
+            "recording process liveness could not be verified; recording state preserved"
+        ) from None
+    if is_zombie is None:
+        raise RuntimeError(
+            "recording process liveness could not be verified; recording state preserved"
+        )
+    if is_zombie is False:
         return True
     # start_recorder() creates one process group per recording. A zombie leader
     # can remain while a descendant is still recording; unknown /proc state is
     # treated as active so start never risks creating a second recorder.
-    return process_group_has_live_processes(state.pid) is not False
+    try:
+        group_live = process_group_has_live_processes(state.pid)
+    except Exception:
+        raise RuntimeError(
+            "recording process liveness could not be verified; recording state preserved"
+        ) from None
+    return group_live is not False
 
 
 def _recorder_process_is_gone(process: subprocess.Popen[bytes]) -> bool:
@@ -3498,8 +3703,118 @@ def _recording_process_group_is_active(pid: int | None) -> bool:
         return False
     try:
         return process_group_has_live_processes(pid) is not False
-    except BaseException:
+    except Exception:
         return True
+
+
+def _recording_process_absence_probe(pid: int) -> tuple[str | None, bool | None, str]:
+    current_identity, identity_status = _recording_process_identity_probe(pid)
+    if identity_status == _RECORDING_PROCESS_IDENTITY_UNKNOWN:
+        return None, None, identity_status
+    try:
+        group_live = process_group_has_live_processes(pid)
+    except Exception:
+        return current_identity, None, identity_status
+    return current_identity, group_live, identity_status
+
+
+def _recording_process_stable_absence(
+    pid: int,
+    expected_identity: str,
+    *,
+    allow_matching_identity: bool = False,
+) -> tuple[bool, str | None]:
+    """Return stable leader/group absence, or an explicit fail-closed error."""
+    current_identity, group_live, identity_status = (
+        _recording_process_absence_probe(pid)
+    )
+    if identity_status == _RECORDING_PROCESS_IDENTITY_UNKNOWN:
+        return False, "recording process identity could not be verified; recording state preserved"
+    if identity_status == _RECORDING_PROCESS_IDENTITY_PRESENT:
+        if expected_identity and current_identity != expected_identity:
+            return False, "recording process identity does not match; recording state preserved"
+        if (
+            not allow_matching_identity
+            or not expected_identity
+            or current_identity != expected_identity
+        ):
+            return False, "recording process liveness could not be verified; recording state preserved"
+        if group_live is None:
+            return False, "recording process liveness could not be verified; recording state preserved"
+        if group_live is True:
+            return False, None
+    if group_live is None:
+        return False, "recording process liveness could not be verified; recording state preserved"
+    if group_live is True:
+        return False, None
+
+    time.sleep(RECORDER_PROCESS_RECONCILIATION_DELAY_SECONDS)
+    second_identity, second_group_live, second_identity_status = (
+        _recording_process_absence_probe(pid)
+    )
+    if second_identity_status == _RECORDING_PROCESS_IDENTITY_UNKNOWN:
+        return False, "recording process identity could not be verified; recording state preserved"
+    if second_identity_status == _RECORDING_PROCESS_IDENTITY_PRESENT:
+        if expected_identity and second_identity != expected_identity:
+            return False, "recording process identity does not match; recording state preserved"
+        if (
+            not allow_matching_identity
+            or not expected_identity
+            or second_identity != expected_identity
+        ):
+            return False, "recording process liveness could not be verified; recording state preserved"
+    if second_group_live is not False:
+        return False, "recording process liveness could not be verified; recording state preserved"
+    return True, None
+
+
+def _reconcile_recording_process(state: RecordingState) -> str | None:
+    """Reconcile recorder lifecycle without stopping an unverified process."""
+    pid = state.pid
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return "recording process liveness could not be verified; recording state preserved"
+    expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)
+    if expected_identity is None:
+        return _RECORDING_PROCESS_IDENTITY_INVALID_ERROR
+    try:
+        leader_alive = _is_recording_process_alive(pid)
+    except Exception:
+        return "recording process liveness could not be verified; recording state preserved"
+    if leader_alive:
+        if not expected_identity:
+            return _RECORDING_PROCESS_IDENTITY_INVALID_ERROR
+        try:
+            current_identity = _recording_process_identity_for_pid(pid)
+        except Exception:
+            return "recording process identity could not be verified; recording state preserved"
+        if current_identity is None:
+            return "recording process identity could not be verified; recording state preserved"
+        if current_identity != expected_identity:
+            return "recording process identity does not match; recording state preserved"
+        if not stop_process(pid, expected_process_identity=expected_identity):
+            stable_absence, absence_error = _recording_process_stable_absence(
+                pid,
+                expected_identity,
+                allow_matching_identity=True,
+            )
+            if absence_error is not None:
+                return absence_error
+            if stable_absence:
+                return None
+            return _RECORDING_PROCESS_GROUP_ACTIVE_ERROR
+        return None
+
+    stable_absence, absence_error = _recording_process_stable_absence(
+        pid,
+        expected_identity,
+    )
+    if absence_error is not None:
+        return absence_error
+    if stable_absence:
+        return None
+    if not expected_identity:
+        return _RECORDING_PROCESS_IDENTITY_INVALID_ERROR
+    return _RECORDING_PROCESS_GROUP_ACTIVE_ERROR
 
 
 def _raise_if_state_unreadable(state: RecordingState) -> None:
@@ -4576,6 +4891,39 @@ def _command_start_locked(
             "status": "finalizing",
             "message": "finalization in progress; wait for completion",
         }
+    identity_marker_present = current.process_identity is not None and current.process_identity != ""
+    if current.status == "error" and (current.pid is not None or identity_marker_present):
+        marker_error = (
+            "previous recorder process state is unresolved; run cancel before starting a new recording"
+        )
+        if (
+            isinstance(current.pid, bool)
+            or not isinstance(current.pid, int)
+            or current.pid <= 0
+            or _validated_recording_process_identity(current.process_identity) is None
+        ):
+            return {
+                "status": "error",
+                "message": marker_error,
+                "error": marker_error,
+                "pid_present": current.pid is not None,
+            }
+        process_error = _reconcile_recording_process(current)
+        if process_error is not None:
+            return {
+                "status": "error",
+                "message": process_error,
+                "error": process_error,
+                "pid_present": True,
+            }
+        current = store.update(
+            status="error",
+            pid=None,
+            process_identity="",
+            stopped_at=current.stopped_at or now_iso(),
+            error="",
+            inserted=False,
+        )
     if current.status == "error" and (current.audio_path or current.log_path or current.transcript_path):
         return {
             "status": "error",
@@ -4584,15 +4932,6 @@ def _command_start_locked(
             "log_path_present": bool(current.log_path),
             "transcript_path_present": bool(current.transcript_path),
         }
-    if current.status == "error" and (current.pid is not None or current.process_identity):
-        if current.pid is None or _recording_process_group_is_active(current.pid):
-            error_text = "previous recorder process state is unresolved; run cancel before starting a new recording"
-            return {
-                "status": "error",
-                "message": error_text,
-                "error": error_text,
-                "pid_present": current.pid is not None,
-            }
     if current.status in {"recorded", "processing"}:
         return {
             "status": current.status,
@@ -4602,12 +4941,6 @@ def _command_start_locked(
             "transcript_path_present": bool(current.transcript_path),
         }
     if current.status == "recording":
-        current_audio_path = _normalized_state_recording_artifact_path(
-            current.audio_path,
-            suffix=(".wav", ".flac", ".socenc"),
-            state_path=store.path,
-            require_recordings_dir=False,
-        )
         try:
             recording_active = _recording_process_verified_active(current)
         except RuntimeError as exc:
@@ -4621,20 +4954,46 @@ def _command_start_locked(
                 "pid_present": bool(current.pid),
                 "language": current.language,
             }
-        expected_process_identity = str(current.process_identity or "").strip()
-        if not expected_process_identity and _recording_process_group_is_active(current.pid):
-            error_text = "recording process identity is missing; recording state preserved"
+        if current.pid is None and not identity_marker_present:
+            current_audio_path = _normalized_state_recording_artifact_path(
+                current.audio_path,
+                suffix=(".wav", ".flac", ".socenc"),
+                state_path=store.path,
+                require_recordings_dir=False,
+            )
+            if current.audio_path and not current_audio_path:
+                store.update(
+                    status="error",
+                    pid=None,
+                    process_identity="",
+                    stopped_at=current.stopped_at or now_iso(),
+                    error="recording state references an invalid artifact path",
+                    inserted=False,
+                )
+                return {
+                    "status": "error",
+                    "message": "recording state references an invalid artifact path",
+                }
+        if current.pid is None:
+            error_text = "recording process pid is missing; recording state preserved"
             store.update(status="recording", error=error_text, inserted=False)
             return {"status": "recording", "message": error_text, "error": error_text}
-        if current.pid is not None and expected_process_identity:
-            stopped = stop_process(
-                current.pid,
-                expected_process_identity=expected_process_identity,
-            )
-            if not stopped:
-                error_text = "previous recorder could not be stopped safely; recording state preserved"
-                store.update(status="recording", error=error_text, inserted=False)
-                return {"status": "recording", "message": error_text, "error": error_text}
+        process_error = _reconcile_recording_process(current)
+        if process_error is not None:
+            if process_error == _RECORDING_PROCESS_GROUP_ACTIVE_ERROR:
+                return {
+                    "status": "recording",
+                    "message": process_error,
+                    "error": process_error,
+                }
+            store.update(status="recording", error=process_error, inserted=False)
+            return {"status": "recording", "message": process_error, "error": process_error}
+        current_audio_path = _normalized_state_recording_artifact_path(
+            current.audio_path,
+            suffix=(".wav", ".flac", ".socenc"),
+            state_path=store.path,
+            require_recordings_dir=False,
+        )
         if current.audio_path and not current_audio_path:
             store.update(
                 status="error",
@@ -4648,10 +5007,6 @@ def _command_start_locked(
                 "status": "error",
                 "message": "recording state references an invalid artifact path",
             }
-        if current.pid is None:
-            error_text = "recording process pid is missing; recording state preserved"
-            store.update(status="recording", error=error_text, inserted=False)
-            return {"status": "recording", "message": error_text, "error": error_text}
         current_audio_stat = _recording_artifact_stat(current_audio_path) if current_audio_path else None
         if current_audio_stat is not None and current_audio_stat.st_size > 0:
             recorded = store.update(
@@ -5244,6 +5599,16 @@ def finalize_recording(
     transcript_encryption = ARTIFACT_ENCRYPTION_OFF
     cleanup_state_namespace: str | None = None
     cleanup_v2_prefix_cache: dict[Path, str] = {}
+    finalize_error_message = TRANSIENT_TRANSCRIPT_PROCESSING_ERROR
+    raw_store_update = store.update
+
+    def _finalize_store_update(*update_args: object, **update_values: object) -> RecordingState:
+        nonlocal finalize_error_message
+        try:
+            return raw_store_update(*update_args, **update_values)
+        except BaseException:
+            finalize_error_message = "failed to persist error state"
+            raise
 
     def current_cleanup_state_namespace() -> str:
         nonlocal cleanup_state_namespace
@@ -5263,7 +5628,7 @@ def finalize_recording(
         )
         if not entries:
             return
-        store.update(
+        _finalize_store_update(
             pending_cleanup_restore_owner_paths=(),
             pending_cleanup_backup_entries=entries,
             cleanup_backup_journal_overflow=False,
@@ -5275,7 +5640,7 @@ def finalize_recording(
         nonlocal cleanup_backup_journal_persisted
         if not cleanup_backup_journal_persisted:
             return
-        store.update(
+        _finalize_store_update(
             pending_cleanup_restore_owner_paths=(),
             pending_cleanup_backup_entries=(),
             cleanup_backup_journal_overflow=False,
@@ -5288,7 +5653,7 @@ def finalize_recording(
         pairs: list[tuple[Path, str]],
     ) -> None:
         nonlocal cleanup_backup_journal_persisted
-        store.update(
+        _finalize_store_update(
             pid=None,
             process_identity="",
             pending_cleanup_restore_owner_paths=tuple(
@@ -5365,16 +5730,16 @@ def finalize_recording(
                         field_name="recording cleanup backup",
                         expected_stat=partial_stat,
                     )
-            except BaseException as cleanup_exc:
-                exc.add_note(f"cleanup backup removal failed: {cleanup_exc}")
+            except BaseException:
+                exc.add_note("cleanup backup removal failed")
             preserve_recording_artifacts_after_cleanup_failure = True
             preserve_written_text_on_error = True
             audio_deleted = False
             log_deleted = False
             try:
                 _restore_cleanup_backups()
-            except BaseException as restore_exc:
-                exc.add_note(f"cleanup backup restore failed: {restore_exc}")
+            except BaseException:
+                exc.add_note("cleanup backup restore failed")
             raise
         cleanup_rollback_backups.append((source, backup, source_stat, backup_stat))
         cleanup_source_stats[source] = source_stat
@@ -5458,17 +5823,17 @@ def finalize_recording(
         final_error_text: str,
         failure_label: str = "error state",
     ) -> None:
-        update_error_text = _redact_error_for_user(str(update_error))
+        del final_error_text
+        stable_message = (
+            "failed to persist error cleanup state"
+            if failure_label == "error cleanup state"
+            else "failed to persist error state"
+        )
         try:
             _restore_cleanup_backups()
-        except BaseException as restore_error:
-            update_error.add_note(f"cleanup backup restore failed: {restore_error}")
-        if isinstance(update_error, Exception):
-            raise RuntimeError(
-                f"{final_error_text}; failed to persist {failure_label}: {update_error_text}"
-            ) from update_error
-        update_error.add_note(f"failed to persist {failure_label}: {update_error_text}")
-        raise update_error.with_traceback(update_error.__traceback__)
+        except BaseException:
+            pass
+        _raise_backend_sanitized_exception(update_error, message=stable_message)
 
     def _discard_cleanup_backups() -> None:
         nonlocal cleanup_backup_restore_failed
@@ -5717,11 +6082,8 @@ def finalize_recording(
                         field_name="recording cleanup restore rollback",
                     )
                     _fsync_fd(parent_fd)
-                except BaseException as rollback_error:
-                    activation_error.add_note(
-                        "recording cleanup restore rollback failed: "
-                        f"{rollback_error}"
-                    )
+                except BaseException:
+                    activation_error.add_note("recording cleanup restore rollback failed")
                 raise activation_error
             _fsync_fd(parent_fd)
         finally:
@@ -5735,6 +6097,7 @@ def finalize_recording(
             )
         _complete_cleanup_backup_restore_pair(path, restore_entry)
 
+    deferred_final_error: BaseException | None = None
     try:
         state = store.read()
         _raise_if_state_unreadable(state)
@@ -5779,42 +6142,39 @@ def finalize_recording(
         ):
             return {"status": state.status, "message": state.error or f"recording already {state.status}"}
         if state.status in {"recorded", "processing", "finalizing"} and (state.pid is not None or state.process_identity):
-            if state.pid is None or not str(state.process_identity or "").strip():
-                error_text = "recording process identity is incomplete; recording state preserved"
-                store.update(status=state.status, error=error_text)
-                raise RuntimeError(error_text)
-            process_verified_alive = _recording_process_verified_alive(state)
-            current_process_identity = (
-                _recording_process_identity_for_pid(state.pid)
-                if not process_verified_alive
-                else None
-            )
-            if (
-                current_process_identity is not None
-                and current_process_identity != state.process_identity
-            ):
-                error_text = "recording process identity does not match; recording state preserved"
-                store.update(status=state.status, error=error_text)
-                raise RuntimeError(error_text)
-            if process_verified_alive or process_group_has_live_processes(state.pid) is not False:
-                stopped = stop_process(
-                    _coerce_int(state.pid, field_name="state pid"),
-                    expected_process_identity=state.process_identity,
+            finalize_error_message = TRANSIENT_RECORDING_PROCESS_ERROR
+            if state.pid is None:
+                error_text = (
+                    f"{TRANSIENT_RECORDING_PROCESS_ERROR}: "
+                    "recording process identity is incomplete; recording state preserved"
                 )
-                if not stopped:
-                    error_text = "recording process could not be stopped safely; recording state preserved"
-                    store.update(status=state.status, error=error_text)
-                    raise RuntimeError(error_text)
+                _finalize_store_update(status=state.status, error=error_text)
+                raise RuntimeError(error_text)
+            process_error = _reconcile_recording_process(state)
+            if process_error is not None:
+                error_text = f"{TRANSIENT_RECORDING_PROCESS_ERROR}: {process_error}"
+                if process_error != _RECORDING_PROCESS_GROUP_ACTIVE_ERROR:
+                    _finalize_store_update(status=state.status, error=error_text)
+                else:
+                    finalize_error_message = process_error
+                raise RuntimeError(process_error)
+            state = _finalize_store_update(
+                pid=None,
+                process_identity="",
+                stopped_at=state.stopped_at or now_iso(),
+            )
+            finalize_error_message = TRANSIENT_TRANSCRIPT_PROCESSING_ERROR
         if state.status == "finalizing":
             inserted = bool(state.inserted)
 
         if not state.audio_path:
-            store.update(
+            finalize_error_message = TRANSIENT_AUDIO_PATH_ERROR
+            _finalize_store_update(
                 status="error",
                 pid=None,
                 process_identity="",
                 stopped_at=state.stopped_at or now_iso(),
-                error="no recording is available",
+                error=finalize_error_message,
             )
             raise RuntimeError("no recording is available")
         audio_path = _normalized_state_recording_artifact_path(
@@ -5839,24 +6199,27 @@ def finalize_recording(
             _restore_cleanup_backup_if_needed(audio_path)
             _restore_cleanup_backup_if_needed(log_path)
         if not audio_path:
-            store.update(
+            finalize_error_message = TRANSIENT_AUDIO_PATH_ERROR
+            _finalize_store_update(
                 status="error",
                 pid=None,
                 process_identity="",
                 stopped_at=state.stopped_at or now_iso(),
-                error="recording audio path is invalid",
+                error=finalize_error_message,
             )
             raise RuntimeError("recording audio path is invalid")
         audio_presence, original_audio_stat = _safe_regular_leaf_probe(audio_path)
         if audio_presence is None:
+            finalize_error_message = TRANSIENT_AUDIO_PATH_ERROR
             raise RuntimeError(f"failed to inspect recording audio path: {audio_path}")
         if audio_presence is True and original_audio_stat is None:
-            store.update(
+            finalize_error_message = TRANSIENT_AUDIO_PATH_ERROR
+            _finalize_store_update(
                 status="error",
                 pid=None,
                 process_identity="",
                 stopped_at=state.stopped_at or now_iso(),
-                error="recording audio path is not a safe regular file",
+                error=finalize_error_message,
             )
             raise RuntimeError("recording audio path is not a safe regular file")
 
@@ -5867,7 +6230,7 @@ def finalize_recording(
                 audio_path = recovered_audio_path
                 original_audio_stat = recovered_audio_stat
                 persisted_audio_path = str(recovered_audio_path)
-                state = store.update(audio_path=str(recovered_audio_path))
+                state = _finalize_store_update(audio_path=str(recovered_audio_path))
 
         chosen_language = state.language or args.language or "en"
         language = _validate_pipeline_text_args(args, language=chosen_language)
@@ -5879,7 +6242,7 @@ def finalize_recording(
         _coerce_bool(getattr(args, "skip_silent_auto_relisten", False), field_name="skip_silent_auto_relisten")
         artifact_encryption = _artifact_encryption_mode(args)
         if state.status != "finalizing":
-            state = store.update(
+            state = _finalize_store_update(
                 status="finalizing",
                 pid=None,
                 process_identity="",
@@ -5899,7 +6262,7 @@ def finalize_recording(
             )
         else:
             if state.pid is not None or state.process_identity:
-                state = store.update(pid=None, process_identity="")
+                state = _finalize_store_update(pid=None, process_identity="")
             inserted = bool(state.inserted)
             state_marked_finalizing = True
         if state.status == "finalizing":
@@ -5948,8 +6311,8 @@ def finalize_recording(
                             kind="recording",
                             field_name="recording audio recovery artifact",
                         )
-                    except ArtifactCryptoError as exc:
-                        raise RuntimeError(str(exc)) from exc
+                    except ArtifactCryptoError:
+                        raise RuntimeError("recording recovery failed") from None
                     recovered_plaintext_stat = _recording_artifact_stat(plaintext_recovery_path)
                     if recovered_plaintext_stat is None:
                         raise RuntimeError(f"recovered plaintext recording artifact is not a safe regular file: {plaintext_recovery_path}")
@@ -5968,7 +6331,7 @@ def finalize_recording(
                 original_audio_stat = recovered_plaintext_stat
                 persisted_audio_path = str(encrypted_recovery_path)
                 if str(state.audio_path or "") != str(encrypted_recovery_path):
-                    state = store.update(audio_path=str(encrypted_recovery_path))
+                    state = _finalize_store_update(audio_path=str(encrypted_recovery_path))
         audio_deleted = False
         log_deleted = False
         done_audio_path = str(audio_path)
@@ -5977,9 +6340,12 @@ def finalize_recording(
         stabilized_audio_path: Path | None = None
         remove_original_after_state_update = False
         audio_suffix = ""
+        finalize_error_message = TRANSIENT_AUDIO_FILE_ERROR
         audio_path = validate_audio_file(audio_path)
         audio_suffix = audio_path.suffix.lower()
+        finalize_error_message = TRANSIENT_SILENCE_DETECTION_ERROR
         silence = detect_silent_recording(audio_path)
+        finalize_error_message = TRANSIENT_TRANSCRIPT_PROCESSING_ERROR
         skip_speechless_recording = silence.silent and silence.speech_seconds <= 0.0
         if skip_speechless_recording:
             cleanup_log_path = str(log_path) if log_path else None
@@ -6084,7 +6450,7 @@ def finalize_recording(
                     "silence_duration_seconds": silence.silence_seconds,
                     "speech_duration_seconds": silence.speech_seconds,
                 }
-            done = store.update(
+            done = _finalize_store_update(
                 status="done",
                 stopped_at=state.stopped_at or now_iso(),
                 audio_path=done_audio_path,
@@ -6118,10 +6484,17 @@ def finalize_recording(
 
         text_path = transcript_dir() / f"{audio_path.stem}.txt"
         transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
-        transient_text_fd, transient_owner_stat = _prepare_transient_transcript_path(
-            transcriber_text_path,
-            text_path,
-        )
+        finalize_error_message = TRANSIENT_TRANSCRIPT_WRITE_ERROR
+        try:
+            transient_text_fd, transient_owner_stat = _prepare_transient_transcript_path(
+                transcriber_text_path,
+                text_path,
+            )
+        except BaseException as exc:
+            _raise_backend_sanitized_exception(
+                exc,
+                message=TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+            )
         transcript_audio_path = audio_path
         try:
             trimmed_audio_path = trim_recording_silence(audio_path)
@@ -6132,6 +6505,7 @@ def finalize_recording(
             transcript_audio_path = audio_path
         transcription_error: BaseException | None = None
         cleanup_error: BaseException | None = None
+        finalize_error_message = TRANSIENT_TRANSCRIPT_PROCESSING_ERROR
         try:
             text = transcribe(
                 audio_path=transcript_audio_path,
@@ -6152,6 +6526,10 @@ def finalize_recording(
                 transcriber_text_path,
                 text_path,
                 expected_fd=transient_text_fd,
+                expected_stat=_trusted_transcript_stat_for_cleanup(
+                    text,
+                    transcriber_text_path,
+                ),
                 expected_owner_stat=transient_owner_stat,
             )
             if trimmed_audio_path is not None and trimmed_audio_path != audio_path and not keep_recording_artifacts:
@@ -6164,36 +6542,50 @@ def finalize_recording(
         except BaseException as cleanup_exc:
             cleanup_error = cleanup_exc
         if cleanup_error is not None:
-            raise _transcription_cleanup_exception(transcription_error, cleanup_error) from None
+            finalize_error_message = TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
+            raise _transcription_cleanup_exception(transcription_error, cleanup_error, stable_public_error=True) from None
         if transcription_error is not None:
-            transcription_message = (
-                _redact_error_for_user(str(transcription_error))
-                if isinstance(transcription_error, Exception)
-                else TRANSIENT_TRANSCRIPT_WRITE_ERROR
-            )
-            raise _sanitize_transient_exception(
+            _raise_backend_sanitized_exception(
                 transcription_error,
-                message=transcription_message,
-            ) from None
+                message=(
+                    TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
+                    if isinstance(transcription_error, TranscriptionCleanupError)
+                    else TRANSIENT_TRANSCRIPT_PROCESSING_ERROR
+                ),
+            )
 
-        if _is_empty_transcript_text(text):
-            text = ""
-            security_post_processing = _empty_security_post_processing()
-        else:
-            text, security_post_processing = _process_transcript(text, args, language)
+        try:
+            if _is_empty_transcript_text(text):
+                text = ""
+                security_post_processing = _empty_security_post_processing()
+            else:
+                text, security_post_processing = _process_transcript(text, args, language)
+        except BaseException as exc:
+            _raise_backend_sanitized_exception(
+                exc,
+                message=TRANSIENT_TRANSCRIPT_PROCESSING_ERROR,
+            )
         stripped_text = text.strip()
         if not stripped_text:
             text = ""
         stored_text_path: Path | None = None
         transcript_encryption = ARTIFACT_ENCRYPTION_OFF
         if stripped_text:
-            stored_text_path, transcript_encryption = _write_stored_transcript(
-                text_path,
-                stripped_text + "\n",
-                args,
-            )
+            finalize_error_message = TRANSIENT_TRANSCRIPT_WRITE_ERROR
+            try:
+                stored_text_path, transcript_encryption = _write_stored_transcript(
+                    text_path,
+                    stripped_text + "\n",
+                    args,
+                )
+            except BaseException as exc:
+                _raise_backend_sanitized_exception(
+                    exc,
+                    message=TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+                )
             written_text_path = stored_text_path
             written_text_stat = _recording_artifact_stat(stored_text_path)
+            finalize_error_message = TRANSIENT_TRANSCRIPT_PROCESSING_ERROR
         stored_transcript_text = text
         append_space = _coerce_bool(args.append_space, field_name="append_space")
         sanitize_special_chars = _coerce_bool(
@@ -6207,11 +6599,18 @@ def finalize_recording(
         if text_to_insert and not inserted:
             # Paste has no transaction boundary. Persist intent first so a crash after
             # the external side effect cannot cause a duplicate paste on resume.
-            store.update(inserted=True)
+            _finalize_store_update(inserted=True)
             inserted = True
-            inserted = bool(insert_text(text_to_insert, args.insert_method, typing_delay_ms))
+            try:
+                inserted = bool(insert_text(text_to_insert, args.insert_method, typing_delay_ms))
+            except BaseException as exc:
+                finalize_error_message = TRANSIENT_TRANSCRIPT_INSERT_ERROR
+                _raise_backend_sanitized_exception(
+                    exc,
+                    message=TRANSIENT_TRANSCRIPT_INSERT_ERROR,
+                )
             if not inserted:
-                store.update(inserted=False)
+                _finalize_store_update(inserted=False)
         if inserted:
             preserve_written_text_on_error = True
 
@@ -6363,7 +6762,7 @@ def finalize_recording(
             message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
             done = done_candidate
         else:
-            done = store.update(
+            done = _finalize_store_update(
                 status="done",
                 pid=None,
                 process_identity="",
@@ -6411,18 +6810,29 @@ def finalize_recording(
             "log_deleted": log_deleted,
         }
     except BaseException as exc:
-        error_text = _redact_error_for_user(str(exc))
+        error_text = finalize_error_message
         # Refresh state once more on error so the most recent status is persisted.
         if state_marked_finalizing:
             try:
                 refreshed_state = store.read()
-            except BaseException as state_refresh_error:
-                exc.add_note(f"finalization state refresh failed: {state_refresh_error}")
+            except BaseException:
+                exc.add_note("finalization state refresh failed")
             else:
                 if isinstance(refreshed_state, RecordingState):
                     state = refreshed_state
                 else:
                     exc.add_note("finalization state refresh returned invalid state")
+            state_audio_anchor = _normalized_state_recording_artifact_path(
+                state.audio_path,
+                suffix=(".wav", ".flac", ".socenc"),
+                state_path=store.path,
+                require_recordings_dir=True,
+            )
+            stabilized_is_state_anchor = (
+                state_audio_anchor is not None
+                and stabilized_audio_path is not None
+                and state_audio_anchor == stabilized_audio_path
+            )
             error_cleanup_failures: list[str] = []
             if trimmed_audio_path is not None and trimmed_audio_path != audio_path:
                 try:
@@ -6431,10 +6841,9 @@ def finalize_recording(
                         suffix=trimmed_audio_path.suffix.lower(),
                         expected_stat=trimmed_audio_stat,
                     )
-                except BaseException as cleanup_exc:
-                    cleanup_error = _redact_error_for_user(str(cleanup_exc))
-                    error_cleanup_failures.append(f"transient trimmed recording artifact ({cleanup_error})")
-                    exc.add_note(f"transient trimmed recording cleanup failed: {cleanup_error}")
+                except BaseException:
+                    error_cleanup_failures.append("transient trimmed recording artifact")
+                    exc.add_note("transient trimmed recording cleanup failed")
                 else:
                     if not trimmed_audio_deleted:
                         error_cleanup_failures.append("transient trimmed recording artifact")
@@ -6442,7 +6851,7 @@ def finalize_recording(
             if (
                 stabilized_audio_path is not None
                 and stabilized_audio_path != preserved_encrypted_audio_path
-                and str(state.audio_path or "") != str(stabilized_audio_path)
+                and not stabilized_is_state_anchor
             ):
                 try:
                     stabilized_audio_deleted = _remove_recording_artifact_if_present(
@@ -6450,10 +6859,9 @@ def finalize_recording(
                         suffix=stabilized_audio_path.suffix.lower(),
                         expected_stat=stabilized_audio_stat,
                     )
-                except BaseException as cleanup_exc:
-                    cleanup_error = _redact_error_for_user(str(cleanup_exc))
-                    error_cleanup_failures.append(f"stabilized recording artifact ({cleanup_error})")
-                    exc.add_note(f"stabilized recording cleanup failed: {cleanup_error}")
+                except BaseException:
+                    error_cleanup_failures.append("stabilized recording artifact")
+                    exc.add_note("stabilized recording cleanup failed")
                 else:
                     if not stabilized_audio_deleted:
                         error_cleanup_failures.append("stabilized recording artifact")
@@ -6470,17 +6878,21 @@ def finalize_recording(
                 "error": error_text,
                 "inserted": inserted,
             }
-            if (
-                preserved_encrypted_audio_path is not None
-                and _recording_artifact_stat(preserved_encrypted_audio_path) is not None
-            ):
-                error_update["audio_path"] = str(preserved_encrypted_audio_path)
-            if (
-                stabilized_audio_path is not None
-                and str(state.audio_path or "") == str(stabilized_audio_path)
-                and (stabilized_audio_deleted or _recording_artifact_stat(stabilized_audio_path) is None)
-            ):
-                error_update["audio_path"] = ""
+            preserved_recovery_anchor = False
+            if preserved_encrypted_audio_path is not None:
+                preserved_presence, _ = _safe_regular_leaf_probe(preserved_encrypted_audio_path)
+                if preserved_presence is not False:
+                    error_update["audio_path"] = str(preserved_encrypted_audio_path)
+                    preserved_recovery_anchor = True
+                elif str(state.audio_path or "") == str(preserved_encrypted_audio_path):
+                    error_update["audio_path"] = ""
+            if stabilized_audio_path is not None:
+                stabilized_presence, _ = _safe_regular_leaf_probe(stabilized_audio_path)
+                if stabilized_presence is False:
+                    if stabilized_is_state_anchor and not preserved_recovery_anchor:
+                        error_update["audio_path"] = ""
+                else:
+                    error_update["audio_path"] = str(stabilized_audio_path)
             if audio_deleted and persisted_audio_path:
                 error_update["audio_path"] = ""
             if log_deleted and persisted_log_path:
@@ -6498,17 +6910,22 @@ def finalize_recording(
                     if written_text_stat is None:
                         raise RuntimeError(f"transcript file identity is unavailable: {written_text_path}")
                     _remove_transcript_file(written_text_path, expected_stat=written_text_stat)
+                    transcript_presence, _ = _safe_regular_leaf_probe(written_text_path)
+                    if transcript_presence is not False:
+                        raise RuntimeError("transcript cleanup could not be verified")
                 except BaseException as cleanup_exc:
-                    cleanup_error = _redact_error_for_user(str(cleanup_exc))
-                    error_update["error"] = f"{error_text}; {cleanup_error}"
+                    error_update["error"] = TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
+                    transcript_presence, _ = _safe_regular_leaf_probe(written_text_path)
                     error_update["transcript_path"] = (
-                        str(written_text_path) if isinstance(cleanup_exc, Exception) else ""
+                        str(written_text_path) if transcript_presence is not False else ""
                     )
-                    exc.add_note(f"transcript cleanup failed: {cleanup_error}")
+                    exc.add_note("transcript cleanup failed")
                 else:
                     error_update["transcript"] = ""
                     error_update["transcript_path"] = ""
-            final_error_text = str(error_update.get("error", error_text))
+            final_error_text = error_update.get("error", error_text)
+            if not isinstance(final_error_text, str):
+                final_error_text = error_text
             cleanup_targets_by_field: dict[
                 str,
                 list[tuple[str, str, bool | None, os.stat_result | None]],
@@ -6573,7 +6990,7 @@ def finalize_recording(
                         )
                     )
             try:
-                store.update(**error_update)
+                _finalize_store_update(**error_update)
             except BaseException as update_exc:
                 _raise_error_state_update_failure(update_exc, final_error_text)
             if cleanup_targets_by_field:
@@ -6589,29 +7006,45 @@ def finalize_recording(
                         ) in field_targets:
                             if cleanup_presence is False:
                                 continue
-                            if cleanup_presence is not True or cleanup_stat is None or not remove_file(
+                            if cleanup_presence is not True or cleanup_stat is None:
+                                field_deleted = False
+                                break
+                            remove_file(
                                 cleanup_path,
                                 suffix=cleanup_suffix,
                                 expected_stat=cleanup_stat,
-                            ):
+                            )
+                            try:
+                                post_cleanup_presence, _ = _safe_regular_leaf_probe(Path(cleanup_path))
+                            except BaseException:
+                                post_cleanup_presence = None
+                            if post_cleanup_presence is not False:
                                 field_deleted = False
                                 break
                         if field_deleted:
                             cleanup_clear_update[cleanup_field] = ""
                     if cleanup_clear_update:
-                        store.update(**cleanup_clear_update)
+                        _finalize_store_update(**cleanup_clear_update)
                 except BaseException as update_exc:
                     _raise_error_state_update_failure(update_exc, final_error_text, "error cleanup state")
             try:
                 _discard_cleanup_backups()
-            except BaseException as cleanup_exc:
-                exc.add_note(f"cleanup backup discard failed: {cleanup_exc}")
-        final_error = str(error_update.get("error", error_text)) if state_marked_finalizing else error_text
-        if isinstance(exc, Exception):
-            raise RuntimeError(final_error)
-        raise
+            except BaseException:
+                exc.add_note("cleanup backup discard failed")
+        final_error = (
+            error_update.get("error", error_text)
+            if state_marked_finalizing and isinstance(error_update.get("error", error_text), str)
+            else error_text
+        )
+        deferred_final_error = _sanitize_transient_exception(
+            exc,
+            message=final_error,
+            system_exit_as_runtime=True,
+        )
     finally:
         _release_finalization_lock(lock_path)
+    if deferred_final_error is not None:
+        raise deferred_final_error
 
 
 def remove_file(
@@ -6686,56 +7119,16 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
             error_text = "recording process pid is missing; recording state preserved"
             store.update(status="recording", error=error_text, inserted=False)
             return {"status": "recording", "message": error_text, "error": error_text}
-        try:
-            process_verified_alive = _recording_process_verified_alive(state)
-        except RuntimeError as exc:
-            error_text = f"{exc}; recording state preserved"
-            store.update(status="recording", error=error_text, inserted=False)
-            return {"status": "recording", "message": error_text, "error": error_text}
-        current_process_identity = None
-        if (
-            not str(state.process_identity or "").strip()
-            and _recording_process_group_is_active(state.pid)
-        ):
-            error_text = "recording process identity is missing; recording state preserved"
-            store.update(status="recording", error=error_text, inserted=False)
-            return {"status": "recording", "message": error_text, "error": error_text}
-        if not process_verified_alive and state.pid is not None and state.process_identity:
-            current_process_identity = _recording_process_identity_for_pid(state.pid)
-        if process_verified_alive:
-            stopped = stop_process(
-                _coerce_int(state.pid, field_name="state pid"),
-                expected_process_identity=state.process_identity,
-            )
-            if not stopped:
-                error_text = "recording process could not be stopped safely; recording state preserved"
-                store.update(
-                    status="recording",
-                    error=error_text,
-                    inserted=False,
-                )
-                return {"status": "recording", "message": error_text, "error": error_text}
-        elif current_process_identity is not None:
-            error_text = "recording process identity does not match; recording state preserved"
-            store.update(
-                status="recording",
-                error=error_text,
-                inserted=False,
-            )
-            return {"status": "recording", "message": error_text, "error": error_text}
-        elif state.pid is not None and state.process_identity:
-            stopped = stop_process(
-                _coerce_int(state.pid, field_name="state pid"),
-                expected_process_identity=state.process_identity,
-            )
-            if not stopped:
-                error_text = "recording process could not be stopped safely; recording state preserved"
-                store.update(
-                    status="recording",
-                    error=error_text,
-                    inserted=False,
-                )
-                return {"status": "recording", "message": error_text, "error": error_text}
+        process_error = _reconcile_recording_process(state)
+        if process_error is not None:
+            if process_error == _RECORDING_PROCESS_GROUP_ACTIVE_ERROR:
+                return {
+                    "status": "recording",
+                    "message": process_error,
+                    "error": process_error,
+                }
+            store.update(status="recording", error=process_error, inserted=False)
+            return {"status": "recording", "message": process_error, "error": process_error}
         state = store.update(
             status="recorded",
             pid=None,
@@ -6804,6 +7197,46 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         state = store.read()
         _raise_if_state_unreadable(state)
         initial_status = state.status
+        if state.status == "recording":
+            if state.pid is None:
+                error_text = "recording process pid is missing; recording state preserved"
+                store.update(status="recording", error=error_text, inserted=False)
+                return {"status": "recording", "message": error_text, "error": error_text}
+            process_error = _reconcile_recording_process(state)
+            if process_error is not None:
+                if process_error == _RECORDING_PROCESS_GROUP_ACTIVE_ERROR:
+                    return {
+                        "status": "recording",
+                        "message": process_error,
+                        "error": process_error,
+                    }
+                store.update(status="recording", error=process_error, inserted=False)
+                return {"status": "recording", "message": process_error, "error": process_error}
+            state = store.update(
+                pid=None,
+                process_identity="",
+                stopped_at=state.stopped_at or now_iso(),
+            )
+        elif state.pid is not None:
+            process_error = _reconcile_recording_process(state)
+            if process_error is not None:
+                if process_error == _RECORDING_PROCESS_GROUP_ACTIVE_ERROR:
+                    return {
+                        "status": state.status,
+                        "message": process_error,
+                        "error": process_error,
+                    }
+                store.update(status=state.status, error=process_error, inserted=state.inserted)
+                return {"status": state.status, "message": process_error, "error": process_error}
+            state = store.update(
+                pid=None,
+                process_identity="",
+                stopped_at=state.stopped_at or now_iso(),
+            )
+        elif state.pid is None and state.process_identity is not None and state.process_identity != "":
+            error_text = "recording process identity is incomplete or invalid; recording state preserved"
+            store.update(status=state.status, error=error_text, inserted=state.inserted)
+            return {"status": state.status, "message": error_text, "error": error_text}
         try:
             persisted_cleanup_owner_paths = {
                 _normalized_cleanup_backup_owner_path(
@@ -7006,91 +7439,6 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     cleanup_backup_journal_restore=False,
                     error="",
                 )
-        if state.status == "recording":
-            if state.pid is None:
-                error_text = "recording process pid is missing; recording state preserved"
-                store.update(status="recording", error=error_text, inserted=False)
-                return {"status": "recording", "message": error_text, "error": error_text}
-            try:
-                process_verified_alive = _recording_process_verified_alive(state)
-            except RuntimeError as exc:
-                error_text = f"{exc}; recording state preserved"
-                store.update(status="recording", error=error_text, inserted=False)
-                return {"status": "recording", "message": error_text, "error": error_text}
-            if (
-                not str(state.process_identity or "").strip()
-                and _recording_process_group_is_active(state.pid)
-            ):
-                error_text = "recording process identity is missing; recording state preserved"
-                store.update(status="recording", error=error_text, inserted=False)
-                return {"status": "recording", "message": error_text, "error": error_text}
-            if process_verified_alive:
-                stopped = stop_process(
-                    _coerce_int(state.pid, field_name="state pid"),
-                    expected_process_identity=state.process_identity,
-                )
-                if not stopped:
-                    error_text = "recording process could not be stopped safely; recording state preserved"
-                    store.update(
-                        status="recording",
-                        error=error_text,
-                        inserted=False,
-                    )
-                    return {"status": "recording", "message": error_text, "error": error_text}
-                # Continue through the normal finalizing/discard path so cancel also removes
-                # the artifacts produced by the just-stopped recording.
-            elif state.pid is not None and state.process_identity:
-                current_process_identity = _recording_process_identity_for_pid(state.pid)
-                if current_process_identity is not None:
-                    error_text = "recording process identity does not match; recording state preserved"
-                    store.update(
-                        status="recording",
-                        error=error_text,
-                        inserted=False,
-                    )
-                    return {"status": "recording", "message": error_text, "error": error_text}
-                stopped = stop_process(
-                    _coerce_int(state.pid, field_name="state pid"),
-                    expected_process_identity=state.process_identity,
-                )
-                if not stopped:
-                    error_text = "recording process could not be stopped safely; recording state preserved"
-                    store.update(
-                        status="recording",
-                        error=error_text,
-                        inserted=False,
-                    )
-                    return {"status": "recording", "message": error_text, "error": error_text}
-                # Continue through the normal finalizing/discard path so cancel also removes
-                # the artifacts left by a recorder whose leader was reaped.
-        elif state.pid is not None and not str(state.process_identity or "").strip():
-            if _recording_process_group_is_active(state.pid):
-                error_text = "recording process identity is missing; recording state preserved"
-                store.update(status=state.status, error=error_text, inserted=state.inserted)
-                return {"status": state.status, "message": error_text, "error": error_text}
-        elif state.pid is not None and state.process_identity:
-            current_process_identity = _recording_process_identity_for_pid(state.pid)
-            if current_process_identity is not None and current_process_identity != state.process_identity:
-                error_text = "recording process identity does not match; recording state preserved"
-                store.update(
-                    status=state.status,
-                    error=error_text,
-                    inserted=state.inserted,
-                )
-                return {"status": state.status, "message": error_text, "error": error_text}
-            stopped = stop_process(
-                _coerce_int(state.pid, field_name="state pid"),
-                expected_process_identity=state.process_identity,
-            )
-            if not stopped:
-                error_text = "recording process could not be stopped safely; recording state preserved"
-                store.update(
-                    status=state.status,
-                    error=error_text,
-                    inserted=state.inserted,
-                )
-                return {"status": state.status, "message": error_text, "error": error_text}
-
         discarded_audio_path = _normalized_state_recording_artifact_path(
             state.audio_path,
             suffix=(".wav", ".flac", ".socenc"),
@@ -8106,6 +8454,13 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
             payload["error"] = error_text
             payload["inserted"] = False
             return payload
+        if isinstance(state.pid, bool) or not isinstance(state.pid, int) or state.pid <= 0:
+            error_text = "recording process liveness could not be verified; recording state preserved"
+            payload["status"] = "error"
+            payload["message"] = error_text
+            payload["error"] = error_text
+            payload["inserted"] = False
+            return payload
         try:
             verified_alive = _recording_process_verified_active(state)
         except RuntimeError as exc:
@@ -8115,42 +8470,68 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
             payload["inserted"] = False
             return payload
         if not verified_alive:
-            current_process_identity = (
-                _recording_process_identity_for_pid(state.pid)
-                if state.pid is not None and state.process_identity
-                else None
-            )
-            if (
-                current_process_identity is not None
-                and current_process_identity != state.process_identity
-            ):
+            expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)
+            if expected_identity is None:
                 payload["status"] = "error"
-                payload["message"] = "recording process identity does not match; recording state preserved"
+                payload["message"] = _RECORDING_PROCESS_IDENTITY_INVALID_ERROR
                 payload["error"] = payload["message"]
                 payload["inserted"] = False
-            else:
-                if _recording_process_group_is_active(state.pid):
+                return payload
+            try:
+                zombie_state = _process_is_zombie(state.pid)
+            except Exception:
+                error_text = "recording process liveness could not be verified; recording state preserved"
+                payload["status"] = "error"
+                payload["message"] = error_text
+                payload["error"] = error_text
+                payload["inserted"] = False
+                return payload
+            if zombie_state is None:
+                error_text = "recording process liveness could not be verified; recording state preserved"
+                payload["status"] = "error"
+                payload["message"] = error_text
+                payload["error"] = error_text
+                payload["inserted"] = False
+                return payload
+            allow_matching_identity = zombie_state
+            stable_absence, absence_error = _recording_process_stable_absence(
+                state.pid,
+                expected_identity,
+                allow_matching_identity=allow_matching_identity,
+            )
+            if absence_error is not None:
+                payload["status"] = "error"
+                payload["message"] = absence_error
+                payload["error"] = payload["message"]
+                payload["inserted"] = False
+            elif not stable_absence:
+                if not expected_identity:
+                    payload["status"] = "error"
+                    payload["message"] = _RECORDING_PROCESS_IDENTITY_INVALID_ERROR
+                    payload["error"] = payload["message"]
+                    payload["inserted"] = False
+                else:
                     payload["status"] = "recording"
                     payload["message"] = "recording process group is still active; run stop to transcribe"
                     payload["error"] = ""
+            else:
+                current_audio_path = _normalized_state_recording_artifact_path(
+                    state.audio_path,
+                    suffix=(".wav", ".flac", ".socenc"),
+                    state_path=store.path,
+                    require_recordings_dir=False,
+                )
+                current_audio_stat = _recording_artifact_stat(current_audio_path) if current_audio_path else None
+                if current_audio_stat is None or current_audio_stat.st_size == 0:
+                    payload["status"] = "error"
+                    payload["message"] = "recording exited before audio was saved"
+                    payload["error"] = payload["message"]
+                    payload["inserted"] = False
                 else:
-                    current_audio_path = _normalized_state_recording_artifact_path(
-                        state.audio_path,
-                        suffix=(".wav", ".flac", ".socenc"),
-                        state_path=store.path,
-                        require_recordings_dir=False,
-                    )
-                    current_audio_stat = _recording_artifact_stat(current_audio_path) if current_audio_path else None
-                    if current_audio_stat is None or current_audio_stat.st_size == 0:
-                        payload["status"] = "error"
-                        payload["message"] = "recording exited before audio was saved"
-                        payload["error"] = payload["message"]
-                        payload["inserted"] = False
-                    else:
-                        payload["status"] = "recorded"
-                        payload["message"] = "recording process has exited; run stop to transcribe"
-                        payload["error"] = ""
-                        payload["inserted"] = False
+                    payload["status"] = "recorded"
+                    payload["message"] = "recording process has exited; run stop to transcribe"
+                    payload["error"] = ""
+                    payload["inserted"] = False
     if payload.get("status") in {"recording", "recorded"}:
         microphone_level = _recording_level_payload(state, state_path=store.path)
         if microphone_level is not None:
@@ -8333,66 +8714,239 @@ def _benchmark_targets(model_names: list[str] | None, language: str) -> list[Mod
 
 
 def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result, os.stat_result]:
-    fd, path_text = tempfile.mkstemp(prefix=".benchmark-", suffix=".tmp.txt", dir=transcript_dir())
-    path = Path(path_text)
-    created_stat = _recording_artifact_stat(path)
+    fd: int | None = None
+    path: Path | None = None
     file_stat: os.stat_result | None = None
     owner_stat: os.stat_result | None = None
+    setup_error: BaseException | None = None
+    cleanup_error: BaseException | None = None
+    close_error: BaseException | None = None
+    cleanup_attempted = False
+    cleanup_succeeded = False
     try:
+        fd, path_text = tempfile.mkstemp(prefix=".benchmark-", suffix=".tmp.txt", dir=transcript_dir())
+        path = Path(path_text)
         file_stat = os.fstat(fd)
+        if (
+            not stat_module.S_ISREG(file_stat.st_mode)
+            or getattr(file_stat, "st_nlink", 1) != 1
+        ):
+            raise RuntimeError("benchmark transcript file identity is unavailable")
         owner_stat = _write_transient_transcript_owner(path)
     except BaseException as exc:
-        try:
-            if created_stat is not None:
+        setup_error = exc
+        if path is not None and file_stat is not None:
+            cleanup_attempted = True
+            try:
                 _remove_transient_transcript_path(
                     path,
                     transcript_dir() / ".benchmark-storage.txt",
-                    expected_stat=file_stat or created_stat,
+                    expected_stat=file_stat,
                     expected_owner_stat=owner_stat,
                 )
-        except BaseException as cleanup_exc:
-            if not isinstance(exc, Exception):
-                exc.add_note(f"benchmark transcript cleanup failed: {cleanup_exc}")
-                raise exc.with_traceback(exc.__traceback__)
-            raise RuntimeError(f"{exc}; failed to clean benchmark transcript file: {cleanup_exc}") from cleanup_exc
-        raise
+            except BaseException as cleanup_exc:
+                cleanup_error = cleanup_exc
+            else:
+                cleanup_succeeded = True
     finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+            except BaseException as exc:
+                close_error = exc
+    close_cleanup_error: BaseException | None = None
+    retry_cleanup_allowed = (
+        not cleanup_attempted
+        or cleanup_error is None
+        or isinstance(cleanup_error, Exception)
+    )
+    if (
+        close_error is not None
+        and path is not None
+        and file_stat is not None
+        and not cleanup_succeeded
+        and retry_cleanup_allowed
+    ):
+        cleanup_attempted = True
         try:
-            os.close(fd)
-        except BaseException:
-            pass
+            _remove_transient_transcript_path(
+                path,
+                transcript_dir() / ".benchmark-storage.txt",
+                expected_stat=file_stat,
+                expected_owner_stat=owner_stat,
+            )
+        except BaseException as cleanup_exc:
+            close_cleanup_error = cleanup_exc
+        else:
+            cleanup_succeeded = True
+            cleanup_error = None
+    interrupt_error = next(
+        (
+            error
+            for error in (setup_error, close_error, cleanup_error, close_cleanup_error)
+            if isinstance(error, KeyboardInterrupt)
+        ),
+        None,
+    )
+    if interrupt_error is not None:
+        _raise_sanitized_transient_exception(
+            interrupt_error,
+            message=TRANSIENT_TRANSCRIPT_INTERRUPT_ERROR,
+        )
+    cleanup_failure = (
+        close_cleanup_error
+        if close_cleanup_error is not None
+        else cleanup_error
+    )
+    if cleanup_failure is not None:
+        _raise_sanitized_transient_exception(
+            RuntimeError(),
+            message=TRANSIENT_TRANSCRIPT_CLEANUP_ERROR,
+        )
+    close_signal = (
+        close_error
+        if close_error is not None
+        and (setup_error is None or isinstance(setup_error, Exception))
+        else None
+    )
+    if close_signal is not None:
+        close_message = (
+            TRANSIENT_TRANSCRIPT_INTERRUPT_ERROR
+            if isinstance(close_signal, KeyboardInterrupt)
+            else TRANSIENT_TRANSCRIPT_WRITE_ERROR
+        )
+        _raise_sanitized_transient_exception(close_signal, message=close_message)
+    if setup_error is not None:
+        _raise_backend_sanitized_exception(
+            setup_error,
+            message=TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+        )
+    if path is None:
+        raise RuntimeError(TRANSIENT_TRANSCRIPT_WRITE_ERROR)
     if file_stat is None or owner_stat is None:
         raise RuntimeError("benchmark transcript file identity is unavailable")
     return path, file_stat, owner_stat
 
 
+def _benchmark_transcript_writer_identity(
+    path: Path,
+    expected_stat: os.stat_result,
+    expected_owner_stat: os.stat_result,
+    text: str,
+) -> tuple[os.stat_result | None, bool]:
+    presence, current_stat = _safe_regular_leaf_probe(path)
+    if presence is False:
+        return expected_stat, True
+    if presence is not True or current_stat is None:
+        return None, False
+    owner_presence, current_owner_stat = _safe_regular_leaf_probe(
+        _transient_transcript_owner_path(path),
+    )
+    if (
+        owner_presence is not True
+        or current_owner_stat is None
+        or not _same_leaf_identity(current_owner_stat, expected_owner_stat)
+        or not _transient_transcript_owner_is_active(path)
+    ):
+        return None, False
+    unchanged = (
+        _same_leaf_identity(current_stat, expected_stat)
+        and current_stat.st_size == expected_stat.st_size
+        and getattr(current_stat, "st_mtime_ns", 0) == getattr(expected_stat, "st_mtime_ns", 0)
+        and getattr(current_stat, "st_ctime_ns", 0) == getattr(expected_stat, "st_ctime_ns", 0)
+    )
+    if unchanged:
+        return current_stat, True
+    try:
+        observed_text = read_text_without_following_symlinks(
+            path,
+            field_name="benchmark transcript",
+            max_bytes=MAX_STORED_TRANSCRIPT_BYTES,
+        )
+    except Exception:
+        return None, False
+    if observed_text.strip() != text.strip():
+        return None, False
+    return current_stat, True
+
+
+def _trusted_transcript_stat_for_cleanup(
+    value: object,
+    expected_path: Path,
+) -> os.stat_result | None:
+    if getattr(value, "output_path", None) != expected_path:
+        return None
+    output_stat = getattr(value, "output_stat", None)
+    if output_stat is None:
+        return None
+    if (
+        not stat_module.S_ISREG(output_stat.st_mode)
+        or getattr(output_stat, "st_nlink", 1) != 1
+    ):
+        return None
+    return output_stat
+
+
 def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[str, object]:
-    path = model_path(model)
-    status = model_status(model, verify=True)
-    downloaded = bool(status.get("downloaded"))
+    path: Path | None = None
+    downloaded = False
+    compatible = False
+    metadata_error: BaseException | None = None
+    try:
+        path = model_path(model)
+        status = model_status(model, verify=True)
+        downloaded = bool(status.get("downloaded"))
+        compatible = model_supports_language(path, language)
+    except BaseException as exc:
+        metadata_error = exc
     result: dict[str, object] = {
         "model": model.name,
         "path_present": bool(path),
         "downloaded": downloaded,
-        "compatible": model_supports_language(path, language),
+        "compatible": compatible,
         "ok": False,
         "seconds": None,
         "transcript": "",
         "transcript_output_redacted": False,
         "error": "",
     }
+    if metadata_error is not None:
+        if isinstance(metadata_error, KeyboardInterrupt):
+            _raise_sanitized_transient_exception(
+                metadata_error,
+                message=TRANSIENT_TRANSCRIPT_PROCESSING_ERROR,
+            )
+        result["error"] = TRANSIENT_TRANSCRIPT_PROCESSING_ERROR
+        return result
     if not downloaded:
         result["error"] = f"model is not downloaded: {model.name}"
         return result
-    if not model_supports_language(path, language):
+    if not compatible:
         result["error"] = f"model does not support language: {language}"
         return result
 
     started = time.perf_counter()
-    text_path, text_path_stat, text_owner_stat = _temporary_benchmark_transcript_path()
-    cleanup_error = ""
-    transcribe_error = ""
-    base_transcribe_error: BaseException | None = None
+    def finish_failure(error: str) -> dict[str, object]:
+        result["seconds"] = round(time.perf_counter() - started, 3)
+        result["error"] = error
+        return result
+
+    try:
+        text_path, text_path_stat, text_owner_stat = _temporary_benchmark_transcript_path()
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            _raise_sanitized_transient_exception(
+                exc,
+                message=TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+            )
+        return finish_failure(TRANSIENT_TRANSCRIPT_WRITE_ERROR)
+    cleanup_error: BaseException | None = None
+    transcribe_failed = False
+    deferred_error: BaseException | None = None
+    cleanup_stat: os.stat_result | None = text_path_stat
+    cleanup_identity_safe = True
     try:
         text = transcribe(
             audio_path=audio_path,
@@ -8407,38 +8961,78 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
             openai_compatible_url=DEFAULT_OPENAI_COMPATIBLE_URL,
             openai_compatible_api_key="",
         )
-    except Exception as exc:
-        text = ""
-        transcribe_error = str(exc)
-    except BaseException as exc:
-        base_transcribe_error = exc
-        raise
-    finally:
-        try:
-            _remove_transient_transcript_path(
-                text_path,
-                transcript_dir() / ".benchmark-storage.txt",
-                expected_stat=text_path_stat,
-                expected_owner_stat=text_owner_stat,
-            )
-        except BaseException as exc:
-            if base_transcribe_error is not None:
-                base_transcribe_error.add_note(f"benchmark transcript cleanup failed: {exc}")
-                raise base_transcribe_error.with_traceback(base_transcribe_error.__traceback__)
-            if isinstance(exc, Exception):
-                cleanup_error = str(exc)
+        trusted_output_path = getattr(text, "output_path", None)
+        if trusted_output_path is not None:
+            trusted_output_stat = getattr(text, "output_stat", None)
+            if trusted_output_path != text_path or (
+                trusted_output_stat is not None
+                and (
+                    not stat_module.S_ISREG(trusted_output_stat.st_mode)
+                    or getattr(trusted_output_stat, "st_nlink", 1) != 1
+                )
+            ):
+                cleanup_identity_safe = False
+                cleanup_error = RuntimeError()
             else:
-                raise
+                cleanup_stat = trusted_output_stat or text_path_stat
+        else:
+            cleanup_stat, cleanup_identity_safe = _benchmark_transcript_writer_identity(
+                text_path,
+                text_path_stat,
+                text_owner_stat,
+                text,
+            )
+        if not cleanup_identity_safe:
+            cleanup_error = RuntimeError()
+    except BaseException as exc:
+        if isinstance(exc, KeyboardInterrupt):
+            deferred_error = _sanitize_transient_exception(
+                exc,
+                message=TRANSIENT_TRANSCRIPT_PROCESSING_ERROR,
+            )
+        else:
+            transcribe_failed = True
+        text = ""
+    finally:
+        if cleanup_identity_safe and (transcribe_failed or deferred_error is not None):
+            try:
+                cleanup_stat, cleanup_identity_safe = _benchmark_transcript_writer_identity(
+                    text_path,
+                    text_path_stat,
+                    text_owner_stat,
+                    text,
+                )
+            except BaseException as exc:
+                cleanup_identity_safe = False
+                cleanup_error = exc
+            else:
+                if not cleanup_identity_safe:
+                    cleanup_error = RuntimeError()
+        if cleanup_identity_safe and cleanup_stat is not None:
+            try:
+                _remove_transient_transcript_path(
+                    text_path,
+                    transcript_dir() / ".benchmark-storage.txt",
+                    expected_stat=cleanup_stat,
+                    expected_owner_stat=text_owner_stat,
+                )
+            except BaseException as exc:
+                cleanup_error = exc
 
-    if cleanup_error:
-        result["seconds"] = round(time.perf_counter() - started, 3)
-        result["error"] = _redact_error_for_user(cleanup_error)
-        return result
-    if transcribe_error:
-        result["seconds"] = round(time.perf_counter() - started, 3)
-        result["error"] = _redact_error_for_user(transcribe_error)
-        return result
-
+    if cleanup_error is not None:
+        if isinstance(cleanup_error, KeyboardInterrupt):
+            deferred_error = _sanitize_transient_exception(
+                cleanup_error,
+                message=TRANSIENT_TRANSCRIPT_CLEANUP_ERROR,
+            )
+        elif isinstance(deferred_error, KeyboardInterrupt):
+            pass
+        else:
+            return finish_failure(TRANSIENT_TRANSCRIPT_CLEANUP_ERROR)
+    if deferred_error is not None:
+        raise deferred_error
+    if transcribe_failed:
+        return finish_failure(TRANSIENT_TRANSCRIPT_PROCESSING_ERROR)
     clean_text = text.strip()
     result["ok"] = True
     result["seconds"] = round(time.perf_counter() - started, 3)
@@ -8985,7 +9579,10 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     except BaseException as exc:
         preparation_error = exc
     if preparation_error is not None:
-        raise _sanitize_transient_exception(preparation_error) from None
+        _raise_backend_sanitized_exception(
+            preparation_error,
+            message=TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+        )
     transcription_error: BaseException | None = None
     cleanup_error: BaseException | None = None
     try:
@@ -9008,6 +9605,10 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
             transcriber_text_path,
             text_path,
             expected_fd=transient_text_fd,
+            expected_stat=_trusted_transcript_stat_for_cleanup(
+                text,
+                transcriber_text_path,
+            ),
             expected_owner_stat=transient_owner_stat,
         )
     except BaseException as cleanup_exc:
@@ -9019,31 +9620,42 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
             stable_public_error=True,
         ) from None
     if transcription_error is not None:
-        transcription_message = (
-            _redact_error_for_user(str(transcription_error))
-            if isinstance(transcription_error, Exception)
-            else TRANSIENT_TRANSCRIPT_WRITE_ERROR
-        )
-        raise _sanitize_transient_exception(
+        _raise_backend_sanitized_exception(
             transcription_error,
-            message=transcription_message,
-        ) from None
-    if _is_empty_transcript_text(text):
-        text = ""
-        security_post_processing = _empty_security_post_processing()
-    else:
-        text, security_post_processing = _process_transcript(text, args, args.language)
+            message=(
+                TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
+                if isinstance(transcription_error, TranscriptionCleanupError)
+                else TRANSIENT_TRANSCRIPT_PROCESSING_ERROR
+            ),
+        )
+    try:
+        if _is_empty_transcript_text(text):
+            text = ""
+            security_post_processing = _empty_security_post_processing()
+        else:
+            text, security_post_processing = _process_transcript(text, args, language)
+    except BaseException as exc:
+        _raise_backend_sanitized_exception(
+            exc,
+            message=TRANSIENT_TRANSCRIPT_PROCESSING_ERROR,
+        )
     stripped_text = text.strip()
     if not stripped_text:
         text = ""
     stored_text_path: Path | None = None
     transcript_encryption = ARTIFACT_ENCRYPTION_OFF
     if stripped_text:
-        stored_text_path, transcript_encryption = _write_stored_transcript(
-            text_path,
-            stripped_text + "\n",
-            args,
-        )
+        try:
+            stored_text_path, transcript_encryption = _write_stored_transcript(
+                text_path,
+                stripped_text + "\n",
+                args,
+            )
+        except BaseException as exc:
+            _raise_backend_sanitized_exception(
+                exc,
+                message=TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+            )
     keep_transcripts = _coerce_int(
         getattr(args, "keep_transcripts", DEFAULT_KEEP_TRANSCRIPTS),
         field_name="keep-transcripts",

@@ -515,6 +515,40 @@ test("real stop payload does not enqueue another stop request", () => {
   assert.equal(applet.isCommandRunning, false);
 });
 
+test("recorded payload with backend markers does not stop again or cancel", () => {
+  const harness = makeRecordingApplet({ realStopPayload: true });
+  const { applet } = harness;
+
+  assert.equal(applet._toggleRecording("start"), true);
+  assert.equal(applet._toggleRecording(), true);
+  harness.requests[0].callback({ status: "recording" });
+
+  assert.equal(harness.requests.length, 2);
+  assert.equal(harness.requests[1].args[0], "stop");
+  const baselineStatusEvents = harness.statusEvents.length;
+
+  harness.requests[1].callback({
+    status: "recorded",
+    message: "Recorded payload from backend",
+    pid_present: true,
+    process_identity_present: true,
+    transcript: "recorded transcript",
+  });
+
+  assert.equal(
+    harness.requests.filter((request) => request.args[0] === "stop").length,
+    1
+  );
+  assert.equal(
+    harness.requests.filter((request) => request.args[0] === "cancel").length,
+    0
+  );
+  assert.equal(applet.isCommandRunning, false);
+  assert.equal(harness.statusEvents.length, baselineStatusEvents + 1);
+  assert.equal(harness.statusEvents.at(-1).status, "recorded");
+  assert.equal(harness.statusEvents.at(-1).transcript, "recorded transcript");
+});
+
 test("real cancel queues behind start and spawns once after callback", () => {
   const harness = makeRecordingApplet({ realStopPayload: true });
   const { applet } = harness;

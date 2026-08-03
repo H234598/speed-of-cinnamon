@@ -254,17 +254,139 @@ class CiStaticTest(unittest.TestCase):
         next_command = source.index("def command_toggle(", cancel_start)
         stop_block = source[stop_start:cancel_start]
         cancel_block = source[cancel_start:next_command]
+        helper_start = source.index("def _reconcile_recording_process(state: RecordingState)")
+        helper_end = source.index("def _raise_if_state_unreadable(state: RecordingState)", helper_start)
+        helper_block = source[helper_start:helper_end]
+
+        self.assertIn("_reconcile_recording_process(state)", stop_block)
+        self.assertIn("_reconcile_recording_process(state)", cancel_block)
+
+        self.assertTrue(
+            "_recording_process_verified_alive(state)" in helper_block
+            or "_is_recording_process_alive(pid)" in helper_block
+        )
+        probe_start = source.index("def _recording_process_absence_probe(pid: int)")
+        probe_end = source.index("def _reconcile_recording_process(state: RecordingState)", probe_start)
+        probe_block = source[probe_start:probe_end]
+        self.assertIn("process_group_has_live_processes(pid)", probe_block)
+        self.assertIn("_RECORDING_PROCESS_IDENTITY_UNKNOWN", probe_block)
+        self.assertIn("_recording_process_stable_absence(", helper_block)
+        absence_start = source.index("def _recording_process_stable_absence(")
+        absence_end = source.index("def _reconcile_recording_process(state: RecordingState)", absence_start)
+        absence_block = source[absence_start:absence_end]
+        self.assertIn("_recording_process_absence_probe(pid)", absence_block)
+        self.assertIn("stop_process(pid, expected_process_identity=expected_identity)", helper_block)
+        self.assertIn("recording state preserved", helper_block)
+
+        source_tree = ast.parse(source)
+        reconcile_node = next(
+            node
+            for node in ast.walk(source_tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_reconcile_recording_process"
+        )
+        absence_helper = next(
+            node
+            for node in ast.walk(source_tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_recording_process_stable_absence"
+        )
+        absence_probe_calls = [
+            node
+            for node in ast.walk(absence_helper)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_recording_process_absence_probe"
+        ]
+        self.assertEqual(len(absence_probe_calls), 2)
+        self.assertTrue(
+            any(
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "time"
+                and node.func.attr == "sleep"
+                for node in ast.walk(absence_helper)
+            )
+        )
+        self.assertGreater(cli.RECORDER_PROCESS_RECONCILIATION_DELAY_SECONDS, 0)
+        self.assertLessEqual(cli.RECORDER_PROCESS_RECONCILIATION_DELAY_SECONDS, 0.05)
 
         for block in (stop_block, cancel_block):
-            self.assertIn("_recording_process_verified_alive(state)", block)
-            self.assertIn("stop_process(", block)
-            self.assertIn("_coerce_int(state.pid, field_name=\"state pid\")", block)
-            self.assertIn("expected_process_identity=state.process_identity", block)
-            self.assertLess(
-                block.index("_recording_process_verified_alive(state)"),
-                block.index("stop_process("),
+            self.assertIn("process_error = _reconcile_recording_process(state)", block)
+
+    def test_start_stale_recording_uses_shared_reconciliation(self) -> None:
+        source = (REPO_ROOT / "src" / "speed_of_cinnamon" / "cli.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        start_node = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_command_start_locked"
+        )
+
+        recording_branch_checked = False
+        for node in ast.walk(start_node):
+            if not isinstance(node, ast.If):
+                continue
+            test = node.test
+            if not (
+                isinstance(test, ast.Compare)
+                and isinstance(test.left, ast.Attribute)
+                and isinstance(test.left.value, ast.Name)
+                and test.left.value.id == "current"
+                and test.left.attr == "status"
+                and any(
+                    isinstance(comparator, ast.Constant)
+                    and comparator.value == "recording"
+                    for comparator in test.comparators
+                )
+            ):
+                continue
+            calls = [
+                child.func.id
+                for child in ast.walk(node)
+                if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+            ]
+            if "_reconcile_recording_process" in calls:
+                recording_branch_checked = True
+                self.assertNotIn("stop_process", calls)
+        self.assertTrue(recording_branch_checked)
+
+    def test_start_error_state_does_not_use_one_probe_group_helper(self) -> None:
+        source = (REPO_ROOT / "src" / "speed_of_cinnamon" / "cli.py").read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        start_node = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_command_start_locked"
+        )
+        error_branch = next(
+            node
+            for node in ast.walk(start_node)
+            if isinstance(node, ast.If)
+            and isinstance(node.test, ast.BoolOp)
+            and any(
+                isinstance(value, ast.Compare)
+                and isinstance(value.left, ast.Attribute)
+                and isinstance(value.left.value, ast.Name)
+                and value.left.value.id == "current"
+                and value.left.attr == "status"
+                and any(
+                    isinstance(comparator, ast.Constant)
+                    and comparator.value == "error"
+                    for comparator in value.comparators
+                )
+                for value in node.test.values
             )
-            self.assertNotIn("stop_process(state.pid)", block)
+        )
+        calls = [
+            child.func.id
+            for child in ast.walk(error_branch)
+            if isinstance(child, ast.Call)
+            and isinstance(child.func, ast.Name)
+        ]
+        self.assertIn("_reconcile_recording_process", calls)
+        self.assertNotIn("_recording_process_group_is_active", calls)
 
     def test_runtime_and_release_code_do_not_execute_subprocess_with_shell_strings(self) -> None:
         code_roots = [REPO_ROOT / "src", REPO_ROOT / "scripts"]
