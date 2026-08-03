@@ -14,6 +14,7 @@ import unicodedata
 import time
 import zlib
 from collections.abc import Callable
+from functools import wraps
 from itertools import islice
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -48,7 +49,10 @@ HOME_DIR = str(Path.home())
 
 
 def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
-    primary.add_note(f"log cleanup failed: {cleanup_error}")
+    try:
+        primary.add_note("log cleanup failed")
+    except Exception:
+        return
 
 
 def _fsync_fd(fd: int) -> None:
@@ -67,22 +71,184 @@ _CREDENTIAL_KEY_PATTERN = (
     r"bearer|token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
     r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|secret|password|passwd|passphrase"
 )
-_TOKEN_RE = re.compile(rf"(?i)\b({_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*[^,\s;]+(?:[ \t]+[^,\s;]+)*")
+_TOKEN_RE = re.compile(rf"(?i)\b({_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*\S+(?:[ \t]+\S+)*")
 _BARE_CREDENTIAL_RE = re.compile(
-    r"(?i)\b(token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
+    r"(?i)(?<![/\\])\b(token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
     r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|password|passwd|passphrase)\b\s+"
     r"(?:(?:is|are|was|were)\s+)?"
-    r"(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+"
-    r"(?:[ \t]+[^,\s;]+)*"
+    r"(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)\S+"
+    r"(?:[ \t]+\S+)*"
 )
-_BEARER_RE = re.compile(r"(?i)\bbearer\s+[^,\s;]+")
+_BEARER_RE = re.compile(r"(?i)\bbearer\s+\S+")
 _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
 _SHORT_API_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b")
 _LOG_MATCH_IGNORE_CATEGORIES = frozenset({"Mn", "Mc", "Me", "Cf"})
 _URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]{0,255}+://)([^/@\s]+)@")
-_LOCAL_ABSOLUTE_PATH_RE = re.compile(
-    r"(?i)(?:(?<=^)|(?<=[\s\"'`=:(]))/(?:home|root|run|tmp|var|etc|usr|opt|mnt|media|dev|proc|sys)/[^\s,;)]*"
+_PATH_STOP_CHARS = frozenset({" ", "\t", "\n", "\r", ")", "}", "]"})
+_PATH_PREFIX_BOUNDARY_BLOCKED_CHARS = frozenset(
+    set(string.ascii_letters + string.digits + "._-/")
 )
+_PATH_SCHEME_CHARS = frozenset(string.ascii_letters + string.digits + "+-.")
+_CSI_MAX_PREFIX_BYTES = 64
+_ERROR_SCAN_MAX_CHARS = 8192
+_MAX_ERROR_INPUT_CHARS = 65_536
+
+
+def _is_ignored_char(char: str) -> bool:
+    codepoint = ord(char)
+    if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
+        return True
+    return unicodedata.category(char) in _LOG_MATCH_IGNORE_CATEGORIES
+
+
+def _path_token_end(value: str, start: int) -> int:
+    end = start
+    while end < len(value) and value[end] not in _PATH_STOP_CHARS:
+        end += 1
+    return end
+
+
+def _has_path_prefix_boundary(value: str, start: int) -> bool:
+    if start <= 0:
+        return True
+    if value[start - 1] not in _PATH_PREFIX_BOUNDARY_BLOCKED_CHARS:
+        return True
+    return _has_ansi_csi_prefix(value, start)
+
+
+def _has_ansi_csi_prefix(value: str, start: int) -> bool:
+    if start <= 0:
+        return False
+    end = start - 1
+    if end < 0:
+        return False
+    index = end
+    scanned = 0
+    if 0x40 <= ord(value[index]) <= 0x7E:
+        scanned = 1
+        index -= 1
+    while scanned < _CSI_MAX_PREFIX_BYTES and index >= 0 and 0x30 <= ord(value[index]) <= 0x3F:
+        index -= 1
+        scanned += 1
+    if scanned >= _CSI_MAX_PREFIX_BYTES:
+        return True
+    while scanned < _CSI_MAX_PREFIX_BYTES and index >= 0 and 0x20 <= ord(value[index]) <= 0x2F:
+        index -= 1
+        scanned += 1
+    if scanned >= _CSI_MAX_PREFIX_BYTES:
+        return True
+    if index < 0:
+        return False
+    if value[index] == "\x9b":
+        return True
+    if value[index] == "\x1b":
+        return True
+    if index > 0 and value[index] == "[" and value[index - 1] == "\x1b":
+        return True
+    if index > 0 and value[index] == "[" and value[index - 1] == "\x9b":
+        return True
+    return False
+
+
+def _url_scheme_before(value: str, first_slash: int) -> str | None:
+    if first_slash <= 0 or value[first_slash - 1] != ":":
+        return None
+    pos = first_slash - 2
+    while pos >= 0 and value[pos] in _PATH_SCHEME_CHARS:
+        pos -= 1
+    scheme_start = pos + 1
+    if scheme_start == first_slash - 1:
+        return None
+    scheme = value[scheme_start : first_slash - 1]
+    if not scheme:
+        return None
+    if pos >= 0 and value[pos] in _PATH_SCHEME_CHARS:
+        return None
+    if not scheme[0].isalpha():
+        return None
+    return scheme.lower()
+
+
+def _match_local_absolute_path(value: str, start: int) -> int:
+    if start >= len(value):
+        return 0
+    if not _has_path_prefix_boundary(value, start):
+        return 0
+    if value[start].isalpha() and start + 2 < len(value) and value[start + 1] == ":" and value[start + 2] in "\\/":
+        end = _path_token_end(value, start)
+        if end > start + 3:
+            return end - start
+        return 0
+    if value[start] == "\\":
+        if start + 1 >= len(value):
+            return 0
+        if value[start + 1] not in "\\/":
+            token_end = _path_token_end(value, start)
+            if token_end <= start + 1:
+                return 0
+            return token_end - start
+        if start > 0 and value[start - 1] == "\\":
+            return 0
+        if start + 3 >= len(value) or value[start + 2] in _PATH_STOP_CHARS:
+            return 0
+        host_end = start + 2
+        while host_end < len(value) and value[host_end] not in (_PATH_STOP_CHARS | {'\\', '/'}):
+            host_end += 1
+        if host_end >= len(value) or value[host_end] not in "\\/":
+            return 0
+        share_end = _path_token_end(value, host_end + 1)
+        if share_end <= host_end + 1:
+            return 0
+        return share_end - start
+    if value[start] != "/":
+        return 0
+    if start + 1 >= len(value):
+        return 0
+    if value[start + 1] == "/":
+        if start > 0 and value[start - 1] == "/":
+            return 0
+        scheme = _url_scheme_before(value, start)
+        if scheme is not None and scheme != "file" and len(scheme) > 1:
+            return 0
+        end = _path_token_end(value, start)
+        if end > start + 2:
+            return end - start
+        return 0
+    end = _path_token_end(value, start)
+    if end > start + 1:
+        return end - start
+    return 0
+
+
+def _contains_local_absolute_path(value: str) -> bool:
+    n = len(value)
+    if "/" not in value and "\\" not in value:
+        return False
+    index = 0
+    while index < n:
+        if value[index] in "/\\" or (value[index].isalpha() and index + 2 < n and value[index + 1] == ":" and value[index + 2] in "\\/"):
+            if _match_local_absolute_path(value, index) > 0:
+                return True
+            if value[index].isalpha() and index + 2 < n and value[index + 1] == ":" and value[index + 2] in "\\/":
+                index += 3
+                continue
+        index += 1
+    return False
+
+
+def _redact_local_absolute_paths(value: str) -> str:
+    n = len(value)
+    index = 0
+    out: list[str] = []
+    while index < n:
+        token_len = _match_local_absolute_path(value, index)
+        if token_len:
+            out.append("[redacted path]")
+            index += token_len
+            continue
+        out.append(value[index])
+        index += 1
+    return "".join(out)
 _ERROR_DETAIL_RE = re.compile(
     r"(?i)(?:\b(?:stdout|stderr)\s*:|\b(?:raw\s+)?transcript\s*(?::|\b(?:text|words|payload|for)\b)|\bprompt\s*:|command\s+output\s*:|backend\s+output\s*:)"
 )
@@ -90,11 +256,11 @@ _ERROR_OUTPUT_LIKELY_RE = re.compile(r"(?i)\b(traceback|exception|at|exit\s+code
 _ERROR_SECRET_WORD_RE = re.compile(r"(?i)\bsecret\b")
 _ERROR_OPAQUE_DETAIL_RE = re.compile(r"(?i)^(?=[A-Za-z0-9_.:/+=@-]{6,}$)(?=.*[a-z])(?=.*\d)[A-Za-z0-9_.:/+=@-]+$")
 _SANITIZE_HINT_RE = re.compile(
-    rf"(?i)(?:\b(?:{_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*[^,\s;]+|"
-    r"\b(?:token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
+    rf"(?i)(?:\b(?:{_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*\S+(?:[ \t]+\S+)*|"
+    r"(?<![/\\])\b(?:token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
     r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|password|passwd|passphrase)\b\s+(?:(?:is|are|was|were)\s+)?"
-    r"(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+|"
-    r"\bbearer\s+[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]{0,255}+://[^/@\s]+@)"
+    r"(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)\S+|"
+    r"\bbearer\s+\S+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]{0,255}+://[^/@\s]+@)"
 )
 _SANITIZE_ESCAPE_TABLE = {
     **{codepoint: f"\\x{codepoint:02x}" for codepoint in tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))},
@@ -310,30 +476,36 @@ class SizeCappedJsonFileHandler(logging.Handler):
             try:
                 file_stat = os.fstat(fd)
                 if not stat_module.S_ISREG(file_stat.st_mode):
-                    raise RuntimeError(f"log file must be a regular file: {self.path}")
+                    raise RuntimeError("log file must be a regular file")
                 if getattr(file_stat, "st_nlink", 1) != 1:
-                    raise RuntimeError(f"log file must not be hardlinked: {self.path}")
+                    raise RuntimeError("log file must not be hardlinked")
                 if expected_stat is not None and (
                     file_stat.st_dev != expected_stat.st_dev
                     or file_stat.st_ino != expected_stat.st_ino
                     or file_stat.st_mode != expected_stat.st_mode
                 ):
-                    raise RuntimeError(f"log file changed while opening: {self.path}")
+                    raise RuntimeError("log file changed while opening")
+                path_error: RuntimeError | None = None
                 try:
                     current_path_stat = self.path.lstat()
-                except FileNotFoundError as exc:
-                    raise RuntimeError(f"log file changed while opening: {self.path}") from exc
+                except OSError:
+                    path_error = RuntimeError("log file changed while opening")
+                if path_error is not None:
+                    raise path_error
                 if (
                     current_path_stat.st_dev != file_stat.st_dev
                     or current_path_stat.st_ino != file_stat.st_ino
                     or current_path_stat.st_mode != file_stat.st_mode
                 ):
-                    raise RuntimeError(f"log file changed while opening: {self.path}")
+                    raise RuntimeError("log file changed while opening")
+                permission_error: RuntimeError | None = None
                 try:
                     os.fchmod(fd, 0o600)
-                except OSError as exc:
-                    raise RuntimeError(f"log file permissions could not be restricted: {self.path}") from exc
-                assert_fd_is_regular_private_file(fd, field_name="log file")
+                except OSError:
+                    permission_error = RuntimeError("log file permissions could not be restricted")
+                if permission_error is not None:
+                    raise permission_error
+                assert_fd_is_regular_private_file(fd, field_name="log file", require_private_mode=True)
                 self.stream = os.fdopen(fd, "a", encoding="utf-8")
             except Exception as exc:
                 try:
@@ -381,6 +553,36 @@ def _log_level_value(level: str) -> int:
     return LOG_LEVEL_VALUES[level]
 
 
+def _safe_public_log_exception(error: Exception) -> Exception:
+    try:
+        safe_message = sanitize_error_message(str(error), max_chars=MAX_LOG_MESSAGE_CHARS)
+    except Exception:
+        safe_message = ""
+    if not safe_message or safe_message.startswith("[redacted") or "[redacted path]" in safe_message:
+        safe_message = "log operation failed"
+    try:
+        sanitized = type(error)(safe_message)
+    except Exception:
+        sanitized = RuntimeError("log operation failed")
+    return sanitized
+
+
+def _public_log_boundary(function: Callable[..., Any]) -> Callable[..., Any]:
+    @wraps(function)
+    def wrapped(*args: Any, **kwargs: Any) -> Any:
+        sanitized: Exception | None = None
+        try:
+            return function(*args, **kwargs)
+        except Exception as error:
+            sanitized = _safe_public_log_exception(error)
+        if sanitized is not None:
+            raise sanitized
+        return None
+
+    return wrapped
+
+
+@_public_log_boundary
 def configure_logging(level: str = DEFAULT_LOG_LEVEL, *, base_dir: Path | None = None) -> None:
     normalized = validate_log_level(level)
     logger = logging.getLogger(LOGGER_NAME)
@@ -416,6 +618,7 @@ def log_event(level: str, event: str, **fields: object) -> None:
     logger.log(_log_level_value(normalized), event, extra={"fields": fields})
 
 
+@_public_log_boundary
 def maintain_logs(base_dir: Path | None = None, *, today: date | None = None) -> None:
     directory = base_dir or logs_dir()
     _ensure_log_directory(directory)
@@ -468,13 +671,13 @@ def _sub_with_ignored_projection(
     pattern: re.Pattern[str],
     replacement: str | Callable[[re.Match[str]], str] = "[redacted]",
 ) -> str:
-    if not any(unicodedata.category(char) in _LOG_MATCH_IGNORE_CATEGORIES for char in text):
+    if not any(_is_ignored_char(char) for char in text):
         return pattern.sub(replacement, text)
     normalized: list[str] = []
     index_map: list[int] = []
     for source_index, char in enumerate(text):
         for normalized_char in unicodedata.normalize("NFKD", char).casefold():
-            if unicodedata.category(normalized_char) in _LOG_MATCH_IGNORE_CATEGORIES:
+            if _is_ignored_char(normalized_char):
                 continue
             normalized.append(normalized_char)
             index_map.append(source_index)
@@ -488,9 +691,9 @@ def _sub_with_ignored_projection(
             continue
         original_start = index_map[match.start()]
         original_end = index_map[match.end() - 1] + 1
-        while original_start > cursor and unicodedata.category(text[original_start - 1]) in _LOG_MATCH_IGNORE_CATEGORIES:
+        while original_start > cursor and _is_ignored_char(text[original_start - 1]):
             original_start -= 1
-        while original_end < len(text) and unicodedata.category(text[original_end]) in _LOG_MATCH_IGNORE_CATEGORIES:
+        while original_end < len(text) and _is_ignored_char(text[original_end]):
             original_end += 1
         if original_end <= cursor:
             continue
@@ -508,7 +711,10 @@ def _sub_with_ignored_projection(
 def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         return "[invalid]"
-    if any(unicodedata.category(char) in _LOG_MATCH_IGNORE_CATEGORIES for char in value):
+    input_was_truncated = len(value) > max_chars
+    if input_was_truncated:
+        value = value[:max_chars]
+    if any(_is_ignored_char(char) for char in value):
         redacted_value = _sub_with_ignored_projection(
             value,
             _TOKEN_RE,
@@ -525,23 +731,27 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
             _URL_CREDENTIAL_RE,
             lambda match: f"{match.group(1)}[redacted]@",
         )
-        redacted_value = _sub_with_ignored_projection(redacted_value, _LOCAL_ABSOLUTE_PATH_RE, "[redacted path]")
         redacted_value = _sub_with_ignored_projection(redacted_value, _OPENAI_KEY_RE)
         redacted_value = _sub_with_ignored_projection(redacted_value, _SHORT_API_KEY_RE)
     else:
         redacted_value = _OPENAI_KEY_RE.sub("[redacted]", value)
         redacted_value = _SHORT_API_KEY_RE.sub("[redacted]", redacted_value)
+    has_control = _contains_control_chars(redacted_value)
+    if has_control:
+        redacted_value = _redact_local_absolute_paths(redacted_value)
+    if _contains_local_absolute_path(redacted_value):
+        redacted_value = _redact_local_absolute_paths(redacted_value)
     if redacted_value != value:
         value = redacted_value
     if (
-        not _contains_control_chars(value)
+        not has_control
         and ":" not in value
         and "@" not in value
         and _SANITIZE_HINT_RE.search(value) is None
-        and _LOCAL_ABSOLUTE_PATH_RE.search(value) is None
+        and not _contains_local_absolute_path(value)
         and (not HOME_DIR or HOME_DIR == "/" or HOME_DIR not in value)
     ):
-        if len(value) > max_chars:
+        if input_was_truncated or len(value) > max_chars:
             return value[:max_chars] + "...[truncated]"
         return value
     text = value.translate(_SANITIZE_ESCAPE_TABLE)
@@ -551,10 +761,11 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
     text = _OPENAI_KEY_RE.sub("[redacted]", text)
     text = _SHORT_API_KEY_RE.sub("[redacted]", text)
     text = _URL_CREDENTIAL_RE.sub(r"\1[redacted]@", text)
-    text = _LOCAL_ABSOLUTE_PATH_RE.sub("[redacted path]", text)
+    if not has_control:
+        text = _redact_local_absolute_paths(text)
     if HOME_DIR and HOME_DIR != "/":
         text = text.replace(HOME_DIR, "~")
-    if len(text) > max_chars:
+    if input_was_truncated or len(text) > max_chars:
         return text[:max_chars] + "...[truncated]"
     return text
 
@@ -566,14 +777,22 @@ def _contains_control_chars(value: str) -> bool:
 def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CHARS) -> str:
     if isinstance(error, bool) or not isinstance(error, str):
         return "[invalid]"
-    failed_match = re.match(r"(?is)^(?P<command>.+?)\s+(?P<marker>failed|error)\s*:\s*(?P<details>.+)$", error)
+    effective_max_chars = min(max(0, max_chars), _MAX_ERROR_INPUT_CHARS)
+    input_was_truncated = len(error) > effective_max_chars
+    scan_limit = min(max(_ERROR_SCAN_MAX_CHARS, effective_max_chars), _MAX_ERROR_INPUT_CHARS)
+    scan_error = error[:scan_limit]
+    failed_match = re.match(
+        r"(?is)^(?P<command>.+?)\s+(?P<marker>failed|error)\s*:\s*(?P<details>.+)$",
+        scan_error,
+    )
     if failed_match:
         details = failed_match.group("details").strip()
+        details_for_scan = failed_match.group("details").strip()[:_ERROR_SCAN_MAX_CHARS]
         if (
-            _ERROR_DETAIL_RE.search(details) is not None
-            or _BARE_CREDENTIAL_RE.search(details) is not None
-            or _ERROR_SECRET_WORD_RE.search(details) is not None
-            or _ERROR_OPAQUE_DETAIL_RE.fullmatch(details) is not None
+            _ERROR_DETAIL_RE.search(details_for_scan) is not None
+            or _BARE_CREDENTIAL_RE.search(details_for_scan) is not None
+            or _ERROR_SECRET_WORD_RE.search(details_for_scan) is not None
+            or _ERROR_OPAQUE_DETAIL_RE.fullmatch(details_for_scan) is not None
         ):
             return "[redacted error details]"
         if (
@@ -585,34 +804,34 @@ def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CH
             return "[redacted error details]"
         command = sanitize_text(failed_match.group("command").strip(), max_chars=80)
         prefix = f"{command} {failed_match.group('marker')}: "
-        details_max_chars = max(8, max_chars - len(prefix))
+        details_max_chars = max(8, effective_max_chars - len(prefix))
         details = sanitize_text(details, max_chars=details_max_chars)
         if _ERROR_SECRET_WORD_RE.search(details):
             return "[redacted error details]"
         if len(details) <= 0:
             return "[redacted error details]"
         candidate = f"{prefix}{details}"
-        if len(candidate) > max_chars:
-            return candidate[:max_chars] + "...[truncated]"
+        if len(candidate) > effective_max_chars:
+            return candidate[:effective_max_chars] + "...[truncated]"
         return candidate
-    if _ERROR_DETAIL_RE.search(error):
+    if _ERROR_DETAIL_RE.search(scan_error):
         return "[redacted error details]"
-    if _BARE_CREDENTIAL_RE.search(error):
+    if _BARE_CREDENTIAL_RE.search(scan_error):
         return "[redacted error details]"
     if (
-        _ERROR_SECRET_WORD_RE.search(error)
-        and _TOKEN_RE.search(error) is None
-        and _BARE_CREDENTIAL_RE.search(error) is None
-        and _BEARER_RE.search(error) is None
-        and _OPENAI_KEY_RE.search(error) is None
-        and _SHORT_API_KEY_RE.search(error) is None
-        and _URL_CREDENTIAL_RE.search(error) is None
+        _ERROR_SECRET_WORD_RE.search(scan_error)
+        and _TOKEN_RE.search(scan_error) is None
+        and _BARE_CREDENTIAL_RE.search(scan_error) is None
+        and _BEARER_RE.search(scan_error) is None
+        and _OPENAI_KEY_RE.search(scan_error) is None
+        and _SHORT_API_KEY_RE.search(scan_error) is None
+        and _URL_CREDENTIAL_RE.search(scan_error) is None
     ):
         return "[redacted error details]"
-    sanitized = sanitize_text(error, max_chars=max(len(error), max_chars))
+    sanitized = sanitize_text(error[:effective_max_chars], max_chars=effective_max_chars)
     sanitized = _SHORT_API_KEY_RE.sub("[redacted]", sanitized)
-    if len(sanitized) > max_chars:
-        return sanitized[:max_chars] + "...[truncated]"
+    if input_was_truncated or len(sanitized) > effective_max_chars:
+        return sanitized[:effective_max_chars] + "...[truncated]"
     return sanitized
 
 
@@ -648,12 +867,18 @@ def _active_log_path(directory: Path, today: date | None = None) -> Path:
 
 
 def _ensure_log_directory(directory: Path) -> None:
+    directory_fd: int | None = None
     try:
         directory_fd = ensure_directory_without_following_symlinks(directory, field_name="log directory")
-    except OSError as exc:
-        raise RuntimeError(f"failed to prepare log directory: {directory}") from exc
+    except OSError:
+        directory_error = RuntimeError("failed to prepare log directory")
+    else:
+        directory_error = None
+    if directory_error is not None:
+        raise directory_error
     try:
-        os.close(directory_fd)
+        if directory_fd is not None:
+            os.close(directory_fd)
     except OSError:
         pass
 
@@ -673,13 +898,19 @@ def _assert_regular_unlinked_file(path: Path, *, field_name: str) -> os.stat_res
     try:
         file_stat = path.lstat()
     except OSError:
-        raise RuntimeError(f"{field_name} must be an existing file: {path}")
+        file_error = RuntimeError(f"{field_name} must be an existing file")
+    else:
+        file_error = None
+    if file_error is not None:
+        raise file_error
     if stat_module.S_ISLNK(file_stat.st_mode):
-        raise RuntimeError(f"{field_name} must not be a symlink: {path}")
+        raise RuntimeError(f"{field_name} must not be a symlink")
     if not stat_module.S_ISREG(file_stat.st_mode):
-        raise RuntimeError(f"{field_name} must be a regular file: {path}")
+        raise RuntimeError(f"{field_name} must be a regular file")
     if getattr(file_stat, "st_nlink", 1) != 1:
-        raise RuntimeError(f"{field_name} must not be hardlinked: {path}")
+        raise RuntimeError(f"{field_name} must not be hardlinked")
+    if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
+        raise RuntimeError(f"{field_name} must be owned by the current user")
     return file_stat
 
 
@@ -715,15 +946,19 @@ def _open_log_source_file(
         or current_stat.st_mtime_ns != expected_stat.st_mtime_ns
         or current_stat.st_ctime_ns != expected_stat.st_ctime_ns
     ):
-        raise RuntimeError(f"{field_name} changed before opening: {path}")
+        raise RuntimeError(f"{field_name} changed before opening")
     expected_for_fd = expected_stat or current_stat
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    open_error: RuntimeError | None = None
     try:
         fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
-    except OSError as exc:
-        raise RuntimeError(f"{field_name} is not readable: {path}") from exc
+    except OSError:
+        open_error = RuntimeError(f"{field_name} is not readable")
+        fd = -1
+    if open_error is not None:
+        raise open_error
     try:
-        assert_fd_is_regular_private_file(fd, field_name=field_name)
+        assert_fd_is_regular_private_file(fd, field_name=field_name, require_private_mode=True)
         opened_stat = os.fstat(fd)
         if (
             opened_stat.st_dev != expected_for_fd.st_dev
@@ -734,7 +969,7 @@ def _open_log_source_file(
             or opened_stat.st_mtime_ns != expected_for_fd.st_mtime_ns
             or opened_stat.st_ctime_ns != expected_for_fd.st_ctime_ns
         ):
-            raise RuntimeError(f"{field_name} changed while opening: {path}")
+            raise RuntimeError(f"{field_name} changed while opening")
     except Exception as exc:
         try:
             os.close(fd)
@@ -760,9 +995,14 @@ def _create_log_temp_file(directory: Path, *, prefix: str, suffix: str) -> tuple
         raise RuntimeError("secure log temporary file creation is not supported on this platform")
     try:
         parent_fd = ensure_directory_without_following_symlinks(directory, field_name="log directory")
-    except OSError as exc:
-        raise RuntimeError(f"failed to prepare log directory: {directory}") from exc
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag
+    except OSError:
+        directory_error = RuntimeError("failed to prepare log directory")
+        parent_fd = -1
+    else:
+        directory_error = None
+    if directory_error is not None:
+        raise directory_error
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag | getattr(os, "O_CLOEXEC", 0)
     try:
         for _ in range(100):
             temp_name = f".{prefix}.{secrets.token_hex(8)}{suffix}"
@@ -868,13 +1108,17 @@ def _unlink_log_temp(
                 raise
             return
         raise RuntimeError("failed to claim log temporary file cleanup path")
-    except OSError as exc:
-        raise RuntimeError("failed to remove log temporary file") from exc
+    except OSError:
+        cleanup_error = RuntimeError("failed to remove log temporary file")
+    else:
+        cleanup_error = None
+    if cleanup_error is not None:
+        raise cleanup_error
 
 
 def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
     if path.is_symlink():
-        raise RuntimeError(f"active log file must not be a symlink: {path}")
+        raise RuntimeError("active log file must not be a symlink")
     if not path.exists():
         return
     file_stat = _assert_regular_unlinked_file(path, field_name="active log file")
@@ -1368,7 +1612,7 @@ def _copy_stream_capped(source: Any, output: Any, *, source_path: Path) -> None:
             return
         copied += len(chunk)
         if copied > MAX_TOTAL_LOG_BYTES:
-            raise RuntimeError(f"log source content is too large: {source_path}")
+            raise RuntimeError("log source content is too large")
         output.write(chunk)
 
 
@@ -1441,7 +1685,7 @@ def _assert_same_log_file_identity(path: Path, expected_stat: os.stat_result, *,
         or current_stat.st_mtime_ns != expected_stat.st_mtime_ns
         or current_stat.st_ctime_ns != expected_stat.st_ctime_ns
     ):
-        raise RuntimeError(f"{field_name} changed before deletion: {path}")
+        raise RuntimeError(f"{field_name} changed before deletion")
 
 
 def _same_log_claim_identity(current: os.stat_result, expected: os.stat_result) -> bool:
@@ -1472,9 +1716,9 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
             or current_stat.st_mtime_ns != expected_stat.st_mtime_ns
             or current_stat.st_ctime_ns != expected_stat.st_ctime_ns
         ):
-            raise RuntimeError(f"{field_name} changed before deletion: {path}")
+            raise RuntimeError(f"{field_name} changed before deletion")
         if not stat_module.S_ISREG(current_stat.st_mode):
-            raise RuntimeError(f"{field_name} must be a regular file: {path}")
+            raise RuntimeError(f"{field_name} must be a regular file")
         for _ in range(100):
             cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
             try:
@@ -1489,7 +1733,7 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
             try:
                 claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
                 if not stat_module.S_ISREG(claimed_stat.st_mode) or not _same_log_claim_identity(claimed_stat, current_stat):
-                    raise RuntimeError(f"{field_name} changed before deletion: {path}")
+                    raise RuntimeError(f"{field_name} changed before deletion")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
             except BaseException as exc:
@@ -1505,7 +1749,7 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
                     _note_cleanup_failure(exc, restore_error)
                 raise
             return True
-        raise RuntimeError(f"failed to claim {field_name} cleanup path: {path}")
+        raise RuntimeError(f"failed to claim {field_name} cleanup path")
     except BaseException as exc:
         primary_error = exc
         raise
@@ -1962,11 +2206,11 @@ def _enforce_total_size_limit(directory: Path, *, today: date | None = None) -> 
         except OSError:
             continue
         if stat_module.S_ISLNK(st.st_mode):
-            raise RuntimeError(f"log file must not be a symlink: {path}")
+            raise RuntimeError("log file must not be a symlink")
         if not stat_module.S_ISREG(st.st_mode):
             continue
         if getattr(st, "st_nlink", 1) != 1:
-            raise RuntimeError(f"log file must not be hardlinked: {path}")
+            raise RuntimeError("log file must not be hardlinked")
         file_info.append((st.st_mtime, path.name, st.st_size, path, st))
     total = sum(size for _, _, size, _, _ in file_info)
     if total <= MAX_TOTAL_LOG_BYTES:

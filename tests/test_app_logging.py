@@ -24,6 +24,193 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertEqual(mocked_fsync.call_args_list, [mock.call(123), mock.call(123)])
 
+    def test_cleanup_note_does_not_expose_cleanup_exception(self) -> None:
+        primary = RuntimeError("primary /srv/private/primary token=primary-secret")
+        cleanup = OSError("cleanup /private/cleanup token=cleanup-secret")
+
+        app_logging._note_cleanup_failure(primary, cleanup)
+
+        notes = "\n".join(getattr(primary, "__notes__", ()))
+        self.assertEqual(notes, "log cleanup failed")
+        self.assertNotIn("primary-secret", notes)
+        self.assertNotIn("cleanup-secret", notes)
+        self.assertNotIn("/private/cleanup", notes)
+
+    def test_sanitize_error_message_redacts_detail_marker_after_scan_limit(self) -> None:
+        value = "x" * (app_logging._ERROR_SCAN_MAX_CHARS + 800) + " stderr: secret-after-limit"
+
+        sanitized = app_logging.sanitize_error_message(value, max_chars=len(value))
+
+        self.assertEqual(sanitized, "[redacted error details]")
+        self.assertNotIn("secret-after-limit", sanitized)
+
+    def test_sanitize_error_message_bounds_scan_with_large_max_chars(self) -> None:
+        value = "x" * 200_000
+        observed_lengths: list[int] = []
+        original_sanitize_text = app_logging.sanitize_text
+
+        def observe_sanitize(text: str, *, max_chars: int) -> str:
+            observed_lengths.append(len(text))
+            return original_sanitize_text(text, max_chars=max_chars)
+
+        with mock.patch.object(app_logging, "sanitize_text", side_effect=observe_sanitize):
+            sanitized = app_logging.sanitize_error_message(value, max_chars=10_000_000)
+
+        self.assertTrue(observed_lengths)
+        self.assertLessEqual(max(observed_lengths), 65_536)
+        self.assertLessEqual(len(sanitized), 65_536 + len("...[truncated]"))
+        self.assertTrue(sanitized.endswith("...[truncated]"))
+
+    def test_sanitize_text_bounds_ignored_character_projection(self) -> None:
+        value = ("x\x00" * 100_000) + " token=projection-secret"
+        observed_lengths: list[int] = []
+        original_projection = app_logging._sub_with_ignored_projection
+
+        def observe_projection(text: str, *args: object, **kwargs: object) -> str:
+            observed_lengths.append(len(text))
+            return original_projection(text, *args, **kwargs)
+
+        with mock.patch.object(app_logging, "_sub_with_ignored_projection", side_effect=observe_projection):
+            sanitized = app_logging.sanitize_text(value, max_chars=64)
+
+        self.assertTrue(observed_lengths)
+        self.assertLessEqual(max(observed_lengths), 64)
+        self.assertNotIn("projection-secret", sanitized)
+        self.assertTrue(sanitized.endswith("...[truncated]"))
+
+    def test_create_log_temp_file_requests_close_on_exec(self) -> None:
+        captured_flags: list[int] = []
+
+        def open_temp(_name: str, flags: int, *_args: object, **_kwargs: object) -> int:
+            captured_flags.append(flags)
+            raise OSError("temp open failed")
+
+        with (
+            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(app_logging.os, "open", side_effect=open_temp),
+            mock.patch.object(app_logging.os, "close"),
+        ):
+            with self.assertRaisesRegex(OSError, "temp open failed"):
+                app_logging._create_log_temp_file(Path("/probe"), prefix="daily", suffix=".tmp")
+
+        self.assertEqual(len(captured_flags), 1)
+        cloexec_flag = getattr(app_logging.os, "O_CLOEXEC", 0)
+        if not cloexec_flag:
+            self.skipTest("O_CLOEXEC is unavailable")
+        self.assertTrue(captured_flags[0] & cloexec_flag)
+
+    def test_open_log_source_requires_private_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source.log"
+            path.write_text("content\n", encoding="utf-8")
+            path.chmod(0o640)
+
+            fd: int | None = None
+            try:
+                with self.assertRaisesRegex(RuntimeError, "must be private"):
+                    fd = app_logging._open_log_source_file(path, field_name="log source file")
+            finally:
+                if fd is not None:
+                    os.close(fd)
+
+    def test_regular_log_file_requires_current_owner(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "source.log"
+            path.write_text("content\n", encoding="utf-8")
+
+            with mock.patch.object(app_logging.os, "getuid", return_value=os.getuid() + 1):
+                with self.assertRaisesRegex(RuntimeError, "owned by the current user"):
+                    app_logging._assert_regular_unlinked_file(path, field_name="log source file")
+
+    def test_public_log_directory_error_is_chain_free(self) -> None:
+        secret = "/srv/private/log-directory token=directory-secret"
+        with mock.patch.object(
+            app_logging,
+            "ensure_directory_without_following_symlinks",
+            side_effect=OSError(secret),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "failed to prepare log directory") as caught:
+                app_logging._ensure_log_directory(Path("/private/logs"))
+
+        error = caught.exception
+        self.assertNotIn(secret, repr(error))
+        self.assertNotIn(secret, str(error))
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+
+    def test_public_log_source_error_is_chain_free(self) -> None:
+        secret = "/private/source token=source-secret"
+        with (
+            mock.patch.object(app_logging, "_assert_regular_unlinked_file", return_value=os.stat(__file__)),
+            mock.patch.object(app_logging, "open_file_without_following_symlinks", side_effect=OSError(secret)),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "log source file is not readable") as caught:
+                app_logging._open_log_source_file(Path("/private/source.log"), field_name="log source file")
+
+        error = caught.exception
+        self.assertNotIn(secret, repr(error))
+        self.assertNotIn(secret, str(error))
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+
+    def test_public_maintenance_error_does_not_expose_internal_exception(self) -> None:
+        secret = "/srv/internal/archive token=archive-secret"
+        with (
+            mock.patch.object(app_logging, "_ensure_log_directory"),
+            mock.patch.object(app_logging, "_merge_old_months", side_effect=OSError(secret)),
+        ):
+            with self.assertRaisesRegex(OSError, "log operation failed") as caught:
+                app_logging.maintain_logs(Path("/private/logs"))
+
+        error = caught.exception
+        self.assertNotIn(secret, repr(error))
+        self.assertNotIn(secret, str(error))
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+
+    def test_handler_permission_error_is_chain_free(self) -> None:
+        handler = app_logging.SizeCappedJsonFileHandler(Path("/private/active.log"), Path("/private"))
+        file_stat = os.stat(__file__)
+        with (
+            mock.patch.object(Path, "lstat", side_effect=[FileNotFoundError(), file_stat]),
+            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(app_logging, "assert_fd_is_private_directory"),
+            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", return_value=file_stat),
+            mock.patch.object(app_logging.os, "fchmod", side_effect=OSError("/private/permission token=chmod-secret")),
+            mock.patch.object(app_logging.os, "close"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "permissions could not be restricted") as caught:
+                handler._open()
+
+        error = caught.exception
+        self.assertNotIn("chmod-secret", repr(error))
+        self.assertNotIn("chmod-secret", str(error))
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+
+    def test_handler_path_probe_oserror_is_chain_free(self) -> None:
+        handler = app_logging.SizeCappedJsonFileHandler(Path("/private/active.log"), Path("/private"))
+        file_stat = os.stat(__file__)
+        secret = "/private/probe token=probe-secret"
+        with (
+            mock.patch.object(Path, "lstat", side_effect=[FileNotFoundError(), PermissionError(secret)]),
+            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(app_logging, "assert_fd_is_private_directory"),
+            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(app_logging.os, "fstat", return_value=file_stat),
+            mock.patch.object(app_logging.os, "fchmod"),
+            mock.patch.object(app_logging.os, "close"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "log file changed while opening") as caught:
+                handler._open()
+
+        error = caught.exception
+        self.assertNotIn(secret, repr(error))
+        self.assertNotIn(secret, str(error))
+        self.assertIsNone(error.__cause__)
+        self.assertIsNone(error.__context__)
+
     def test_sanitize_error_message_redacts_tokens_and_commands(self) -> None:
         self.assertEqual(
             app_logging.sanitize_error_message("Bearer sk-secret token=abc123", max_chars=120),
@@ -219,10 +406,161 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(sanitized, "failed to read [redacted path]")
         self.assertNotIn("/tmp/private", sanitized)
 
+    def test_sanitize_text_redacts_network_share_style_double_slash_path(self) -> None:
+        sanitized = app_logging.sanitize_text("failed to read //srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "failed to read [redacted path]")
+        self.assertNotIn("//srv/private", sanitized)
+
+    def test_sanitize_text_redacts_repeated_leading_slash_paths(self) -> None:
+        sanitized = app_logging.sanitize_text("failed to read ///srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "failed to read [redacted path]")
+        self.assertNotIn("///srv/private", sanitized)
+
+    def test_sanitize_text_redacts_double_slash_paths_after_control_and_delimiter_boundaries(self) -> None:
+        sanitized = app_logging.sanitize_text("line1\n//srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "line1\\n[redacted path]")
+        self.assertNotIn("//srv/private", sanitized)
+
+        sanitized = app_logging.sanitize_text("line1|//srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "line1|[redacted path]")
+        self.assertNotIn("//srv/private", sanitized)
+
+        sanitized = app_logging.sanitize_text("<//srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "<[redacted path]")
+        self.assertNotIn("//srv/private", sanitized)
+
+        sanitized = app_logging.sanitize_text("#//srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "#[redacted path]")
+        self.assertNotIn("//srv/private", sanitized)
+
+    def test_sanitize_text_redacts_bypassy_boundary_variants(self) -> None:
+        sanitized = app_logging.sanitize_text("artifact@/srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "artifact@[redacted path]")
+        self.assertNotIn("/srv/private/token", sanitized)
+
+        sanitized = app_logging.sanitize_text("x?/srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "x?[redacted path]")
+
+        sanitized = app_logging.sanitize_text("K" + "\u001b[0K/srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "K\\x1b[0K[redacted path]")
+
+        sanitizer = "K" + "\u001b" + ("9" * 65) + "m/srv/private/token"
+        self.assertNotIn("/srv/private/token", app_logging.sanitize_text(sanitizer, max_chars=240))
+
+        sanitized = app_logging.sanitize_text("J" + "\u001b[1J/srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "J\\x1b[1J[redacted path]")
+
+        sanitized = app_logging.sanitize_text("H" + "\u001b[1;1H/srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "H\\x1b[1;1H[redacted path]")
+
+        sanitized = app_logging.sanitize_text("l" + "\u001b[?25l/srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "l\\x1b[?25l[redacted path]")
+
+        sanitized = app_logging.sanitize_text("c1" + "\x9b[31m/srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "c1\\x9b[31m[redacted path]")
+
+        sanitized = app_logging.sanitize_text("\u001b[31m/srv/private/token", max_chars=120)
+        self.assertEqual(sanitized, "\\x1b[31m[redacted path]")
+
+        c1_direct = "\x9b" + "31m/srv/private/token"
+        self.assertEqual(app_logging.sanitize_text("c" + c1_direct, max_chars=120), "c\\x9b31m[redacted path]")
+
+        self.assertEqual(app_logging.sanitize_text("\u001b[31/srv/private/token", max_chars=120), "\\x1b[31[redacted path]")
+
+        self.assertEqual(app_logging.sanitize_text("x:/private/token", max_chars=120), "[redacted path]")
+        self.assertEqual(app_logging.sanitize_text("C://Users/Alice/token.txt", max_chars=120), "[redacted path]")
+        self.assertEqual(app_logging.sanitize_text("c://Users/Alice/token.txt", max_chars=120), "[redacted path]")
+        self.assertEqual(app_logging.sanitize_text("x://example.test/path", max_chars=120), "[redacted path]")
+        self.assertEqual(app_logging.sanitize_text("X:\\private\\token", max_chars=120), "[redacted path]")
+        self.assertEqual(app_logging.sanitize_text(r"\secret", max_chars=120), "[redacted path]")
+        self.assertEqual(app_logging.sanitize_text(r"\Users\Alice\token.txt", max_chars=120), "[redacted path]")
+        self.assertEqual(app_logging.sanitize_text(r"\[redacted-secret]", max_chars=120), "[redacted path]]")
+        self.assertEqual(app_logging.sanitize_text(r"\\x41\\private\\secret", max_chars=120), "[redacted path]")
+
+        redacted_marker = app_logging.sanitize_text(r"\secret", max_chars=120)
+        self.assertEqual(redacted_marker, "[redacted path]")
+        self.assertEqual(app_logging.sanitize_text(redacted_marker, max_chars=120), "[redacted path]")
+
+    def test_sanitize_text_does_not_redact_scheme_urls(self) -> None:
+        sanitized = app_logging.sanitize_text("download from https://example.test/path", max_chars=120)
+        self.assertEqual(sanitized, "download from https://example.test/path")
+        self.assertNotEqual(sanitized, "[redacted path]")
+
+    def test_sanitize_text_redacts_secret_values_with_comma_and_semicolon(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_text("token=abc,secret-tail", max_chars=120),
+            "token=[redacted]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("Bearer abc;secret-tail", max_chars=120),
+            "Bearer [redacted]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("Authorization: token=abc;secret-tail", max_chars=120),
+            "Authorization: token=[redacted]",
+        )
+
+    def test_sanitize_text_ignores_c0_c1_inside_credential_keys(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_text("tok\x00en=abc;secret-tail", max_chars=120),
+            "token=[redacted]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("be\x1barer abc,secret-tail", max_chars=120),
+            "Bearer [redacted]",
+        )
+
+    def test_sanitize_text_redacts_path_suffix_after_attack_punctuation(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_text("open /srv/private/token;tail", max_chars=120),
+            "open [redacted path]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("open /srv/private/token,tail", max_chars=120),
+            "open [redacted path]",
+        )
+
+    def test_sanitize_text_redacts_file_uri_and_preserves_http_userinfo(self) -> None:
+        sanitized = app_logging.sanitize_text(
+            "fetch https://user:pa:ss@example.test:8443/path?x=1#frag and file:///tmp/private/token.txt?mode=0400#tail",
+            max_chars=260,
+        )
+        self.assertEqual(
+            sanitized,
+            "fetch https://[redacted]@example.test:8443/path?x=1#frag and file:[redacted path]",
+        )
+
+    def test_sanitize_text_preserves_protocol_relative_counterexamples(self) -> None:
+        self.assertEqual(
+            app_logging.sanitize_text("sync //example.test/path", max_chars=120),
+            "sync [redacted path]",
+        )
+
     def test_sanitize_error_message_redacts_local_absolute_paths(self) -> None:
         sanitized = app_logging.sanitize_error_message("settings export not found: /var/tmp/private/settings.json", max_chars=120)
         self.assertEqual(sanitized, "settings export not found: [redacted path]")
         self.assertNotIn("/var/tmp/private", sanitized)
+
+    def test_sanitize_error_message_redacts_arbitrary_absolute_paths(self) -> None:
+        for value, private_path in (
+            ("failed: /srv/internal/transcript.owner", "/srv/internal/transcript.owner"),
+            ("failed: /private/token-value", "/private/token-value"),
+            (r"failed: C:\Users\Alice\token.txt", r"C:\Users\Alice\token.txt"),
+            (r"failed: \\server\share\token.txt", r"\\server\share\token.txt"),
+            ("failed: [/srv/internal/transcript.owner]", "/srv/internal/transcript.owner"),
+            (r"failed: {C:\Users\Alice\token.txt}", r"C:\Users\Alice\token.txt"),
+            (r"failed: item,\\server\share\token.txt", r"\\server\share\token.txt"),
+            ("failed: value)/private/token-value", "/private/token-value"),
+        ):
+            with self.subTest(value=value):
+                sanitized = app_logging.sanitize_error_message(value, max_chars=120)
+                self.assertNotIn(private_path, sanitized)
+                self.assertIn("[redacted path]", sanitized)
+
+        self.assertEqual(
+            app_logging.sanitize_error_message("failed: https://example.test/path", max_chars=120),
+            "failed: https://example.test/path",
+        )
 
     def test_sanitize_hint_detects_url_userinfo_without_password(self) -> None:
         self.assertIsNotNone(app_logging._SANITIZE_HINT_RE.search("https://secret-token@example.test/path"))
@@ -235,6 +573,44 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertLess(time.perf_counter() - started, 2.0)
         self.assertTrue(sanitized.endswith("...[truncated]"))
+
+    def test_sanitize_error_message_capped_extraction_on_long_inputs(self) -> None:
+        value = "failed: " + ("x" * 20_000) + " token=abc,secret-tail"
+        started = time.perf_counter()
+        sanitized = app_logging.sanitize_error_message(value, max_chars=120)
+        elapsed = time.perf_counter() - started
+
+        self.assertLess(elapsed, 3.0)
+        self.assertNotIn("abc,secret-tail", sanitized)
+        self.assertTrue("..." in sanitized or "[redacted]" in sanitized or "[redacted error details]" in sanitized)
+
+    def test_sanitize_text_adversarial_path_boundary_scan(self) -> None:
+        value = (
+            (
+                "x" * 2_000
+                + "artifact@/srv/private/token "
+                + "x" * 2_000
+                + "x?/srv/private/token "
+                + "x" * 2_000
+                + "\u001b[?25l/srv/private/token "
+                + "x" * 2_000
+                + "X:/private/token "
+                + "x" * 2_000
+                + "\x1b[31/srv/private/token "
+                + "x" * 2_000
+                + "\x9b" + ("0" * 70) + "m/srv/private/token "
+                + "\x9b[31m/srv/private/token "
+                + "\n"
+            )
+            * 10
+        )
+        started = time.perf_counter()
+        sanitized = app_logging.sanitize_text(value, max_chars=1_000_000)
+
+        elapsed = time.perf_counter() - started
+        self.assertLess(elapsed, 3.0)
+        self.assertEqual(sanitized.count("[redacted path]"), 70)
+        self.assertIn("\\x1b[31[redacted path]", sanitized)
 
     def test_log_path_insecure_rejects_non_private_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -377,6 +753,8 @@ class AppLoggingTest(unittest.TestCase):
             newest = log_dir / "speed-of-cinnamon-2026-06-02.log.gz"
             oldest.write_bytes(b"o" * 120)
             newest.write_bytes(b"n" * 120)
+            oldest.chmod(0o600)
+            newest.chmod(0o600)
             os.utime(oldest, (100, 100))
             os.utime(newest, (200, 200))
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
@@ -646,7 +1024,7 @@ class AppLoggingTest(unittest.TestCase):
                 app_logging._copy_log_content(Path("/probe.log"), mock.Mock())
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
-        self.assertIn("source close failed", "\n".join(caught.exception.__notes__))
+        self.assertNotIn("source close failed", "\n".join(caught.exception.__notes__))
 
     def test_gzip_file_preserves_copy_error_when_input_close_fails(self) -> None:
         input_file = mock.MagicMock()
@@ -674,7 +1052,7 @@ class AppLoggingTest(unittest.TestCase):
                 app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
-        self.assertIn("source close failed", "\n".join(caught.exception.__notes__))
+        self.assertNotIn("source close failed", "\n".join(caught.exception.__notes__))
 
     def test_unlink_log_file_preserves_success_when_parent_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -988,7 +1366,7 @@ class AppLoggingTest(unittest.TestCase):
                     app_logging._merge_old_months(log_dir, date(2026, 6, 1))
 
             self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
-            self.assertIn("archive close failed", "\n".join(caught.exception.__notes__))
+            self.assertNotIn("archive close failed", "\n".join(caught.exception.__notes__))
 
     def test_monthly_merge_removes_temp_archive_when_copy_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1247,6 +1625,8 @@ class AppLoggingTest(unittest.TestCase):
             newest = log_dir / "speed-of-cinnamon-2026-06-02.log.gz"
             oldest.write_bytes(b"o" * 120)
             newest.write_bytes(b"n" * 120)
+            oldest.chmod(0o600)
+            newest.chmod(0o600)
             os.utime(oldest, (100, 100))
             os.utime(newest, (200, 200))
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
@@ -1283,6 +1663,7 @@ class AppLoggingTest(unittest.TestCase):
             log_dir = Path(tmp)
             active = log_dir / f"speed-of-cinnamon-{today.isoformat()}.log"
             active.write_bytes(b"x" * 101)
+            active.chmod(0o600)
 
             with mock.patch("speed_of_cinnamon.app_logging.MAX_DAILY_LOG_BYTES", 100):
                 app_logging.maintain_logs(log_dir, today=today)
@@ -1627,6 +2008,8 @@ class AppLoggingTest(unittest.TestCase):
             second = log_dir / "speed-of-cinnamon-2026-05-31.log"
             first.write_text("first\n", encoding="utf-8")
             second.write_text("second\n", encoding="utf-8")
+            first.chmod(0o600)
+            second.chmod(0o600)
             first.chmod(0o600)
             second.chmod(0o600)
             real_unlink = os.unlink
@@ -1980,7 +2363,10 @@ class AppLoggingTest(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "activation fsync failed") as caught:
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
-            self.assertIn("monthly log archive changed during activation rollback", "\n".join(caught.exception.__notes__))
+            self.assertNotIn(
+                "monthly log archive changed during activation rollback",
+                "\n".join(getattr(caught.exception, "__notes__", ())),
+            )
             self.assertEqual(state["directory_syncs"], 3)
             self.assertEqual(state["rollback_stat_calls"], 2)
             self.assertEqual(old_archive.read_text(encoding="utf-8"), "must survive\n")
@@ -2083,6 +2469,8 @@ class AppLoggingTest(unittest.TestCase):
             second = log_dir / "speed-of-cinnamon-2026-05-31.log"
             first.write_text("first\n", encoding="utf-8")
             second.write_text("second\n", encoding="utf-8")
+            first.chmod(0o600)
+            second.chmod(0o600)
             failed = False
             real_fsync = os.fsync
 
@@ -2491,7 +2879,7 @@ class AppLoggingTest(unittest.TestCase):
                 with self.assertRaisesRegex(OSError, "target activation fsync failed") as caught:
                     app_logging._gzip_file(source, target)
 
-            self.assertIn("log target changed during activation rollback", "\n".join(caught.exception.__notes__))
+            self.assertNotIn("log target changed during activation rollback", "\n".join(caught.exception.__notes__))
             self.assertEqual(state["rollback_stat_calls"], 2)
             self.assertEqual(target.read_text(encoding="utf-8"), "must survive\n")
 
@@ -2678,6 +3066,9 @@ class AppLoggingTest(unittest.TestCase):
             oldest.write_bytes(b"o" * 40)
             newest.write_bytes(b"n" * 40)
             active.write_bytes(b"a" * 10)
+            oldest.chmod(0o600)
+            newest.chmod(0o600)
+            active.chmod(0o600)
 
             with mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 55):
                 with mock.patch("speed_of_cinnamon.app_logging.os.unlink", wraps=os.unlink) as mocked_unlink:
