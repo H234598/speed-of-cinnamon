@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 from .command_chain import MAX_COMMAND_LENGTH_CHARS
-from .http_safety import is_loopback_hostname
+from .http_safety import has_unsafe_url_characters, is_loopback_hostname
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
 from .postprocessor import (
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
@@ -208,20 +208,25 @@ def _validate_remote_http_url(value: str, *, field_name: str) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError(f"{field_name} must be text")
     raw = value or ""
+    probe = raw[: MAX_REMOTE_URL_CHARS + 1].strip(" ")
+    if _contains_escaped_null(probe):
+        raise ValueError(f"{field_name} contains invalid null byte")
+    if has_unsafe_url_characters(probe) or _contains_http_header_control_chars(probe):
+        raise ValueError(f"{field_name} contains invalid control character")
     try:
-        raw.encode("utf-8")
+        probe.encode("utf-8")
     except UnicodeEncodeError as exc:
         raise ValueError(f"{field_name} contains invalid UTF-8") from exc
-    if _contains_escaped_null(raw):
-        raise ValueError(f"{field_name} contains invalid null byte")
-    if _contains_http_header_control_chars(raw):
-        raise ValueError(f"{field_name} contains invalid control character")
-    normalized = raw.strip()
+    if len(raw) > MAX_REMOTE_URL_CHARS:
+        raise ValueError(f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} characters)")
+    try:
+        raw_encoded = raw.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise ValueError(f"{field_name} contains invalid UTF-8") from exc
+    normalized = raw.strip(" ")
     if not normalized:
         raise ValueError(f"{field_name} is required")
-    if len(normalized) > MAX_REMOTE_URL_CHARS:
-        raise ValueError(f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} characters)")
-    if len(normalized.encode("utf-8")) > MAX_REMOTE_URL_CHARS:
+    if len(raw_encoded) > MAX_REMOTE_URL_CHARS:
         raise ValueError(f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} bytes)")
     try:
         parsed = urllib.parse.urlparse(normalized)

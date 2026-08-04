@@ -6259,6 +6259,68 @@ class CliTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "missing hostname"):
                     cli._validate_openai_compatible_http_url(value, "openai-compatible url")
 
+    def test_text_model_url_validators_reject_inner_whitespace_and_invalid_port(self) -> None:
+        for value in ("http://localhost:11434/v1 with-space", "http://localhost:11434/v1\u2003with-space"):
+            with self.subTest(value=repr(value)):
+                with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+                    cli._validate_ollama_http_url(value, field_name="ollama url")
+                with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+                    cli._validate_openai_compatible_http_url(value, "openai-compatible url")
+        for value in ("http://localhost:not-a-port", "https://api.example.test:not-a-port/v1"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(RuntimeError, "invalid port"):
+                    cli._validate_ollama_http_url(value, field_name="ollama url")
+                with self.assertRaisesRegex(RuntimeError, "invalid port"):
+                    cli._validate_openai_compatible_http_url(value, "openai-compatible url")
+
+    def test_text_model_url_validators_normalize_outer_ascii_spaces_only(self) -> None:
+        ollama = "  http://localhost:11434/v1  "
+        openai = "  https://api.example.test/v1  "
+        self.assertEqual(
+            cli._validate_ollama_http_url(ollama, field_name="ollama url"),
+            "http://localhost:11434/v1",
+        )
+        self.assertEqual(
+            cli._validate_openai_compatible_http_url(openai, "openai-compatible url"),
+            "https://api.example.test/v1",
+        )
+        for value in ("\thttp://localhost:11434/v1", "http://localhost:11434/v1\t", "\u2003http://localhost:11434/v1"):
+            with self.subTest(value=repr(value)):
+                with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+                    cli._validate_ollama_http_url(value, field_name="ollama url")
+
+    def test_text_model_url_raw_character_limit_counts_outer_ascii_space(self) -> None:
+        prefix = "http://localhost:11434/"
+        normalized = prefix + ("x" * (cli.MAX_URL_CHARS - len(prefix)))
+        raw = " " + normalized
+        self.assertEqual(len(normalized), cli.MAX_URL_CHARS)
+        self.assertEqual(len(raw), cli.MAX_URL_CHARS + 1)
+        with self.assertRaisesRegex(RuntimeError, "ollama url is too large"):
+            cli._validate_ollama_http_url(raw, field_name="ollama url")
+
+    def test_text_model_url_error_precedence_beats_size_limit(self) -> None:
+        suffix = "x" * cli.MAX_URL_CHARS
+        for marker, expected in (
+            ("\x00", "contains invalid null byte"),
+            ("\x85", "contains invalid control character"),
+            ("\ud800", "contains invalid UTF-8"),
+        ):
+            value = f"http://localhost:11434/{marker}{suffix}"
+            with self.subTest(marker=repr(marker)):
+                with self.assertRaisesRegex(RuntimeError, expected):
+                    cli._validate_ollama_http_url(value, field_name="ollama url")
+                with self.assertRaisesRegex(RuntimeError, expected):
+                    cli._validate_openai_compatible_http_url(value, "openai-compatible url")
+
+    def test_text_model_url_probe_bounds_diagnostics_before_size_limit(self) -> None:
+        prefix = "http://localhost:11434/"
+        far_surrogate = prefix + ("x" * (cli.MAX_URL_CHARS + 10)) + "\ud800"
+        near_surrogate = prefix + "\ud800" + ("x" * cli.MAX_URL_CHARS)
+        with self.assertRaisesRegex(RuntimeError, "ollama url is too large"):
+            cli._validate_ollama_http_url(far_surrogate, field_name="ollama url")
+        with self.assertRaisesRegex(RuntimeError, "contains invalid UTF-8"):
+            cli._validate_ollama_http_url(near_surrogate, field_name="ollama url")
+
     @mock.patch("speed_of_cinnamon.cli.list_openai_compatible_models")
     def test_text_models_rejects_remote_plain_http_openai_url(self, mocked_list: mock.Mock) -> None:
         stdout = io.StringIO()

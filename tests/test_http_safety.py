@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from speed_of_cinnamon.http_safety import is_loopback_hostname
+from speed_of_cinnamon.http_safety import MAX_LOOPBACK_HOSTNAME_CHARS, is_loopback_hostname
 
 
 class HttpSafetyTest(unittest.TestCase):
@@ -22,6 +22,27 @@ class HttpSafetyTest(unittest.TestCase):
         for hostname in (" localhost", "localhost ", " 127.0.0.1", "127.0.0.1 ", " [::1]", "[::1] "):
             with self.subTest(hostname=hostname):
                 self.assertFalse(is_loopback_hostname(hostname))
+
+    def test_is_loopback_hostname_rejects_oversized_and_unsafe_hosts(self) -> None:
+        self.assertFalse(is_loopback_hostname("a" * (MAX_LOOPBACK_HOSTNAME_CHARS + 1)))
+        for hostname in ("local\x00host", "local\x85host", "local\thost", "local\u2003host", "local\u00a0host"):
+            with self.subTest(hostname=repr(hostname)):
+                self.assertFalse(is_loopback_hostname(hostname))
+
+    def test_is_loopback_hostname_rejects_scoped_and_mapped_ipv6_conservatively(self) -> None:
+        self.assertFalse(is_loopback_hostname("fe80::1%eth0"))
+        self.assertFalse(is_loopback_hostname("::ffff:127.0.0.1"))
+
+    def test_is_loopback_hostname_preserves_bracketed_trailing_dot_behavior(self) -> None:
+        self.assertTrue(is_loopback_hostname("[::1]."))
+
+    def test_is_loopback_hostname_accepts_only_bracketed_ipv6_loopback(self) -> None:
+        for hostname in ("[localhost]", "[127.0.0.1]", "[127.0.0.1].", "[::ffff:127.0.0.1]", "[::1%eth0]"):
+            with self.subTest(hostname=hostname):
+                self.assertFalse(is_loopback_hostname(hostname))
+        for hostname in ("[::1]", "[0:0:0:0:0:0:0:1]", "[::1]."):
+            with self.subTest(hostname=hostname):
+                self.assertTrue(is_loopback_hostname(hostname))
 
     def test_is_loopback_hostname_rejects_non_text_values(self) -> None:
         self.assertFalse(is_loopback_hostname(123))  # type: ignore[arg-type]

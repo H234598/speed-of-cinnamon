@@ -1060,6 +1060,54 @@ class DoctorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "contains invalid control character"):
             doctor._validate_remote_http_url("\x85https://api.example.test/v1", field_name="remote endpoint URL")
 
+    def test_validate_remote_http_url_rejects_inner_whitespace_and_invalid_port(self) -> None:
+        for value in ("https://api.example.test/v1 with-space", "https://api.example.test/v1\u2003with-space"):
+            with self.subTest(value=repr(value)):
+                with self.assertRaisesRegex(ValueError, "contains invalid control character"):
+                    doctor._validate_remote_http_url(value, field_name="remote endpoint URL")
+        with self.assertRaisesRegex(ValueError, "invalid port"):
+            doctor._validate_remote_http_url("https://api.example.test:not-a-port/v1", field_name="remote endpoint URL")
+
+    def test_validate_remote_http_url_normalizes_outer_ascii_spaces_only(self) -> None:
+        self.assertEqual(
+            doctor._validate_remote_http_url("  https://api.example.test/v1  ", field_name="remote endpoint URL"),
+            "https://api.example.test/v1",
+        )
+        for value in ("\thttps://api.example.test/v1", "https://api.example.test/v1\t", "\u2003https://api.example.test/v1"):
+            with self.subTest(value=repr(value)):
+                with self.assertRaisesRegex(ValueError, "contains invalid control character"):
+                    doctor._validate_remote_http_url(value, field_name="remote endpoint URL")
+
+    def test_validate_remote_http_url_raw_character_limit_counts_outer_ascii_space(self) -> None:
+        prefix = "https://api.example.test/"
+        normalized = prefix + ("x" * (doctor.MAX_REMOTE_URL_CHARS - len(prefix)))
+        raw = " " + normalized
+        self.assertEqual(len(normalized), doctor.MAX_REMOTE_URL_CHARS)
+        self.assertEqual(len(raw), doctor.MAX_REMOTE_URL_CHARS + 1)
+        with self.assertRaisesRegex(ValueError, "remote endpoint URL is too large"):
+            doctor._validate_remote_http_url(raw, field_name="remote endpoint URL")
+
+    def test_validate_remote_http_url_error_precedence_beats_size_limit(self) -> None:
+        suffix = "x" * doctor.MAX_REMOTE_URL_CHARS
+        for marker, expected in (
+            ("\x00", "contains invalid null byte"),
+            ("\x85", "contains invalid control character"),
+            ("\ud800", "contains invalid UTF-8"),
+        ):
+            value = f"https://api.example.test/{marker}{suffix}"
+            with self.subTest(marker=repr(marker)):
+                with self.assertRaisesRegex(ValueError, expected):
+                    doctor._validate_remote_http_url(value, field_name="remote endpoint URL")
+
+    def test_validate_remote_http_url_probe_bounds_diagnostics_before_size_limit(self) -> None:
+        prefix = "https://api.example.test/"
+        far_surrogate = prefix + ("x" * (doctor.MAX_REMOTE_URL_CHARS + 10)) + "\ud800"
+        near_surrogate = prefix + "\ud800" + ("x" * doctor.MAX_REMOTE_URL_CHARS)
+        with self.assertRaisesRegex(ValueError, "remote endpoint URL is too large"):
+            doctor._validate_remote_http_url(far_surrogate, field_name="remote endpoint URL")
+        with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
+            doctor._validate_remote_http_url(near_surrogate, field_name="remote endpoint URL")
+
     def test_validate_remote_http_url_rejects_surrogate_character(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
             doctor._validate_remote_http_url("https://api.example.test/\ud800", field_name="remote endpoint URL")

@@ -48,7 +48,7 @@ from .artifact_crypto import (
 )
 from .command_chain import CommandChainError, run_process_bounded_output
 from .doctor import parse_settings_json, report as doctor_report
-from .http_safety import is_loopback_hostname
+from .http_safety import has_unsafe_url_characters, is_loopback_hostname
 from .models import (
     CATALOG,
     ModelError,
@@ -884,7 +884,27 @@ def _assert_clean_text(value: str, *, field_name: str, max_chars: int) -> str:
 
 
 def _validate_text_model_url(url: str, *, field_name: str) -> str:
-    return _assert_clean_text(url, field_name=field_name, max_chars=MAX_URL_CHARS).rstrip("/")
+    if isinstance(url, bool) or not isinstance(url, str):
+        return _assert_clean_text(url, field_name=field_name, max_chars=MAX_URL_CHARS)
+    probe = url[: MAX_URL_CHARS + 1].strip(" ")
+    if _contains_escaped_null(probe):
+        raise RuntimeError(f"{field_name} contains invalid null byte")
+    if has_unsafe_url_characters(probe) or _contains_http_header_control_chars(probe):
+        raise RuntimeError(f"{field_name} contains invalid control character")
+    try:
+        probe.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RuntimeError(f"{field_name} contains invalid UTF-8") from exc
+    if len(url) > MAX_URL_CHARS:
+        raise RuntimeError(f"{field_name} is too large (max {MAX_URL_CHARS} characters)")
+    try:
+        raw_encoded = url.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise RuntimeError(f"{field_name} contains invalid UTF-8") from exc
+    if len(raw_encoded) > MAX_URL_CHARS:
+        raise RuntimeError(f"{field_name} is too large (max {MAX_URL_CHARS} bytes)")
+    normalized = url.strip(" ")
+    return normalized.rstrip("/")
 
 
 def _validate_ollama_http_url(url: str, *, field_name: str) -> str:
