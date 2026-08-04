@@ -322,7 +322,7 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertFalse(path.exists())
             self.assertTrue(any(child.name.startswith(".artifact.key.") and child.name.endswith(".tmp") for child in Path(tmp).iterdir()))
             self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
-            self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
+            self.assertNotIn("cleanup denied", "\n".join(caught.exception.__notes__))
 
     def test_default_passphrase_generation_closes_parent_after_temp_close_failure(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -371,19 +371,34 @@ class ArtifactCryptoTest(unittest.TestCase):
             close_calls: list[int] = []
             post_interrupt_calls: list[int] = []
             interrupted_fd: int | None = None
+            interrupted_fingerprint: tuple[int, int] | None = None
+            reopened_fds: set[int] = set()
+            real_open = artifact_crypto.os.open
+
+            def tracked_open(*args: object, **kwargs: object) -> int:
+                fd = real_open(*args, **kwargs)
+                if interrupted_fd is not None and fd == interrupted_fd:
+                    reopened_fds.add(fd)
+                return fd
 
             def close_after_close(fd: int) -> None:
-                nonlocal interrupted_fd
+                nonlocal interrupted_fd, interrupted_fingerprint
                 close_calls.append(fd)
-                if interrupted_fd is not None and fd == interrupted_fd:
-                    post_interrupt_calls.append(fd)
                 try:
-                    mode = real_fstat(fd).st_mode
+                    current_stat = real_fstat(fd)
                 except OSError:
                     return real_close(fd)
-                if stat.S_ISREG(mode) and interrupted_fd is None:
+                fingerprint = (current_stat.st_dev, current_stat.st_ino)
+                if (
+                    interrupted_fingerprint is not None
+                    and fingerprint == interrupted_fingerprint
+                    and fd not in reopened_fds
+                ):
+                    post_interrupt_calls.append(fd)
+                if stat.S_ISREG(current_stat.st_mode) and interrupted_fd is None:
                     real_close(fd)
                     interrupted_fd = fd
+                    interrupted_fingerprint = fingerprint
                     raise OSError("temp close interrupted after close")
                 real_close(fd)
 
@@ -395,6 +410,7 @@ class ArtifactCryptoTest(unittest.TestCase):
                         clear=False,
                     ),
                     mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+                    mock.patch.object(artifact_crypto.os, "open", side_effect=tracked_open),
                     mock.patch.object(artifact_crypto.os, "close", side_effect=close_after_close),
                 ):
                     with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
@@ -424,7 +440,7 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertEqual(len(leftovers), 1)
             self.assertEqual(leftovers[0].read_bytes(), b"")
             self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
-            self.assertIn("cleanup denied", "\n".join(caught.exception.__notes__))
+            self.assertNotIn("cleanup denied", "\n".join(caught.exception.__notes__))
 
     def test_default_passphrase_generation_preserves_race_read_error_after_rename_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -471,7 +487,7 @@ class ArtifactCryptoTest(unittest.TestCase):
                         real_close(fd)
 
             self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
-            self.assertIn("parent close failed", "\n".join(caught.exception.__notes__))
+            self.assertNotIn("parent close failed", "\n".join(caught.exception.__notes__))
             self.assertFalse(list(Path(tmp).glob(".artifact.key.*.tmp")))
 
     def test_default_passphrase_generation_preserves_race_read_error_after_temp_creation_conflict(self) -> None:
@@ -511,7 +527,50 @@ class ArtifactCryptoTest(unittest.TestCase):
                         real_close(fd)
 
             self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
-            self.assertIn("parent close failed", "\n".join(caught.exception.__notes__))
+            self.assertNotIn("parent close failed", "\n".join(caught.exception.__notes__))
+
+    def test_default_passphrase_generation_does_not_return_before_deferred_cleanup_error(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            real_close = artifact_crypto.os.close
+            real_rename = artifact_crypto._rename_without_replacing
+            parent_fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY)
+            leaked_fds: list[int] = []
+
+            def close_parent_with_error(fd: int) -> None:
+                if fd == parent_fd:
+                    leaked_fds.append(fd)
+                    raise OSError("parent close failed")
+                real_close(fd)
+
+            def rename_or_conflict(
+                source: str,
+                target: str,
+                *,
+                directory_fd: int,
+                field_name: str,
+            ) -> None:
+                if target == path.name:
+                    path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
+                    path.chmod(0o600)
+                    raise FileExistsError("target appeared")
+                real_rename(source, target, directory_fd=directory_fd, field_name=field_name)
+
+            try:
+                with (
+                    mock.patch.object(artifact_crypto, "default_passphrase_file", return_value=path),
+                    mock.patch.object(artifact_crypto, "ensure_directory_without_following_symlinks", return_value=parent_fd),
+                    mock.patch.object(artifact_crypto, "_rename_without_replacing", side_effect=rename_or_conflict),
+                    mock.patch.object(artifact_crypto.os, "close", side_effect=close_parent_with_error),
+                ):
+                    with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "temporary file could not be removed"):
+                        artifact_crypto._generate_default_passphrase_file(path)
+            finally:
+                for fd in leaked_fds:
+                    with contextlib.suppress(OSError):
+                        real_close(fd)
+
+            self.assertEqual(path.read_text(encoding="utf-8"), STRONG_PASSPHRASE + "\n")
 
     def test_default_passphrase_generation_does_not_remove_replaced_temp_file_after_activation_conflict(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -734,7 +793,8 @@ class ArtifactCryptoTest(unittest.TestCase):
                     artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
 
             notes = "\n".join(caught.exception.__notes__)
-            self.assertIn("target changed during rollback", notes)
+            self.assertIn("artifact encryption cleanup failed", notes)
+            self.assertNotIn("target changed during rollback", notes)
             self.assertNotIn("cannot access local variable", notes)
             self.assertEqual(path.read_text(encoding="utf-8"), "replacement\n")
 
@@ -769,7 +829,8 @@ class ArtifactCryptoTest(unittest.TestCase):
                     artifact_crypto._generate_default_passphrase_file(path, replace=True)
 
             notes = "\n".join(caught.exception.__notes__)
-            self.assertIn("recovery backup changed before cleanup", notes)
+            self.assertIn("artifact encryption cleanup failed", notes)
+            self.assertNotIn("recovery backup changed before cleanup", notes)
             self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
             backups = list(root.glob(".artifact.key.*.bak"))
             self.assertEqual(len(backups), 1)
@@ -964,6 +1025,32 @@ class ArtifactCryptoTest(unittest.TestCase):
         bad_secret = artifact_crypto._b64encode(b"too short").encode("ascii")
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "invalid length"):
             artifact_crypto._parse_keyring_secret(bad_secret)
+
+    def test_keyring_lookup_invalid_payloads_keep_parser_error_contract(self) -> None:
+        key = bytes(range(artifact_crypto.KEY_SIZE_BYTES))
+        with mock.patch.object(artifact_crypto, "_load_keyring_key", return_value=key):
+            encrypted, _mode = artifact_crypto.encrypt_bytes(b"payload", "keyring", kind="transcript")
+
+        cases = (
+            (b"\xff\xfe-secret", "invalid UTF-8"),
+            (b"not-base64!\n", "encrypted artifact artifact is invalid"),
+            (artifact_crypto._b64encode(b"too short").encode("ascii") + b"\n", "invalid length"),
+        )
+        for raw, message in cases:
+            with self.subTest(message=message):
+                response = subprocess.CompletedProcess(["secret-tool", "lookup"], 0, raw, b"")
+                with mock.patch.object(artifact_crypto, "_run_secret_tool", return_value=response):
+                    with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, message) as caught:
+                        artifact_crypto.decrypt_bytes(encrypted, kind="transcript")
+
+                exception = caught.exception
+                rendered = "".join(__import__("traceback").format_exception(exception))
+                self.assertIsNone(exception.__cause__)
+                self.assertIsNone(exception.__context__)
+                self.assertNotIn(repr(raw), repr(exception))
+                self.assertNotIn(repr(raw), repr(exception.args))
+                self.assertNotIn(repr(raw), rendered)
+                self.assertNotIn(repr(raw), "\n".join(getattr(exception, "__notes__", ())))
 
     def test_keyring_lookup_failure_does_not_create_or_replace_key(self) -> None:
         failure = subprocess.CompletedProcess(
@@ -1328,6 +1415,8 @@ class ArtifactCryptoTest(unittest.TestCase):
             start_new_session=True,
         )
         child_pid = int(process.stdout.readline())
+        process._soc_process_identity = artifact_crypto._clipboard_lock_identity_for_pid(process.pid)
+        self.assertTrue(process._soc_process_identity)
 
         def child_is_live() -> bool:
             try:
@@ -1367,6 +1456,8 @@ class ArtifactCryptoTest(unittest.TestCase):
             start_new_session=True,
         )
         child_pid = int(process.stdout.readline())
+        process._soc_process_identity = artifact_crypto._clipboard_lock_identity_for_pid(process.pid)
+        self.assertTrue(process._soc_process_identity)
         process.wait()
 
         def child_is_live() -> bool:
@@ -1404,6 +1495,8 @@ class ArtifactCryptoTest(unittest.TestCase):
             start_new_session=True,
         )
         child_pid = int(process.stdout.readline())
+        process._soc_process_identity = artifact_crypto._clipboard_lock_identity_for_pid(process.pid)
+        self.assertTrue(process._soc_process_identity)
 
         def child_is_live() -> bool:
             try:
@@ -1743,6 +1836,25 @@ class ArtifactCryptoTest(unittest.TestCase):
         mocked_store.assert_not_called()
         mocked_token_bytes.assert_not_called()
 
+    def test_v1_keyring_envelope_remains_decryptable(self) -> None:
+        key = bytes(range(artifact_crypto.KEY_SIZE_BYTES))
+        nonce = bytes(range(artifact_crypto.NONCE_SIZE_BYTES))
+        _invalid_tag, aesgcm, _scrypt = artifact_crypto._crypto_backend()
+        ciphertext = aesgcm(key).encrypt(nonce, b"legacy-keyring", artifact_crypto._aad("transcript", version=1))
+        envelope = {
+            "magic": artifact_crypto.ENVELOPE_MAGIC,
+            "version": 1,
+            "algorithm": artifact_crypto.ENVELOPE_ALGORITHM,
+            "mode": artifact_crypto.ARTIFACT_ENCRYPTION_KEYRING,
+            "kind": "transcript",
+            "nonce": artifact_crypto._b64encode(nonce),
+            "ciphertext": artifact_crypto._b64encode(ciphertext),
+            "kdf": "none",
+        }
+        payload = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        with mock.patch.object(artifact_crypto, "_lookup_keyring_key", return_value=key):
+            self.assertEqual(artifact_crypto.decrypt_bytes(payload, kind="transcript"), b"legacy-keyring")
+
     def test_decryption_rejects_wrong_artifact_kind(self) -> None:
         with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
             encrypted, _ = artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
@@ -1927,7 +2039,8 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "failed to read artifact") as caught:
                 artifact_crypto.read_private_bytes(Path("/does-not-matter/artifact"), field_name="artifact")
 
-        self.assertIn("close interrupted", "\n".join(caught.exception.__notes__))
+        self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertNotIn("close interrupted", "\n".join(caught.exception.__notes__))
 
     def test_private_passphrase_fdopen_value_error_is_wrapped(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2026,7 +2139,8 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be read") as caught:
                 artifact_crypto._read_private_passphrase_file(Path("/does-not-matter/passphrase.key"))
 
-        self.assertIn("close interrupted", "\n".join(caught.exception.__notes__))
+        self.assertIn("artifact encryption cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertNotIn("close interrupted", "\n".join(caught.exception.__notes__))
 
     def test_write_encrypted_bytes_error_does_not_leak_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2115,6 +2229,416 @@ class ArtifactCryptoTest(unittest.TestCase):
             with mock.patch("speed_of_cinnamon.artifact_crypto.MAX_ENCRYPTED_ARTIFACT_BYTES", 4):
                 with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "is too large"):
                     artifact_crypto.read_private_bytes(path, field_name="artifact")
+
+    def test_v2_envelope_binds_metadata_and_rejects_unknown_fields(self) -> None:
+        with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
+            encrypted, _mode = artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+
+        envelope = json.loads(encrypted.decode("utf-8"))
+        self.assertEqual(envelope["version"], 2)
+        envelope["scrypt_n"] = artifact_crypto.SCRYPT_N + 1
+        tampered = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "metadata"):
+            artifact_crypto.decrypt_bytes(tampered, kind="transcript")
+
+    def test_unknown_envelope_version_is_rejected_as_unsupported(self) -> None:
+        with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
+            encrypted, _mode = artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+        envelope = json.loads(encrypted.decode("utf-8"))
+        envelope["version"] = "future"
+        tampered = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "version is unsupported"):
+            artifact_crypto.decrypt_bytes(tampered, kind="transcript")
+
+    def test_v1_envelope_remains_decryptable_after_v2_default(self) -> None:
+        salt = bytes(range(artifact_crypto.SALT_SIZE_BYTES))
+        nonce = bytes(range(artifact_crypto.NONCE_SIZE_BYTES))
+        _invalid_tag, aesgcm, _scrypt = artifact_crypto._crypto_backend()
+        key = artifact_crypto._derive_passphrase_key(STRONG_PASSPHRASE, salt)
+        ciphertext = aesgcm(key).encrypt(nonce, b"legacy", artifact_crypto._aad("transcript", version=1))
+        envelope = {
+            "magic": artifact_crypto.ENVELOPE_MAGIC,
+            "version": 1,
+            "algorithm": artifact_crypto.ENVELOPE_ALGORITHM,
+            "mode": artifact_crypto.ARTIFACT_ENCRYPTION_PASSPHRASE,
+            "kind": "transcript",
+            "nonce": artifact_crypto._b64encode(nonce),
+            "ciphertext": artifact_crypto._b64encode(ciphertext),
+            "kdf": "scrypt",
+            "salt": artifact_crypto._b64encode(salt),
+            "scrypt_n": artifact_crypto.SCRYPT_N,
+            "scrypt_r": artifact_crypto.SCRYPT_R,
+            "scrypt_p": artifact_crypto.SCRYPT_P,
+        }
+        payload = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
+            self.assertEqual(artifact_crypto.decrypt_bytes(payload, kind="transcript"), b"legacy")
+
+    def test_weak_default_rotation_preserves_one_bounded_previous_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+            salt = bytes(range(artifact_crypto.SALT_SIZE_BYTES))
+            nonce = bytes(range(artifact_crypto.NONCE_SIZE_BYTES))
+            _invalid_tag, aesgcm, _scrypt = artifact_crypto._crypto_backend()
+            old_key = artifact_crypto._derive_passphrase_key("short", salt)
+            ciphertext = aesgcm(old_key).encrypt(nonce, b"old", artifact_crypto._aad("transcript", version=1))
+            legacy = {
+                "magic": artifact_crypto.ENVELOPE_MAGIC,
+                "version": 1,
+                "algorithm": artifact_crypto.ENVELOPE_ALGORITHM,
+                "mode": artifact_crypto.ARTIFACT_ENCRYPTION_PASSPHRASE,
+                "kind": "transcript",
+                "nonce": artifact_crypto._b64encode(nonce),
+                "ciphertext": artifact_crypto._b64encode(ciphertext),
+                "kdf": "scrypt",
+                "salt": artifact_crypto._b64encode(salt),
+                "scrypt_n": artifact_crypto.SCRYPT_N,
+                "scrypt_r": artifact_crypto.SCRYPT_R,
+                "scrypt_p": artifact_crypto.SCRYPT_P,
+            }
+            old_payload = (json.dumps(legacy, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+            ):
+                artifact_crypto.encrypt_bytes(b"new", "passphrase", kind="transcript")
+                history = path.with_name("artifact.key.history")
+                self.assertTrue(history.exists())
+                self.assertNotIn(b"short", history.read_bytes())
+                self.assertLessEqual(history.stat().st_size, 8192)
+                self.assertEqual(history.stat().st_mode & 0o777, 0o600)
+                self.assertEqual(history.stat().st_nlink, 1)
+                self.assertEqual(artifact_crypto.decrypt_bytes(old_payload, kind="transcript"), b"old")
+
+    def test_untrusted_default_history_is_not_overwritten(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "artifact.key"
+            history = root / "artifact.key.history"
+            victim = root / "victim.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+            victim.write_text("victim secret", encoding="utf-8")
+            victim.chmod(0o600)
+            history.symlink_to(victim.name)
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "history"):
+                    artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+            self.assertTrue(history.is_symlink())
+            self.assertEqual(victim.read_text(encoding="utf-8"), "victim secret")
+            self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
+
+    def test_secret_tool_stop_kills_owned_live_process_when_identity_is_unknown(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.returncode = None
+        process.poll.return_value = None
+        process._soc_process_identity = ""
+        with (
+            mock.patch("speed_of_cinnamon.artifact_crypto._process_tree_descendant_identities") as tree,
+            mock.patch.object(artifact_crypto.os, "getpgid", side_effect=ProcessLookupError),
+            mock.patch("speed_of_cinnamon.artifact_crypto.os.killpg") as killpg,
+        ):
+            artifact_crypto._stop_secret_tool_process(process)
+
+        process.kill.assert_called_once_with()
+        process.wait.assert_called_once()
+        tree.assert_not_called()
+        killpg.assert_not_called()
+
+    def test_passphrase_temp_creation_requests_cloexec(self) -> None:
+        with (
+            mock.patch.object(artifact_crypto.os, "open", return_value=123) as mocked_open,
+            mock.patch.object(artifact_crypto.secrets, "token_hex", return_value="fixed"),
+        ):
+            fd, name = artifact_crypto._create_private_temp_passphrase_file(9, "artifact.key")
+
+        self.assertEqual((fd, name), (123, ".artifact.key.fixed.tmp"))
+        self.assertTrue(mocked_open.call_args.args[1] & getattr(os, "O_CLOEXEC", 0))
+
+    def test_passphrase_scrub_requests_cloexec(self) -> None:
+        fake_stat = SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_dev=1, st_ino=2, st_nlink=1, st_size=0)
+        with (
+            mock.patch.object(artifact_crypto.os, "open", return_value=123) as mocked_open,
+            mock.patch.object(artifact_crypto.os, "fstat", return_value=fake_stat),
+            mock.patch.object(artifact_crypto.os, "ftruncate"),
+            mock.patch.object(artifact_crypto.os, "close"),
+        ):
+            artifact_crypto._scrub_temp_passphrase_file(9, "temp.key")
+
+        self.assertTrue(mocked_open.call_args.args[1] & getattr(os, "O_CLOEXEC", 0))
+
+    def test_default_generation_restores_claim_after_cleanup_open_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            real_open = artifact_crypto.os.open
+
+            def fail_cleanup_open(name: object, *args: object, **kwargs: object) -> int:
+                if isinstance(name, str) and name.endswith(".cleanup"):
+                    raise OSError("cleanup open failed")
+                return real_open(name, *args, **kwargs)
+
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+                mock.patch.object(artifact_crypto, "_write_all", side_effect=OSError("write failed")),
+                mock.patch.object(artifact_crypto.os, "open", side_effect=fail_cleanup_open),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "passphrase file could not be generated"):
+                    artifact_crypto._generate_default_passphrase_file(path)
+
+            temporary_files = list(Path(tmp).glob(".artifact.key.*.tmp"))
+            self.assertEqual(len(temporary_files), 1)
+            self.assertEqual(temporary_files[0].read_bytes(), b"")
+            self.assertFalse(list(Path(tmp).glob("*.cleanup")))
+
+    def test_invalid_default_history_does_not_block_current_key(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            history = Path(tmp) / "artifact.key.history"
+            path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            history.write_text("not-json", encoding="utf-8")
+            history.chmod(0o600)
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+            ):
+                encrypted, _mode = artifact_crypto.encrypt_bytes(b"current", "passphrase", kind="transcript")
+                self.assertEqual(artifact_crypto.decrypt_bytes(encrypted, kind="transcript"), b"current")
+            self.assertEqual(history.read_text(encoding="utf-8"), "not-json")
+
+    def test_invalid_history_after_current_key_failure_is_ignored_chain_free(self) -> None:
+        wrong_passphrase = "WrongStrongPassphrase!9876543210"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            history = Path(tmp) / "artifact.key.history"
+            victim = Path(tmp) / "history-victim"
+            path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+            ):
+                encrypted, _mode = artifact_crypto.encrypt_bytes(b"current", "passphrase", kind="transcript")
+
+            path.write_text(wrong_passphrase + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            history.write_text("not-json", encoding="utf-8")
+            history.chmod(0o600)
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "authentication failed") as caught:
+                    artifact_crypto.decrypt_bytes(encrypted, kind="transcript")
+
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertIsNone(caught.exception.__context__)
+            rendered = "".join(__import__("traceback").format_exception(caught.exception))
+            self.assertNotIn("not-json", rendered)
+            self.assertNotIn(wrong_passphrase, rendered)
+
+            victim.write_text("victim", encoding="utf-8")
+            victim.chmod(0o600)
+            history.unlink()
+            history.symlink_to(victim.name)
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+            ):
+                with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "authentication failed") as caught:
+                    artifact_crypto.decrypt_bytes(encrypted, kind="transcript")
+
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertIsNone(caught.exception.__context__)
+            self.assertTrue(history.is_symlink())
+            self.assertEqual(victim.read_text(encoding="utf-8"), "victim")
+
+    def test_default_history_rejects_boolean_and_float_versions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            history = Path(tmp) / "artifact.key.history"
+            for version in (True, 1.0):
+                history.write_text(
+                    json.dumps({"version": version, "keys": []}) + "\n",
+                    encoding="utf-8",
+                )
+                history.chmod(0o600)
+                with self.assertRaisesRegex(artifact_crypto._PassphraseHistoryError, "invalid"):
+                    artifact_crypto._read_default_passphrase_history(path)
+
+    def test_default_history_key_derivation_is_lazy(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            path.write_text("short\n", encoding="utf-8")
+            path.chmod(0o600)
+            with (
+                mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: "", artifact_crypto.PASSPHRASE_FILE_ENV: ""}, clear=False),
+                mock.patch("speed_of_cinnamon.artifact_crypto.default_passphrase_file", return_value=path),
+            ):
+                encrypted, _mode = artifact_crypto.encrypt_bytes(b"current", "passphrase", kind="transcript")
+                real_derive = artifact_crypto._derive_passphrase_key
+                with mock.patch.object(
+                    artifact_crypto,
+                    "_derive_passphrase_key",
+                    side_effect=real_derive,
+                ) as derive:
+                    self.assertEqual(artifact_crypto.decrypt_bytes(encrypted, kind="transcript"), b"current")
+                self.assertEqual(derive.call_count, 1)
+
+    def test_v2_downgrade_and_nonce_tamper_are_rejected(self) -> None:
+        with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
+            encrypted, _mode = artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+        envelope = json.loads(encrypted.decode("utf-8"))
+
+        downgraded = dict(envelope)
+        downgraded["version"] = 1
+        payload = (json.dumps(downgraded, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "authentication failed"):
+            artifact_crypto.decrypt_bytes(payload, kind="transcript")
+
+        tampered = dict(envelope)
+        tampered["nonce"] = artifact_crypto._b64encode(b"x" * artifact_crypto.NONCE_SIZE_BYTES)
+        payload = (json.dumps(tampered, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "authentication failed"):
+            artifact_crypto.decrypt_bytes(payload, kind="transcript")
+
+    def test_unknown_numeric_envelope_version_is_rejected(self) -> None:
+        with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
+            encrypted, _mode = artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
+        envelope = json.loads(encrypted.decode("utf-8"))
+        envelope["version"] = 99
+        payload = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "version is unsupported"):
+            artifact_crypto.decrypt_bytes(payload, kind="transcript")
+
+    def test_secret_tool_unknown_identity_uses_confirmed_private_group(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.returncode = None
+        process.poll.return_value = None
+        process._soc_process_identity = ""
+        with (
+            mock.patch.object(artifact_crypto.os, "getpgid", return_value=1234),
+            mock.patch.object(artifact_crypto.os, "killpg") as killpg,
+        ):
+            artifact_crypto._stop_secret_tool_process(process)
+        killpg.assert_called_once_with(1234, artifact_crypto.signal.SIGKILL)
+        process.kill.assert_not_called()
+        process.wait.assert_called_once()
+
+    def test_secret_tool_unknown_identity_falls_back_to_leader_when_group_unconfirmed(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.returncode = None
+        process.poll.return_value = None
+        process._soc_process_identity = ""
+        with (
+            mock.patch.object(artifact_crypto.os, "getpgid", side_effect=OSError("permission denied")),
+            mock.patch.object(artifact_crypto.os, "killpg") as killpg,
+        ):
+            artifact_crypto._stop_secret_tool_process(process)
+        killpg.assert_not_called()
+        process.kill.assert_called_once_with()
+        process.wait.assert_called_once()
+
+    def test_history_error_boundary_is_chain_free(self) -> None:
+        secret = "/srv/private/passphrase-secret"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            history = Path(tmp) / "artifact.key.history"
+            path.write_text(STRONG_PASSPHRASE + "\n", encoding="utf-8")
+            path.chmod(0o600)
+            history.write_text("{}\n", encoding="utf-8")
+            history.chmod(0o600)
+            with mock.patch.object(
+                artifact_crypto,
+                "read_private_bytes",
+                side_effect=artifact_crypto.ArtifactCryptoError(secret),
+            ):
+                try:
+                    artifact_crypto._read_default_passphrase_history(path)
+                except artifact_crypto.ArtifactCryptoError as caught:
+                    rendered = "".join(__import__("traceback").format_exception(caught))
+                    self.assertEqual(caught.__cause__, None)
+                    self.assertEqual(caught.__context__, None)
+                    self.assertNotIn(secret, str(caught))
+                    self.assertNotIn(secret, repr(caught))
+                    self.assertNotIn(secret, repr(caught.args))
+                    self.assertNotIn(secret, "\n".join(getattr(caught, "__notes__", ())))
+                    self.assertNotIn(secret, rendered)
+                else:
+                    self.fail("history error was not raised")
+
+    def test_read_error_boundary_does_not_retain_path_exception(self) -> None:
+        secret = "/private/audio-key"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.bin"
+            path.write_bytes(b"payload")
+            path.chmod(0o600)
+            with mock.patch.object(
+                artifact_crypto,
+                "open_file_without_following_symlinks",
+                side_effect=OSError(secret),
+            ):
+                with self.assertRaises(artifact_crypto.ArtifactCryptoError) as caught:
+                    artifact_crypto.read_private_bytes(path, field_name="artifact")
+        rendered = "".join(__import__("traceback").format_exception(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertNotIn(secret, repr(caught.exception))
+        self.assertNotIn(secret, repr(caught.exception.args))
+        self.assertNotIn(secret, rendered)
+
+    def test_decrypt_json_boundary_is_chain_free(self) -> None:
+        secret = "/private/json-passphrase-payload"
+        decode_error = json.JSONDecodeError(secret, "{}", 0)
+        with (
+            mock.patch.object(artifact_crypto, "is_encrypted_payload", return_value=True),
+            mock.patch.object(artifact_crypto.json, "loads", side_effect=decode_error),
+        ):
+            with self.assertRaises(artifact_crypto.ArtifactCryptoError) as caught:
+                artifact_crypto.decrypt_bytes(b"{}", kind="transcript")
+        rendered = "".join(__import__("traceback").format_exception(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertNotIn(secret, repr(caught.exception))
+        self.assertNotIn(secret, repr(caught.exception.args))
+        self.assertNotIn(secret, rendered)
+
+    def test_base64_boundary_is_chain_free(self) -> None:
+        secret = "/private/base64-passphrase"
+        with self.assertRaises(artifact_crypto.ArtifactCryptoError) as caught:
+            artifact_crypto._b64decode(secret, field_name="ciphertext")
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertNotIn(secret, repr(caught.exception))
+        self.assertNotIn(secret, repr(caught.exception.args))
+
+    def test_secret_tool_start_boundary_is_chain_free(self) -> None:
+        secret = "/run/user/1000/secret-tool-service"
+        with (
+            mock.patch.object(artifact_crypto, "_secret_tool_path", return_value="/usr/bin/secret-tool"),
+            mock.patch.object(artifact_crypto.subprocess, "Popen", side_effect=OSError(secret)),
+        ):
+            with self.assertRaises(artifact_crypto.ArtifactCryptoError) as caught:
+                artifact_crypto._run_secret_tool(["lookup", "application", artifact_crypto.APP_ID])
+        rendered = "".join(__import__("traceback").format_exception(caught.exception))
+        self.assertIsNone(caught.exception.__cause__)
+        self.assertIsNone(caught.exception.__context__)
+        self.assertNotIn(secret, str(caught.exception))
+        self.assertNotIn(secret, repr(caught.exception))
+        self.assertNotIn(secret, repr(caught.exception.args))
+        self.assertNotIn(secret, rendered)
 
 if __name__ == "__main__":
     unittest.main()
