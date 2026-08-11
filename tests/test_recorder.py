@@ -3068,6 +3068,31 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(result, "default")
         self.assertEqual(calls[0][0], "/usr/bin/pactl")
 
+    def test_run_pactl_command_cleans_process_when_identity_is_unavailable(self) -> None:
+        process_holder: dict[str, object] = {}
+
+        class FakePopen:
+            __module__ = "subprocess"
+
+            def __init__(self, **_kwargs: object) -> None:
+                self.pid = 12345
+                self.returncode: int | None = None
+                self.stdout = None
+                self.stderr = None
+                process_holder["process"] = self
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=FakePopen),
+            mock.patch.object(recorder_module, "_recording_process_identity_for_pid", return_value=None),
+            mock.patch.object(recorder_module, "_reap_unidentified_recorder_process") as mocked_cleanup,
+        ):
+            with self.assertRaisesRegex(RecorderError, "pactl process identity is unavailable"):
+                recorder_module._run_pactl_command(["pactl"], required=False)
+
+        process = process_holder.get("process")
+        self.assertIsNotNone(process)
+        mocked_cleanup.assert_called_once_with(process)
+
     def test_run_pactl_command_sanitizes_error_controls(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             command = args[0] if args else kwargs["args"]

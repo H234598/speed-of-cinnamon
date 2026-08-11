@@ -2031,6 +2031,12 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
                     if type(proc).__module__ == "subprocess":
                         process_identity = _recording_process_identity_for_pid(proc.pid)
                         if not process_identity:
+                            try:
+                                _reap_unidentified_recorder_process(proc)
+                            except RecorderError as cleanup_error:
+                                error = RecorderError("pactl process identity is unavailable")
+                                error.add_note("pactl process cleanup failed")
+                                raise error from cleanup_error
                             raise RecorderError("pactl process identity is unavailable")
                         setattr(proc, "_soc_process_identity", process_identity)
                     try:
