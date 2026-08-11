@@ -3,6 +3,9 @@ Version:        0.2.4
 Release:        2%{?dist}
 Summary:        Cinnamon-native voice typing helper for Fedora Cinnamon
 
+%{!?python3_sitelib:%global python3_sitelib %(%{__python3} -c 'import sysconfig; print(sysconfig.get_path("purelib"))')}
+%undefine __brp_linkdupes
+
 License:        MIT
 URL:            https://github.com/H234598/speed-of-cinnamon
 Packager:       H234598 <54270221+H234598@users.noreply.github.com>
