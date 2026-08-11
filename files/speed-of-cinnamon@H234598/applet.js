@@ -14936,12 +14936,6 @@ MyApplet.prototype = {
   },
 
   _xWindowLooksLikeSpeedOfCinnamon: function(title, windowClass) {
-    let classValue = String(windowClass || "").toLowerCase();
-    for (let i = 0; i < TERMINAL_WINDOW_MARKERS.length; i++) {
-      if (classValue.indexOf(TERMINAL_WINDOW_MARKERS[i]) >= 0) {
-        return false;
-      }
-    }
     let value = (String(title || "") + "\n" + String(windowClass || "")).toLowerCase();
     return value.indexOf("speed of cinnamon") >= 0 ||
       value.indexOf("speed-of-cinnamon") >= 0 ||
@@ -15206,14 +15200,6 @@ MyApplet.prototype = {
       this._windowProbeValue(window, "get_wm_class_instance"),
       this._windowProbeValue(window, "get_gtk_application_id")
     ];
-    for (let i = 0; i < identityValues.length; i++) {
-      let value = identityValues[i];
-      for (let j = 0; j < TERMINAL_WINDOW_MARKERS.length; j++) {
-        if (value.indexOf(TERMINAL_WINDOW_MARKERS[j]) >= 0) {
-          return false;
-        }
-      }
-    }
     let values = [
       this._windowProbeValue(window, "get_title"),
       identityValues[0],

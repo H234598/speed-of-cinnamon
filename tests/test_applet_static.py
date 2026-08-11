@@ -8139,9 +8139,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_notifySelfProtectionBlocked: function(title, windowClass)", source)
         self.assertIn('this._notify(_("Speed of Cinnamon"), message, true);', source)
         self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', source)
-        self.assertIn("let classValue = String(windowClass || \"\").toLowerCase();", source)
         self.assertIn("let identityValues = [", source)
-        self.assertIn("TERMINAL_WINDOW_MARKERS.length", source)
         self.assertIn(
             "if (!targetWindowUsable && (!xTargetAvailable || (!this.targetWindowXClass && !this.targetWindowXTitle))) {",
             source,
@@ -9997,6 +9995,22 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn(cooldown_guard, block)
         self.assertNotIn("key === this.selfProtectionNoticeKey", block)
         self.assertLess(block.index("activeInsertToken.selfProtectionNoticeShown = true;"), block.index(cooldown_guard))
+
+    def test_self_protection_does_not_trust_terminal_class(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        x11_start = source.index("_xWindowLooksLikeSpeedOfCinnamon: function(title, windowClass)")
+        x11_end = source.index("\n  _notifySelfProtectionBlocked:", x11_start)
+        x11_block = source[x11_start:x11_end]
+        cinnamon_start = source.index("_windowLooksLikeSpeedOfCinnamon: function(window)")
+        cinnamon_end = source.index("\n  _markerAllowsAutoPasteIdentity:", cinnamon_start)
+        cinnamon_block = source[cinnamon_start:cinnamon_end]
+
+        self.assertIn('String(windowClass || "")', x11_block)
+        self.assertIn('this._windowProbeValue(window, "get_title")', cinnamon_block)
+        self.assertNotIn("TERMINAL_WINDOW_MARKERS.length", x11_block)
+        self.assertNotIn("TERMINAL_WINDOW_MARKERS.length", cinnamon_block)
+        self.assertNotIn("let classValue =", x11_block)
+        self.assertNotIn("let identityValues =", cinnamon_block[cinnamon_block.index("let values ="):])
 
     def test_text_insert_cancellation_invalidates_x11_target_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
