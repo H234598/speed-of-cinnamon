@@ -292,12 +292,6 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("recording state preserved", helper_block)
 
         source_tree = ast.parse(source)
-        reconcile_node = next(
-            node
-            for node in ast.walk(source_tree)
-            if isinstance(node, ast.FunctionDef)
-            and node.name == "_reconcile_recording_process"
-        )
         absence_helper = next(
             node
             for node in ast.walk(source_tree)
@@ -691,6 +685,20 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("permissions:", security_workflow)
         self.assertIn("contents: read", security_workflow)
         self.assertNotIn("contents: write", security_workflow)
+
+    def test_workflow_change_detection_uses_validated_env_revisions(self) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+
+        self.assertIn("BASE_SHA: ${{ github.event.pull_request.base.sha }}", workflow)
+        self.assertIn("HEAD_SHA: ${{ github.event.pull_request.head.sha }}", workflow)
+        self.assertIn('base="${BASE_SHA}"', workflow)
+        self.assertIn('head="${HEAD_SHA}"', workflow)
+        self.assertIn(
+            'if [[ ! "${base}" =~ ^[0-9a-fA-F]{40}$ || ! "${head}" =~ ^[0-9a-fA-F]{40}$ ]]; then',
+            workflow,
+        )
+        self.assertNotIn('base="${{ github.event.pull_request.base.sha }}"', workflow)
+        self.assertNotIn('head="${{ github.event.pull_request.head.sha }}"', workflow)
 
     def test_release_workflow_validates_tag_against_pyproject_version(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
@@ -1339,7 +1347,6 @@ class CiStaticTest(unittest.TestCase):
             'find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap"',
             build_snap,
         )
-        activation = build_snap.index('activate_snap_output "${dist_parent}/.build-snap.finalize.lock" "${snap_stage_path}" "${output_path}"')
         self.assertNotIn('cleanup_existing_dist_snaps "$(basename "${output_path}")"', build_snap)
         candidate_scan_start = build_snap.index('{\n  find "${snap_workspace}"')
         candidate_scan_end = build_snap.index('} | sort -z', candidate_scan_start)
