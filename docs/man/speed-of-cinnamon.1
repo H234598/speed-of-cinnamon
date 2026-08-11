@@ -89,6 +89,9 @@ Write a portable applet settings backup.
 .B settings-import
 Read a portable applet settings backup and restore local alarm state.
 .TP
+.B alarms-import
+Read normalized alarm state from standard input and replace local alarm state.
+.TP
 .B alarms
 Manage Cinnamon-local repeating alarms. See
 .BR speed-of-cinnamon-alarms (1).
@@ -143,10 +146,6 @@ content.
 Allow full transcript text in command output even when the stored transcript is
 encrypted. Without this flag, encrypted transcript storage redacts transcript
 text from JSON command output.
-.B SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE
-or
-.B SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE
-is configured.
 .TP
 .BI --transcriber " BACKEND"
 Use

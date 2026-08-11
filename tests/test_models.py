@@ -413,6 +413,24 @@ class ModelsTest(unittest.TestCase):
 
             self.assertFalse(cache_path.exists())
 
+    def test_model_checksum_cache_removes_non_finite_json(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                '{"model.bin":{"checksum":"' + ("a" * 40) + '","size":NaN,"mtime_ns":1}}',
+                encoding="utf-8",
+            )
+
+            models._load_model_checksum_cache()
+
+            self.assertFalse(cache_path.exists())
+
     def test_model_checksum_cache_recovers_from_json_memory_error(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -1370,8 +1388,13 @@ class ModelsTest(unittest.TestCase):
                 FakeResponse(data),
                 FakeResponse(data),
             ]),
+            mock.patch(
+                "speed_of_cinnamon.models._hash_model_file",
+                wraps=models._hash_model_file,
+            ) as hash_model_file,
         ):
             payload = models.download_model("ct2-test")
+            self.assertEqual(hash_model_file.call_count, len(spec.files) * 2)
             second_payload = models.download_model("ct2-test")
             path = models.model_path(spec)
             self.assertTrue(path.is_dir())
@@ -1911,6 +1934,75 @@ class ModelsTest(unittest.TestCase):
 
             self.assertEqual([], list(Path(tmp).iterdir()))
 
+    def test_download_url_wraps_network_read_error(self) -> None:
+        class NetworkErrorResponse(FakeResponse):
+            def read(self, size: int = -1) -> object:
+                raise urllib.error.URLError("connection reset")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(models, "_open_model_download_url", return_value=NetworkErrorResponse(b"")),
+                self.assertRaisesRegex(models.ModelError, "model download failed"),
+            ):
+                models._download_url_to_file(
+                    models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
+                    Path(tmp),
+                    1024,
+                    "test",
+                    prefix=".test.",
+                )
+
+            self.assertEqual([], list(Path(tmp).iterdir()))
+
+    def test_download_url_enforces_total_download_deadline(self) -> None:
+        class SlowResponse(FakeResponse):
+            def read(self, size: int = -1) -> bytes:
+                return b"x"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(models, "MODEL_DOWNLOAD_MAX_SECONDS", 1),
+                mock.patch.object(models.time, "monotonic", side_effect=[0.0, 2.0]),
+                mock.patch.object(models, "_open_model_download_url", return_value=SlowResponse(b"")),
+                self.assertRaisesRegex(models.ModelError, "model download timed out"),
+            ):
+                models._download_url_to_file(
+                    models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
+                    Path(tmp),
+                    1024,
+                    "test",
+                    prefix=".test.",
+                )
+
+            self.assertEqual([], list(Path(tmp).iterdir()))
+
+    def test_download_url_applies_remaining_deadline_to_response_reads(self) -> None:
+        class TimeoutTrackingResponse(FakeResponse):
+            def __init__(self) -> None:
+                super().__init__(b"")
+                self.timeouts: list[float] = []
+
+            def settimeout(self, value: float) -> None:
+                self.timeouts.append(value)
+
+        response = TimeoutTrackingResponse()
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(models, "MODEL_DOWNLOAD_MAX_SECONDS", 10),
+                mock.patch.object(models.time, "monotonic", side_effect=[100.0, 101.0, 102.0, 103.0]),
+                mock.patch.object(models, "_open_model_download_url", return_value=response) as open_url,
+            ):
+                models._download_url_to_file(
+                    models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
+                    Path(tmp),
+                    1024,
+                    "test",
+                    prefix=".test.",
+                )
+
+        self.assertEqual(response.timeouts, [8.0])
+        self.assertEqual(open_url.call_args.kwargs["timeout"], 9.0)
+
     def test_download_url_closes_temporary_file_when_identity_inspection_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             created_fds: list[int] = []
@@ -2074,7 +2166,7 @@ class ModelsTest(unittest.TestCase):
                     raise OSError("network failed")
 
             with mock.patch.object(models, "_open_model_download_url", return_value=ReplacingErrorResponse()):
-                with self.assertRaisesRegex(OSError, "network failed") as caught:
+                with self.assertRaisesRegex(models.ModelError, "model download failed") as caught:
                     models._download_url_to_file(
                         models.HUGGING_FACE_BASE_URL + "/ggml-test.bin",
                         directory,
@@ -2261,7 +2353,7 @@ class ModelsTest(unittest.TestCase):
                 mock.patch.object(models, "CATALOG", (spec,)),
                 mock.patch.object(models, "_open_model_download_url", return_value=ReplacingErrorResponse()),
             ):
-                with self.assertRaisesRegex(OSError, "network failed"):
+                with self.assertRaisesRegex(models.ModelError, "model download failed"):
                     models.download_model(spec.name)
 
             temporary_dirs = [item for item in path.parent.glob(f".{spec.filename}.*") if item.is_dir()]
@@ -2627,6 +2719,20 @@ class ModelsTest(unittest.TestCase):
         self.assertIsInstance(response, FakeResponseWithLength)
         self.assertTrue(error.fp.closed)
 
+    def test_download_redirect_wraps_network_open_error(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.models._open_model_download_url",
+            side_effect=urllib.error.URLError("offline"),
+        ):
+            with self.assertRaisesRegex(models.ModelError, "model download failed"):
+                models._open_model_download_response(
+                    models.TINY_DE_MODEL_URL,
+                    allowed_hosts={models.HUGGING_FACE_DOWNLOAD_HOST},
+                    redirect_allowed_hosts=models.HUGGING_FACE_STORAGE_REDIRECT_HOSTS
+                    | {models.HUGGING_FACE_DOWNLOAD_HOST},
+                    allowed_urls={models.TINY_DE_MODEL_URL},
+                )
+
     def test_download_redirect_preserves_error_when_http_error_close_is_interrupted(self) -> None:
         error = urllib.error.HTTPError(
             models.TINY_DE_MODEL_URL,
@@ -2793,6 +2899,20 @@ class ModelsTest(unittest.TestCase):
                         "ct2-base",
                         prefix=".model.",
                     )
+
+    def test_download_url_rejects_huggingface_storage_redirect_with_path_traversal(self) -> None:
+        source_url = "https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin"
+        for path in (
+            "/x/../model.bin",
+            "/x/%2e%2e/model.bin",
+            "/x\\../model.bin",
+        ):
+            with self.subTest(path=path):
+                redirect_url = (
+                    "https://cas-bridge.xethub.hf.co"
+                    f"{path}?response-content-disposition=inline%3B+filename%3D%22model.bin%22"
+                )
+                self.assertFalse(models._download_redirect_matches_allowed_url(redirect_url, source_url))
 
     def test_download_url_rejects_huggingface_storage_redirect_for_other_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3983,6 +4103,31 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(models.sha1_file(path), hashlib.sha1(bad_data, usedforsecurity=False).hexdigest())
             self.assertEqual(models.default_whisper_cpp_model_path(), "")
 
+    def test_default_model_path_reuses_current_checksum_metadata_cache(self) -> None:
+        data = b"cached default model"
+        spec = models.ModelSpec(
+            name="metadata-cache",
+            filename="ggml-metadata-cache.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(data).hexdigest(),
+            description="metadata cache model",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(data)
+            with mock.patch.object(models, "_hash_model_file", wraps=models._hash_model_file) as mocked_hash:
+                self.assertEqual(models.default_whisper_cpp_model_path(), str(path))
+                self.assertEqual(models.default_whisper_cpp_model_path(), str(path))
+
+            mocked_hash.assert_called_once_with(path)
+
     def test_default_model_path_skips_english_only_model_for_non_english_language(self) -> None:
         english_data = b"english model"
         multilingual_data = b"multilingual model"
@@ -4049,6 +4194,14 @@ class ModelsTest(unittest.TestCase):
     def test_unknown_model_raises_clear_error(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "unknown model"):
             models.resolve_model("missing")
+
+    def test_unknown_model_rejects_control_characters_before_error_echo(self) -> None:
+        with self.assertRaisesRegex(models.ModelError, "model name contains invalid control character") as raised:
+            models.resolve_model("missing\x1b[31m")
+        self.assertNotIn("\x1b", str(raised.exception))
+
+    def test_resolve_model_accepts_case_insensitive_catalog_name(self) -> None:
+        self.assertIs(models.resolve_model("TiNy.En"), models.resolve_model("tiny.en"))
 
     def test_download_model_rejects_downloads_over_limit(self) -> None:
         spec = models.ModelSpec(
@@ -4249,8 +4402,9 @@ class ModelsTest(unittest.TestCase):
             models._contains_escaped_null(12)  # type: ignore[arg-type]
 
     def test_parse_content_length_rejects_invalid_or_non_positive_headers(self) -> None:
-        with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
+        with self.assertRaisesRegex(models.ModelError, "invalid content-length header") as raised:
             models._parse_content_length("x")
+        self.assertIsNone(raised.exception.__cause__)
         with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
             models._parse_content_length("0")
         with self.assertRaisesRegex(models.ModelError, "invalid content-length header"):
@@ -4420,7 +4574,7 @@ class ModelsTest(unittest.TestCase):
             sha1=hashlib.sha1(data).hexdigest(),
             description="temp change after checksum",
         )
-        real_sha1_file = models.sha1_file
+        real_hash_model_file = models._hash_model_file
 
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -4428,16 +4582,16 @@ class ModelsTest(unittest.TestCase):
             mock.patch.object(models, "CATALOG", (spec,)),
             mock.patch("speed_of_cinnamon.models._open_model_download_url", return_value=FakeResponse(data)),
         ):
-            def sha1_then_mutate(source: Path) -> str:
-                result = real_sha1_file(source)
+            def hash_then_mutate(source: Path) -> tuple[str, os.stat_result]:
+                result = real_hash_model_file(source)
                 if source.name.startswith(f".{spec.filename}."):
                     original_stat = source.stat(follow_symlinks=False)
                     source.write_bytes(b"tampered data")
                     os.utime(source, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
                 return result
 
-            with mock.patch.object(models, "sha1_file", side_effect=sha1_then_mutate):
-                with self.assertRaisesRegex(models.ModelError, "downloaded checksum changed during activation"):
+            with mock.patch.object(models, "_hash_model_file", side_effect=hash_then_mutate):
+                with self.assertRaisesRegex(models.ModelError, "source changed before activation"):
                     models.download_model(spec.name)
 
             self.assertFalse(models.model_path(spec).exists())

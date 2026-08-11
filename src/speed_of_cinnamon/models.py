@@ -38,6 +38,9 @@ HUGGING_FACE_DOWNLOAD_HOST = "huggingface.co"
 HUGGING_FACE_STORAGE_REDIRECT_HOSTS = {"cas-bridge.xethub.hf.co", "cdn-lfs.huggingface.co"}
 MAX_MODEL_DOWNLOAD_BYTES = 1_200_000_000
 MAX_MODEL_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
+MODEL_DOWNLOAD_MIN_SECONDS = 5 * 60
+MODEL_DOWNLOAD_MAX_SECONDS = 2 * 60 * 60
+MODEL_DOWNLOAD_MIN_BYTES_PER_SECOND = 128 * 1024
 MAX_MODEL_DOWNLOAD_URL_CHARS = 16_384
 MODEL_SIZE_SLACK_BYTES = 32 * 1024 * 1024
 MAX_MODEL_CHECKSUM_JSON_BYTES = 1_000_000
@@ -54,7 +57,7 @@ _MODEL_OPERATION_LOCK_SUFFIX = "model-operation.lock"
 
 
 def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
-    primary.add_note(f"model artifact cleanup failed: {cleanup_error}")
+    primary.add_note("model artifact cleanup failed")
 
 
 def _fsync_fd(fd: int) -> None:
@@ -201,13 +204,17 @@ def _is_valid_checksum(value: object) -> bool:
     )
 
 
+def _reject_non_finite_json_number(value: str) -> object:
+    raise ValueError(f"non-finite JSON number is not allowed: {value}")
+
+
 def _is_valid_cache_entry(entry: Any) -> bool:
     if not isinstance(entry, dict):
         return False
     checksum = entry.get("checksum")
     size = entry.get("size")
     mtime_ns = entry.get("mtime_ns")
-    return (
+    if not (
         _is_valid_checksum(checksum)
         and isinstance(size, int)
         and not isinstance(size, bool)
@@ -215,7 +222,15 @@ def _is_valid_cache_entry(entry: Any) -> bool:
         and not isinstance(mtime_ns, bool)
         and size >= 0
         and mtime_ns >= 0
-    )
+    ):
+        return False
+    for field_name in ("dev", "ino", "ctime_ns", "mode", "nlink"):
+        value = entry.get(field_name)
+        if field_name not in entry:
+            continue
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            return False
+    return True
 
 
 def _model_checksum_cache_path() -> Path:
@@ -316,8 +331,8 @@ def _load_model_checksum_cache() -> None:
         _remove_model_checksum_cache_file(cache_path)
         return
     try:
-        payload = json.loads(text)
-    except (json.JSONDecodeError, RecursionError, MemoryError):
+        payload = json.loads(text, parse_constant=_reject_non_finite_json_number)
+    except (json.JSONDecodeError, ValueError, RecursionError, MemoryError):
         _remove_model_checksum_cache_file(cache_path)
         return
 
@@ -339,11 +354,15 @@ def _load_model_checksum_cache() -> None:
             or not _is_valid_cache_entry(raw_entry)
         ):
             continue
-        _model_checksum_cache[key] = {
+        cache_entry = {
             "checksum": raw_entry["checksum"],
             "size": raw_entry["size"],
             "mtime_ns": raw_entry["mtime_ns"],
         }
+        for field_name in ("dev", "ino", "ctime_ns", "mode", "nlink"):
+            if field_name in raw_entry:
+                cache_entry[field_name] = raw_entry[field_name]
+        _model_checksum_cache[key] = cache_entry
 
     _prune_model_checksum_cache()
 
@@ -418,6 +437,11 @@ def _set_model_checksum_cache(path: Path, checksum: str, stat: os.stat_result) -
         "checksum": checksum,
         "size": stat.st_size,
         "mtime_ns": stat.st_mtime_ns,
+        "dev": stat.st_dev,
+        "ino": stat.st_ino,
+        "ctime_ns": stat.st_ctime_ns,
+        "mode": stat.st_mode,
+        "nlink": getattr(stat, "st_nlink", 1),
     }
     _write_model_checksum_cache()
 
@@ -517,6 +541,14 @@ def _same_model_path_identity(first: os.stat_result, second: os.stat_result) -> 
     return False
 
 
+def _same_model_source_identity(first: os.stat_result, second: os.stat_result) -> bool:
+    if not _same_model_path_identity(first, second):
+        return False
+    if stat_module.S_ISREG(first.st_mode) and stat_module.S_ISREG(second.st_mode):
+        return first.st_ctime_ns == second.st_ctime_ns
+    return True
+
+
 def _hash_model_file(path: Path) -> tuple[str, os.stat_result]:
     fd = _open_model_hash_file(path)
     try:
@@ -542,6 +574,50 @@ def _cached_or_computed_sha1(path: Path) -> str:
     _load_model_checksum_cache()
     checksum, info = _hash_model_file(path)
     _set_model_checksum_cache(path, checksum, info)
+    return checksum
+
+
+def _model_checksum_snapshot(path: Path) -> os.stat_result:
+    try:
+        file_stat = path.stat(follow_symlinks=False)
+    except OSError as exc:
+        raise ModelError("model file could not be inspected") from exc
+    if not stat_module.S_ISREG(file_stat.st_mode):
+        raise ModelError("model file must be a regular file")
+    if getattr(file_stat, "st_nlink", 1) != 1:
+        raise ModelError("model file must not be hardlinked")
+    if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
+        raise ModelError("model file must be owned by the current user")
+    return file_stat
+
+
+def _model_checksum_cache_matches(cached: object, file_stat: os.stat_result) -> bool:
+    if not isinstance(cached, dict) or not _is_valid_cache_entry(cached):
+        return False
+    return all(
+        cached.get(field_name) == value
+        for field_name, value in (
+            ("size", file_stat.st_size),
+            ("mtime_ns", file_stat.st_mtime_ns),
+            ("dev", file_stat.st_dev),
+            ("ino", file_stat.st_ino),
+            ("ctime_ns", file_stat.st_ctime_ns),
+            ("mode", file_stat.st_mode),
+            ("nlink", getattr(file_stat, "st_nlink", 1)),
+        )
+    )
+
+
+def _cached_verified_sha1(path: Path) -> str:
+    _load_model_checksum_cache()
+    file_stat = _model_checksum_snapshot(path)
+    cached = _model_checksum_cache.get(str(path))
+    if _model_checksum_cache_matches(cached, file_stat):
+        checksum = cached.get("checksum") if isinstance(cached, dict) else None
+        if isinstance(checksum, str):
+            return checksum
+    checksum, verified_stat = _hash_model_file(path)
+    _set_model_checksum_cache(path, checksum, verified_stat)
     return checksum
 
 
@@ -584,6 +660,13 @@ def _download_size_limit(model: ModelSpec) -> int:
     return min(MAX_MODEL_DOWNLOAD_BYTES, expected + max(MODEL_SIZE_SLACK_BYTES, int(expected * 0.2)))
 
 
+def _model_download_timeout_seconds(size_limit: int) -> int:
+    if not isinstance(size_limit, int) or isinstance(size_limit, bool) or size_limit <= 0:
+        raise ModelError("model download size limit must be positive")
+    estimated = math.ceil(size_limit / MODEL_DOWNLOAD_MIN_BYTES_PER_SECOND)
+    return min(MODEL_DOWNLOAD_MAX_SECONDS, max(MODEL_DOWNLOAD_MIN_SECONDS, estimated))
+
+
 def _parse_content_length(value: str | None) -> int | None:
     if value is None:
         return None
@@ -594,7 +677,7 @@ def _parse_content_length(value: str | None) -> int | None:
     try:
         parsed = int(value)
     except (ValueError, TypeError):
-        raise ModelError(f"invalid content-length header: {value!r}")
+        raise ModelError(f"invalid content-length header: {value!r}") from None
     if parsed <= 0:
         raise ModelError(f"invalid content-length header: {value!r}")
     return parsed
@@ -772,11 +855,14 @@ def _huggingface_storage_redirect_matches(url: str, allowed_url: str) -> bool:
         return False
     if (parsed.hostname or "").lower() not in HUGGING_FACE_STORAGE_REDIRECT_HOSTS:
         return False
-    if "%2f" in parsed.path.lower() or "%5c" in parsed.path.lower():
+    if "\\" in parsed.path or "%2f" in parsed.path.lower() or "%5c" in parsed.path.lower():
         return False
     _repo, filename = allowed_parts
     leaf = filename.rsplit("/", 1)[-1]
-    redirect_path = urllib.parse.unquote(parsed.path).rstrip("/")
+    redirect_path = urllib.parse.unquote(parsed.path)
+    if any(part in {".", ".."} for part in redirect_path.split("/")):
+        return False
+    redirect_path = redirect_path.rstrip("/")
     if not redirect_path.endswith(f"/{leaf}"):
         return False
     disposition_values = urllib.parse.parse_qs(parsed.query).get("response-content-disposition", [])
@@ -851,17 +937,41 @@ def _open_model_download_url(url: str, *, timeout: int = 30) -> Any:
     return _MODEL_DOWNLOAD_OPENER.open(url, timeout=timeout)
 
 
+def _set_model_response_read_timeout(response: object, timeout_seconds: float) -> None:
+    candidates = [response]
+    frame = getattr(response, "fp", None)
+    raw = getattr(frame, "raw", None)
+    socket = getattr(raw, "_sock", None)
+    candidates.extend((frame, raw, socket))
+    for candidate in candidates:
+        setter = getattr(candidate, "settimeout", None)
+        if not callable(setter):
+            continue
+        try:
+            setter(max(0.001, timeout_seconds))
+        except (OSError, ValueError):
+            continue
+        return
+
+
 def _open_model_download_response(
     url: str,
     *,
     allowed_hosts: set[str],
     redirect_allowed_hosts: set[str],
     allowed_urls: set[str] | None,
+    deadline: float | None = None,
 ) -> Any:
     current_url = url
     for _ in range(MAX_MODEL_DOWNLOAD_REDIRECTS + 1):
         try:
-            return _open_model_download_url(current_url, timeout=30)
+            timeout = 30
+            if deadline is not None:
+                remaining_seconds = deadline - time.monotonic()
+                if remaining_seconds <= 0:
+                    raise ModelError("model download timed out")
+                timeout = min(timeout, max(0.001, remaining_seconds))
+            return _open_model_download_url(current_url, timeout=timeout)
         except urllib.error.HTTPError as exc:
             primary_error: BaseException | None = None
             try:
@@ -891,6 +1001,8 @@ def _open_model_download_response(
                         _note_cleanup_failure(primary_error, cleanup_error)
                     else:
                         raise
+        except (urllib.error.URLError, TimeoutError, OSError) as exc:
+            raise ModelError("model download failed") from exc
     raise ModelError("model download has too many redirects")
 
 
@@ -1071,10 +1183,15 @@ def catalog_by_name() -> dict[str, ModelSpec]:
 def resolve_model(name: str) -> ModelSpec:
     if isinstance(name, bool) or not isinstance(name, str):
         raise ModelError("model name must be text")
+    if _contains_escaped_null(name) or _contains_http_header_control_chars(name):
+        raise ModelError("model name contains invalid control character")
     key = (name or "").strip()
     models, _lower_names, _filenames = _catalog_indexes()
     if key in models:
         return models[key]
+    casefolded = _lower_names.get(key.lower())
+    if casefolded is not None:
+        return casefolded
     raise ModelError(f"unknown model: {name}")
 
 
@@ -1206,10 +1323,13 @@ def _replace_model_sibling_path(
     try:
         _assert_model_path_for_atomic_replace(source, root, field_name=f"{field_name} source")
         _assert_model_path_for_atomic_replace(target, root, field_name=field_name)
+        source_identity = _same_model_path_identity
+        if not source.name.endswith(".backup"):
+            source_identity = _same_model_source_identity
         source_path_stat = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
         if not (stat_module.S_ISREG(source_path_stat.st_mode) or stat_module.S_ISDIR(source_path_stat.st_mode)):
             raise ModelError(f"{field_name} source must be a regular file or directory: {source}")
-        if expected_source_stat is not None and not _same_model_path_identity(source_path_stat, expected_source_stat):
+        if expected_source_stat is not None and not source_identity(source_path_stat, expected_source_stat):
             raise ModelError(f"{field_name} source changed before activation: {source}")
         source_fd = os.open(
             source.name,
@@ -1221,7 +1341,7 @@ def _replace_model_sibling_path(
             source_stat = os.fstat(source_fd)
             if not (stat_module.S_ISREG(source_stat.st_mode) or stat_module.S_ISDIR(source_stat.st_mode)):
                 raise ModelError(f"{field_name} source must be a regular file or directory: {source}")
-            if not _same_model_path_identity(source_stat, source_path_stat):
+            if not source_identity(source_stat, source_path_stat):
                 raise ModelError(f"{field_name} source changed before activation: {source}")
             _fsync_fd(source_fd)
         except BaseException as exc:
@@ -1236,7 +1356,7 @@ def _replace_model_sibling_path(
                 else:
                     pass
         current_source_stat = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
-        if not _same_model_path_identity(current_source_stat, source_stat):
+        if not source_identity(current_source_stat, source_stat):
             raise ModelError(f"{field_name} source changed before activation: {source}")
         _rename_without_replacing(
             source.name,
@@ -1733,13 +1853,13 @@ def _model_is_verified(model: ModelSpec, path: Path, checksum: str = "") -> bool
             return False
         for filename, expected_checksum in expected_hashes.items():
             try:
-                if _sha1_file_without_cache(path / filename) != expected_checksum:
+                if _cached_verified_sha1(path / filename) != expected_checksum:
                     return False
             except ModelError:
                 return False
         return True
     try:
-        current_checksum = checksum or _sha1_file_without_cache(path)
+        current_checksum = checksum or _cached_verified_sha1(path)
     except ModelError:
         return False
     return bool(model.sha1 and current_checksum == model.sha1.lower())
@@ -1913,6 +2033,7 @@ def _download_url_to_file_with_fd(
     tmp_fd: int | None = None
     temporary_stat: os.stat_result | None = None
     primary_error: BaseException | None = None
+    download_deadline = time.monotonic() + _model_download_timeout_seconds(size_limit)
     try:
         temporary_name, tmp_fd = _create_temporary_file_in_parent_directory(tmp_dir_fd, prefix=prefix)
         tmp_path = tmp_dir / temporary_name
@@ -1939,6 +2060,7 @@ def _download_url_to_file_with_fd(
                 allowed_hosts=allowed_hosts,
                 redirect_allowed_hosts=redirect_allowed_hosts,
                 allowed_urls=allowed_urls,
+                deadline=download_deadline,
             ) as response:
                 geturl = getattr(response, "geturl", None)
                 if callable(geturl):
@@ -1957,11 +2079,20 @@ def _download_url_to_file_with_fd(
 
                 downloaded = 0
                 while True:
-                    chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
+                    remaining_seconds = download_deadline - time.monotonic()
+                    if remaining_seconds <= 0:
+                        raise ModelError(f"model download timed out for {model_name}")
+                    _set_model_response_read_timeout(response, remaining_seconds)
+                    try:
+                        chunk = response.read(MAX_MODEL_DOWNLOAD_CHUNK_BYTES)
+                    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+                        raise ModelError("model download failed") from exc
                     if not isinstance(chunk, bytes):
                         raise ModelError("model download response chunk must be bytes")
                     if not chunk:
                         break
+                    if time.monotonic() > download_deadline:
+                        raise ModelError(f"model download timed out for {model_name}")
                     downloaded += len(chunk)
                     if downloaded > size_limit:
                         raise ModelError(f"downloaded model too large for {model_name}: {downloaded} > {size_limit}")
@@ -2082,16 +2213,10 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                     pass
             downloaded_total += downloaded
             expected_checksum = expected_hashes[filename_key]
-            if _sha1_file_without_cache(tmp_path) != expected_checksum:
+            checksum, checksum_stat = _hash_model_file(tmp_path)
+            if checksum != expected_checksum:
                 raise ModelError(f"downloaded model file checksum mismatch for {model.name}: {filename_key}")
-            if _sha1_file_without_cache(tmp_path) != expected_checksum:
-                raise ModelError(
-                    f"downloaded model file checksum changed during activation for {model.name}: {filename_key}"
-                )
-            try:
-                tmp_file_stat = tmp_path.stat(follow_symlinks=False)
-            except OSError as exc:
-                raise ModelError(f"failed to inspect downloaded model file: {tmp_path}") from exc
+            tmp_file_stat = checksum_stat
             try:
                 _replace_model_sibling_path(
                     tmp_path,
@@ -2423,11 +2548,10 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
                 os.close(parent_fd)
             except OSError:
                 pass
-        checksum = sha1_file(tmp_path)
+        checksum, checksum_stat = _hash_model_file(tmp_path)
         if checksum != model.sha1.lower():
             raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
-        if _sha1_file_without_cache(tmp_path) != model.sha1.lower():
-            raise ModelError(f"downloaded checksum changed during activation for {model.name}")
+        tmp_stat = checksum_stat
         try:
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
             if path.exists():

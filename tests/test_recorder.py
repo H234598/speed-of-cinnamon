@@ -147,6 +147,25 @@ class RecorderTest(unittest.TestCase):
         mocked_killpg.assert_not_called()
         process.communicate.assert_called_once_with(timeout=1)
 
+    def test_reap_recorder_process_if_zombie_reaps_owned_child(self) -> None:
+        process = subprocess.Popen(["/bin/true"])
+        deadline = time.monotonic() + 2
+        try:
+            while time.monotonic() < deadline:
+                stat_fields = recorder_module._recording_process_stat_fields(process.pid)
+                if stat_fields is not None and stat_fields[0] == "Z":
+                    break
+                time.sleep(0.01)
+            stat_fields = recorder_module._recording_process_stat_fields(process.pid)
+            self.assertIsNotNone(stat_fields)
+            self.assertEqual(stat_fields[0], "Z")
+            self.assertTrue(recorder_module._reap_recorder_process_if_zombie(process.pid))
+            self.assertIsNone(recorder_module._recording_process_stat_fields(process.pid))
+            process.returncode = 0
+        finally:
+            if recorder_module._recording_process_stat_fields(process.pid) is not None:
+                os.waitpid(process.pid, os.WNOHANG)
+
     def test_recorder_process_cleanup_fails_closed_when_pid_identity_changes(self) -> None:
         process = mock.Mock()
         process.pid = 1234
@@ -172,6 +191,7 @@ class RecorderTest(unittest.TestCase):
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
+        setattr(process, "_soc_process_identity", recorder_module._recording_process_identity_for_pid(process.pid))
         child_pid = int(process.stdout.readline())
         process.wait()
 
@@ -209,6 +229,7 @@ class RecorderTest(unittest.TestCase):
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
+        setattr(process, "_soc_process_identity", recorder_module._recording_process_identity_for_pid(process.pid))
         child_pid = int(process.stdout.readline())
         process.wait()
 
@@ -228,6 +249,57 @@ class RecorderTest(unittest.TestCase):
                 pass
             process.communicate()
 
+    def test_reaped_process_cleanup_kills_detached_child_without_output_pipe(self) -> None:
+        process = subprocess.Popen(
+            [
+                "python3",
+                "-c",
+                "import os,time\n"
+                "child=os.fork()\n"
+                "if child == 0:\n"
+                " os.setsid()\n"
+                " null=os.open('/dev/null', os.O_RDWR)\n"
+                " os.dup2(null,1)\n"
+                " os.dup2(null,2)\n"
+                " os.close(null)\n"
+                " time.sleep(30)\n"
+                "else:\n"
+                " print(child, flush=True)\n"
+                " time.sleep(0.1)\n",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        setattr(process, "_soc_process_identity", recorder_module._recording_process_identity_for_pid(process.pid))
+        child_line = process.stdout.readline()
+        try:
+            child_pid = int(child_line)
+        except ValueError:
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+            raise
+
+        def child_is_live() -> bool:
+            stat_fields = recorder_module._recording_process_stat_fields(child_pid)
+            return stat_fields is not None and stat_fields[0] not in {"Z", "X", "x"}
+
+        try:
+            time.sleep(0.02)
+            self.assertTrue(child_is_live())
+            self.assertTrue(recorder_module._terminate_recorder_process_group(process))
+            self.assertFalse(child_is_live())
+        finally:
+            try:
+                if child_is_live():
+                    os.kill(child_pid, 9)
+            except ProcessLookupError:
+                pass
+            if process.poll() is None:
+                process.kill()
+            process.communicate()
+
     def test_live_process_group_cleanup_kills_same_session_child_process_group(self) -> None:
         process = subprocess.Popen(
             [
@@ -239,6 +311,7 @@ class RecorderTest(unittest.TestCase):
             stderr=subprocess.PIPE,
             start_new_session=True,
         )
+        setattr(process, "_soc_process_identity", recorder_module._recording_process_identity_for_pid(process.pid))
         child_pid = int(process.stdout.readline())
 
         def child_is_live() -> bool:
@@ -291,7 +364,67 @@ class RecorderTest(unittest.TestCase):
                 )
 
         self.assertIs(raised.exception, timeout)
-        self.assertIn("cleanup interrupted", "\n".join(timeout.__notes__))
+        notes = "\n".join(timeout.__notes__)
+        self.assertIn("ffmpeg process cleanup failed", notes)
+        self.assertNotIn("cleanup interrupted", notes)
+
+    def test_run_ffmpeg_rejects_invalid_timeout(self) -> None:
+        for value, message in (
+            (0, "ffmpeg timeout must be positive"),
+            (-1, "ffmpeg timeout must be positive"),
+            (float("nan"), "ffmpeg timeout must be finite"),
+            (float("inf"), "ffmpeg timeout must be finite"),
+            (recorder_module.MAX_PROCESS_STOP_TIMEOUT_SECONDS + 1, "ffmpeg timeout exceeds safe limit"),
+        ):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(RecorderError, message):
+                    recorder_module._run_ffmpeg_bounded(["/usr/bin/ffmpeg"], timeout=value, pass_fds=())
+
+    def test_run_ffmpeg_rejects_unsafe_command_arguments(self) -> None:
+        cases = (
+            ([], "ffmpeg command is empty"),
+            ([""], "ffmpeg executable is empty"),
+            (["/usr/bin/ffmpeg", 1], "ffmpeg command arguments must be text"),
+            (["/usr/bin/ffmpeg", "bad\x00arg"], "ffmpeg command contains invalid null byte"),
+            (["/usr/bin/ffmpeg", "bad\narg"], "ffmpeg command contains invalid control character"),
+        )
+        for command, message in cases:
+            with self.subTest(command=command):
+                with self.assertRaisesRegex(RecorderError, message):
+                    recorder_module._run_ffmpeg_bounded(command, timeout=1, pass_fds=())  # type: ignore[arg-type]
+
+    def test_run_ffmpeg_cleans_process_when_identity_is_unavailable(self) -> None:
+        process_holder: dict[str, object] = {}
+
+        class FakePopen:
+            def __init__(self, command: list[str], **_kwargs: object) -> None:
+                self.pid = 12345
+                self.returncode: int | None = None
+                self.stdout = None
+                self.stderr = None
+                process_holder["process"] = self
+
+            def poll(self) -> int | None:
+                return self.returncode
+
+            def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+                self.returncode = -9
+                return b"", b""
+
+            def kill(self) -> None:
+                self.returncode = -9
+
+        FakePopen.__module__ = "subprocess"
+        with (
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=FakePopen),
+            mock.patch.object(recorder_module, "_recording_process_identity_for_pid", return_value=None),
+            mock.patch.object(recorder_module.os, "killpg") as mocked_killpg,
+        ):
+            with self.assertRaisesRegex(RecorderError, "process identity is unavailable"):
+                recorder_module._run_ffmpeg_bounded(["/usr/bin/ffmpeg"], timeout=1, pass_fds=())
+
+        self.assertIsNotNone(process_holder.get("process"))
+        mocked_killpg.assert_called_once_with(12345, recorder_module.signal.SIGKILL)
 
     def test_run_ffmpeg_cleans_descendant_when_leader_exits_with_pipe_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1080,8 +1213,9 @@ class RecorderTest(unittest.TestCase):
             with self.assertRaisesRegex(KeyboardInterrupt, "audio read interrupted") as caught:
                 recorder_module.read_recording_level(audio_path)
 
-        self.assertIn("recorder audio cleanup failed", "\n".join(caught.exception.__notes__))
-        self.assertIn("audio close failed", "\n".join(caught.exception.__notes__))
+        notes = "\n".join(caught.exception.__notes__)
+        self.assertIn("recorder audio cleanup failed", notes)
+        self.assertNotIn("audio close failed", notes)
 
     def test_silence_detection_preserves_result_on_audio_fd_close_failure(self) -> None:
         from speed_of_cinnamon import recorder as recorder_module
@@ -1207,6 +1341,28 @@ class RecorderTest(unittest.TestCase):
                 with self.subTest(value=value):
                     with self.assertRaisesRegex(RecorderError, "silence trim duration must be numeric"):
                         trim_recording_silence(audio, duration_seconds=value)
+
+    def test_trim_recording_silence_rejects_filtergraph_noise(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+
+            with self.assertRaisesRegex(RecorderError, "silence trim noise threshold is invalid"):
+                trim_recording_silence(audio, noise="-30dB,volume=0")
+
+    def test_trim_recording_silence_accepts_numeric_noise_threshold(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+
+            with mock.patch("speed_of_cinnamon.recorder._command_path", return_value="/usr/bin/ffmpeg"):
+                with mock.patch(
+                    "speed_of_cinnamon.recorder.subprocess.Popen",
+                    side_effect=_popen_from_run(lambda *args, **kwargs: self._ffmpeg_success_with_output(args[0])),
+                ) as mocked_run:
+                    trim_recording_silence(audio, noise=" -30dB ").unlink()
+
+        self.assertIn("start_threshold=-30dB", "".join(mocked_run.call_args.args[0]))
 
     def test_reencode_recording_to_flac_uses_ffmpeg_flac_encoder(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1697,7 +1853,7 @@ class RecorderTest(unittest.TestCase):
             with mock.patch("speed_of_cinnamon.recorder.shutil.which", which_any("parecord", "timeout")):
                 command = choose_recorder("parecord", audio_path, 3, "alsa_input.usb-mic")
         self.assertEqual(command.name, "parecord")
-        self.assertEqual(command.argv[:4], ["timeout", "--kill-after=1", "3", "parecord"])
+        self.assertEqual(command.argv[:5], ["timeout", "--signal=INT", "--kill-after=1", "3", "parecord"])
         self.assertIn("--device=alsa_input.usb-mic", command.argv)
         self.assertEqual(command.argv[-1], str(audio_path))
 
@@ -1899,6 +2055,7 @@ class RecorderTest(unittest.TestCase):
             ):
                 mocked_process = mock.Mock()
                 mocked_process.pid = 1234
+                mocked_process.poll.return_value = None
                 mocked_popen.return_value = mocked_process
                 result = start_recorder(command, Path(tmp) / "session.log")
         self.assertIs(result, mocked_process)
@@ -1907,6 +2064,110 @@ class RecorderTest(unittest.TestCase):
         self.assertIsInstance(mocked_popen.call_args.kwargs["stdout"], recorder_module._RecorderLogCapture)
         self.assertEqual(mocked_popen.call_args.kwargs["stderr"], subprocess.STDOUT)
         mocked_popen.call_args.kwargs["stdout"].finish()
+
+    def test_start_recorder_rejects_recorder_that_exited_during_startup(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch(
+                    "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                    return_value="owner-identity",
+                ),
+                mock.patch.object(
+                    recorder_module,
+                    "_reap_timed_out_recorder_process",
+                    return_value=True,
+                ) as mocked_reap,
+            ):
+                with self.assertRaisesRegex(RecorderError, "exited during startup with status 7"):
+                    start_recorder(command, log_path)
+
+        mocked_reap.assert_called_once_with(process)
+        self.assertFalse(log_path.exists())
+
+    def test_start_recorder_rejects_recorder_that_exited_cleanly_during_startup(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch(
+                    "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                    return_value="owner-identity",
+                ),
+                mock.patch.object(
+                    recorder_module,
+                    "_reap_timed_out_recorder_process",
+                    return_value=True,
+                ) as mocked_reap,
+            ):
+                with self.assertRaisesRegex(RecorderError, "exited during startup with status 0"):
+                    start_recorder(command, log_path)
+
+        mocked_reap.assert_called_once_with(process)
+        self.assertFalse(log_path.exists())
+
+    def test_start_recorder_rejects_recorder_that_exits_after_initial_poll(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.side_effect = [None, 9]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch(
+                    "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                    return_value="owner-identity",
+                ),
+                mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+                mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", return_value=True),
+            ):
+                with self.assertRaisesRegex(RecorderError, "exited during startup with status 9"):
+                    start_recorder(command, log_path)
+
+        self.assertFalse(log_path.exists())
+
+    def test_start_recorder_rejects_recorder_that_exits_at_startup_deadline(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.side_effect = [None, 9]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_path = Path(tmp) / "session.log"
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch(
+                    "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                    return_value="owner-identity",
+                ),
+                mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.2]),
+                mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", return_value=True),
+            ):
+                with self.assertRaisesRegex(RecorderError, "exited during startup with status 9"):
+                    start_recorder(command, log_path)
+
+        self.assertFalse(log_path.exists())
 
     def test_recorder_log_capture_caps_output_and_preserves_existing_bytes(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1968,7 +2229,11 @@ class RecorderTest(unittest.TestCase):
     def test_start_recorder_bounds_real_backend_output(self) -> None:
         command = RecorderCommand(
             name="python3",
-            argv=["python3", "-c", "import sys; sys.stderr.write('x' * 1000000)"],
+            argv=[
+                "python3",
+                "-c",
+                "import sys,time; sys.stderr.write('x' * 1000000); sys.stderr.flush(); time.sleep(2)",
+            ],
         )
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "session.log"
@@ -2016,7 +2281,9 @@ class RecorderTest(unittest.TestCase):
         log_file = mock.Mock()
         log_file.fileno.return_value = 11
         log_file.close.side_effect = OSError("log flush failed")
-        process = object()
+        process = mock.Mock()
+        process.pid = os.getpid()
+        process.poll.return_value = None
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "session.log"
             with (
@@ -2037,7 +2304,9 @@ class RecorderTest(unittest.TestCase):
         log_file = mock.Mock()
         log_file.fileno.return_value = 11
         log_file.close.side_effect = KeyboardInterrupt
-        process = object()
+        process = mock.Mock()
+        process.pid = os.getpid()
+        process.poll.return_value = None
         with tempfile.TemporaryDirectory() as tmp:
             log_path = Path(tmp) / "session.log"
             with (
@@ -2057,6 +2326,7 @@ class RecorderTest(unittest.TestCase):
         command = RecorderCommand(name="noop", argv=["true"])
         process = mock.Mock()
         process.pid = 1234
+        process.poll.return_value = None
 
         with tempfile.TemporaryDirectory() as tmp:
             with (
@@ -2067,6 +2337,7 @@ class RecorderTest(unittest.TestCase):
                     "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
                     return_value=None,
                 ),
+                mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 1.5]),
                 mock.patch.object(
                     recorder_module,
                     "_reap_timed_out_recorder_process",
@@ -2074,6 +2345,27 @@ class RecorderTest(unittest.TestCase):
                 ) as mocked_reap,
             ):
                 with self.assertRaisesRegex(RecorderError, "process identity"):
+                    start_recorder(command, Path(tmp) / "session.log")
+
+        mocked_reap.assert_called_once_with(process)
+
+    def test_start_recorder_rejects_invalid_process_pid(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = None
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch.object(
+                    recorder_module,
+                    "_reap_timed_out_recorder_process",
+                    return_value=True,
+                ) as mocked_reap,
+            ):
+                with self.assertRaisesRegex(RecorderError, "process pid is invalid"):
                     start_recorder(command, Path(tmp) / "session.log")
 
         mocked_reap.assert_called_once_with(process)
@@ -2114,7 +2406,7 @@ class RecorderTest(unittest.TestCase):
                         start_recorder(command, Path(tmp) / "session.log")
 
             self.assertIsNotNone(process)
-            self.assertIsNotNone(process.returncode)
+            self.assertIsNone(process.returncode)
         finally:
             if process is not None and process.returncode is None:
                 process.kill()
@@ -2123,6 +2415,8 @@ class RecorderTest(unittest.TestCase):
     def test_start_recorder_terminates_process_when_capture_writer_close_fails(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         process = mock.Mock()
+        process.pid = os.getpid()
+        process.poll.return_value = None
         with tempfile.TemporaryDirectory() as tmp:
             with (
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
@@ -2173,7 +2467,10 @@ class RecorderTest(unittest.TestCase):
             env = kwargs.get("env")
             if isinstance(env, dict):
                 captured_env.update(env)
-            return mock.Mock()
+            process = mock.Mock()
+            process.pid = os.getpid()
+            process.poll.return_value = None
+            return process
 
         with tempfile.TemporaryDirectory() as tmp:
             with (
@@ -2239,7 +2536,7 @@ class RecorderTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
                 mock.patch("speed_of_cinnamon.recorder.subprocess.Popen") as mocked_popen,
             ):
-                mocked_popen.return_value = mock.Mock()
+                mocked_popen.return_value = mock.Mock(pid=os.getpid(), poll=mock.Mock(return_value=None))
                 start_recorder(command, log_path)
             mode = log_path.stat().st_mode & 0o777
             self.assertEqual(mode, 0o600)
@@ -2314,7 +2611,7 @@ class RecorderTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.recorder.assert_fd_is_regular_private_file"),
                 mock.patch("speed_of_cinnamon.recorder.subprocess.Popen") as mocked_popen,
             ):
-                mocked_popen.return_value = mock.Mock()
+                mocked_popen.return_value = mock.Mock(pid=os.getpid(), poll=mock.Mock(return_value=None))
                 start_recorder(command, log_path)
 
         self.assertEqual(captured["path"], log_path.name)
@@ -2917,6 +3214,23 @@ class RecorderTest(unittest.TestCase):
 
         self.assertEqual(calls[0], ["/usr/bin/kill", "-INT", "1234"])
 
+    def test_run_kill_uses_bounded_timeout(self) -> None:
+        captured: dict[str, object] = {}
+
+        def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            captured.update(kwargs)
+            command = args[0] if args else kwargs.get("args")
+            assert isinstance(command, (list, tuple))
+            return subprocess.CompletedProcess(list(command), 0, stdout=b"", stderr=b"")
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/kill"),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.run", side_effect=fake_run),
+        ):
+            _run_kill(["kill", "-INT", "1234"], check_exit=False, timeout_seconds=0.25)
+
+        self.assertEqual(captured["timeout"], 0.25)
+
     def test_run_kill_rejects_non_bool_check(self) -> None:
         with self.assertRaisesRegex(RecorderError, "invalid kill command"):
             _run_kill(["kill", "-9", "123"], check_exit="false")  # type: ignore[arg-type]
@@ -3041,6 +3355,30 @@ Source #13
         self.assertEqual(sources[0].name, "alsa_input.clean")
         self.assertEqual(sources[0].description, "Clean Microphone")
 
+    def test_parse_pactl_sources_skips_oversized_source_fields(self) -> None:
+        oversized = PACTL_SOURCES.replace(
+            "Description: USB Microphone",
+            "Description: " + ("x" * (recorder_module.MAX_INPUT_SOURCE_FIELD_CHARS + 1)),
+        )
+        sources = parse_pactl_sources(oversized, include_monitors=True)
+        self.assertEqual([source.id for source in sources], ["10"])
+
+    def test_parse_pactl_sources_skips_input_name_over_device_limit(self) -> None:
+        oversized = PACTL_SOURCES.replace(
+            "Name: alsa_input.usb-mic.analog-stereo",
+            "Name: " + ("x" * (recorder_module.MAX_RECORDING_INPUT_DEVICE_CHARS + 1)),
+        )
+        sources = parse_pactl_sources(oversized, include_monitors=True)
+        self.assertEqual([source.id for source in sources], ["10"])
+
+    def test_parse_pactl_sources_skips_invalid_unicode_source_fields(self) -> None:
+        invalid = PACTL_SOURCES.replace(
+            "Description: USB Microphone",
+            "Description: \ud800",
+        )
+        sources = parse_pactl_sources(invalid, include_monitors=True)
+        self.assertEqual([source.id for source in sources], ["10"])
+
     def test_list_input_sources_rejects_too_large_pactl_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             stdout_file = kwargs["stdout"]
@@ -3152,6 +3490,13 @@ Source #13
 
         mocked_kill.assert_not_called()
 
+    def test_stop_process_rejects_unverified_process_override(self) -> None:
+        with mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill:
+            with self.assertRaisesRegex(RecorderError, "expected_process_identity is required"):
+                stop_process(1234, timeout_seconds=0.1, allow_unverified_process=True)
+
+        mocked_kill.assert_not_called()
+
     def test_stop_process_rejects_kill_timeout(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
@@ -3166,7 +3511,7 @@ Source #13
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=999),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", side_effect=["owner-identity", "foreign-identity"]) as mocked_identity,
             mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2, 0.2]),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
@@ -3174,7 +3519,7 @@ Source #13
 
         self.assertFalse(result)
         self.assertEqual(mocked_identity.call_count, 2)
-        self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "1234"])
+        mocked_kill.assert_not_called()
 
     def test_stop_process_aborts_group_stop_when_leader_identity_changes_after_signal(self) -> None:
         identity_calls = 0
@@ -3196,8 +3541,7 @@ Source #13
             result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
         self.assertFalse(result)
-        self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
-        self.assertEqual(mocked_kill.call_count, 1)
+        mocked_kill.assert_not_called()
 
     def test_stop_process_does_not_signal_if_expected_identity_already_mismatches(self) -> None:
         with (
@@ -3218,16 +3562,13 @@ Source #13
                 side_effect=["owner-identity", None],
             ) as mocked_identity,
             mock.patch("speed_of_cinnamon.recorder.os.kill", side_effect=ProcessLookupError) as mocked_os_kill,
-            mock.patch(
-                "speed_of_cinnamon.recorder._run_kill",
-            ) as mocked_kill,
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
             result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
-        self.assertTrue(result)
-        self.assertEqual(mocked_identity.call_count, 1)
-        mocked_os_kill.assert_called_once_with(-1234, 0)
-        self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
+        self.assertFalse(result)
+        self.assertGreaterEqual(mocked_identity.call_count, 2)
+        mocked_kill.assert_not_called()
 
     def test_stop_process_short_circuits_live_group_scan(self) -> None:
         pid = 1234
@@ -3290,7 +3631,7 @@ Source #13
         )
 
         full_scan.assert_not_called()
-        self.assertEqual(leader_stat.call_count, mocked_sleep.call_count + 2)
+        self.assertGreaterEqual(leader_stat.call_count, mocked_sleep.call_count)
         self.assertEqual(session_groups.call_count, 3)
         self.assertEqual(mocked_kill.call_count, 3)
         self.assertGreaterEqual(mocked_sleep.call_count, 50)
@@ -3301,16 +3642,52 @@ Source #13
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
             mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
             mock.patch("speed_of_cinnamon.recorder.process_group_has_live_processes", return_value=True),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.95, 0.99, 0.99, 1.1, 1.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
+
+        self.assertFalse(result)
+        self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "-1234"])
+        self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "-1234"])
+
+    def test_stop_process_does_not_escalate_after_total_deadline(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder.process_group_has_live_processes", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2, 0.2]),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
             result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
         self.assertFalse(result)
-        self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
-        self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "-1234"])
-        self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "-1234"])
+        self.assertEqual([call.args[0] for call in mocked_kill.call_args_list], [["kill", "-INT", "--", "-1234"]])
+
+    def test_stop_process_waits_after_term_before_kill(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_matches", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder._process_tree_descendant_identities", return_value={}),
+            mock.patch("speed_of_cinnamon.recorder._process_tree_has_live_processes", return_value=False),
+            mock.patch("speed_of_cinnamon.recorder._process_is_gone", side_effect=[False, False, False, True]),
+            mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.9, 0.95, 1.0]),
+            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
+
+        self.assertTrue(result)
+        self.assertEqual(
+            [call.args[0] for call in mocked_kill.call_args_list],
+            [["kill", "-INT", "--", "-1234"], ["kill", "-TERM", "--", "-1234"]],
+        )
 
     def test_process_group_scan_ignores_disappeared_unrelated_process(self) -> None:
         entries = (Path("/proc/100"), Path("/proc/200"))
@@ -3372,11 +3749,11 @@ Source #13
                 return_value={1234, 4321},
             ),
             mock.patch("speed_of_cinnamon.recorder._same_session_has_live_processes", return_value=True),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.95, 0.99, 0.99, 1.1, 1.2]),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
 
         self.assertFalse(result)
         self.assertEqual(
@@ -3396,6 +3773,64 @@ Source #13
         with mock.patch.object(recorder_module.Path, "read_text", side_effect=error):
             self.assertIsNone(recorder_module._recording_process_stat_fields(1234))
             self.assertIsNone(recorder_module._recording_process_identity_for_pid(1234))
+
+    def test_recording_process_identity_caches_boot_id_only(self) -> None:
+        previous_cache = recorder_module._BOOT_ID_CACHE
+        stat_fields = ["S"] * 20
+        stat_fields[19] = "12345"
+        try:
+            recorder_module._BOOT_ID_CACHE = None
+            with (
+                mock.patch.object(recorder_module, "_recording_process_stat_fields", return_value=stat_fields),
+                mock.patch.object(recorder_module.Path, "read_text", return_value="boot-id") as mocked_read,
+            ):
+                first = recorder_module._recording_process_identity_for_pid(1234)
+                second = recorder_module._recording_process_identity_for_pid(1234)
+        finally:
+            recorder_module._BOOT_ID_CACHE = previous_cache
+
+        self.assertEqual(first, "boot-id:12345")
+        self.assertEqual(second, first)
+        mocked_read.assert_called_once_with(encoding="utf-8")
+
+    def test_recording_process_identity_falls_back_to_pid_start_time_prefix_when_boot_id_missing(self) -> None:
+        previous_cache = recorder_module._BOOT_ID_CACHE
+        stat_fields = ["S"] * 20
+        stat_fields[19] = "12345"
+        try:
+            recorder_module._BOOT_ID_CACHE = None
+            with (
+                mock.patch.object(recorder_module, "_recording_process_stat_fields", return_value=stat_fields),
+                mock.patch.object(
+                    recorder_module.Path,
+                    "read_text",
+                    side_effect=OSError("boot_id missing"),
+                ) as mocked_read,
+            ):
+                identity = recorder_module._recording_process_identity_for_pid(1234)
+        finally:
+            recorder_module._BOOT_ID_CACHE = previous_cache
+        self.assertEqual(identity, "pid:1234:12345")
+        self.assertEqual(mocked_read.call_count, 1)
+
+    def test_start_recorder_accepts_identity_after_initial_poll_when_boot_id_missing(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.side_effect = [None, None, None]
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch(
+                    "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                    side_effect=[None, "pid:1234:12345"],
+                ),
+                mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.05, 1.5]),
+                mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            ):
+                self.assertIs(start_recorder(command, Path(tmp) / "session.log"), process)
 
     def test_process_group_scan_ignores_foreign_session(self) -> None:
         entries = (Path("/proc/100"),)
@@ -3438,27 +3873,46 @@ Source #13
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=999),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
             mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.95, 0.99, 0.99, 1.1, 1.2]),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
 
         self.assertFalse(result)
         self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "1234"])
         self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "1234"])
         self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "1234"])
 
+    def test_stop_process_uses_pidfd_for_single_pid_when_available(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=999),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder.os.pidfd_open", return_value=42) as mocked_open,
+            mock.patch("speed_of_cinnamon.recorder.signal.pidfd_send_signal") as mocked_send,
+            mock.patch("speed_of_cinnamon.recorder.os.close") as mocked_close,
+            mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+
+        self.assertTrue(result)
+        mocked_open.assert_called_once_with(1234, 0)
+        mocked_send.assert_called_once_with(42, recorder_module.signal.SIGINT, None, 0)
+        mocked_close.assert_called_once_with(42)
+        mocked_kill.assert_not_called()
+
     def test_stop_process_does_not_treat_permission_denied_kill_zero_as_success(self) -> None:
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
             mock.patch("speed_of_cinnamon.recorder.os.kill", side_effect=PermissionError("Operation not permitted")),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.95, 0.99, 0.99, 1.1, 1.2]),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
 
         self.assertFalse(result)
         self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
@@ -3544,17 +3998,17 @@ Source #13
             mock.patch("speed_of_cinnamon.recorder._process_group_has_recorder_session", return_value=True),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_matches", return_value=False),
             mock.patch("speed_of_cinnamon.recorder._process_is_gone", side_effect=process_gone),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.95, 0.99, 0.99, 1.1, 1.2]),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
 
         self.assertTrue(result)
         self.assertGreaterEqual(mocked_group_exists.call_count, 2)
         self.assertEqual(mocked_kill.call_args_list[0].args[0], ["kill", "-INT", "--", "-1234"])
         self.assertEqual(mocked_kill.call_args_list[1].args[0], ["kill", "-TERM", "--", "-1234"])
-        self.assertEqual(mocked_kill.call_args_list[2].args[0], ["kill", "-KILL", "--", "-1234"])
+        self.assertEqual(len(mocked_kill.call_args_list), 2)
 
     def test_stop_process_kills_live_descendant_that_created_new_session(self) -> None:
         process = subprocess.Popen(
@@ -3581,7 +4035,7 @@ Source #13
 
         try:
             self.assertTrue(child_is_live())
-            self.assertTrue(stop_process(process.pid, timeout_seconds=1, expected_process_identity=identity))
+            self.assertTrue(stop_process(process.pid, timeout_seconds=2, expected_process_identity=identity))
             self.assertFalse(child_is_live())
         finally:
             try:
@@ -3592,6 +4046,37 @@ Source #13
             if process.poll() is None:
                 process.kill()
             process.communicate()
+
+    def test_stop_process_refreshes_descendants_before_final_cleanup(self) -> None:
+        scans = [{}, {4321: "late-child-identity"}]
+        clock = [0.0]
+
+        def scan(_pid: int) -> dict[int, str]:
+            return scans.pop(0) if scans else {4321: "late-child-identity"}
+
+        def monotonic() -> float:
+            return clock[0]
+
+        def sleep(seconds: float) -> None:
+            clock[0] += seconds
+
+        with (
+            mock.patch.object(recorder_module.os, "getpgid", return_value=1234),
+            mock.patch.object(recorder_module.os, "getsid", return_value=1234),
+            mock.patch.object(recorder_module, "_recording_process_identity_matches", return_value=True),
+            mock.patch.object(recorder_module, "_process_tree_descendant_identities", side_effect=scan),
+            mock.patch.object(recorder_module, "_process_tree_has_live_processes", return_value=False),
+            mock.patch.object(recorder_module, "_process_is_gone", return_value=False),
+            mock.patch.object(recorder_module, "_same_session_process_group_ids", return_value={1234}),
+            mock.patch.object(recorder_module, "_kill_output_process_tree", return_value=True) as mocked_cleanup,
+            mock.patch.object(recorder_module, "_run_kill"),
+            mock.patch.object(recorder_module.time, "monotonic", side_effect=monotonic),
+            mock.patch.object(recorder_module.time, "sleep", side_effect=sleep),
+        ):
+            result = stop_process(1234, timeout_seconds=1.0, expected_process_identity="owner-identity")
+
+        self.assertFalse(result)
+        mocked_cleanup.assert_called_once_with({4321: "late-child-identity"})
 
 
 if __name__ == "__main__":

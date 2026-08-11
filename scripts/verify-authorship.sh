@@ -22,6 +22,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tomllib
@@ -80,6 +81,8 @@ allowed_history_commit_identities = {
     ),
 }
 forbidden = re.compile("staff" + r"[-_ ]?" + "control", re.IGNORECASE)
+FORBIDDEN_SCAN_CHUNK_BYTES = 1 << 20
+FORBIDDEN_SCAN_OVERLAP_CHARS = 64
 
 
 def fail(message: str) -> None:
@@ -154,12 +157,35 @@ def check_forbidden_names() -> None:
     for path in tracked_files():
         if path.is_symlink():
             continue
-        try:
-            content = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        if forbidden.search(content):
+        if contains_forbidden_marker(path):
             fail(f"forbidden upstream author marker found in {path.relative_to(repo_dir)}")
+
+
+def contains_forbidden_marker(path: Path) -> bool:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    fd: int | None = None
+    try:
+        fd = os.open(path, flags)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return False
+        with os.fdopen(fd, "r", encoding="utf-8", closefd=True) as handle:
+            fd = None
+            overlap = ""
+            while True:
+                chunk = handle.read(FORBIDDEN_SCAN_CHUNK_BYTES)
+                if not chunk:
+                    return forbidden.search(overlap) is not None
+                candidate = overlap + chunk
+                if forbidden.search(candidate):
+                    return True
+                overlap = candidate[-FORBIDDEN_SCAN_OVERLAP_CHARS:]
+    except UnicodeDecodeError:
+        return False
+    except OSError as exc:
+        fail(f"could not inspect tracked file {path.relative_to(repo_dir)}: {exc}")
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def check_git_identity() -> None:
@@ -181,7 +207,14 @@ def check_git_identity() -> None:
     if shallow_state == "true":
         fail("cannot verify full commit history in shallow clone; use fetch-depth: 0")
 
-    log = run_git("--no-pager", "log", "HEAD", "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1e").stdout
+    log = run_git(
+        "--no-pager",
+        "log",
+        "--no-color",
+        "--no-show-signature",
+        "HEAD",
+        "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1e",
+    ).stdout
     bad_commits: list[str] = []
     for record in log.strip("\x1e").split("\x1e"):
         record = record.strip()

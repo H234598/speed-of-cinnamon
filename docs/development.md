@@ -195,6 +195,25 @@ Successful runs upload:
 
 ## Release Publishing
 
+### Kanonische Release-Matrix
+
+| Zweck | Ziel/Befehl | Snap | Generic RPM | Publish-Verhalten |
+| --- | --- | --- | --- | --- |
+| Normale lokale Checks | `make check` | Nein | Nein | Kein Publish |
+| Manueller CI-Dispatch | `gh workflow run ci.yml -f build_snap=false -f build_generic_rpm=false` | Optional | Optional | Kein Publish |
+| Lokale Release-Validierung | `make release-dry-run` | Pflicht | Standardmaessig ja | Kein Publish |
+| Lokale Release-Validierung ohne Snap | `make release-dry-run-no-snap` | Nein | Standardmaessig ja | Kein Publish |
+| Lokaler echter Release-Versuch | `make release` | Pflicht | Standardmaessig ja | Kann publizieren |
+| Manueller Workflow-Release | `gh workflow run release.yml -f tag=vX.Y.Z` | Pflicht | Ja | Publiziert, sofern `dry_run=false` |
+| Manueller Workflow-Release ohne Generic RPM | `gh workflow run release.yml -f tag=vX.Y.Z -f build_generic_rpm=false` | Pflicht | Nein | Publiziert, sofern `dry_run=false` |
+
+Die Matrix ist kanonisch fuer die Zuordnung von Checks, Pakettypen und Publish-Verhalten. `SNAP_BUILD=0` darf nicht
+mit `release` oder `release-dry-run` verwendet werden; Snap-freie lokale Validierung nutzt ausschliesslich
+`release-dry-run-no-snap`. CI-Dispatch nutzt `ci.yml` mit `build_snap` und `build_generic_rpm`; Release-Dispatch nutzt
+`release.yml` mit `tag`, `dry_run` und `build_generic_rpm`. `BUILD_GENERIC_RPM=0` kann bei lokalen Targets und
+manuellen Workflow-Laeufen den Generic RPM deaktivieren. `dry_run=true` deaktiviert das Publizieren im manuellen
+Release-Workflow.
+
 Pushing a version tag that matches `pyproject.toml`, for example `vX.Y.Z`, runs the release workflow:
 
 ```bash
@@ -219,15 +238,15 @@ Publishing uses repository secret `RELEASE_GITHUB_TOKEN` (PAT or token with `con
 For environments without `snapcraft`, run `make release-dry-run-no-snap` only as a local non-publishable validation.
 To skip local generic RPM generation, use `make release-dry-run BUILD_GENERIC_RPM=0`.
 This keeps the release build and validation steps and skips only the publish/upload step for local dry-runs.
-To combine both optional skips:
+To validate locally without Snap and without the generic RPM, use the dedicated no-Snap target. It is non-publishable:
 
 ```bash
-make release-dry-run BUILD_GENERIC_RPM=0
+make release-dry-run-no-snap BUILD_GENERIC_RPM=0
 ```
 
 Flag values are validated locally before any artifacts are built:
 
-- `SNAP_BUILD`: must be `1` for `release` and `release-dry-run`
+- `SNAP_BUILD`: must be `1` for `release` and `release-dry-run`; use `release-dry-run-no-snap` for local validation without Snap
 - `BUILD_GENERIC_RPM`: `0` or `1`
 
 To run the manual release workflow from CLI:

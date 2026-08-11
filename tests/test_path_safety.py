@@ -38,6 +38,36 @@ class PathSafetyTest(unittest.TestCase):
         except TypeError as exc:
             self.fail(f"ExpectedTarget.captured must accept a secure file descriptor: {exc}")
 
+    def test_conditional_unlink_secure_wipes_content_before_unlink(self) -> None:
+        expected_target, _replace, unlink = self._conditional_symbols()
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "transcript.txt"
+            secret = b"private transcript data"
+            target.write_bytes(secret)
+            expected = self._capture_expected(expected_target, target)
+            observed: list[bytes] = []
+            real_unlink = path_safety.os.unlink
+
+            def observe_unlink(name: str, *, dir_fd: int = -1) -> None:
+                fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=dir_fd)
+                try:
+                    observed.append(os.read(fd, len(secret)))
+                finally:
+                    os.close(fd)
+                real_unlink(name, dir_fd=dir_fd)
+
+            with mock.patch.object(path_safety.os, "unlink", side_effect=observe_unlink):
+                self.assertTrue(
+                    unlink(
+                        target,
+                        expected,
+                        field_name="generated transcript",
+                        secure_wipe=True,
+                    )
+                )
+
+        self.assertEqual(observed, [b"\x00" * len(secret)])
+
     def test_cleanup_note_helper_preserves_primary_legacy_exception(self) -> None:
         class LegacyBaseException(BaseException):
             pass
@@ -99,6 +129,19 @@ class PathSafetyTest(unittest.TestCase):
     def test_open_file_without_following_symlinks_rejects_relative_paths(self) -> None:
         with self.assertRaisesRegex(OSError, "must be absolute"):
             path_safety.open_file_without_following_symlinks(Path("settings.json"), os.O_RDONLY)
+
+    def test_directory_special_paths_use_validated_no_follow_flag(self) -> None:
+        nofollow_flag = path_safety._resolve_no_follow_flag(field_name="directory")
+        callers = (
+            path_safety.open_directory_without_following_symlinks,
+            path_safety.ensure_directory_without_following_symlinks,
+        )
+        for caller in callers:
+            for path in (Path("."), Path("/")):
+                with self.subTest(caller=caller.__name__, path=path):
+                    with mock.patch.object(path_safety.os, "open", return_value=123) as mocked_open:
+                        self.assertEqual(caller(path), 123)
+                    self.assertTrue(mocked_open.call_args.args[1] & nofollow_flag)
 
     def test_secure_open_callers_reject_invalid_nofollow_before_os_open(self) -> None:
         callers = (
@@ -2079,6 +2122,35 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"old")
             self.assertFalse(list(root.glob(".target.bin.*.txn")))
 
+    def test_conditional_replace_removes_activated_target_before_rollback(self) -> None:
+        expected_target, replace, _unlink = self._conditional_symbols()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = root / "target.bin"
+            target.write_bytes(b"old")
+            expected = self._capture_expected(expected_target, target)
+            real_retry = path_safety._verify_expected_target_with_retry
+            activation_checks = 0
+
+            def fail_first_activation_check(fd, expected_value, *, field_name):
+                nonlocal activation_checks
+                if expected_value is not expected:
+                    activation_checks += 1
+                    if activation_checks == 1:
+                        return False
+                return real_retry(fd, expected_value, field_name=field_name)
+
+            with mock.patch.object(
+                path_safety,
+                "_verify_expected_target_with_retry",
+                side_effect=fail_first_activation_check,
+            ):
+                with self.assertRaisesRegex(OSError, "changed after activation"):
+                    replace(target, b"new", expected)
+
+            self.assertEqual(target.read_bytes(), b"old")
+            self.assertFalse(list(root.glob(".target.bin.*.txn")))
+
     def test_conditional_replace_missing_rejects_post_activation_unsafe_targets(self) -> None:
         expected_target, replace, _unlink = self._conditional_symbols()
         for race_kind in ("foreign", "symlink", "hardlink"):
@@ -2486,6 +2558,20 @@ class PathSafetyTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(OSError, "could not be read"):
                 path_safety.read_text_without_following_symlinks(Path("/does-not-matter.txt"))
+
+    def test_read_text_open_error_does_not_leak_path(self) -> None:
+        with mock.patch.object(
+            path_safety,
+            "open_file_without_following_symlinks",
+            side_effect=OSError("/secret/transcript-token.txt"),
+        ):
+            with self.assertRaisesRegex(OSError, "could not be opened") as caught:
+                path_safety.read_text_without_following_symlinks(
+                    Path("/secret/transcript-token.txt"),
+                    field_name="transcript file",
+                )
+
+        self.assertNotIn("/secret/transcript-token.txt", str(caught.exception))
 
     def test_read_text_preserves_read_interrupt_when_handle_close_fails(self) -> None:
         class _FailingHandle:

@@ -367,7 +367,6 @@ class LivePasteEditorTest(unittest.TestCase):
                 deadline = time.monotonic() + PASTE_TIMEOUT_SECONDS
                 last_content = ""
                 while time.monotonic() < deadline:
-                    window_id = _wait_for_xed_window(target_path.name, editor.pid, known_xed_windows)
                     _activate_window(window_id)
                     _run([xdotool, "key", "--clearmodifiers", "ctrl+s"], timeout=3)
                     last_content = target_path.read_text(encoding="utf-8", errors="replace")

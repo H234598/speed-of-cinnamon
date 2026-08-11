@@ -1,15 +1,33 @@
 from __future__ import annotations
 
 import unittest
+import unicodedata
+from unittest import mock
 
+from speed_of_cinnamon import profanity_filter
 from speed_of_cinnamon.profanity_filter import (
+    MAX_PROFANITY_IGNORABLE_CODEPOINTS,
     PROFANITY_REPLACEMENT_PAIRS,
     compile_profanity_replacements,
     parse_profanity_replacement_list,
+    render_profanity_replacement_list,
 )
 
 
 class ProfanityFilterTest(unittest.TestCase):
+    def test_default_profanity_catalog_contains_exactly_200_entries(self) -> None:
+        self.assertEqual(len(PROFANITY_REPLACEMENT_PAIRS), 200)
+        self.assertEqual(len({pattern for pattern, _replacement in PROFANITY_REPLACEMENT_PAIRS}), 200)
+
+    def test_parse_profanity_replacement_list_fast_paths_untouched_bundled_list(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.profanity_filter._safe_profanity_pattern_source",
+            side_effect=AssertionError("bundled list must not revalidate regexes"),
+        ):
+            pairs = parse_profanity_replacement_list(render_profanity_replacement_list())
+
+        self.assertEqual(pairs, PROFANITY_REPLACEMENT_PAIRS)
+
     def test_parse_profanity_replacement_list_ignores_unencodable_values(self) -> None:
         pairs = parse_profanity_replacement_list("bad\ud800 -> harmless\nfuck -> frog\n")
 
@@ -87,6 +105,26 @@ class ProfanityFilterTest(unittest.TestCase):
 
         self.assertEqual(compiled[0][0].sub(compiled[0][1], text), "frog")
 
+    def test_compile_profanity_replacements_bounds_dynamic_ignorable_character_class(self) -> None:
+        ignorable = []
+        for codepoint in range(0x110000):
+            if unicodedata.category(chr(codepoint)) in profanity_filter._MATCH_IGNORE_CATEGORIES:
+                ignorable.append(chr(codepoint))
+                if len(ignorable) > MAX_PROFANITY_IGNORABLE_CODEPOINTS * 4:
+                    break
+
+        text = "fu" + ignorable[0] + "ck " + " ".join(pattern for pattern, _ in PROFANITY_REPLACEMENT_PAIRS)
+        text += "".join(ignorable)
+        compiled = compile_profanity_replacements(PROFANITY_REPLACEMENT_PAIRS, text=text)
+
+        fuck_pattern = next(pattern for pattern, replacement in compiled if replacement == "Frickelfrosch")
+        self.assertEqual(fuck_pattern.sub("Frickelfrosch", "fu\u200bck"), "Frickelfrosch")
+        bounded_source_length = max(
+            len(profanity_filter._build_tolerant_profanity_pattern(pattern))
+            for pattern, _ in PROFANITY_REPLACEMENT_PAIRS
+        )
+        self.assertLessEqual(max(len(pattern.pattern) for pattern, _ in compiled), bounded_source_length)
+
     def test_compile_profanity_replacements_skips_impossible_rules_in_ignorable_text(self) -> None:
         text = "\u200b" * 100_000
         pairs = tuple((f"bad{index}", "safe") for index in range(500))
@@ -128,6 +166,15 @@ class ProfanityFilterTest(unittest.TestCase):
 
         self.assertEqual(softened, "Frickelfrosch")
 
+    def test_compile_profanity_replacements_skips_unrelated_replacement_candidates(self) -> None:
+        compiled = compile_profanity_replacements(PROFANITY_REPLACEMENT_PAIRS, text="Scheiße")
+
+        self.assertLess(len(compiled), len(PROFANITY_REPLACEMENT_PAIRS))
+        softened = "Scheiße"
+        for pattern, replacement in compiled:
+            softened = pattern.sub(replacement, softened)
+        self.assertNotIn("Scheiße", softened)
+
     def test_default_profanity_replacements_preserve_trusted_regex_patterns(self) -> None:
         from speed_of_cinnamon.profanity_filter import PROFANITY_REPLACEMENTS
 
@@ -137,6 +184,15 @@ class ProfanityFilterTest(unittest.TestCase):
 
         self.assertNotIn("scheiße", soften)
         self.assertNotIn("scheisse", soften)
+
+    def test_default_profanity_replacements_block_zero_width_variants(self) -> None:
+        from speed_of_cinnamon.profanity_filter import PROFANITY_REPLACEMENTS
+
+        soften = "schei\u200bße und schei\u200bßhaus"
+        for pattern, replacement in PROFANITY_REPLACEMENTS:
+            soften = pattern.sub(replacement, soften)
+
+        self.assertEqual(soften, "Glitzerkram und Glitzerhaus")
 
     def test_compile_profanity_replacements_blocks_zero_width_in_trusted_regex_patterns(self) -> None:
         text = "schei\u200bße und schei\u200bßhaus"

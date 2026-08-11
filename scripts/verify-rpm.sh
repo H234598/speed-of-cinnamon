@@ -115,6 +115,12 @@ if [[ "${rpm_link_count}" -ne 1 ]]; then
   printf 'RPM package must not be hardlinked: %s\n' "${rpm_path}" >&2
   exit 1
 fi
+rpm_filename="$(basename "${rpm_path}")"
+if [[ ! "${rpm_filename}" =~ ^speed-of-cinnamon-(.+)-[^-]+\.noarch\.rpm$ ]]; then
+  printf 'unexpected RPM package name: %s\n' "${rpm_filename}" >&2
+  exit 1
+fi
+rpm_filename_version="${BASH_REMATCH[1]}"
 rpm_bytes="$(stat -c '%s' "${rpm_path}")"
 if [[ "${rpm_bytes}" -le 0 || "${rpm_bytes}" -gt "${MAX_RPM_ARCHIVE_BYTES}" ]]; then
   printf 'RPM package size is outside allowed bounds: %s bytes\n' "${rpm_bytes}" >&2
@@ -146,8 +152,6 @@ if ! tmp_root="$(realpath "${tmp_root}" 2>/dev/null)"; then
   printf 'failed to resolve temporary root\n' >&2
   exit 1
 fi
-mkdir -p "${tmp_root}"
-
 tmp_dir="$(mktemp -d "${tmp_root}/speed-of-cinnamon-rpm-verify-XXXXXX")"
 if [[ -L "${tmp_dir}" ]]; then
   printf 'temporary RPM verification directory must not be a symlink: %s\n' "${tmp_dir}" >&2
@@ -162,13 +166,25 @@ if [[ "${tmp_dir_abs}" != "${tmp_root}/speed-of-cinnamon-rpm-verify-"* ]]; then
   exit 1
 fi
 tmp_dir="${tmp_dir_abs}"
+tmp_dir_identity=""
 cleanup_tmpdir() {
-  "${safe_fs_cmd[@]}" remove verify-rpm "${tmp_dir}" --kind dir >/dev/null 2>&1 || true
+  if [[ -n "${tmp_dir_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove verify-rpm "${tmp_dir}" --kind dir \
+      --expected-identity "${tmp_dir_identity}" >/dev/null 2>&1 || true
+  else
+    printf 'refusing RPM verification cleanup without verified identity: %s\n' "${tmp_dir}" >&2
+  fi
 }
 trap cleanup_tmpdir EXIT
 
+if ! tmp_dir_identity="$("${safe_fs_cmd[@]}" identity verify-rpm "${tmp_dir}" --kind dir)"; then
+  printf 'failed to capture RPM verification directory identity: %s\n' "${tmp_dir}" >&2
+  exit 1
+fi
+
 rpm_snapshot="${tmp_dir}/speed-of-cinnamon-verify.rpm"
-if ! "${safe_fs_cmd[@]}" copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644; then
+if ! "${safe_fs_cmd[@]}" copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644 \
+  --max-bytes "${MAX_RPM_ARCHIVE_BYTES}"; then
   printf 'failed to snapshot RPM package for verification: %s\n' "${rpm_path}" >&2
   exit 1
 fi
@@ -180,6 +196,12 @@ if [[ "$(stat -c '%h' "${rpm_snapshot}")" -ne 1 ]]; then
   printf 'RPM snapshot must not be hardlinked: %s\n' "${rpm_snapshot}" >&2
   exit 1
 fi
+snapshot_bytes="$(stat -c '%s' "${rpm_snapshot}")"
+if [[ "${snapshot_bytes}" -le 0 || "${snapshot_bytes}" -gt "${MAX_RPM_ARCHIVE_BYTES}" ]]; then
+  printf 'RPM snapshot size is outside allowed bounds: %s bytes\n' "${snapshot_bytes}" >&2
+  exit 1
+fi
+rpm_bytes="${snapshot_bytes}"
 
 metadata_file="${tmp_dir}/rpm-metadata.txt"
 scriptlets_file="${tmp_dir}/rpm-scriptlets.txt"
@@ -187,6 +209,11 @@ triggers_file="${tmp_dir}/rpm-triggers.txt"
 rpm -qp --qf 'name=%{NAME}\nversion=%{VERSION}\narch=%{ARCH}\npackager=%{PACKAGER}\nvendor=%{VENDOR}\nurl=%{URL}\n' "${rpm_snapshot}" > "${metadata_file}"
 grep -Fxq 'name=speed-of-cinnamon' "${metadata_file}"
 grep -Fxq 'arch=noarch' "${metadata_file}"
+rpm_metadata_version="$(awk -F= '$1 == "version" { print substr($0, index($0, "=") + 1); exit }' "${metadata_file}")"
+if [[ -z "${rpm_metadata_version}" || "${rpm_metadata_version}" != "${rpm_filename_version}" ]]; then
+  printf 'RPM metadata version does not match package filename: %s\n' "${rpm_filename}" >&2
+  exit 1
+fi
 grep -Fxq 'packager=H234598 <54270221+H234598@users.noreply.github.com>' "${metadata_file}"
 grep -Fxq 'vendor=H234598' "${metadata_file}"
 grep -Fxq 'url=https://github.com/H234598/speed-of-cinnamon' "${metadata_file}"
@@ -363,11 +390,19 @@ done
   rpm2cpio "${rpm_snapshot}" | cpio -idmu --no-absolute-filenames --quiet
 )
 
-if find "${tmp_dir}" -type l -print -quit | grep -q .; then
+if ! unsupported_links="$(find "${tmp_dir}" -type l -print -quit)"; then
+  printf 'failed to inspect RPM expansion for symlinks.\n' >&2
+  exit 1
+fi
+if [[ -n "${unsupported_links}" ]]; then
   printf 'RPM expansion contains unsupported symlink entries.\n' >&2
   exit 1
 fi
-if find "${tmp_dir}" -type f -links +1 -print -quit | grep -q .; then
+if ! unsupported_hardlinks="$(find "${tmp_dir}" -type f -links +1 -print -quit)"; then
+  printf 'failed to inspect RPM expansion for hardlinks.\n' >&2
+  exit 1
+fi
+if [[ -n "${unsupported_hardlinks}" ]]; then
   printf 'RPM expansion contains unsupported hardlink entries.\n' >&2
   exit 1
 fi

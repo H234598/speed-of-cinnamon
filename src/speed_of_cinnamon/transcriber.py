@@ -12,8 +12,10 @@ import errno
 import fcntl
 import os
 import re
+import signal
 import stat as stat_module
 import sys
+import threading
 import uuid
 import urllib.parse
 import urllib.error
@@ -22,11 +24,12 @@ from contextlib import contextmanager, nullcontext, suppress
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
+from typing import NoReturn
 
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
 from .command_chain import CommandChainError, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, run_process_bounded_output, split_command_chain
 from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
-from .http_safety import is_loopback_hostname
+from .http_safety import PinnedHTTPHandler, PinnedHTTPSHandler, UnsafeUrlError, is_loopback_hostname, resolve_url_host
 from .postprocessor import (
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
     DEFAULT_OPENAI_COMPATIBLE_URL,
@@ -48,12 +51,15 @@ from .path_safety import (
     unlink_file_if_identity,
     write_text_atomically_without_following_symlinks,
 )
+from .paths import _private_runtime_temp_root
+from .secure_delete import secure_wipe_regular_file_at
 
 
 TRANSCRIBE_COMMAND_TIMEOUT_SECONDS = 900
 MAX_TRANSCRIBER_ERROR_CHARS = 4096
 MAX_OPENAI_URL_CHARS = 2048
 MAX_AUDIO_FILE_BYTES = 200 * 1024 * 1024
+MULTIPART_FILE_CHUNK_BYTES = 1024 * 1024
 MAX_AUDIO_PATH_CHARS = 240
 MAX_AUDIO_STEM_CHARS = 120
 MAX_LANGUAGE_CODE_CHARS = 64
@@ -62,6 +68,8 @@ ALLOWED_AUDIO_EXTENSIONS = {".wav", ".m4a", ".flac", ".ogg", ".mp3", ".aac", ".w
 MAX_TRANSCRIPT_TEXT_CHARS = 1_000_000
 MAX_TRANSCRIBER_JSON_BYTES = 1_000_000
 TRANSCRIBER_OUTPUT_LOCK_NAME = ".speed-of-cinnamon-transcriber.lock"
+STAGED_AUDIO_PREFIX = ".sc-audio-"
+STAGED_AUDIO_CLEANUP_MIN_AGE_SECONDS = TRANSCRIBE_COMMAND_TIMEOUT_SECONDS * 2
 PLACEHOLDER_TRANSCRIPTS = {"[speaking in foreign language]"}
 OPENAI_TRANSCRIPTION_MODELS = {
     "gpt-4o-transcribe",
@@ -235,15 +243,13 @@ def _command_path(command: str) -> str:
     resolved: str | None = None
     try:
         resolved = _which(command_name)
-        if resolved:
-            command_path = Path(resolved)
-        else:
+        if not resolved:
             resolution_failed = True
     except (OSError, RuntimeError, TypeError, ValueError):
         resolution_failed = True
     if resolution_failed or not resolved:
         raise TranscriptionError("transcriber executable is not available") from None
-    return str(command_path)
+    return str(Path(resolved))
 
 
 def _require_whisper_command() -> str:
@@ -708,6 +714,77 @@ def _remove_staged_audio_file_after_mismatch(
     )
 
 
+def _cleanup_stale_staged_audio_dirs(runtime_root: Path) -> None:
+    if not isinstance(runtime_root, Path):
+        return
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or isinstance(directory_flag, bool)
+        or not isinstance(directory_flag, int)
+    ):
+        return
+    directory_open_flags = os.O_RDONLY | nofollow_flag | directory_flag | getattr(os, "O_CLOEXEC", 0)
+    root_fd: int | None = None
+    try:
+        root_fd = os.open(runtime_root, directory_open_flags)
+        assert_fd_is_private_directory(root_fd, field_name="staged audio runtime directory")
+        try:
+            names = os.listdir(root_fd)
+        except OSError:
+            return
+        cutoff = time.time() - STAGED_AUDIO_CLEANUP_MIN_AGE_SECONDS
+        for name in names:
+            if not isinstance(name, str) or not name.startswith(STAGED_AUDIO_PREFIX):
+                continue
+            stage_fd: int | None = None
+            try:
+                stage_stat = os.stat(name, dir_fd=root_fd, follow_symlinks=False)
+                if (
+                    not stat_module.S_ISDIR(stage_stat.st_mode)
+                    or stat_module.S_IMODE(stage_stat.st_mode) != 0o700
+                    or stage_stat.st_mtime > cutoff
+                ):
+                    continue
+                stage_fd = os.open(name, directory_open_flags, dir_fd=root_fd)
+                assert_fd_is_private_directory(stage_fd, field_name="staged audio directory")
+                child_names = os.listdir(stage_fd)
+                child_stats: list[tuple[str, os.stat_result]] = []
+                for child_name in child_names:
+                    if not isinstance(child_name, str) or not child_name:
+                        raise OSError("invalid staged audio entry")
+                    child_stat = os.stat(child_name, dir_fd=stage_fd, follow_symlinks=False)
+                    if (
+                        not stat_module.S_ISREG(child_stat.st_mode)
+                        or getattr(child_stat, "st_nlink", 1) != 1
+                        or stat_module.S_IMODE(child_stat.st_mode) != 0o600
+                    ):
+                        raise OSError("unexpected staged audio entry")
+                    child_stats.append((child_name, child_stat))
+                for child_name, _child_stat in child_stats:
+                    secure_wipe_regular_file_at(stage_fd, child_name, _child_stat, field_name="staged audio file")
+                    os.unlink(child_name, dir_fd=stage_fd)
+                os.rmdir(name, dir_fd=root_fd)
+            except BaseException:
+                continue
+            finally:
+                if stage_fd is not None:
+                    try:
+                        os.close(stage_fd)
+                    except BaseException:
+                        pass
+    except BaseException:
+        return
+    finally:
+        if root_fd is not None:
+            try:
+                os.close(root_fd)
+            except BaseException:
+                pass
+
+
 def _same_expected_target_evidence(left: ExpectedTarget, right: ExpectedTarget) -> bool:
     if not isinstance(left, ExpectedTarget) or not isinstance(right, ExpectedTarget):
         return False
@@ -757,6 +834,7 @@ def _remove_generated_transcript_file(
             path,
             expected_target,
             field_name=field_name,
+            secure_wipe=True,
         )
     except (OSError, RuntimeError, TypeError, ValueError):
         underlying_error = True
@@ -789,19 +867,54 @@ def _restore_or_remove_generated_transcript(
         raise TranscriptionError("failed to remove generated transcript")
 
 
-def _read_response_text(response: object, max_bytes: int = MAX_TRANSCRIBER_JSON_BYTES) -> str:
+def _set_response_read_timeout(response: object, timeout_seconds: float) -> None:
+    candidates = [response]
+    frame = getattr(response, "fp", None)
+    raw = getattr(frame, "raw", None)
+    socket = getattr(raw, "_sock", None)
+    candidates.extend((frame, raw, socket))
+    for candidate in candidates:
+        setter = getattr(candidate, "settimeout", None)
+        if callable(setter):
+            try:
+                setter(max(0.001, timeout_seconds))
+            except (OSError, ValueError):
+                pass
+            return
+
+
+def _read_response_text(
+    response: object,
+    max_bytes: int = MAX_TRANSCRIBER_JSON_BYTES,
+    *,
+    deadline: float | None = None,
+) -> str:
     if not hasattr(response, "read"):
         raise TranscriptionError("response must be readable")
     if not isinstance(max_bytes, int) or isinstance(max_bytes, bool):
         raise TranscriptionError("max response bytes must be an integer")
     if max_bytes < 0:
         raise TranscriptionError("max response bytes must be non-negative")
+    if deadline is not None and (
+        not isinstance(deadline, (int, float))
+        or isinstance(deadline, bool)
+        or deadline != deadline
+        or deadline in {float("inf"), float("-inf")}
+    ):
+        raise TranscriptionError("response deadline must be finite")
     chunks: list[bytes] = []
     total = 0
     read_failed = False
     while True:
+        if deadline is not None:
+            remaining_seconds = deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                raise TranscriptionError("API response timed out")
+            _set_response_read_timeout(response, remaining_seconds)
         try:
             chunk = response.read(65536)
+        except TimeoutError as exc:
+            raise TranscriptionError("API response timed out") from exc
         except Exception:
             read_failed = True
             break
@@ -869,8 +982,29 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
 
 def _open_http_request(request: urllib.request.Request, *, timeout: int, field_name: str) -> object:
     _validate_http_request(request, field_name=field_name)
-    opener = urllib.request.build_opener(_SameOriginRedirectHandler, urllib.request.ProxyHandler({}))
-    return opener.open(request, timeout=timeout)  # nosec B310
+    request_deadline = time.monotonic() + timeout
+    try:
+        remaining_timeout = request_deadline - time.monotonic()
+        if remaining_timeout <= 0:
+            raise UnsafeUrlError(f"{field_name} request timed out")
+        pinned_addresses = resolve_url_host(
+            request.get_full_url(),
+            field_name=field_name,
+            allow_loopback_host=True,
+            timeout_seconds=remaining_timeout,
+        )
+    except UnsafeUrlError as exc:
+        raise TranscriptionError(str(exc)) from None
+    opener = urllib.request.build_opener(
+        _SameOriginRedirectHandler,
+        PinnedHTTPHandler(pinned_addresses),
+        PinnedHTTPSHandler(pinned_addresses),
+        urllib.request.ProxyHandler({}),
+    )
+    remaining_timeout = request_deadline - time.monotonic()
+    if remaining_timeout <= 0:
+        raise TranscriptionError(f"{field_name} request timed out")
+    return opener.open(request, timeout=remaining_timeout)  # nosec B310
 
 
 def _file_size(file: io.BufferedRandom) -> int:
@@ -1346,7 +1480,7 @@ def _validate_audio_path_shape(path: Path) -> Path:
         raise TranscriptionError("audio file path is too long")
     try:
         normalized_bytes = str(normalized).encode("utf-8")
-    except UnicodeEncodeError as exc:
+    except UnicodeEncodeError:
         raise TranscriptionError("audio path contains invalid UTF-8") from None
     if len(normalized_bytes) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError("audio file path is too long")
@@ -1354,7 +1488,7 @@ def _validate_audio_path_shape(path: Path) -> Path:
         raise TranscriptionError("audio file name is too long")
     try:
         normalized_name_bytes = normalized.name.encode("utf-8")
-    except UnicodeEncodeError as exc:
+    except UnicodeEncodeError:
         raise TranscriptionError("audio path contains invalid UTF-8") from None
     if len(normalized_name_bytes) > MAX_AUDIO_PATH_CHARS:
         raise TranscriptionError("audio file name is too long")
@@ -1362,7 +1496,7 @@ def _validate_audio_path_shape(path: Path) -> Path:
         raise TranscriptionError("audio file stem is too long")
     try:
         normalized_stem_bytes = normalized.stem.encode("utf-8")
-    except UnicodeEncodeError as exc:
+    except UnicodeEncodeError:
         raise TranscriptionError("audio path contains invalid UTF-8") from None
     if len(normalized_stem_bytes) > MAX_AUDIO_STEM_CHARS:
         raise TranscriptionError("audio file stem is too long")
@@ -1399,6 +1533,7 @@ def _read_private_file_bytes(
     field_name: str,
     max_bytes: int | None = None,
     expected_snapshot: tuple[int, int, int, int, int, int, str] | tuple[int, int, int, int, int, int] | None = None,
+    chunk_callback: object | None = None,
 ) -> bytes:
     if not isinstance(path, Path):
         raise TranscriptionError("path must be a Path")
@@ -1407,6 +1542,8 @@ def _read_private_file_bytes(
     effective_max_bytes = MAX_AUDIO_FILE_BYTES if max_bytes is None else max_bytes
     if isinstance(field_name, bool) or not isinstance(field_name, str):
         raise TranscriptionError("field_name must be text")
+    if chunk_callback is not None and not callable(chunk_callback):
+        raise TranscriptionError("chunk_callback must be callable")
     expected_snapshot_metadata: tuple[int, int, int, int, int, int] | None = None
     expected_snapshot_digest: str | None = None
     if expected_snapshot is not None:
@@ -1478,13 +1615,27 @@ def _read_private_file_bytes(
         fd = None
     except OSError:
         release_open_fds(None)
-        raise TranscriptionError(f"failed to read {field_name}")
+        raise TranscriptionError(f"failed to read {field_name}") from None
     read_failed = False
     try:
         hasher = hashlib.sha256() if expected_snapshot_digest is not None else None
-        data = handle.read(effective_max_bytes + 1)
-        if hasher is not None:
-            hasher.update(data)
+        data_buffer = bytearray()
+        total_bytes = 0
+        while total_bytes <= effective_max_bytes:
+            chunk = handle.read(min(MULTIPART_FILE_CHUNK_BYTES, effective_max_bytes + 1 - total_bytes))
+            if not isinstance(chunk, bytes):
+                raise TranscriptionError(f"failed to read {field_name}")
+            if not chunk:
+                break
+            total_bytes += len(chunk)
+            if hasher is not None:
+                hasher.update(chunk)
+            if chunk_callback is None:
+                data_buffer.extend(chunk)
+            else:
+                chunk_callback(chunk)
+            if total_bytes > effective_max_bytes:
+                break
         final_snapshot, final_ctime_ns = _snapshot_fd(handle.fileno())
         if (
             final_snapshot != observed_snapshot
@@ -1495,7 +1646,7 @@ def _read_private_file_bytes(
             )
         ):
             raise TranscriptionError(f"{field_name} changed between validation and read")
-        if len(data) > effective_max_bytes:
+        if total_bytes > effective_max_bytes:
             raise TranscriptionError(f"{field_name} is too large")
         if hasher is not None and hasher.hexdigest() != expected_snapshot_digest:
             raise TranscriptionError(f"{field_name} changed between validation and read")
@@ -1517,7 +1668,7 @@ def _read_private_file_bytes(
         )
     if read_failed:
         raise TranscriptionError(f"failed to read {field_name}")
-    return data
+    return bytes(data_buffer)
 
 
 def _snapshot_private_file(
@@ -1643,7 +1794,14 @@ def _staged_audio_file_for_local_backend(
         _release_owned_fd(fd, close_errors)
 
     try:
-        staging_dir = Path(tempfile.mkdtemp(prefix=".sc-audio-"))
+        runtime_temp_root = _private_runtime_temp_root()
+        _cleanup_stale_staged_audio_dirs(runtime_temp_root)
+        staging_dir = Path(
+            tempfile.mkdtemp(
+                prefix=STAGED_AUDIO_PREFIX,
+                dir=str(runtime_temp_root),
+            )
+        )
         staging_path = staging_dir / audio_path.name
         try:
             parent_fd = open_directory_without_following_symlinks(audio_path.parent, field_name="audio file directory")
@@ -1871,7 +2029,7 @@ def _validate_audio_file_for_upload(
     expected_snapshot: tuple[int, int, int, int, int, int]
     | tuple[int, int, int, int, int, int, str]
     | None = None,
-    _metadata_only: bool = True,
+    _metadata_only: bool = False,
 ) -> tuple[Path, _AudioSnapshot]:
     normalized = _validate_audio_path_shape(path)
     if expected_snapshot is None:
@@ -2293,7 +2451,7 @@ def transcribe_with_openai_whisper(
                     )
                     if restored_stat is None:
                         return text
-                    return _trusted_transcript_text(text, text_path, restored_stat)
+                    return text
                 final_stat = _regular_file_stat(
                     text_path,
                     field_name="transcript output",
@@ -2574,6 +2732,34 @@ def _require_faster_whisper_available() -> None:
         raise TranscriptionError("faster-whisper is not available")
 
 
+@contextmanager
+def _faster_whisper_deadline(deadline: float):
+    if threading.current_thread() is not threading.main_thread():
+        raise TranscriptionError("faster-whisper timeout requires the main thread")
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TranscriptionError("faster-whisper timed out")
+
+    previous_handler = signal.getsignal(signal.SIGALRM)
+    previous_timer = signal.getitimer(signal.ITIMER_REAL)
+
+    def timeout_handler(_signum: int, _frame: object) -> None:
+        raise TranscriptionError("faster-whisper timed out")
+
+    started = time.monotonic()
+    signal.signal(signal.SIGALRM, timeout_handler)
+    signal.setitimer(signal.ITIMER_REAL, remaining)
+    try:
+        yield
+    finally:
+        signal.setitimer(signal.ITIMER_REAL, 0)
+        signal.signal(signal.SIGALRM, previous_handler)
+        if previous_timer[0] > 0:
+            elapsed = max(0.0, time.monotonic() - started)
+            restored_delay = max(0.0, previous_timer[0] - elapsed)
+            signal.setitimer(signal.ITIMER_REAL, restored_delay, previous_timer[1])
+
+
 def transcribe_with_faster_whisper(
     audio_path: Path,
     language: str,
@@ -2616,22 +2802,40 @@ def transcribe_with_faster_whisper(
             ensure_deadline()
             model = WhisperModel(model_path, device="cpu", compute_type="int8")
             ensure_deadline()
-            segments, _info = model.transcribe(
-                str(staged_audio_path),
-                language=language or None,
-                task="transcribe",
-                beam_size=5,
-            )
-            ensure_deadline()
-            text_parts: list[str] = []
-            for segment in segments:
+            with _faster_whisper_deadline(deadline):
+                segments, _info = model.transcribe(
+                    str(staged_audio_path),
+                    language=language or None,
+                    task="transcribe",
+                    beam_size=5,
+                )
                 ensure_deadline()
-                segment_text = str(segment.text or "").strip()
-                if not segment_text:
-                    continue
-                text_parts.append(segment_text)
-                _assert_text_length(" ".join(text_parts), field_name="transcript")
-            text = " ".join(text_parts).strip()
+                text_parts: list[str] = []
+                transcript_chars = 0
+                transcript_bytes = 0
+                for segment in segments:
+                    ensure_deadline()
+                    raw_segment_text = getattr(segment, "text", None)
+                    if raw_segment_text is not None and not isinstance(raw_segment_text, str):
+                        raise TranscriptionError("faster-whisper returned invalid segment text")
+                    segment_text = (raw_segment_text or "").strip()
+                    if not segment_text:
+                        continue
+                    _assert_text_length(segment_text, field_name="transcript")
+                    separator_chars = 1 if text_parts else 0
+                    transcript_chars += separator_chars + len(segment_text)
+                    segment_bytes = len(segment_text.encode("utf-8"))
+                    transcript_bytes += separator_chars + segment_bytes
+                    if transcript_chars > MAX_TRANSCRIPT_TEXT_CHARS:
+                        raise TranscriptionError(
+                            f"transcript is too large (max {MAX_TRANSCRIPT_TEXT_CHARS} characters)"
+                        )
+                    if transcript_bytes > MAX_TRANSCRIPT_TEXT_CHARS:
+                        raise TranscriptionError(
+                            f"transcript is too large (max {MAX_TRANSCRIPT_TEXT_CHARS} bytes)"
+                        )
+                    text_parts.append(segment_text)
+                text = " ".join(text_parts).strip()
         except Exception as exc:
             if isinstance(exc, TranscriptionError):
                 raise
@@ -2772,13 +2976,17 @@ def _safe_url_display(url: str, *, field_name: str) -> str:
     return urllib.parse.urlunparse((parsed.scheme, netloc, "", "", "", ""))
 
 
+def _reject_non_finite_json_number(_value: str) -> object:
+    raise ValueError("JSON response contains non-finite number")
+
+
 def _openai_compatible_error_detail(raw: str) -> str:
     raw = _assert_text_length(raw or "", field_name="OpenAI-compatible API error", max_chars=MAX_TRANSCRIBER_ERROR_CHARS).strip()
     if not raw:
         return ""
     try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
+        payload = json.loads(raw, parse_constant=_reject_non_finite_json_number)
+    except (json.JSONDecodeError, RecursionError, ValueError, MemoryError):
         return raw
     if isinstance(payload, dict) and payload.get("error"):
         error = payload["error"]
@@ -2959,17 +3167,12 @@ def _multipart_form_data(
     boundary = "speed-of-cinnamon-" + uuid.uuid4().hex
     body = bytearray()
     file_name = file_path.name
-    if "\r" in file_name or "\n" in file_name:
-        raise TranscriptionError("audio file name contains invalid newline")
+    if _contains_multipart_control_chars(file_name):
+        if "\r" in file_name or "\n" in file_name:
+            raise TranscriptionError("audio file name contains invalid newline")
+        raise TranscriptionError("audio file name contains invalid control character")
     file_name = file_name.replace("\\", "\\\\").replace('"', '\\"')
-    if file_bytes is None:
-        file_bytes = _read_private_file_bytes(
-            file_path,
-            field_name="audio file for API upload",
-            max_bytes=MAX_AUDIO_FILE_BYTES,
-            expected_snapshot=expected_file_snapshot,
-        )
-    elif type(file_bytes) is not bytes:
+    if file_bytes is not None and type(file_bytes) is not bytes:
         raise TranscriptionError("audio bytes must be bytes")
     for key, value in fields.items():
         if _contains_multipart_control_chars(key) or _contains_multipart_control_chars(value):
@@ -2996,8 +3199,16 @@ def _multipart_form_data(
             "Content-Type: application/octet-stream\r\n\r\n"
         ).encode("utf-8")
     )
-    body.extend(file_bytes)
-    del file_bytes
+    if file_bytes is None:
+        _read_private_file_bytes(
+            file_path,
+            field_name="audio file for API upload",
+            max_bytes=MAX_AUDIO_FILE_BYTES,
+            expected_snapshot=expected_file_snapshot,
+            chunk_callback=body.extend,
+        )
+    else:
+        body.extend(file_bytes)
     body.extend(b"\r\n")
     body.extend(f"--{boundary}--\r\n".encode("utf-8"))
     return body, boundary
@@ -3065,20 +3276,17 @@ def transcribe_with_openai_compatible_api(
     if use_flex_processing:
         fields["service_tier"] = "flex"
     allow_service_tier_fallback = use_flex_processing and openai_compatible_service_tier_fallback
-    audio_bytes = _read_private_file_bytes(
-        audio_path,
-        field_name="audio file for API upload",
-        max_bytes=MAX_AUDIO_FILE_BYTES,
-        expected_snapshot=audio_snapshot,
-    )
+    request_deadline = time.monotonic() + TRANSCRIBE_COMMAND_TIMEOUT_SECONDS
 
     def _request_transcription(request_fields: dict[str, str]) -> str:
+        remaining_seconds = request_deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            raise TranscriptionError("OpenAI-compatible speech API timed out")
         body, boundary = _multipart_form_data(
             request_fields,
             "file",
             audio_path,
             expected_file_snapshot=audio_snapshot,
-            file_bytes=audio_bytes,
         )
         headers = {
             "Content-Type": f"multipart/form-data; boundary={boundary}",
@@ -3087,19 +3295,30 @@ def transcribe_with_openai_compatible_api(
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
         request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
+        remaining_seconds = request_deadline - time.monotonic()
+        if remaining_seconds <= 0:
+            raise TranscriptionError("OpenAI-compatible speech API timed out")
         with _open_http_request(
             request,
-            timeout=TRANSCRIBE_COMMAND_TIMEOUT_SECONDS,
+            timeout=remaining_seconds,
             field_name="OpenAI-compatible speech request",
         ) as response:
-            return _read_response_text(response)
+            return _read_response_text(response, deadline=request_deadline)
 
     pending_remote_error: TranscriptionError | None = None
     try:
         raw = _request_transcription(fields)
     except urllib.error.HTTPError as exc:
         try:
-            raw_error = _read_response_text(exc, MAX_TRANSCRIBER_ERROR_CHARS)
+            raw_error = _read_response_text(
+                exc,
+                MAX_TRANSCRIBER_ERROR_CHARS,
+                deadline=request_deadline,
+            )
+        except TranscriptionError as read_exc:
+            if str(read_exc) == "API response timed out":
+                raise
+            raw_error = ""
         except Exception:
             raw_error = ""
         finally:
@@ -3115,7 +3334,15 @@ def transcribe_with_openai_compatible_api(
                 raw = _request_transcription(fallback_fields)
             except urllib.error.HTTPError as fallback_exc:
                 try:
-                    raw_error = _read_response_text(fallback_exc, MAX_TRANSCRIBER_ERROR_CHARS)
+                    raw_error = _read_response_text(
+                        fallback_exc,
+                        MAX_TRANSCRIBER_ERROR_CHARS,
+                        deadline=request_deadline,
+                    )
+                except TranscriptionError as read_exc:
+                    if str(read_exc) == "API response timed out":
+                        raise
+                    raw_error = ""
                 except Exception:
                     raw_error = ""
                 finally:
@@ -3154,8 +3381,8 @@ def transcribe_with_openai_compatible_api(
         raise pending_remote_error
     json_error = False
     try:
-        payload = json.loads(raw)
-    except json.JSONDecodeError:
+        payload = json.loads(raw, parse_constant=_reject_non_finite_json_number)
+    except (json.JSONDecodeError, RecursionError, ValueError, MemoryError):
         json_error = True
     if json_error:
         raise TranscriptionError("OpenAI-compatible speech API returned invalid JSON")
@@ -3404,7 +3631,7 @@ def _transcribe_locked(
             raise TranscriptionError("transcript output is unsafe")
         current_stat = _regular_file_stat(text_path, field_name="transcript output")
         if current_stat is None:
-            return text
+            raise TranscriptionError("transcript output changed before return")
         if not _same_regular_file_identity(output_stat, current_stat):
             raise TranscriptionError("transcript output changed before return")
         return _TrustedTranscriptText(
@@ -3519,14 +3746,14 @@ def transcribe(
         preflight_audio_snapshot = _snapshot_private_file(
             audio_path,
             field_name="audio file for backend",
-            include_hash=False,
+                    include_hash=True,
         )
     elif preflight_backend == "whisper":
         _require_whisper_command()
         preflight_audio_snapshot = _snapshot_private_file(
             audio_path,
             field_name="audio file for backend",
-            include_hash=False,
+            include_hash=True,
         )
     elif preflight_backend == "whisper-cpp":
         preflight_model = whisper_model or default_whisper_cpp_model_path(language)
@@ -3545,7 +3772,7 @@ def transcribe(
         preflight_audio_snapshot = _snapshot_private_file(
             audio_path,
             field_name="audio file for backend",
-            include_hash=False,
+            include_hash=True,
         )
     elif preflight_backend == "faster-whisper":
         preflight_model = whisper_model or default_ctranslate2_model_path(language)
@@ -3562,10 +3789,13 @@ def transcribe(
         preflight_audio_snapshot = _snapshot_private_file(
             audio_path,
             field_name="audio file for backend",
-            include_hash=False,
+            include_hash=True,
         )
     elif preflight_backend == "openai-compatible":
-        audio_path, preflight_audio_snapshot = _validate_audio_file_for_upload(audio_path)
+        audio_path, preflight_audio_snapshot = _validate_audio_file_for_upload(
+            audio_path,
+            _metadata_only=False,
+        )
     preflight = _TranscriberPreflight(
         preflight_backend,
         preflight_audio_snapshot,

@@ -5,6 +5,7 @@ IFS=$'\n\t'
 
 repo_dir="${APPLET_CRASH_SAFETY_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 uuid="speed-of-cinnamon@H234598"
+safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 cycles="${APPLET_CRASH_SAFETY_CYCLES:-100}"
 max_cycles=1000
 reload_mode="${APPLET_CRASH_SAFETY_RELOAD_MODE:-module}"
@@ -21,6 +22,46 @@ for tool in Xephyr dbus-run-session dconf gdbus cinnamon mktemp ps sed awk date 
     exit 2
   fi
 done
+if [[ ! -f "${safe_fs}" || -L "${safe_fs}" ]]; then
+  printf 'applet-crash-safety: safe local filesystem helper is invalid.\n' >&2
+  exit 2
+fi
+
+validate_directory_path() {
+  local path="$1"
+  local require_private="${2:-0}"
+  python3 - "${path}" "${require_private}" <<'PY'
+import os
+import stat
+import sys
+
+path = sys.argv[1]
+require_private = sys.argv[2] == "1"
+if not path.startswith("/") or "\x00" in path:
+    raise SystemExit(1)
+current = "/"
+for component in path.split("/"):
+    if component in ("", "."):
+        continue
+    if component == "..":
+        raise SystemExit(1)
+    current = os.path.join(current, component)
+    try:
+        entry = os.lstat(current)
+    except OSError:
+        raise SystemExit(1)
+    if stat.S_ISLNK(entry.st_mode) or not stat.S_ISDIR(entry.st_mode):
+        raise SystemExit(1)
+if not os.access(path, os.W_OK | os.X_OK):
+    raise SystemExit(1)
+entry = os.lstat(path)
+if require_private and (
+    entry.st_mode & 0o077
+    or (hasattr(os, "getuid") and entry.st_uid != os.getuid())
+):
+    raise SystemExit(1)
+PY
+}
 
 if [[ ! "${cycles}" =~ ^[1-9][0-9]*$ || ${#cycles} -gt 4 ]] ||
    (( cycles > max_cycles )); then
@@ -62,9 +103,19 @@ if [[ -n "${APPLET_CRASH_SAFETY_TEST_ROOT:-}" ]]; then
   test_root="${APPLET_CRASH_SAFETY_TEST_ROOT}"
   test_root_owned="0"
 else
-  test_root="$(mktemp -d "${TMPDIR:-/tmp}/speed-of-cinnamon-crash-safety.XXXXXX")"
+  test_tmp_root="${TMPDIR:-/tmp}"
+  if ! validate_directory_path "${test_tmp_root}"; then
+    printf 'applet-crash-safety: temporary root is unsafe: %s\n' "${test_tmp_root}" >&2
+    exit 2
+  fi
+  test_root="$(mktemp -d "${test_tmp_root}/speed-of-cinnamon-crash-safety.XXXXXX")"
   test_root_owned="1"
 fi
+if ! validate_directory_path "${test_root}" "1"; then
+  printf 'applet-crash-safety: test root is unsafe: %s\n' "${test_root}" >&2
+  exit 2
+fi
+test_root_identity=""
 session_home="${test_root}/home"
 runtime_dir="${test_root}/runtime"
 config_dir="${test_root}/config"
@@ -76,9 +127,24 @@ cinnamon_log="${test_root}/cinnamon.log"
 
 cleanup_test_root() {
   if [[ "${test_root_owned}" == "1" ]]; then
-    python3 "${repo_dir}/scripts/safe-local-fs.py" remove applet-crash-safety "${test_root}" --kind dir >/dev/null 2>&1 || true
+    if [[ -n "${test_root_identity}" ]]; then
+      if python3 "${safe_fs}" remove applet-crash-safety "${test_root}" --kind dir \
+          --expected-identity "${test_root_identity}" >/dev/null 2>&1; then
+        test_root_identity=""
+      fi
+    else
+      printf 'refusing applet crash-safety cleanup without verified identity: %s\n' "${test_root}" >&2
+    fi
   fi
 }
+trap cleanup_test_root EXIT
+
+if [[ "${test_root_owned}" == "1" ]]; then
+  if ! test_root_identity="$(python3 "${safe_fs}" identity applet-crash-safety "${test_root}" --kind dir)"; then
+    printf 'failed to capture applet crash-safety test root identity: %s\n' "${test_root}" >&2
+    exit 2
+  fi
+fi
 
 mkdir -p -- "${session_home}" "${runtime_dir}" "${config_dir}/autostart" "${cache_dir}" "${data_dir}" "${state_dir}"
 chmod 700 "${session_home}" "${runtime_dir}" "${config_dir}" "${cache_dir}" "${data_dir}" "${state_dir}"
@@ -275,7 +341,6 @@ if rg -n -i 'segmentation fault|segfault|core dumped|out of memory|oom-kill|Cjs-
   sed -n '1,120p' "${crash_error_log}" >&2 || true
   exit 1
 fi
-rm -f -- "${crash_error_log}"
 
 final_rss_kb="$(ps -o rss= -p "${cinnamon_pid}" | awk '{print $1}' | head -n1)"
 final_rss_kb="${final_rss_kb:-0}"

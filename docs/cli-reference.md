@@ -129,7 +129,7 @@ The same values are exposed as environment variables:
 
 ```text
 SPEED_OF_CINNAMON_CONTEXT
-SPEED_OF_CINNAMON_VOCABULARY
+SPEED_OF_CINNAMON_VOCABULARY (JSON array of terms)
 SPEED_OF_CINNAMON_PROMPT
 ```
 
@@ -179,6 +179,8 @@ speed-of-cinnamon text-models \
 
 If the OpenAI-compatible server requires a bearer token, set
 `SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY` in the environment that starts the backend.
+For one-shot CLI use without exposing the token in process arguments, pipe it through stdin and add
+`--openai-compatible-api-key-stdin`.
 
 OpenAI-compatible speech-to-text:
 
@@ -309,6 +311,7 @@ the just-created transcript.
 speed-of-cinnamon settings-export --settings-json '{"language":"de","append-space":true}' --json
 printf '%s' '{"language":"de","append-space":true}' | speed-of-cinnamon settings-export --settings-json-stdin --json
 speed-of-cinnamon settings-import --json
+printf '{"alarms":[],"last_checked_at":""}' | speed-of-cinnamon alarms-import --json
 ```
 
 The default export/import path is:

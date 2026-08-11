@@ -54,7 +54,7 @@ class _ResponsiveLogo(SettingsWidget):
             self._drawing_area.connect("draw", self._on_draw)
             box.pack_start(self._drawing_area, True, True, 0)
             box.connect("size-allocate", self._on_size_allocate)
-            self._set_render_width(self.max_width)
+            self._set_render_size(self.max_width, self.max_height)
         except Exception:
             self._show_fallback()
 
@@ -76,26 +76,36 @@ class _ResponsiveLogo(SettingsWidget):
 
     def _on_size_allocate(self, widget, allocation):
         try:
-            self._set_render_width(allocation.width)
+            self._set_render_size(allocation.width, allocation.height)
         except Exception:
             self._show_fallback()
 
-    def _fit_size_for_width(self, width):
-        target_width = max(1, int(width))
+    def _fit_size_for_allocation(self, width, height):
+        available_width = max(1, int(width))
+        available_height = max(1, int(height))
         if self._source_pixbuf is None:
             return 1, 1
         source_width = max(1, self._source_pixbuf.get_width())
         source_height = max(1, self._source_pixbuf.get_height())
-        target_width = min(target_width, max(1, int(self.max_width)))
-        height_limited_width = max(1, int(self.max_height * source_width / source_height))
-        target_width = min(target_width, height_limited_width)
-        target_height = max(1, min(int(self.max_height), int(round(target_width * source_height / source_width))))
-        return target_width, target_height
+        max_width = max(1, int(self.max_width))
+        max_height = max(1, int(self.max_height))
+        scale = min(
+            float(available_width) / float(source_width),
+            float(available_height) / float(source_height),
+            float(max_width) / float(source_width),
+            float(max_height) / float(source_height),
+        )
+        if scale <= 0:
+            return 1, 1
+        return (
+            max(1, int(round(source_width * scale))),
+            max(1, int(round(source_height * scale))),
+        )
 
-    def _set_render_width(self, width):
+    def _set_render_size(self, width, height):
         if self._source_pixbuf is None or self._drawing_area is None:
             return
-        target_width, target_height = self._fit_size_for_width(width)
+        target_width, target_height = self._fit_size_for_allocation(width, height)
         current = (target_width, target_height)
         if current == self._last_render_size and self._scaled_pixbuf is not None:
             return
@@ -112,7 +122,6 @@ class _ResponsiveLogo(SettingsWidget):
         except Exception:
             self._show_fallback()
             return
-        self._drawing_area.set_size_request(1, target_height)
         self._drawing_area.queue_draw()
 
     def _show_fallback(self):
@@ -138,7 +147,7 @@ class _ResponsiveLogo(SettingsWidget):
             return False
         try:
             allocation = widget.get_allocation()
-            self._set_render_width(allocation.width)
+            self._set_render_size(allocation.width, allocation.height)
             if self._scaled_pixbuf is None:
                 return False
             x_offset = max(0, int((allocation.width - self._scaled_pixbuf.get_width()) / 2))
@@ -437,6 +446,7 @@ class StatusIconPreview(SettingsWidget):
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.set_halign(Gtk.Align.FILL)
         box.set_hexpand(True)
+        self._preview_box = box
 
         try:
             self._drawing_area = Gtk.DrawingArea()
@@ -612,7 +622,7 @@ class StatusIconPreview(SettingsWidget):
         fallback = Gtk.Label(label=self._fallback_text)
         fallback.set_halign(Gtk.Align.CENTER)
         fallback.set_hexpand(True)
-        self.pack_start(fallback, True, True, 0)
+        self._preview_box.pack_start(fallback, True, True, 0)
         fallback.show()
         self._fallback_label = fallback
 

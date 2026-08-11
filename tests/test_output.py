@@ -474,8 +474,10 @@ class OutputTest(unittest.TestCase):
                 side_effect=OSError("capture create failed"),
             ),
         ):
-            with self.assertRaisesRegex(OutputError, "failed to prepare output capture"):
+            with self.assertRaisesRegex(OutputError, "failed to prepare output capture") as caught:
                 _run_with_input(["cmd"], "input")
+
+        self.assertNotIn("capture create failed", str(caught.exception))
 
     def test_run_with_input_wraps_capture_close_failure(self) -> None:
         stdout_file = mock.MagicMock()
@@ -492,8 +494,10 @@ class OutputTest(unittest.TestCase):
             ),
             mock.patch("speed_of_cinnamon.output.tempfile.TemporaryFile", side_effect=[stdout_file, stderr_file]),
         ):
-            with self.assertRaisesRegex(OutputError, "output cleanup failed"):
+            with self.assertRaisesRegex(OutputError, "output cleanup failed") as caught:
                 _run_with_input(["cmd"], "input")
+
+        self.assertNotIn("stdout close failed", str(caught.exception))
 
     def test_run_with_input_rejects_command_error_output(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -606,7 +610,7 @@ class OutputTest(unittest.TestCase):
         self.assertEqual(captured_env["DISPLAY"], ":0")
         self.assertEqual(captured_env["WAYLAND_DISPLAY"], "wayland-0")
         self.assertEqual(captured_env["XDG_RUNTIME_DIR"], "/run/user/1000")
-        self.assertEqual(captured_env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", captured_env)
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_run_with_input_skips_non_text_environment_values(self) -> None:
@@ -933,6 +937,33 @@ class OutputTest(unittest.TestCase):
                     with self.assertRaises(KeyboardInterrupt):
                         invoke()
                 mocked_reap.assert_called_once_with(process)
+
+    def test_output_process_cleanup_failure_is_reported_when_wait_is_interrupted(self) -> None:
+        for invoke in (
+            (
+                lambda: _run_with_input(["cmd"], "input", resolved_command="/usr/bin/cmd"),
+                "cmd process cleanup was not confirmed",
+            ),
+            (
+                lambda: output_module._run_stdout_raw(["cmd"], timeout=1, resolved_command="/usr/bin/cmd"),
+                "bounded command process cleanup was not confirmed",
+            ),
+        ):
+            with self.subTest(invoke=invoke[0]):
+                process = _InterruptPopen(subprocess.CompletedProcess(["cmd"], 0))
+                with (
+                    mock.patch("speed_of_cinnamon.output.subprocess.Popen", return_value=process),
+                    mock.patch(
+                        "speed_of_cinnamon.output._reap_timed_out_output_process",
+                        return_value=False,
+                    ),
+                ):
+                    with self.assertRaises(KeyboardInterrupt) as caught:
+                        invoke[0]()
+                self.assertIn(
+                    invoke[1],
+                    "\n".join(getattr(caught.exception, "__notes__", [])),
+                )
 
     def test_output_process_is_reaped_when_wait_fails(self) -> None:
         for invoke in (
@@ -1531,8 +1562,9 @@ class OutputTest(unittest.TestCase):
     def test_read_file_head_rejects_invalid_utf8(self) -> None:
         with tempfile.TemporaryFile() as handle:
             handle.write(b"ok\xff")
-            with self.assertRaisesRegex(OutputError, "not valid UTF-8"):
+            with self.assertRaisesRegex(OutputError, "not valid UTF-8") as caught:
                 _read_file_head(handle, 10)
+        self.assertNotIn("codec", str(caught.exception))
 
     def test_read_file_head_rejects_escaped_null(self) -> None:
         with tempfile.TemporaryFile() as handle:
@@ -1699,6 +1731,14 @@ class OutputTest(unittest.TestCase):
         ):
             self.assertEqual(_active_window_paste_key(), "ctrl+shift+v")
 
+    def test_clipboard_dedup_context_ignores_window_title_changes(self) -> None:
+        first = output_module._clipboard_dedup_context_for_window_snapshot(("1", "Editor - one", "xed"))
+        second = output_module._clipboard_dedup_context_for_window_snapshot(("1", "Editor - two", "xed"))
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(first, second)
+
     def test_terminal_marker_matching_is_conservative(self) -> None:
         self.assertTrue(_looks_like_terminal("Codex"))
         self.assertTrue(_looks_like_terminal("org.gnome.Terminal"))
@@ -1844,6 +1884,50 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual(calls, ["paste"])
 
+    def test_insert_text_suppresses_concurrent_duplicate_paste(self) -> None:
+        start = threading.Barrier(3)
+        entered_clipboard = threading.Event()
+        release_clipboard = threading.Event()
+        results: list[bool] = []
+        errors: list[BaseException] = []
+
+        def run_insert() -> None:
+            try:
+                start.wait(timeout=2)
+                results.append(insert_text("wiederholung", "clipboard-paste"))
+            except BaseException as exc:
+                errors.append(exc)
+
+        def fake_set_clipboard(*args: object, **kwargs: object) -> None:
+            entered_clipboard.set()
+            release_clipboard.wait(timeout=2)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._clipboard_paste_helper_available", return_value=True),
+            mock.patch("speed_of_cinnamon.output._which", return_value="/usr/bin/xdotool"),
+            mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=("100", "Editor", "Xed")),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "old")),
+            mock.patch("speed_of_cinnamon.output.set_clipboard", side_effect=fake_set_clipboard) as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
+        ):
+            threads = [threading.Thread(target=run_insert) for _ in range(2)]
+            for thread in threads:
+                thread.start()
+            start.wait(timeout=2)
+            self.assertTrue(entered_clipboard.wait(timeout=2))
+            release_clipboard.set()
+            for thread in threads:
+                thread.join(timeout=2)
+
+        self.assertEqual(errors, [])
+        self.assertCountEqual(results, [False, True])
+        mocked_clipboard.assert_called_once_with("wiederholung", allowed_helpers=("xclip", "xsel"))
+        mocked_paste.assert_called_once()
+
     def test_insert_text_dedupe_uses_exact_clipboard_text(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
@@ -1895,6 +1979,30 @@ class OutputTest(unittest.TestCase):
 
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["wiederholung", ""])
         self.assertEqual(mocked_paste.call_count, 1)
+
+    def test_uncertain_paste_refreshes_pending_state_with_correct_method(self) -> None:
+        with (
+            mock.patch(
+                "speed_of_cinnamon.output._restore_clipboard_snapshot_after_failed_paste",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.output._refresh_pending_clipboard_dedup_state",
+                return_value=True,
+            ) as mocked_refresh,
+        ):
+            output_module._handle_uncertain_clipboard_paste(
+                "new text",
+                "window-context",
+                True,
+                "previous",
+            )
+
+        mocked_refresh.assert_called_once_with(
+            "new text",
+            "clipboard-paste",
+            dedupe_context="window-context",
+        )
 
     def test_insert_text_marks_dedupe_state_pending_when_paste_fails(self) -> None:
         with (
@@ -1951,19 +2059,17 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False) as mocked_non_text,
         ):
-            with self.assertRaisesRegex(OutputError, "automatic paste helper"):
-                insert_text("wiederholung", "clipboard-paste")
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
 
-        mocked_clipboard.assert_not_called()
+        mocked_clipboard.assert_called_once_with("wiederholung")
         mocked_paste.assert_not_called()
-        mocked_non_text.assert_not_called()
+        mocked_non_text.assert_called_once()
 
-    def test_clipboard_paste_refuses_wl_copy_only_when_using_xdotool(self) -> None:
+    def test_clipboard_paste_falls_back_to_wl_copy_only_when_using_xdotool(self) -> None:
         def fake_which(command: str) -> str | None:
             return {
                 "xdotool": "/usr/bin/xdotool",
                 "wl-copy": "/usr/bin/wl-copy",
-                "wl-paste": "/usr/bin/wl-paste",
             }.get(command)
 
         with (
@@ -1971,12 +2077,26 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch("speed_of_cinnamon.output._which", side_effect=fake_which),
             mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=("1", "Editor", "Xed")),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output._run_with_input") as mocked_run,
         ):
-            with self.assertRaisesRegex(OutputError, "X11 clipboard helper"):
-                insert_text("wiederholung", "clipboard-paste")
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
 
+        mocked_clipboard.assert_called_once_with("wiederholung")
         mocked_run.assert_not_called()
+
+    def test_clipboard_fallback_allows_unknown_payload_without_target_helper(self) -> None:
+        with mock.patch("speed_of_cinnamon.output._which", return_value=None):
+            self.assertTrue(output_module._clipboard_has_non_text_payload())
+            self.assertFalse(output_module._clipboard_has_non_text_payload(unknown_is_non_text=False))
+
+    def test_empty_clipboard_targets_are_not_non_text_payload(self) -> None:
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload(""))
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("TARGETS\nTIMESTAMP"))
+        self.assertFalse(
+            output_module._clipboard_targets_contain_non_text_payload("", empty_is_non_text=False)
+        )
+        self.assertTrue(output_module._clipboard_targets_contain_non_text_payload("image/png"))
 
     def test_insert_text_commits_dedupe_state_when_paste_succeeds(self) -> None:
         with (
@@ -2202,7 +2322,32 @@ class OutputTest(unittest.TestCase):
         mocked_clipboard.assert_not_called()
         mocked_paste.assert_not_called()
 
-    def test_insert_text_refuses_clipboard_paste_without_verifiable_window(self) -> None:
+    def test_insert_text_allows_verified_empty_clipboard_for_paste_fallback(self) -> None:
+        def empty_payload_policy(*, unknown_is_non_text: bool = True, empty_is_non_text: bool = True) -> bool:
+            del unknown_is_non_text
+            return empty_is_non_text
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=("1", "Editor", "Xed")),
+            mock.patch("speed_of_cinnamon.output._clipboard_paste_helper_available", return_value=True),
+            mock.patch("speed_of_cinnamon.output._clipboard_paste_writer_available", return_value=True),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "")),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", side_effect=empty_payload_policy),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch(
+                "speed_of_cinnamon.output.paste_from_clipboard",
+                side_effect=PasteNotAttemptedError("paste helper unavailable"),
+            ) as mocked_paste,
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
+        ):
+            self.assertTrue(insert_text("new text", "clipboard-paste"))
+
+        mocked_clipboard.assert_called_once_with("new text", allowed_helpers=("xclip", "xsel"))
+        mocked_paste.assert_called_once()
+
+    def test_insert_text_falls_back_to_clipboard_without_verifiable_window(self) -> None:
         def fake_which(command: str, path: str | None = None) -> str | None:
             del path
             if command == "wtype":
@@ -2217,12 +2362,25 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.shutil.which", side_effect=fake_which),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
         ):
-            with self.assertRaisesRegex(OutputError, "automatic paste helper"):
-                insert_text("new text", "clipboard-paste")
+            self.assertTrue(insert_text("new text", "clipboard-paste"))
 
-        mocked_clipboard.assert_not_called()
+        mocked_clipboard.assert_called_once_with("new text")
         mocked_paste.assert_not_called()
+
+    def test_insert_text_does_not_mask_paste_helper_failure_with_duplicate_state(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._which", return_value=None),
+            mock.patch("speed_of_cinnamon.output._should_skip_clipboard_duplicate", return_value=True) as mocked_duplicate,
+            mock.patch("speed_of_cinnamon.output._clipboard_paste_helper_available", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+        ):
+            self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+
+        mocked_duplicate.assert_called_once()
 
     def test_insert_text_fails_closed_when_clipboard_changes_before_overwrite(self) -> None:
         with (
@@ -2265,10 +2423,9 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output._run_with_input") as mocked_run,
         ):
-            with self.assertRaisesRegex(OutputError, "active window changed before automatic paste"):
-                insert_text("new text", "clipboard-paste")
+            self.assertTrue(insert_text("new text", "clipboard-paste"))
 
-        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text", "previous text"])
+        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["new text"])
         mocked_run.assert_not_called()
 
     def test_insert_text_does_not_restore_previous_text_clipboard_when_paste_fails(self) -> None:
@@ -2719,6 +2876,7 @@ class OutputTest(unittest.TestCase):
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch("speed_of_cinnamon.output._clipboard_paste_helper_available", return_value=True),
             mock.patch("speed_of_cinnamon.output._clipboard_paste_writer_available", return_value=True),
+            mock.patch("speed_of_cinnamon.output._clipboard_dedup_context_for_window_snapshot", return_value="target-context"),
             mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "previous")),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
@@ -2732,7 +2890,7 @@ class OutputTest(unittest.TestCase):
         self.assertIs(caught.exception, paste_error)
         mocked_restore.assert_not_called()
 
-    def test_insert_text_quarantines_when_pre_spawn_restore_is_unconfirmed(self) -> None:
+    def test_insert_text_does_not_quarantine_when_paste_was_not_attempted(self) -> None:
         paste_error = PasteNotAttemptedError("active window changed")
         paste_started = False
 
@@ -2750,6 +2908,7 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output.time.time", side_effect=fake_time),
             mock.patch("speed_of_cinnamon.output._clipboard_paste_helper_available", return_value=True),
             mock.patch("speed_of_cinnamon.output._clipboard_paste_writer_available", return_value=True),
+            mock.patch("speed_of_cinnamon.output._clipboard_dedup_context_for_window_snapshot", return_value="target-context"),
             mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "previous")),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=True),
@@ -2760,22 +2919,19 @@ class OutputTest(unittest.TestCase):
                 return_value=False,
             ),
         ):
-            with self.assertRaises(PasteNotAttemptedError) as caught:
-                insert_text("new text", "clipboard-paste")
-
-            self.assertIs(caught.exception, paste_error)
+            self.assertTrue(insert_text("new text", "clipboard-paste"))
             trusted, snapshot, pending = output_module._read_clipboard_dedup_state_entry()
             self.assertTrue(trusted)
-            self.assertTrue(pending)
+            self.assertFalse(pending)
             with mock.patch("speed_of_cinnamon.output.time.time", return_value=10.2):
-                self.assertTrue(
+                self.assertFalse(
                     output_module._should_skip_clipboard_duplicate(
                         "new text",
                         "clipboard-paste",
                         persistent_snapshot=snapshot,
                         persistent_state_trusted=True,
                         pending_state=pending,
-                        dedupe_context=output_module._LAST_CLIPBOARD_CONTEXT,
+                        dedupe_context="target-context",
                     )
                 )
 
@@ -3000,6 +3156,7 @@ class OutputTest(unittest.TestCase):
                     dedupe_context=pending_context,
                 )
             )
+
             output_module._CLIPBOARD_PENDING_QUARANTINE.clear()
             with (
                 mock.patch("speed_of_cinnamon.output.time.time", return_value=10.1),
@@ -3015,6 +3172,19 @@ class OutputTest(unittest.TestCase):
                         dedupe_context=pending_context,
                     )
                 )
+
+    def test_pending_ledger_write_fails_closed_without_ledger_lock(self) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.output._acquire_clipboard_pending_quarantine_lock",
+            return_value=None,
+        ):
+            self.assertFalse(
+                output_module._write_clipboard_pending_quarantine_ledger(
+                    {},
+                    expected_identity=None,
+                    allow_missing=True,
+                )
+            )
 
     def test_invalid_pending_ledger_is_untouched_and_blocks_dedupe(self) -> None:
         path = output_module._clipboard_pending_quarantine_path()
@@ -3034,6 +3204,7 @@ class OutputTest(unittest.TestCase):
                     dedupe_context="pending-context",
                 )
             )
+
         mocked_log.assert_called_once_with(
             "warning",
             "clipboard_pending_quarantine_untrusted",
@@ -3047,6 +3218,41 @@ class OutputTest(unittest.TestCase):
             )
         )
         self.assertEqual(path.read_bytes(), original)
+
+    def test_pending_quarantine_mutation_reads_ledger_under_lock(self) -> None:
+        events: list[str] = []
+
+        def acquire_lock() -> int:
+            events.append("lock")
+            return 17
+
+        def release_lock(_fd: int | None) -> None:
+            events.append("unlock")
+
+        def read_ledger() -> tuple[str, dict[tuple[str, str | None], float], None]:
+            events.append("read")
+            return output_module._CLIPBOARD_PENDING_LEDGER_MISSING, {}, None
+
+        def write_ledger(*args: object, **kwargs: object) -> bool:
+            events.append("write")
+            self.assertEqual(kwargs["lock_fd"], 17)
+            return True
+
+        with (
+            mock.patch.object(output_module, "_acquire_clipboard_pending_quarantine_lock", side_effect=acquire_lock),
+            mock.patch.object(output_module, "_release_clipboard_pending_quarantine_lock", side_effect=release_lock),
+            mock.patch.object(output_module, "_read_clipboard_pending_quarantine_ledger", side_effect=read_ledger),
+            mock.patch.object(output_module, "_write_clipboard_pending_quarantine_ledger", side_effect=write_ledger),
+        ):
+            self.assertTrue(
+                output_module._set_clipboard_pending_quarantine(
+                    "pending text",
+                    "clipboard-paste",
+                    dedupe_context="lock-order",
+                )
+            )
+
+        self.assertEqual(events, ["lock", "read", "write", "unlock"])
 
     def test_oversized_pending_ledger_is_untouched_and_blocks_dedupe(self) -> None:
         path = output_module._clipboard_pending_quarantine_path()
@@ -3366,7 +3572,7 @@ class OutputTest(unittest.TestCase):
         self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["same text", "same text"])
         self.assertEqual(mocked_paste.call_count, 2)
 
-    def test_clipboard_paste_duplicate_guard_survives_title_change_in_same_window(self) -> None:
+    def test_clipboard_paste_suppresses_same_text_after_title_change_in_same_window(self) -> None:
         first_target = ("100", "Editor A", "Xed")
         renamed_target = ("100", "Editor A - changed", "Xed")
         with (
@@ -3384,8 +3590,11 @@ class OutputTest(unittest.TestCase):
             self.assertTrue(insert_text("same text", "clipboard-paste"))
             self.assertFalse(insert_text("same text", "clipboard-paste"))
 
-        mocked_clipboard.assert_called_once_with("same text", allowed_helpers=("xclip", "xsel"))
-        mocked_paste.assert_called_once()
+        self.assertEqual(
+            [call.args[0] for call in mocked_clipboard.call_args_list],
+            ["same text"],
+        )
+        self.assertEqual(mocked_paste.call_count, 1)
 
     def test_clipboard_copy_does_not_suppress_followup_clipboard_paste(self) -> None:
         target = ("100", "Editor", "Xed")
@@ -3561,9 +3770,11 @@ class OutputTest(unittest.TestCase):
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
             mock.patch("speed_of_cinnamon.output._read_trusted_clipboard_dedup_state", return_value=(False, ("", 0.0))),
+            mock.patch("speed_of_cinnamon.output._read_clipboard_dedup_state_entry", return_value=(False, ("", 0.0), False)),
             mock.patch("speed_of_cinnamon.output._which", return_value=None),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
         ):
-            with self.assertRaisesRegex(OutputError, "no automatic paste helper found"):
+            with self.assertRaisesRegex(OutputError, "untrusted clipboard dedupe state"):
                 insert_text("secure text", "clipboard-paste")
 
     def test_insert_text_clipboard_fails_closed_when_dedupe_state_cannot_persist(self) -> None:
@@ -4726,7 +4937,7 @@ class OutputTest(unittest.TestCase):
         self.assertNotIn("hello", type_calls[0])
         self.assertEqual(typed_payloads, ["hello"])
 
-    def test_insert_text_restores_dedupe_state_when_paste_was_not_attempted(self) -> None:
+    def test_insert_text_falls_back_to_clipboard_when_paste_was_not_attempted(self) -> None:
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
@@ -4741,12 +4952,53 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=4.0),
         ):
-            with self.assertRaisesRegex(OutputError, "active window changed"):
-                insert_text("wiederholung", "clipboard-paste")
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
             self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
 
-        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["wiederholung", "", "wiederholung"])
+        self.assertEqual(
+            [call.args[0] for call in mocked_clipboard.call_args_list],
+            ["wiederholung", "wiederholung"],
+        )
         self.assertEqual(mocked_paste.call_count, 2)
+
+    def test_insert_text_fallback_uses_paste_dedupe_key(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._which", return_value=None),
+            mock.patch("speed_of_cinnamon.output._clipboard_paste_helper_available", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+        ):
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
+            self.assertFalse(insert_text("wiederholung", "clipboard-paste"))
+
+        mocked_clipboard.assert_called_once_with("wiederholung")
+
+    def test_insert_text_fallback_keeps_paste_dedupe_key_after_uncertain_clipboard_cleanup(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._which", return_value=None),
+            mock.patch("speed_of_cinnamon.output._clipboard_paste_helper_available", return_value=False),
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+            mock.patch(
+                "speed_of_cinnamon.output.set_clipboard",
+                side_effect=OutputCleanupError("cleanup uncertain"),
+            ),
+            mock.patch(
+                "speed_of_cinnamon.output._refresh_pending_clipboard_dedup_state",
+                return_value=True,
+            ) as refresh_pending,
+        ):
+            with self.assertRaisesRegex(OutputCleanupError, "cleanup uncertain"):
+                insert_text("wiederholung", "clipboard-paste")
+
+        refresh_pending.assert_called_once_with(
+            "wiederholung",
+            "clipboard-paste",
+            dedupe_context=None,
+        )
 
     def test_clipboard_paste_restore_after_failed_paste_does_not_fallback_to_wl_copy(self) -> None:
         calls: list[str] = []
@@ -4811,11 +5063,13 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
             mock.patch("speed_of_cinnamon.output.time.monotonic", return_value=4.0),
         ):
-            with self.assertRaisesRegex(OutputError, "failed to execute"):
-                insert_text("wiederholung", "clipboard-paste")
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
             self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
 
-        self.assertEqual([call.args[0] for call in mocked_clipboard.call_args_list], ["wiederholung", "", "wiederholung"])
+        self.assertEqual(
+            [call.args[0] for call in mocked_clipboard.call_args_list],
+            ["wiederholung", "wiederholung"],
+        )
         self.assertEqual(mocked_run.call_count, 2)
 
     def test_insert_text_type_empty_returns_false(self) -> None:

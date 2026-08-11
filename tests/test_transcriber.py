@@ -30,6 +30,7 @@ from speed_of_cinnamon.transcriber import (
     MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
     MAX_AUDIO_FILE_BYTES,
+    MULTIPART_FILE_CHUNK_BYTES,
     MAX_AUDIO_PATH_CHARS,
     MAX_TRANSCRIBER_TEXT_CHARS,
     _multipart_form_data,
@@ -274,13 +275,18 @@ class TranscriberTest(unittest.TestCase):
         opener = mock.Mock()
         sentinel = object()
         opener.open.return_value = sentinel
-        with mock.patch("speed_of_cinnamon.transcriber.urllib.request.build_opener", return_value=opener) as build_opener:
+        with (
+            mock.patch("speed_of_cinnamon.transcriber.resolve_url_host", return_value=("93.184.216.34",)),
+            mock.patch("speed_of_cinnamon.transcriber.urllib.request.build_opener", return_value=opener) as build_opener,
+        ):
             self.assertIs(_open_http_request(request, timeout=7, field_name="speech request"), sentinel)
 
         handlers = build_opener.call_args.args
         self.assertTrue(any(isinstance(handler, urllib.request.ProxyHandler) for handler in handlers))
         self.assertTrue(any(getattr(handler, "proxies", None) == {} for handler in handlers))
-        opener.open.assert_called_once_with(request, timeout=7)
+        opener.open.assert_called_once()
+        self.assertGreater(opener.open.call_args.kwargs["timeout"], 0)
+        self.assertLessEqual(opener.open.call_args.kwargs["timeout"], 7)
 
     def test_openai_compatible_rejects_oversized_language_before_request(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -571,6 +577,34 @@ class TranscriberTest(unittest.TestCase):
 
             self.assertFalse(generated.exists())
 
+    def test_remove_generated_transcript_file_wipes_content_before_delete(self) -> None:
+        from speed_of_cinnamon import path_safety
+
+        with tempfile.TemporaryDirectory() as tmp:
+            generated = Path(tmp) / "generated.txt"
+            secret = b"private transcript"
+            generated.write_bytes(secret)
+            expected_target = _capture_expected_target_for_test(generated)
+            observed: list[bytes] = []
+            real_unlink = path_safety.os.unlink
+
+            def observe_unlink(name: str, *, dir_fd: int = -1) -> None:
+                fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=dir_fd)
+                try:
+                    observed.append(os.read(fd, len(secret)))
+                finally:
+                    os.close(fd)
+                real_unlink(name, dir_fd=dir_fd)
+
+            with mock.patch.object(path_safety.os, "unlink", side_effect=observe_unlink):
+                _remove_generated_transcript_file(
+                    generated,
+                    field_name="generated transcript",
+                    expected_target=expected_target,
+                )
+
+        self.assertEqual(observed, [b"\x00" * len(secret)])
+
     def test_remove_generated_transcript_file_rejects_fifo_without_blocking(self) -> None:
         if not hasattr(os, "mkfifo"):
             self.skipTest("mkfifo unavailable")
@@ -617,10 +651,11 @@ class TranscriberTest(unittest.TestCase):
             expected_target: ExpectedTarget,
             *,
             field_name: str,
+            secure_wipe: bool,
         ) -> bool:
             path.unlink()
             path.write_text("attacker", encoding="utf-8")
-            return real_unlink(path, expected_target, field_name=field_name)
+            return real_unlink(path, expected_target, field_name=field_name, secure_wipe=secure_wipe)
 
         with tempfile.TemporaryDirectory() as tmp:
             generated = Path(tmp) / "generated.txt"
@@ -798,7 +833,7 @@ class TranscriberTest(unittest.TestCase):
                     self.assertIn("_expected_audio_snapshot", received)
                     expected_snapshot = received["_expected_audio_snapshot"]
                     self.assertIsInstance(expected_snapshot, tuple)
-                    self.assertEqual(len(expected_snapshot), 6)
+                    self.assertEqual(len(expected_snapshot), 7)
 
     def test_transcribe_maps_missing_whisper_command_before_output_filesystem(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1594,6 +1629,18 @@ class TranscriberTest(unittest.TestCase):
                     _read_text_file(path)
             self.assertNotIn(str(path), str(raised.exception))
 
+    @mock.patch("speed_of_cinnamon.transcriber.os.fdopen", side_effect=OSError("/secret/fdopen-path"))
+    def test_read_text_file_does_not_chain_fdopen_error(self, _mocked_fdopen: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sample.txt"
+            path.write_text("safe", encoding="utf-8")
+
+            with self.assertRaisesRegex(TranscriptionError, "failed to read generated transcript") as raised:
+                transcriber_module._read_private_file_bytes(path, field_name="generated transcript")
+
+        self.assertIsNone(raised.exception.__cause__)
+        self.assertTrue(raised.exception.__suppress_context__)
+
     def test_validate_audio_file_rejects_null_byte_path(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "invalid null byte"):
             validate_audio_file(Path("sample\x00.wav"))
@@ -2262,6 +2309,15 @@ class TranscriberTest(unittest.TestCase):
         with self.assertRaisesRegex(TranscriptionError, "API response chunk must be bytes"):
             _read_response_text(response)
 
+    def test_read_response_text_enforces_total_deadline(self) -> None:
+        response = mock.Mock()
+        response.read.return_value = b"partial"
+        with mock.patch("speed_of_cinnamon.transcriber.time.monotonic", side_effect=[0.0, 2.0]):
+            with self.assertRaisesRegex(TranscriptionError, "API response timed out"):
+                _read_response_text(response, deadline=1.0)
+
+        response.read.assert_called_once_with(65536)
+
     def test_contains_escaped_null_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "value must be text"):
             _contains_escaped_null(12)  # type: ignore[arg-type]
@@ -2665,11 +2721,7 @@ class TranscriberTest(unittest.TestCase):
 
             self.assertEqual(result, "hello whisper")
             self.assertEqual(text.read_text(encoding="utf-8"), "existing transcript")
-            self.assertIsInstance(result, transcriber_module._TrustedTranscriptText)
-            self.assertEqual(result.output_path, text)
-            self.assertIsNotNone(result.output_stat)
-            self.assertEqual(result.output_stat.st_ino, text.stat().st_ino)
-            self.assertEqual(result.output_stat.st_nlink, 1)
+            self.assertNotIsInstance(result, transcriber_module._TrustedTranscriptText)
 
     def test_openai_whisper_preserves_existing_matching_text_path_on_error_when_not_writing(self) -> None:
         def fake_run(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
@@ -4149,6 +4201,49 @@ class TranscriberTest(unittest.TestCase):
             self.assertIsNotNone(staged_path)
             self.assertFalse(staged_path.exists())
 
+    def test_staged_audio_uses_private_root_and_reaps_old_orphans(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            private_root = root / "private-runtime"
+            private_root.mkdir(mode=0o700)
+            stale_dir = private_root / f"{transcriber_module.STAGED_AUDIO_PREFIX}stale"
+            stale_dir.mkdir(mode=0o700)
+            stale_audio = stale_dir / "sample.wav"
+            stale_audio.write_bytes(b"stale audio")
+            stale_audio.chmod(0o600)
+            old_time = time.time() - transcriber_module.STAGED_AUDIO_CLEANUP_MIN_AGE_SECONDS - 1
+            os.utime(stale_dir, (old_time, old_time))
+            fresh_dir = private_root / f"{transcriber_module.STAGED_AUDIO_PREFIX}fresh"
+            fresh_dir.mkdir(mode=0o700)
+            (fresh_dir / "sample.wav").write_bytes(b"fresh audio")
+
+            audio = root / "input.wav"
+            audio.write_bytes(b"audio")
+            snapshot = transcriber_module._snapshot_private_file(
+                audio,
+                field_name="audio file for backend",
+                include_hash=True,
+            )
+            staged_path: Path | None = None
+            try:
+                with mock.patch(
+                    "speed_of_cinnamon.transcriber._private_runtime_temp_root",
+                    return_value=private_root,
+                ):
+                    with transcriber_module._staged_audio_file_for_local_backend(
+                        audio,
+                        expected_snapshot=snapshot,
+                    ) as staged:
+                        staged_path = staged
+                        self.assertEqual(staged.parent.parent, private_root)
+
+                self.assertIsNotNone(staged_path)
+                self.assertFalse(stale_dir.exists())
+                self.assertTrue(fresh_dir.exists())
+            finally:
+                if fresh_dir.exists():
+                    shutil.rmtree(fresh_dir, ignore_errors=False)
+
     def test_staged_audio_cleanup_reports_failure_after_backend_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -5448,6 +5543,29 @@ class TranscriberTest(unittest.TestCase):
                 with self.assertRaisesRegex(TranscriptionError, "transcript output changed before return"):
                     transcribe(audio, "en", text, "printf ignored")
 
+    def test_transcribe_rejects_trusted_output_when_file_disappears(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            audio = root / "sample.wav"
+            audio.write_bytes(b"audio")
+            text = root / "sample.txt"
+
+            def delete_before_return(*_args: object, **_kwargs: object) -> _TrustedTranscriptText:
+                text.write_text("hello cinnamon\n", encoding="utf-8")
+                trusted = transcriber_module._TrustedTranscriptText("hello cinnamon", text, text.stat())
+                text.unlink()
+                return trusted
+
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.resolve_transcriber", return_value="command"),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.transcribe_with_template",
+                    side_effect=delete_before_return,
+                ),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "transcript output changed before return"):
+                    transcribe(audio, "en", text, "printf ignored")
+
     def test_command_empty_stdout_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -5678,6 +5796,36 @@ class TranscriberTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             with mock.patch("speed_of_cinnamon.transcriber._open_http_request", return_value=Response()):
                 with self.assertRaisesRegex(TranscriptionError, "response text must be text"):
+                    transcribe_with_openai_compatible_api(
+                        audio,
+                        "en",
+                        Path(tmp) / "sample.txt",
+                        model="local-transcriber",
+                        url="http://127.0.0.1:8000/v1",
+                    )
+
+    def test_openai_compatible_api_rejects_non_finite_json_response_values(self) -> None:
+        class Response:
+            def __init__(self) -> None:
+                self._read = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if self._read:
+                    return b""
+                self._read = True
+                return b'{"text":"hello","usage":{"duration":NaN}}'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", return_value=Response()):
+                with self.assertRaisesRegex(TranscriptionError, "returned invalid JSON"):
                     transcribe_with_openai_compatible_api(
                         audio,
                         "en",
@@ -5981,6 +6129,13 @@ class TranscriberTest(unittest.TestCase):
             with self.assertRaisesRegex(TranscriptionError, "multipart file field contains invalid control character"):
                 _multipart_form_data({}, "file\r\nX-Injected: yes", audio_path)
 
+    def test_multipart_form_data_rejects_control_characters_in_audio_file_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample\x85.wav"
+            audio_path.write_bytes(b"audio")
+            with self.assertRaisesRegex(TranscriptionError, "audio file name contains invalid control character"):
+                _multipart_form_data({}, "file", audio_path)
+
     def test_multipart_form_data_escapes_quotes_in_file_field(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "sample.wav"
@@ -6102,6 +6257,48 @@ class TranscriberTest(unittest.TestCase):
                         "https://api.openai.com/v1",
                     )
         self.assertEqual(snapshot_calls, [(audio, "audio file for API upload")])
+
+    def test_openai_compatible_api_hash_binds_direct_audio_snapshot(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            snapshot_calls: list[bool] = []
+            real_snapshot = transcriber_module._snapshot_private_file
+
+            def capture_snapshot(path: Path, *, field_name: str, include_hash: bool = False):
+                snapshot_calls.append(include_hash)
+                return real_snapshot(path, field_name=field_name, include_hash=include_hash)
+
+            class Response:
+                def __enter__(self):
+                    return self
+
+                def __exit__(self, *args: object) -> None:
+                    return None
+
+                def read(self, size: int = -1) -> bytes:
+                    if getattr(self, "_read", False):
+                        return b""
+                    self._read = True
+                    return b'{"text":"hello api"}'
+
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._snapshot_private_file",
+                    side_effect=capture_snapshot,
+                ),
+                mock.patch("speed_of_cinnamon.transcriber._open_http_request", return_value=Response()),
+            ):
+                result = transcribe_with_openai_compatible_api(
+                    audio,
+                    "en",
+                    Path(tmp) / "sample.txt",
+                    "local-transcriber",
+                    "http://127.0.0.1:8000/v1",
+                )
+
+        self.assertEqual(result, "hello api")
+        self.assertEqual(snapshot_calls, [True])
 
     def test_openai_compatible_api_requires_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -6670,6 +6867,59 @@ class TranscriberTest(unittest.TestCase):
                             )
                     self.assertIs(raised.exception, control_flow)
 
+    def test_openai_http_error_body_reads_share_request_deadline(self) -> None:
+        url = "https://api.openai.com/v1/audio/transcriptions"
+        errors = [
+            urllib.error.HTTPError(
+                url,
+                400,
+                "Bad Request",
+                {},
+                io.BytesIO(b'{"error":{"message":"service_tier not enabled"}}'),
+            ),
+            urllib.error.HTTPError(
+                url,
+                503,
+                "Service Unavailable",
+                {},
+                io.BytesIO(b'{"error":{"message":"temporary failure"}}'),
+            ),
+        ]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._open_http_request",
+                    side_effect=errors,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._read_response_text",
+                    side_effect=[
+                        '{"error":{"message":"service_tier not enabled"}}',
+                        '{"error":{"message":"temporary failure"}}',
+                    ],
+                ) as read_response_text,
+            ):
+                with self.assertRaisesRegex(TranscriptionError, r"speech API failed \(503\)"):
+                    transcribe_with_openai_compatible_api(
+                        audio,
+                        "en",
+                        Path(tmp) / "sample.txt",
+                        model="gpt-4o-transcribe",
+                        url="https://api.openai.com/v1",
+                        openai_compatible_service_tier_fallback=True,
+                    )
+
+        self.assertEqual(read_response_text.call_count, 2)
+        deadlines = []
+        for call in read_response_text.call_args_list:
+            self.assertEqual(call.args[1], transcriber_module.MAX_TRANSCRIBER_ERROR_CHARS)
+            self.assertIn("deadline", call.kwargs)
+            deadlines.append(call.kwargs["deadline"])
+        self.assertEqual(deadlines[0], deadlines[1])
+
     def test_openai_compatible_api_error_does_not_echo_url_path_secret(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -6995,6 +7245,32 @@ class TranscriberTest(unittest.TestCase):
                 with self.assertRaisesRegex(TranscriptionError, "faster-whisper timed out"):
                     transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
 
+    def test_faster_whisper_timeout_interrupts_blocking_decode(self) -> None:
+        class WhisperModel:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def transcribe(self, *_args: object, **_kwargs: object) -> tuple[list[object], object]:
+                time.sleep(0.2)
+                return [], object()
+
+        fake_module = type("FakeFasterWhisper", (), {"WhisperModel": WhisperModel})
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            with (
+                mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+                mock.patch("speed_of_cinnamon.transcriber.TRANSCRIBE_COMMAND_TIMEOUT_SECONDS", 0.05),
+            ):
+                started = time.monotonic()
+                with self.assertRaisesRegex(TranscriptionError, "faster-whisper timed out"):
+                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+                self.assertLess(time.monotonic() - started, 0.15)
+
     def test_faster_whisper_availability_fails_closed_on_native_import_error(self) -> None:
         original_import = __import__
 
@@ -7121,6 +7397,33 @@ class TranscriberTest(unittest.TestCase):
                     transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
 
         self.assertFalse(text_path.exists())
+
+    def test_faster_whisper_rejects_non_text_segment_values(self) -> None:
+        class Segment:
+            text = b"backend payload"
+
+        class WhisperModel:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                pass
+
+            def transcribe(self, *_args: object, **_kwargs: object) -> tuple[list[Segment], object]:
+                return [Segment()], object()
+
+        fake_module = type("FakeFasterWhisper", (), {"WhisperModel": WhisperModel})
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            with (
+                mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "invalid segment text"):
+                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+
+            self.assertFalse(text_path.exists())
 
     def test_faster_whisper_fails_closed_if_audio_is_swapped_after_validation(self) -> None:
         class FakeFasterWhisper:
@@ -8104,7 +8407,7 @@ class TranscriberTest(unittest.TestCase):
         self.assertEqual(read_bytes, len(payload))
         self.assertEqual(hash_passes[0], len(payload))
         self.assertEqual(snapshot_mock.call_count, 1)
-        self.assertFalse(snapshot_mock.call_args.kwargs["include_hash"])
+        self.assertTrue(snapshot_mock.call_args.kwargs["include_hash"])
 
     def test_staged_audio_detects_mutation_during_copy_with_final_source_stat(self) -> None:
         payload = b"a" * 131_072
@@ -8294,7 +8597,7 @@ class TranscriberTest(unittest.TestCase):
                 self.assertIsNone(error.__cause__)
                 self.assertIsNone(error.__context__)
 
-    def test_openai_top_level_reads_audio_once_and_reuses_body_for_flex_fallback(self) -> None:
+    def test_openai_top_level_reads_audio_in_bounded_chunks_for_flex_fallback(self) -> None:
         payload = b"audio" * 100_000
         requests: list[object] = []
         read_bytes = 0
@@ -8378,9 +8681,43 @@ class TranscriberTest(unittest.TestCase):
 
         self.assertEqual(result, "fallback transcript")
         self.assertEqual(len(requests), 2)
-        self.assertEqual(read_bytes, len(payload))
+        self.assertEqual(read_bytes, len(payload) * 3)
         self.assertIn(payload, requests[0].data)
         self.assertIn(payload, requests[1].data)
+
+    def test_multipart_form_data_streams_audio_into_body_in_bounded_chunks(self) -> None:
+        payload = b"audio" * 300_000
+        chunk_sizes: list[int] = []
+        real_read = transcriber_module._read_private_file_bytes
+
+        def tracked_read(*args: object, **kwargs: object) -> bytes:
+            callback = kwargs.get("chunk_callback")
+            self.assertTrue(callable(callback))
+
+            def track(chunk: bytes) -> None:
+                chunk_sizes.append(len(chunk))
+                callback(chunk)  # type: ignore[operator]
+
+            kwargs["chunk_callback"] = track
+            return real_read(*args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample.wav"
+            audio_path.write_bytes(payload)
+            with mock.patch.object(transcriber_module, "_read_private_file_bytes", side_effect=tracked_read):
+                body, _boundary = _multipart_form_data(
+                    {"model": "whisper-1", "language": "en", "response_format": "json"},
+                    "file",
+                    audio_path,
+                )
+
+            self.assertGreater(len(chunk_sizes), 1)
+            self.assertLessEqual(max(chunk_sizes), MULTIPART_FILE_CHUNK_BYTES)
+            self.assertIn(payload, body)
+            boundary_bytes = f"--{_boundary}\r\n".encode("utf-8")
+            file_header = b'Content-Type: application/octet-stream\r\n\r\n'
+            self.assertTrue(body.startswith(boundary_bytes))
+            self.assertGreaterEqual(body.find(payload), body.find(file_header) + len(file_header))
 
     def test_openai_top_level_rejects_mutation_during_single_audio_read(self) -> None:
         payload = b"audio" * 100
@@ -8430,7 +8767,7 @@ class TranscriberTest(unittest.TestCase):
                     side_effect=AssertionError("request must not run after audio mutation"),
                 ),
             ):
-                with self.assertRaisesRegex(TranscriptionError, "changed between validation and read"):
+                with self.assertRaisesRegex(TranscriptionError, "changed while snapshotting"):
                     transcribe(
                         audio,
                         "en",

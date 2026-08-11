@@ -4,7 +4,9 @@ import json
 import os
 import re
 import fcntl
+import errno
 import stat
+import time as time_module
 from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
@@ -43,19 +45,41 @@ MAX_ALARM_TRIGGER_CHARS = 40
 MAX_ALARM_DAYS_CHARS = 128
 MAX_ALARM_TIME_CHARS = 16
 MAX_ALARM_URGENCY_CHARS = 16
+ALARM_LOCK_TIMEOUT_SECONDS = 5.0
+ALARM_LOCK_RETRY_SECONDS = 0.05
+
+
+def _reject_non_finite_json_number(value: str) -> object:
+    raise ValueError(f"non-finite JSON number is not allowed: {value}")
 
 
 def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
-    primary.add_note(f"alarm store lock cleanup failed: {cleanup_error}")
+    primary.add_note("alarm store lock cleanup failed")
 
 
-def _flock_retry(fd: int, operation: int) -> None:
+def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
+    if timeout_seconds is None:
+        while True:
+            try:
+                fcntl.flock(fd, operation)
+                return
+            except InterruptedError:
+                continue
+    deadline = time_module.monotonic() + timeout_seconds
+    nonblocking_operation = operation | fcntl.LOCK_NB
     while True:
         try:
-            fcntl.flock(fd, operation)
+            fcntl.flock(fd, nonblocking_operation)
             return
         except InterruptedError:
             continue
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
+            remaining = deadline - time_module.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("alarm store lock acquisition timed out") from exc
+            time_module.sleep(min(ALARM_LOCK_RETRY_SECONDS, remaining))
 
 
 def _assert_clean_path(path: Path, *, field_name: str) -> None:
@@ -123,7 +147,7 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
     primary_error: BaseException | None = None
     try:
         assert_fd_is_regular_private_file(fd, field_name="alarm store lock file", require_private_mode=True)
-        _flock_retry(fd, fcntl.LOCK_EX)
+        _flock_retry(fd, fcntl.LOCK_EX, timeout_seconds=ALARM_LOCK_TIMEOUT_SECONDS)
         assert_fd_is_regular_private_file(fd, field_name="alarm store lock file", require_private_mode=True)
         yield store_path
     except BaseException as exc:
@@ -264,7 +288,7 @@ def parse_repeat_days(value: str) -> list[str]:
     for chunk in re.split(r"[, ]+", text):
         if not chunk:
             continue
-        code = chunk[:3]
+        code = chunk
         if code not in DAY_CODES:
             raise ValueError(f"unknown repeat day: {chunk}")
         if code not in days:
@@ -313,7 +337,7 @@ def alarm_days(alarm: dict[str, Any]) -> list[str]:
     for raw_day in days:
         if isinstance(raw_day, bool) or not isinstance(raw_day, str):
             return []
-        day = raw_day.strip().lower()[:3]
+        day = raw_day.strip().lower()
         if day not in DAY_CODES:
             return []
         if day not in normalized:
@@ -321,18 +345,26 @@ def alarm_days(alarm: dict[str, Any]) -> list[str]:
     return [day for day in DAY_CODES if day in normalized]
 
 
-def _normalize_alarm_list(alarms: object) -> list[dict[str, Any]]:
+def _normalize_alarm_list(alarms: object, *, strict: bool = False) -> list[dict[str, Any]]:
     if not isinstance(alarms, list):
+        if strict:
+            raise ValueError("alarm list must be a list")
         return []
     normalized: list[dict[str, Any]] = []
     for raw_alarm in alarms:
         if len(normalized) >= MAX_ALARM_COUNT:
+            if strict:
+                raise ValueError(f"alarm list exceeds maximum count of {MAX_ALARM_COUNT}")
             break
         if not isinstance(raw_alarm, dict):
+            if strict:
+                raise ValueError("alarm entry must be a dictionary")
             continue
         try:
             normalized.append(normalize_alarm(raw_alarm))
         except (TypeError, ValueError):
+            if strict:
+                raise
             continue
     return _dedupe_alarm_ids(normalized)
 
@@ -372,11 +404,11 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
     except FileNotFoundError:
         return empty_store()
     except (OSError, RuntimeError) as exc:
-        raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
+        raise RuntimeError("alarm store could not be read") from exc
     if not stat.S_ISREG(file_stat.st_mode):
-        raise RuntimeError(f"alarm store could not be read: {store_path}")
+        raise RuntimeError("alarm store could not be read")
     if file_stat.st_size > MAX_ALARM_STORE_BYTES:
-        raise RuntimeError(f"alarm store is too large: {store_path}")
+        raise RuntimeError("alarm store is too large")
     try:
         text = read_text_without_following_symlinks(
             store_path,
@@ -387,20 +419,23 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
         )
     except OSError as exc:
         if "too large" in str(exc):
-            raise RuntimeError(f"alarm store is too large: {store_path}") from exc
-        raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
+            raise RuntimeError("alarm store is too large") from exc
+        raise RuntimeError("alarm store could not be read") from exc
     except UnicodeDecodeError as exc:
-        raise RuntimeError(f"alarm store could not be parsed: {exc}") from exc
+        raise RuntimeError("alarm store could not be parsed") from exc
     if _contains_escaped_null(text):
         raise RuntimeError("alarm store contains invalid null byte")
     try:
-        raw = json.loads(text)
-    except (json.JSONDecodeError, RecursionError, MemoryError) as exc:
-        if isinstance(exc, OSError):
-            raise RuntimeError(f"alarm store could not be read: {store_path}") from exc
-        raise RuntimeError(f"alarm store could not be parsed: {exc}") from exc
+        raw = json.loads(text, parse_constant=_reject_non_finite_json_number)
+    except (json.JSONDecodeError, ValueError, RecursionError, MemoryError) as exc:
+        raise RuntimeError("alarm store could not be parsed") from exc
     if not isinstance(raw, dict):
         raise RuntimeError("alarm store must be a JSON object")
+    if set(raw) - {"version", "alarms", "last_checked_at"}:
+        raise RuntimeError("alarm store contains unknown fields")
+    version = raw.get("version")
+    if isinstance(version, bool) or not isinstance(version, int) or version != STORE_VERSION:
+        raise RuntimeError("alarm store version is unsupported")
     try:
         raw_last_checked_at = _sanitize_text_field(
             raw.get("last_checked_at"), field_name="alarm store last_checked_at", max_chars=MAX_ALARM_TRIGGER_CHARS
@@ -408,10 +443,20 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
     except ValueError as exc:
         if "too large" in str(exc):
             raise RuntimeError(f"alarm store last_checked_at is too large (max {MAX_ALARM_TRIGGER_CHARS} characters)") from exc
-        raise RuntimeError("alarm store last_checked_at contains invalid null byte") from exc
+        if "invalid null byte" in str(exc):
+            raise RuntimeError("alarm store last_checked_at contains invalid null byte") from exc
+        if "invalid control character" in str(exc):
+            raise RuntimeError("alarm store last_checked_at contains invalid control character") from exc
+        if "invalid unicode" in str(exc):
+            raise RuntimeError("alarm store last_checked_at contains invalid unicode") from exc
+        raise RuntimeError("alarm store last_checked_at is invalid") from exc
+    try:
+        normalized_alarms = _normalize_alarm_list(raw.get("alarms", []), strict=True)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("alarm store contains invalid alarms") from exc
     return {
         "version": STORE_VERSION,
-        "alarms": _normalize_alarm_list(raw.get("alarms", [])),
+        "alarms": normalized_alarms,
         "last_checked_at": raw_last_checked_at,
     }
 
@@ -421,7 +466,7 @@ def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
     _assert_clean_path(store_path, field_name="alarm store path")
     payload = {
         "version": STORE_VERSION,
-        "alarms": _normalize_alarm_list(store.get("alarms", [])),
+        "alarms": _normalize_alarm_list(store.get("alarms", []), strict=True),
         "last_checked_at": _sanitize_text_field(
             store.get("last_checked_at"),
             field_name="alarm store last_checked_at",
@@ -445,7 +490,7 @@ def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
             field_name="alarm store path",
         )
     except OSError as exc:
-        raise RuntimeError(f"failed to persist alarm store: {store_path}") from exc
+        raise RuntimeError("failed to persist alarm store") from exc
 
 
 def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
@@ -473,7 +518,7 @@ def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
         for raw_day in raw_days:
             if isinstance(raw_day, bool) or not isinstance(raw_day, str):
                 raise ValueError("alarm days must contain text values")
-            day = raw_day.strip().lower()[:3]
+            day = raw_day.strip().lower()
             if day not in DAY_CODES:
                 raise ValueError(f"unknown alarm day: {raw_day}")
             if day not in normalized_days:
@@ -481,6 +526,19 @@ def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
     alarm_id = _sanitize_text_field(alarm.get("id"), field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS)
     if not alarm_id:
         alarm_id = f"alarm-{hour:02d}{minute:02d}"
+    last_triggered_at = _sanitize_text_field(
+        alarm.get("last_triggered_at"),
+        field_name="last_triggered_at",
+        max_chars=MAX_ALARM_TRIGGER_CHARS,
+    )
+    if last_triggered_at:
+        parsed_last_triggered_at = parse_local_datetime(last_triggered_at)
+        if parsed_last_triggered_at is None:
+            raise ValueError("last_triggered_at is invalid")
+        last_triggered_at = _normalize_local_datetime(
+            parsed_last_triggered_at,
+            field_name="last_triggered_at",
+        ).isoformat(timespec="minutes")
     return {
         "id": alarm_id,
         "name": _sanitize_text_field(alarm.get("name"), field_name="alarm name", max_chars=MAX_ALARM_NAME_CHARS),
@@ -489,11 +547,7 @@ def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
         "days": normalized_days,
         "enabled": _coerce_alarm_bool(alarm.get("enabled", True), field_name="alarm enabled"),
         "urgency": urgency,
-        "last_triggered_at": _sanitize_text_field(
-            alarm.get("last_triggered_at"),
-            field_name="last_triggered_at",
-            max_chars=MAX_ALARM_TRIGGER_CHARS,
-        ),
+        "last_triggered_at": last_triggered_at,
     }
 
 

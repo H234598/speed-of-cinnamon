@@ -10,8 +10,10 @@ from unittest import mock
 
 from speed_of_cinnamon import security_parser
 from speed_of_cinnamon.security_parser import (
+    _MAX_BLACKLIST_ENTRY_CHARS,
     _MAX_BLACKLIST_ENTRIES,
     _MAX_BLACKLIST_FILE_BYTES,
+    _MAX_BLACKLIST_PATTERN_BYTES,
     _MAX_SECURITY_TEXT_CHARS,
     apply_blacklist_mode,
     apply_security_mode,
@@ -38,8 +40,39 @@ class SecurityParserTest(unittest.TestCase):
 
         self.assertEqual(operations, [fcntl.LOCK_EX, fcntl.LOCK_EX, fcntl.LOCK_UN])
 
+    def test_blacklist_lock_is_close_on_exec(self) -> None:
+        cloexec_flag = getattr(os, "O_CLOEXEC", 0)
+        if not cloexec_flag:
+            self.skipTest("platform has no O_CLOEXEC")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            with (
+                mock.patch.object(
+                    security_parser,
+                    "ensure_directory_without_following_symlinks",
+                    return_value=456,
+                ),
+                mock.patch.object(security_parser.os, "open", return_value=123) as mocked_open,
+                mock.patch.object(security_parser.os, "close"),
+                mock.patch.object(security_parser, "assert_fd_is_regular_private_file"),
+                mock.patch.object(security_parser.fcntl, "flock"),
+            ):
+                fd = security_parser._acquire_blacklist_lock(path)
+                security_parser._release_blacklist_lock(fd)
+
+        flags = mocked_open.call_args.args[1]
+        self.assertTrue(flags & cloexec_flag)
+
     def test_parse_security_directives_extracts_blacklist_entries_and_show_command(self) -> None:
         text = "blacklisteintrag: geheim\nBlacklist anzeigen"
+        directives = parse_security_directives(text)
+        self.assertEqual(directives.added_blacklist, ["geheim"])
+        self.assertTrue(directives.show_blacklist)
+        self.assertEqual(directives.text, "")
+
+    def test_parse_security_directives_ignores_zero_width_command_bypass(self) -> None:
+        text = "blacklistein\u200btrag: geheim\nBitte Black\u200blist anzeigen"
         directives = parse_security_directives(text)
         self.assertEqual(directives.added_blacklist, ["geheim"])
         self.assertTrue(directives.show_blacklist)
@@ -89,6 +122,15 @@ class SecurityParserTest(unittest.TestCase):
         )
 
         self.assertEqual(directives.added_blacklist, ["Geheim"])
+
+    def test_parse_security_directives_rejects_too_many_blacklist_entries(self) -> None:
+        text = "\n".join(
+            f"blacklisteintrag: entry-{index}"
+            for index in range(_MAX_BLACKLIST_ENTRIES + 1)
+        )
+
+        with self.assertRaisesRegex(ValueError, "blacklist directive exceeds maximum entries"):
+            parse_security_directives(text)
 
     def test_parse_security_directives_does_not_treat_mixed_sentence_as_command(self) -> None:
         text = "Hallo blacklisteintrag: geheim"
@@ -238,6 +280,24 @@ class SecurityParserTest(unittest.TestCase):
         self.assertNotIn("abc123", sanitized)
         self.assertGreaterEqual(count, 2)
 
+    def test_apply_security_mode_masks_unseparated_multiline_sensitive_values(self) -> None:
+        text = "password\nSuperSecret123\nname\nMax Mustermann"
+        sanitized, count = apply_security_mode(text, [])
+
+        self.assertEqual(sanitized, "[redacted password]\n[redacted name]")
+        self.assertNotIn("SuperSecret123", sanitized)
+        self.assertNotIn("Max Mustermann", sanitized)
+        self.assertEqual(count, 2)
+
+    def test_apply_security_mode_masks_spoken_name_and_identifier_labels(self) -> None:
+        text = "name ist Max Mustermann und full name heisst Max Mustermann und customer id ist C-12345"
+        sanitized, count = apply_security_mode(text, [])
+
+        self.assertEqual(sanitized, "[redacted name] und [redacted name] und [redacted customer id]")
+        self.assertNotIn("Max Mustermann", sanitized)
+        self.assertNotIn("C-12345", sanitized)
+        self.assertEqual(count, 3)
+
     def test_apply_security_mode_masks_newline_split_sensitive_values(self) -> None:
         text = (
             "token:\nabc123\n\n"
@@ -256,6 +316,29 @@ class SecurityParserTest(unittest.TestCase):
         self.assertNotIn("Max Mustermann", sanitized)
         self.assertNotIn("Hauptstraße 5", sanitized)
         self.assertGreaterEqual(count, 4)
+
+    def test_apply_security_mode_masks_newline_split_customer_and_id_labels(self) -> None:
+        text = "customer id:\nK-12345\nsocial security number:\n123-45-6789"
+        sanitized, count = apply_security_mode(text, [])
+
+        self.assertIn("[redacted customer id]", sanitized)
+        self.assertIn("[redacted id]", sanitized)
+        self.assertNotIn("K-12345", sanitized)
+        self.assertNotIn("123-45-6789", sanitized)
+        self.assertGreaterEqual(count, 2)
+
+    def test_apply_security_mode_preserves_multiline_name_and_tax_id_placeholders(self) -> None:
+        cases = (
+            ("full name", "Max Mustermann", "[redacted name]"),
+            ("voller name", "Max Mustermann", "[redacted name]"),
+            ("steuernummer", "123456789", "[redacted id]"),
+        )
+        for label, value, expected in cases:
+            with self.subTest(label=label):
+                sanitized, count = apply_security_mode(f"{label}:\n{value}", [])
+                self.assertEqual(sanitized, expected)
+                self.assertEqual(count, 1)
+                self.assertNotIn(value, sanitized)
 
     def test_apply_security_mode_stops_spoken_name_at_plain_conjunction(self) -> None:
         sanitized, count = apply_security_mode("mein name ist Anna und gehe jetzt weiter", [])
@@ -434,18 +517,38 @@ class SecurityParserTest(unittest.TestCase):
 
     def test_apply_blacklist_mode_caps_direct_entries_before_regex_build(self) -> None:
         blacklist = [f"secret-{index}" for index in range(_MAX_BLACKLIST_ENTRIES + 5)]
-        text = f"secret-0 secret-{_MAX_BLACKLIST_ENTRIES - 1} secret-{_MAX_BLACKLIST_ENTRIES}"
-        sanitized, count = apply_blacklist_mode(text, blacklist)
+        with self.assertRaisesRegex(ValueError, "blacklist pattern exceeds maximum entries"):
+            apply_blacklist_mode("secret-0", blacklist)
 
-        self.assertEqual(count, 2)
-        self.assertIn("[redacted blacklist item]", sanitized)
-        self.assertIn(f"secret-{_MAX_BLACKLIST_ENTRIES}", sanitized)
+    def test_apply_blacklist_mode_rejects_pattern_byte_budget_overflow(self) -> None:
+        entry_length = _MAX_BLACKLIST_ENTRY_CHARS
+        blacklist = [
+            f"{index:04d}-" + ("x" * (entry_length - 5))
+            for index in range(_MAX_BLACKLIST_ENTRIES + 1)
+        ]
+
+        self.assertEqual(
+            sum(len(entry.encode("utf-8")) for entry in blacklist[:_MAX_BLACKLIST_ENTRIES]),
+            _MAX_BLACKLIST_PATTERN_BYTES,
+        )
+        with self.assertRaisesRegex(ValueError, "blacklist pattern exceeds maximum size"):
+            apply_blacklist_mode("safe", blacklist)
+
+    def test_apply_blacklist_mode_rejects_overlong_entry(self) -> None:
+        with self.assertRaisesRegex(ValueError, "blacklist entry is too long"):
+            apply_blacklist_mode("safe", ["x" * (_MAX_BLACKLIST_ENTRY_CHARS + 1)])
 
     def test_apply_blacklist_mode_ignores_non_text_direct_entries(self) -> None:
         sanitized, count = apply_blacklist_mode("visible geheim", ["geheim", True])  # type: ignore[list-item]
 
         self.assertEqual(count, 1)
         self.assertEqual(sanitized, "visible [redacted blacklist item]")
+
+    def test_blacklist_modes_reject_string_container(self) -> None:
+        with self.assertRaisesRegex(ValueError, "blacklist must be a list or tuple"):
+            apply_blacklist_mode("secret value", "secret")  # type: ignore[arg-type]
+        with self.assertRaisesRegex(ValueError, "blacklist must be a list or tuple"):
+            apply_security_mode("secret value", "secret")  # type: ignore[arg-type]
 
     def test_apply_blacklist_mode_ignores_unencodable_direct_entries(self) -> None:
         sanitized, count = apply_blacklist_mode("visible geheim", ["\ud800", "geheim"])
@@ -478,6 +581,13 @@ class SecurityParserTest(unittest.TestCase):
 
         self.assertEqual(entries, ["erste", "zweite", "dritte"])
 
+    def test_update_blacklist_file_rejects_string_additions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            with self.assertRaisesRegex(ValueError, "blacklist additions must be a list or tuple"):
+                update_blacklist_file(path, "secret")  # type: ignore[arg-type]
+            self.assertFalse(path.exists())
+
     def test_update_blacklist_file_normalizes_added_entries_before_persisting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "blacklist.txt"
@@ -493,6 +603,23 @@ class SecurityParserTest(unittest.TestCase):
             entries = update_blacklist_file(path, ["\ud800", "geheim"])
 
         self.assertEqual(entries, ["geheim"])
+
+    def test_blacklist_file_rejects_relative_and_noncanonical_paths(self) -> None:
+        for path in (Path("blacklist.txt"), Path("./blacklist.txt"), Path("/tmp/../tmp/blacklist.txt")):
+            with self.subTest(path=path):
+                with self.assertRaisesRegex(ValueError, "blacklist file path is not safe"):
+                    load_blacklist_file(path)
+                with self.assertRaisesRegex(ValueError, "blacklist file path is not safe"):
+                    update_blacklist_file(path, ["secret"])
+
+    def test_update_blacklist_file_rejects_overlong_entry_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+
+            with self.assertRaisesRegex(ValueError, "blacklist entry is too long"):
+                update_blacklist_file(path, ["x" * (_MAX_BLACKLIST_ENTRY_CHARS + 1)])
+
+            self.assertFalse(path.exists())
 
     def test_update_blacklist_file_fails_closed_on_corrupt_existing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -572,6 +699,7 @@ class SecurityParserTest(unittest.TestCase):
                     update_blacklist_file(path, ["entry"])
 
         self.assertIn("blacklist lock cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertNotIn("unlock failed", "\n".join(caught.exception.__notes__))
 
     def test_blacklist_lock_returns_lock_fd_when_parent_close_fails(self) -> None:
         close_calls: list[int] = []
@@ -631,6 +759,7 @@ class SecurityParserTest(unittest.TestCase):
                 security_parser._acquire_blacklist_lock(Path("/probe/blacklist.txt"))
 
         self.assertIn("blacklist lock cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertNotIn("fd close failed", "\n".join(caught.exception.__notes__))
 
     def test_blacklist_lock_closes_parent_when_open_is_interrupted(self) -> None:
         with (
@@ -695,6 +824,7 @@ class SecurityParserTest(unittest.TestCase):
                 security_parser._release_blacklist_lock(123)
 
         self.assertIn("blacklist lock cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertNotIn("fd close failed", "\n".join(caught.exception.__notes__))
 
     def test_update_blacklist_file_rejects_hardlinked_existing_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

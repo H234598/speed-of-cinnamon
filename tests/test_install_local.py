@@ -907,6 +907,41 @@ class InstallLocalTest(unittest.TestCase):
 
             self.assertFalse(target.exists())
 
+    def test_safe_fs_install_tree_rejects_source_root_swap_before_signature(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = self._load_safe_fs_module()
+            root = Path(tmp)
+            source = root / "source"
+            original_source = root / "original-source"
+            outside = root / "outside"
+            target = root / "target"
+            source.mkdir()
+            outside.mkdir()
+            (source / "payload.txt").write_text("safe\n", encoding="utf-8")
+            (outside / "payload.txt").write_text("outside\n", encoding="utf-8")
+            real_tree_signature = module._tree_signature
+
+            def swap_source_before_signature(
+                tree: Path,
+                **kwargs: object,
+            ) -> dict[str, tuple[object, ...]]:
+                source.rename(original_source)
+                source.symlink_to(outside, target_is_directory=True)
+                return real_tree_signature(tree, **kwargs)
+
+            args = module.argparse.Namespace(action="install", source=str(source), target=str(target), label="tree")
+            try:
+                with mock.patch.object(module, "_tree_signature", side_effect=swap_source_before_signature):
+                    with self.assertRaisesRegex(SystemExit, "1"):
+                        module.cmd_install_tree(args)
+            finally:
+                if source.is_symlink():
+                    source.unlink()
+                if original_source.exists():
+                    original_source.rename(source)
+
+            self.assertFalse(target.exists())
+
     def test_install_local_refuses_symlinked_home_ancestor(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

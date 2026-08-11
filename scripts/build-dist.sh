@@ -74,7 +74,6 @@ if ! work_root="$(realpath "${work_root}")"; then
   printf 'failed to resolve temporary root: %s\n' "${work_root}" >&2
   exit 1
 fi
-mkdir -p "${work_root}"
 work_dir="$(mktemp -d "${work_root}/speed-of-cinnamon-build-dist-XXXXXX")"
 if [[ -L "${work_dir}" ]]; then
   printf 'temporary build-dist workspace must not be a symlink: %s\n' "${work_dir}" >&2
@@ -90,24 +89,45 @@ if [[ "${work_dir_abs}" != "${work_root}/speed-of-cinnamon-build-dist-"* ]]; the
 fi
 work_dir="${work_dir_abs}"
 staging_tarball=""
+staging_tarball_identity=""
 staging_checksum=""
+staging_checksum_identity=""
 dist_staging_dir=""
+dist_staging_dir_identity=""
+work_dir_identity=""
 dist_finalize_lock="${dist_dir}/.build-dist.finalize.lock"
 cleanup() {
-  if [[ -n "${staging_tarball}" ]]; then
-    "${safe_fs_cmd[@]}" remove-leaf build-dist "${staging_tarball}" >/dev/null 2>&1 || true
+  if [[ -n "${staging_tarball}" && -n "${staging_tarball_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove-leaf build-dist "${staging_tarball}" \
+      --expected-identity "${staging_tarball_identity}" >/dev/null 2>&1 || true
+  elif [[ -n "${staging_tarball}" ]]; then
+    printf 'refusing staged tarball cleanup without verified identity: %s\n' "${staging_tarball}" >&2
   fi
-  if [[ -n "${staging_checksum}" ]]; then
-    "${safe_fs_cmd[@]}" remove-leaf build-dist "${staging_checksum}" >/dev/null 2>&1 || true
+  if [[ -n "${staging_checksum}" && -n "${staging_checksum_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove-leaf build-dist "${staging_checksum}" \
+      --expected-identity "${staging_checksum_identity}" >/dev/null 2>&1 || true
+  elif [[ -n "${staging_checksum}" ]]; then
+    printf 'refusing staged checksum cleanup without verified identity: %s\n' "${staging_checksum}" >&2
   fi
-  if [[ -n "${dist_staging_dir}" ]]; then
-    "${safe_fs_cmd[@]}" remove build-dist "${dist_staging_dir}" --kind dir >/dev/null 2>&1 || true
+  if [[ -n "${dist_staging_dir}" && -n "${dist_staging_dir_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove build-dist "${dist_staging_dir}" --kind dir \
+      --expected-identity "${dist_staging_dir_identity}" >/dev/null 2>&1 || true
+  elif [[ -n "${dist_staging_dir}" ]]; then
+    printf 'refusing dist staging cleanup without verified identity: %s\n' "${dist_staging_dir}" >&2
   fi
-  if [[ -n "${work_dir}" ]]; then
-    "${safe_fs_cmd[@]}" remove build-dist "${work_dir}" --kind dir >/dev/null 2>&1 || true
+  if [[ -n "${work_dir}" && -n "${work_dir_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove build-dist "${work_dir}" --kind dir \
+      --expected-identity "${work_dir_identity}" >/dev/null 2>&1 || true
+  elif [[ -n "${work_dir}" ]]; then
+    printf 'refusing build-dist workspace cleanup without verified identity: %s\n' "${work_dir}" >&2
   fi
 }
 trap cleanup EXIT
+
+if ! work_dir_identity="$("${safe_fs_cmd[@]}" identity build-dist "${work_dir}" --kind dir)"; then
+  printf 'failed to capture temporary build-dist workspace identity: %s\n' "${work_dir}" >&2
+  exit 1
+fi
 
 fsync_regular_file() {
   local path=$1
@@ -140,14 +160,17 @@ PY
 write_regular_file_from_stdin() {
   local path=$1
   local label=$2
+  local expected_identity=${3:-}
 
   python3 -c '
 import os
 import stat
 import sys
 
-path, label = sys.argv[1:3]
-flags = os.O_WRONLY | os.O_CREAT
+path, label, expected_identity = sys.argv[1:4]
+flags = os.O_WRONLY
+if not expected_identity:
+    flags |= os.O_CREAT
 if hasattr(os, "O_NOFOLLOW"):
     flags |= os.O_NOFOLLOW
 try:
@@ -162,6 +185,10 @@ try:
         raise SystemExit(1)
     if getattr(file_stat, "st_nlink", 1) != 1:
         print(f"{label} must not be hardlinked: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    actual_identity = f"{file_stat.st_dev}:{file_stat.st_ino}:{file_stat.st_mode}"
+    if expected_identity and actual_identity != expected_identity:
+        print(f"{label} changed before writing: {path}", file=sys.stderr)
         raise SystemExit(1)
     os.ftruncate(fd, 0)
     while True:
@@ -178,7 +205,7 @@ try:
     os.fsync(fd)
 finally:
     os.close(fd)
-' "${path}" "${label}"
+' "${path}" "${label}" "${expected_identity}"
 }
 
 replace_with_finalize_lock() {
@@ -374,6 +401,7 @@ try:
                     "had_existing": final_stat is not None,
                     "staging": staging,
                     "staging_identity": _file_identity(staging_stat),
+                    "staging_fs_identity": _safe_fs_identity(staging_stat),
                 }
             )
 
@@ -402,6 +430,10 @@ try:
                     entry["final"],
                     "--src-kind",
                     "file",
+                    "--expected-src-identity",
+                    entry["staging_fs_identity"],
+                    "--expected-dst-identity",
+                    "missing",
                 )
         except BaseException as exc:
             rollback_errors = _rollback(entries)
@@ -421,7 +453,8 @@ finally:
 PY
 }
 
-mkdir -p "${dist_dir}" "${work_dir}/${package}"
+"${safe_fs_cmd[@]}" mkdirs build-dist "${dist_dir}"
+"${safe_fs_cmd[@]}" mkdirs build-dist "${work_dir}/${package}"
 
 for path in \
   .github \
@@ -452,14 +485,16 @@ do
 done
 
 while IFS= read -r -d '' cache_dir; do
-  "${safe_fs_cmd[@]}" remove build-dist "${cache_dir}" --kind dir
+  cache_identity="$("${safe_fs_cmd[@]}" identity build-dist "${cache_dir}" --kind dir)"
+  "${safe_fs_cmd[@]}" remove build-dist "${cache_dir}" --kind dir --expected-identity "${cache_identity}"
 done < <(
   find "${work_dir}/${package}" \
     -type d \( -name __pycache__ -o -name .pytest_cache -o -name .mypy_cache \) \
     -prune -print0
 )
 while IFS= read -r -d '' bytecode_file; do
-  "${safe_fs_cmd[@]}" remove build-dist "${bytecode_file}" --kind file
+  bytecode_identity="$("${safe_fs_cmd[@]}" identity build-dist "${bytecode_file}" --kind file)"
+  "${safe_fs_cmd[@]}" remove build-dist "${bytecode_file}" --kind file --expected-identity "${bytecode_identity}"
 done < <(find "${work_dir}/${package}" -type f \( -name '*.pyc' -o -name '*.pyo' \) -print0)
 
 if find "${work_dir}/${package}" -type l -print -quit | grep -q .; then
@@ -493,16 +528,28 @@ if [[ "${dist_staging_dir_abs}" != "${repo_dir}/.build-dist-staging-"* ]]; then
   exit 1
 fi
 dist_staging_dir="${dist_staging_dir_abs}"
+if ! dist_staging_dir_identity="$("${safe_fs_cmd[@]}" identity build-dist "${dist_staging_dir}" --kind dir)"; then
+  printf 'failed to capture dist staging directory identity: %s\n' "${dist_staging_dir}" >&2
+  exit 1
+fi
 staging_tarball="$(mktemp "${dist_staging_dir}/.${package}.tar.gz.XXXXXX")"
+if ! staging_tarball_identity="$("${safe_fs_cmd[@]}" identity build-dist "${staging_tarball}" --kind file)"; then
+  printf 'failed to capture staged tarball identity: %s\n' "${staging_tarball}" >&2
+  exit 1
+fi
 
 tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf - "${package}" \
-  | write_regular_file_from_stdin "${staging_tarball}" "staged dist tarball"
+  | write_regular_file_from_stdin "${staging_tarball}" "staged dist tarball" "${staging_tarball_identity}"
 fsync_regular_file "${staging_tarball}" "staged dist tarball"
 checksum_value="$(sha256sum "${staging_tarball}")"
 checksum_value="${checksum_value%% *}"
 staging_checksum="$(mktemp "${dist_staging_dir}/.${package}.tar.gz.sha256.XXXXXX")"
+if ! staging_checksum_identity="$("${safe_fs_cmd[@]}" identity build-dist "${staging_checksum}" --kind file)"; then
+  printf 'failed to capture staged checksum identity: %s\n' "${staging_checksum}" >&2
+  exit 1
+fi
 printf '%s  %s\n' "${checksum_value}" "${package}.tar.gz" \
-  | write_regular_file_from_stdin "${staging_checksum}" "staged dist checksum"
+  | write_regular_file_from_stdin "${staging_checksum}" "staged dist checksum" "${staging_checksum_identity}"
 replace_with_finalize_lock \
   "${dist_finalize_lock}" \
   "${staging_tarball}" \
@@ -510,7 +557,9 @@ replace_with_finalize_lock \
   "${staging_checksum}" \
   "${final_checksum}"
 staging_tarball=""
+staging_tarball_identity=""
 staging_checksum=""
+staging_checksum_identity=""
 
 printf 'Built %s\n' "${final_tarball}" >&2
 printf '%s\n' "${final_tarball}"

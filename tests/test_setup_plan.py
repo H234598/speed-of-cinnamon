@@ -319,7 +319,7 @@ class SetupPlanTest(unittest.TestCase):
 
     def test_applet_plan_marks_non_cinnamon_session_not_ready(self) -> None:
         payload = {
-            "ok": False,
+            "ok": True,
             "applet": True,
             "configured": {
                 "recorder": {"ok": True},
@@ -456,6 +456,13 @@ class SetupPlanTest(unittest.TestCase):
         sanitized = _sanitize_setup_text(detail)
         self.assertNotIn("correct horse battery staple", sanitized)
         self.assertNotIn("multi word secret", sanitized)
+
+    def test_setup_plan_redacts_url_encoded_credential_separators(self) -> None:
+        detail = "api_key%3Dencoded-secret-value; password%3Aencoded-pass-value"
+        sanitized = _sanitize_setup_text(detail)
+        self.assertNotIn("encoded-secret-value", sanitized)
+        self.assertNotIn("encoded-pass-value", sanitized)
+        self.assertIn("[redacted]", sanitized)
 
     def test_setup_plan_truncates_oversized_details(self) -> None:
         payload = {

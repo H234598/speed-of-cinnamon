@@ -8,7 +8,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
-from .command_chain import MAX_COMMAND_LENGTH_CHARS
+from .command_chain import CommandChainError, MAX_COMMAND_LENGTH_CHARS, _command_path, split_command_chain
 from .http_safety import has_unsafe_url_characters, is_loopback_hostname
 from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
 from .postprocessor import (
@@ -17,6 +17,7 @@ from .postprocessor import (
     DEFAULT_OPENAI_COMPATIBLE_URL,
     MAX_OLLAMA_MODEL_CHARS,
     MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+    POSTPROCESS_TEMPLATE_PLACEHOLDER_RE,
     _openai_compatible_model_supports_text_polishing,
     _safe_prompt_language,
 )
@@ -25,6 +26,7 @@ from .recorder import MAX_RECORDING_SECONDS
 from .transcriber import (
     MAX_LANGUAGE_CODE_CHARS,
     MAX_TRANSCRIBER_TEXT_CHARS,
+    _COMMAND_TEMPLATE_PLACEHOLDER_RE,
     _validate_ctranslate2_model_tree,
     faster_whisper_available,
     normalize_backend,
@@ -194,6 +196,27 @@ def _doctor_text_limit(value: str, *, field_name: str, max_chars: int) -> str | 
     return None
 
 
+def _doctor_command_template_detail(
+    command_template: str,
+    *,
+    field_name: str,
+    placeholder_pattern: Any,
+) -> str | None:
+    try:
+        segments = split_command_chain(command_template, field_name)
+    except CommandChainError as exc:
+        return str(exc)
+    unsupported_placeholder_text = placeholder_pattern.sub("", command_template)
+    if "{" in unsupported_placeholder_text or "}" in unsupported_placeholder_text:
+        return f"{field_name} contains an unsupported placeholder"
+    for segment in segments:
+        try:
+            _command_path(segment[0])
+        except (CommandChainError, IndexError) as exc:
+            return str(exc) if isinstance(exc, CommandChainError) else f"{field_name} is empty"
+    return None
+
+
 def _valid_http_url(value: str) -> bool:
     if not isinstance(value, str) or isinstance(value, bool):
         return False
@@ -258,7 +281,17 @@ def _safe_remote_url_display(value: str, *, field_name: str) -> str:
     netloc = hostname
     if parsed.port is not None:
         netloc = f"{netloc}:{parsed.port}"
-    return urllib.parse.urlunparse((parsed.scheme, netloc, "", "", "", ""))
+    path_segments = tuple(segment for segment in parsed.path.split("/") if segment)
+    safe_path = ""
+    if path_segments:
+        first_segment = path_segments[0]
+        version_suffix = first_segment[1:].split(".") if first_segment[:1].lower() == "v" else []
+        is_version_prefix = bool(version_suffix) and all(part.isdigit() for part in version_suffix)
+        if first_segment.lower() == "api" or is_version_prefix:
+            safe_path = f"/{first_segment}"
+            if len(path_segments) > 1:
+                safe_path += "/..."
+    return urllib.parse.urlunparse((parsed.scheme, netloc, safe_path, "", "", ""))
 
 
 def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]) -> dict[str, object]:
@@ -335,6 +368,13 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
         field_name="command template",
         max_chars=MAX_TRANSCRIBER_TEXT_CHARS,
     )
+    if command_detail:
+        return {"ok": False, "value": transcriber or "auto", "detail": command_detail}
+    command_detail = _doctor_command_template_detail(
+        command_template,
+        field_name="transcriber command",
+        placeholder_pattern=_COMMAND_TEMPLATE_PLACEHOLDER_RE,
+    ) if command_template else None
     if command_detail:
         return {"ok": False, "value": transcriber or "auto", "detail": command_detail}
     try:
@@ -606,6 +646,13 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
                 "value": "command",
                 "detail": "custom post-process command is empty",
             }
+        command_detail = _doctor_command_template_detail(
+            command_template,
+            field_name="post-process command",
+            placeholder_pattern=POSTPROCESS_TEMPLATE_PLACEHOLDER_RE,
+        )
+        if command_detail:
+            return {"ok": False, "value": "command", "detail": command_detail}
         return {
             "ok": True,
             "value": "command",
@@ -775,6 +822,10 @@ def _contains_http_header_control_chars(value: str, *, allow_newline: bool = Fal
     return False
 
 
+def _reject_non_finite_json_number(_value: str) -> object:
+    raise ValueError("settings JSON contains non-finite numbers")
+
+
 def parse_settings_json(value: str) -> dict[str, object]:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError("settings JSON must be text")
@@ -791,7 +842,7 @@ def parse_settings_json(value: str) -> dict[str, object]:
     if len(value.encode("utf-8")) > MAX_SETTINGS_JSON_CHARS:
         raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} bytes)")
     try:
-        parsed = json.loads(value)
+        parsed = json.loads(value, parse_constant=_reject_non_finite_json_number)
     except (json.JSONDecodeError, RecursionError, MemoryError) as exc:
         raise ValueError(f"settings JSON could not be parsed: {exc}") from exc
     try:

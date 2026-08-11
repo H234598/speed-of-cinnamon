@@ -123,8 +123,6 @@ if ! repo_tmp_root="$(realpath "${repo_tmp_root}")"; then
   printf 'failed to resolve temporary root: %s\n' "${repo_tmp_root}" >&2
   exit 1
 fi
-mkdir -p "${repo_tmp_root}"
-
 rpmbuild_tmpdir="$(mktemp -d "${repo_tmp_root}/speed-of-cinnamon-rpm-tmp-XXXXXX")"
 if [[ -L "${rpmbuild_tmpdir}" ]]; then
   printf 'temporary RPM workspace must not be a symlink: %s\n' "${rpmbuild_tmpdir}" >&2
@@ -140,15 +138,28 @@ if [[ "${rpmbuild_tmpdir_abs}" != "${repo_tmp_root}/speed-of-cinnamon-rpm-tmp-"*
 fi
 rpmbuild_tmpdir="${rpmbuild_tmpdir_abs}"
 stage_topdir=""
+rpmbuild_tmpdir_identity=""
+stage_topdir_identity=""
 cleanup_tmpdir() {
-  if [[ -n "${stage_topdir}" ]]; then
-    "${safe_fs_cmd[@]}" remove build-rpm "${stage_topdir}" --kind dir >/dev/null 2>&1 || true
+  if [[ -n "${stage_topdir}" && -n "${stage_topdir_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove build-rpm "${stage_topdir}" --kind dir \
+      --expected-identity "${stage_topdir_identity}" >/dev/null 2>&1 || true
+  elif [[ -n "${stage_topdir}" ]]; then
+    printf 'refusing RPM stage cleanup without verified identity: %s\n' "${stage_topdir}" >&2
   fi
-  if [[ -n "${rpmbuild_tmpdir}" ]]; then
-    "${safe_fs_cmd[@]}" remove build-rpm "${rpmbuild_tmpdir}" --kind dir >/dev/null 2>&1 || true
+  if [[ -n "${rpmbuild_tmpdir}" && -n "${rpmbuild_tmpdir_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove build-rpm "${rpmbuild_tmpdir}" --kind dir \
+      --expected-identity "${rpmbuild_tmpdir_identity}" >/dev/null 2>&1 || true
+  elif [[ -n "${rpmbuild_tmpdir}" ]]; then
+    printf 'refusing RPM workspace cleanup without verified identity: %s\n' "${rpmbuild_tmpdir}" >&2
   fi
 }
 trap cleanup_tmpdir EXIT
+
+if ! rpmbuild_tmpdir_identity="$("${safe_fs_cmd[@]}" identity build-rpm "${rpmbuild_tmpdir}" --kind dir)"; then
+  printf 'failed to capture temporary RPM workspace identity: %s\n' "${rpmbuild_tmpdir}" >&2
+  exit 1
+fi
 
 profile="${1:-fedora}"
 case "${profile}" in
@@ -201,7 +212,7 @@ if [[ -L "${dist_dir}" ]]; then
   printf 'dist parent directory must not be a symlink: %s\n' "${dist_dir}" >&2
   exit 1
 fi
-mkdir -p "${dist_dir}"
+"${safe_fs_cmd[@]}" mkdirs build-rpm "${dist_dir}"
 dist_finalize_lock="${dist_dir}/.build-rpm.finalize.lock"
 stage_topdir="$(mktemp -d "${rpmbuild_tmpdir}/.$(basename "${final_topdir}").stage.XXXXXX")"
 if [[ -L "${stage_topdir}" ]]; then
@@ -217,6 +228,10 @@ if [[ "${stage_topdir_abs}" != "${rpmbuild_tmpdir}/."*".stage."* ]]; then
   exit 1
 fi
 stage_topdir="${stage_topdir_abs}"
+if ! stage_topdir_identity="$("${safe_fs_cmd[@]}" identity build-rpm "${stage_topdir}" --kind dir)"; then
+  printf 'failed to capture temporary RPM stage identity: %s\n' "${stage_topdir}" >&2
+  exit 1
+fi
 spec_file="${stage_topdir}/SPECS/speed-of-cinnamon.spec"
 
 if [[ ! -f "${spec_source}" ]]; then
@@ -226,7 +241,9 @@ fi
 require_regular_source_file "${tarball}" "tarball source"
 require_regular_source_file "${spec_source}" "spec source"
 
-mkdir -p "${stage_topdir}"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS}
+for rpm_stage_dir in BUILD BUILDROOT RPMS SOURCES SPECS SRPMS; do
+  "${safe_fs_cmd[@]}" mkdirs build-rpm "${stage_topdir}/${rpm_stage_dir}"
+done
 if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${tarball}" "${stage_topdir}/SOURCES/$(basename "${tarball}")" 0644; then
   printf 'failed to copy tarball source into RPM staging: %s\n' "${tarball}" >&2
   exit 1
@@ -307,7 +324,9 @@ if ! activate_with_finalize_lock "${dist_finalize_lock}" "${stage_topdir}" "${fi
   printf 'failed to activate RPM build directory: %s\n' "${final_topdir}" >&2
   exit 1
 fi
-"${safe_fs_cmd[@]}" remove build-rpm "${stage_topdir}" --kind dir
+"${safe_fs_cmd[@]}" remove build-rpm "${stage_topdir}" --kind dir \
+  --expected-identity "${stage_topdir_identity}"
 stage_topdir=""
+stage_topdir_identity=""
 
 find "${final_topdir}/RPMS" "${final_topdir}/SRPMS" -type f \( -name '*.rpm' -o -name '*.src.rpm' \) -print | sort

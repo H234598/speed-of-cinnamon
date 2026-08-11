@@ -7,6 +7,7 @@ MAX_PROFANITY_FILTER_BYTES = 200_000
 MAX_PROFANITY_FILTER_ENTRIES = 500
 MAX_PROFANITY_PATTERN_CHARS = 256
 MAX_PROFANITY_REPLACEMENT_CHARS = 256
+MAX_PROFANITY_IGNORABLE_CODEPOINTS = 256
 
 PROFANITY_REPLACEMENT_PAIRS: tuple[tuple[str, str], ...] = (
     (r"abfuck", "Konfetti-Katastrophe"),
@@ -34,6 +35,7 @@ PROFANITY_REPLACEMENT_PAIRS: tuple[tuple[str, str], ...] = (
     (r"deppenapostel", "Toastprediger"),
     (r"dreck", "Glitzerstaub"),
     (r"drecksack", "Glitzerbeutel"),
+    (r"drecksau", "Glitzerschwein"),
     (r"drecksding", "Keksapparat"),
     (r"drecksfresse", "Keksvisage"),
     (r"dreckskerl", "Glitzeronkel"),
@@ -54,6 +56,7 @@ PROFANITY_REPLACEMENT_PAIRS: tuple[tuple[str, str], ...] = (
     (r"hirni", "Keksdenker"),
     (r"honk", "Hupenwichtel"),
     (r"horst", "Gurkengeneral"),
+    (r"hurensohn", "Kekssohn"),
     (r"idiot", "Quatschpilot"),
     (r"idioten", "Quatschpiloten"),
     (r"kack", "Kakao"),
@@ -72,6 +75,7 @@ PROFANITY_REPLACEMENT_PAIRS: tuple[tuple[str, str], ...] = (
     (r"lauch", "Suppengrün"),
     (r"mistkerl", "Muffinmensch"),
     (r"miststück", "Muffinstück"),
+    (r"missgeburt", "Fehlkonfetti"),
     (r"muschi", "Miezekissen"),
     (r"pimmel", "Wackelzapfen"),
     (r"pimmelkopf", "Zapfenkopf"),
@@ -146,8 +150,10 @@ PROFANITY_REPLACEMENT_PAIRS: tuple[tuple[str, str], ...] = (
     (r"jerk", "pickle juggler"),
     (r"jerkoff", "pickle tumbler"),
     (r"motherfucker", "motherfluffin muffin"),
+    (r"motherfucking", "motherfluffing"),
     (r"nutsack", "peanut pouch"),
     (r"piss", "lemon fizz"),
+    (r"piece of shit", "sprinkle-soaked nonsense"),
     (r"pissed", "lemon-fizzed"),
     (r"prick", "cactus cupcake"),
     (r"pussy", "kitten pillow"),
@@ -161,6 +167,7 @@ PROFANITY_REPLACEMENT_PAIRS: tuple[tuple[str, str], ...] = (
     (r"shitty", "sprinkle-powered"),
     (r"slut", "sparkle llama"),
     (r"sonofabitch", "son of a biscuit"),
+    (r"son of a bitch", "son of a biscuit"),
     (r"twat", "teacup goblin"),
     (r"wanker", "waffle wobbler"),
     (r"whore", "sparkle pancake"),
@@ -323,13 +330,6 @@ def _profanity_pattern_needs_literal_variant(pattern: str) -> bool:
     return False
 
 
-def _profanity_pattern_has_candidate(pattern: str, candidate_chars: set[str]) -> bool:
-    if pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in pattern):
-        return all(char in candidate_chars for char in _normalize_profanity_candidate("schei"))
-    normalized = _normalize_profanity_candidate(pattern)
-    return bool(normalized) and all(char in candidate_chars for char in normalized)
-
-
 def _profanity_left_boundary(boundary_class: str) -> str:
     return rf"(?:(?<!{boundary_class})|(?<={_CJK_CONTEXT_CLASS}))"
 
@@ -422,11 +422,52 @@ def _safe_compact_profanity_pattern_source(pattern: str) -> str:
     )
 
 
-PROFANITY_REPLACEMENTS: tuple[tuple[re.Pattern[str], str], ...] = tuple(
-    (re.compile(_safe_compact_profanity_pattern_source(pattern), re.IGNORECASE), replacement)
-    for pattern, replacement in PROFANITY_REPLACEMENT_PAIRS
-    if _safe_compact_profanity_pattern_source(pattern)
-)
+def _profanity_pattern_hint(pattern: str) -> str:
+    if pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in pattern):
+        return _normalize_profanity_candidate("schei")
+    return _normalize_profanity_candidate(pattern)
+
+
+def _compile_default_profanity_replacements_with_hints() -> tuple[
+    tuple[re.Pattern[str], str, str], ...
+]:
+    compiled: list[tuple[re.Pattern[str], str, str]] = []
+    for pattern, replacement in PROFANITY_REPLACEMENT_PAIRS:
+        pattern_source = _safe_profanity_pattern_source(pattern)
+        if pattern_source:
+            compiled.append(
+                (
+                    re.compile(pattern_source, re.IGNORECASE),
+                    replacement,
+                    _profanity_pattern_hint(pattern),
+                )
+            )
+    return tuple(compiled)
+
+
+class _LazyProfanityReplacements:
+    def __init__(self) -> None:
+        self._value: tuple[tuple[re.Pattern[str], str], ...] | None = None
+
+    def _get(self) -> tuple[tuple[re.Pattern[str], str], ...]:
+        if self._value is None:
+            self._value = tuple(
+                (pattern, replacement)
+                for pattern, replacement, _hint in _compile_default_profanity_replacements_with_hints()
+            )
+        return self._value
+
+    def __iter__(self):
+        return iter(self._get())
+
+    def __len__(self) -> int:
+        return len(self._get())
+
+    def __getitem__(self, index):
+        return self._get()[index]
+
+
+PROFANITY_REPLACEMENTS = _LazyProfanityReplacements()
 
 
 def render_profanity_replacement_list() -> str:
@@ -460,6 +501,8 @@ def _clean_editable_value(value: str, *, max_chars: int) -> str:
 
 
 def parse_profanity_replacement_list(text: str) -> tuple[tuple[str, str], ...]:
+    if text == render_profanity_replacement_list():
+        return PROFANITY_REPLACEMENT_PAIRS
     pairs: list[tuple[str, str]] = []
     for raw_line in str(text or "").splitlines():
         line = raw_line.strip()
@@ -496,12 +539,11 @@ def _compile_profanity_replacements_with_hints(
     gap_pattern = _IGNORABLE_GAP_PATTERN
     use_compact_patterns = text is not None
     candidate_chars: set[str] | None = None
+    candidate_fragments: list[str] | None = None
     if text is not None:
-        candidate_chars = set(_normalize_profanity_candidate(text))
-        for _pattern, replacement in pairs[:MAX_PROFANITY_FILTER_ENTRIES]:
-            clean_replacement = _clean_editable_value(replacement, max_chars=MAX_PROFANITY_REPLACEMENT_CHARS)
-            if clean_replacement:
-                candidate_chars.update(_normalize_profanity_candidate(clean_replacement))
+        normalized_text = _normalize_profanity_candidate(text)
+        candidate_chars = set(normalized_text)
+        candidate_fragments = [normalized_text]
         ignorable_codepoints = {
             ord(char)
             for value in (
@@ -519,11 +561,13 @@ def _compile_profanity_replacements_with_hints(
             for char in value
             if unicodedata.category(char) in _MATCH_IGNORE_CATEGORIES
         }
-        if ignorable_codepoints:
+        if 0 < len(ignorable_codepoints) <= MAX_PROFANITY_IGNORABLE_CODEPOINTS:
             escaped_codepoints = "".join(_regex_escape_codepoint(codepoint) for codepoint in sorted(ignorable_codepoints))
             ignorable_class = f"[{escaped_codepoints}]"
             boundary_class = f"[\\w{escaped_codepoints}]"
             gap_pattern = rf"{ignorable_class}*"
+            use_compact_patterns = False
+        elif len(ignorable_codepoints) > MAX_PROFANITY_IGNORABLE_CODEPOINTS:
             use_compact_patterns = False
     compiled: list[tuple[re.Pattern[str], str, str]] = []
     saw_valid_pattern = False
@@ -532,6 +576,17 @@ def _compile_profanity_replacements_with_hints(
         clean_replacement = _clean_editable_value(replacement, max_chars=MAX_PROFANITY_REPLACEMENT_CHARS)
         if not clean_pattern or not clean_replacement:
             continue
+        pattern_hint = _profanity_pattern_hint(clean_pattern)
+        if not pattern_hint:
+            continue
+        saw_valid_pattern = True
+        if candidate_chars is not None:
+            if candidate_fragments is None or not any(pattern_hint in fragment for fragment in candidate_fragments):
+                continue
+        if candidate_chars is not None:
+            candidate_chars.update(_normalize_profanity_candidate(clean_replacement))
+            if candidate_fragments is not None:
+                candidate_fragments.append(_normalize_profanity_candidate(clean_replacement))
         pattern_source = (
             _safe_compact_profanity_pattern_source(clean_pattern)
             if use_compact_patterns
@@ -543,15 +598,7 @@ def _compile_profanity_replacements_with_hints(
         )
         if not pattern_source:
             continue
-        saw_valid_pattern = True
-        if candidate_chars is not None and not _profanity_pattern_has_candidate(clean_pattern, candidate_chars):
-            continue
         try:
-            pattern_hint = (
-                _normalize_profanity_candidate("schei")
-                if clean_pattern in _TRUSTED_PROFANITY_PATTERNS and any(char in _REGEX_META_CHARS for char in clean_pattern)
-                else _normalize_profanity_candidate(clean_pattern)
-            )
             compiled.append((re.compile(pattern_source, re.IGNORECASE), clean_replacement, pattern_hint))
         except re.error:
             continue

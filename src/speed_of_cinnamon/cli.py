@@ -85,6 +85,7 @@ from .path_safety import (
     read_text_without_following_symlinks,
     write_text_atomically_without_following_symlinks,
 )
+from .secure_delete import secure_wipe_regular_file_at
 from .postprocessor import (
     DEFAULT_OLLAMA_URL,
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
@@ -104,8 +105,10 @@ from .security_parser import (
     update_blacklist_file,
 )
 from .recorder import (
+    MAX_INPUT_SOURCE_FIELD_CHARS,
+    MAX_RECORDING_INPUT_DEVICE_CHARS,
     RecorderCommand,
-    SilenceDetectionResult,
+    SilenceDetectionResult,  # noqa: F401 - public CLI compatibility export
     choose_recorder,
     detect_silent_recording,
     list_input_sources,
@@ -118,8 +121,16 @@ from .recorder import (
     trim_recording_silence,
 )
 from .recorder import MAX_RECORDING_SECONDS, RecorderError, validate_recording_path
-from .settings_export import read_export, write_export
-from .settings_export import MAX_SETTINGS_EXPORT_PATH_CHARS
+from .settings_export import (
+    MAX_SETTINGS_EXPORT_PATH_CHARS,
+    POST_COMMIT_DIRECTORY_CLOSE_WARNING,
+    POST_COMMIT_RECOVERY_BACKUP_CLEANUP_WARNING,
+    SettingsExportError,
+    _reject_non_finite_json_number,
+    normalize_alarm_store,
+    read_export,
+    write_export,
+)
 from .setup_plan import build_setup_plan
 from .state import (
     MAX_PENDING_CLEANUP_BACKUP_ENTRIES,
@@ -145,9 +156,10 @@ from .profanity_filter import (
     MAX_PROFANITY_FILTER_BYTES,
     _compile_profanity_replacements_with_hints,
     _normalize_profanity_candidate,
-    PROFANITY_REPLACEMENTS,
-    PROFANITY_REPLACEMENT_PAIRS,
-    compile_profanity_replacements,
+    _profanity_pattern_hint,  # noqa: F401 - public CLI compatibility export
+    PROFANITY_REPLACEMENTS,  # noqa: F401 - public CLI compatibility export
+    PROFANITY_REPLACEMENT_PAIRS,  # noqa: F401 - public CLI compatibility export
+    compile_profanity_replacements,  # noqa: F401 - public CLI compatibility export
     parse_profanity_replacement_list,
     render_profanity_replacement_list,
 )
@@ -197,6 +209,8 @@ EMPTY_TRANSCRIPT_MARKERS = frozenset(
     }
 )
 MAX_HISTORY_LIMIT = 1_000
+MAX_TRANSCRIPT_HISTORY_SCAN = 10_000
+MAX_TRANSCRIPT_HISTORY_SCAN_CHARS = 64 * 1024 * 1024
 DEFAULT_MAX_SECONDS = 30
 MAX_KEEP_TRANSCRIPTS = 1_000
 MAX_KEEP_RECORDINGS = 1_000
@@ -209,7 +223,7 @@ MAX_SETTINGS_JSON_CHARS = 250_000
 MAX_SETTINGS_FILE_BYTES = 1_000_000
 MAX_DIAGNOSTICS_JSON_BYTES = 1_000_000
 MAX_FINALIZATION_LOCK_BYTES = 1_024
-MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS = 5
+MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS = 300
 MAX_URL_CHARS = 2_048
 MAX_ALARM_CATCH_UP_MINUTES = 14_400
 MAX_RECORDING_ARTIFACT_CANDIDATES = 100
@@ -223,6 +237,7 @@ TRANSCRIBER_CHOICES = [
     "whisper-cpp",
     "faster-whisper",
     "openai-compatible",
+    "openai-compatible-api",
     "external-api",
     "command",
     "custom",
@@ -268,15 +283,30 @@ def _which(command_name: str) -> str | None:
     return shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)
 
 
+def _required_nonblocking_flag() -> int:
+    flag = getattr(os, "O_NONBLOCK", None)
+    if type(flag) is not int or flag <= 0:
+        raise OSError("secure nonblocking file open is not supported on this platform")
+    return flag
+
+
+_FINALIZATION_LOCK_PID_UNKNOWN = object()
+_FINALIZATION_LOCK_PID_EMPTY = object()
+_FINALIZATION_LOCK_PID_CORRUPT = object()
+
+
 def _finalization_lock_path(state_path: Path) -> Path:
     return Path(state_path).with_name(f".{state_path.name}.finalizing")
 
 
-def _read_finalization_lock_pid(lock_path: Path) -> int | None:
+def _read_finalization_lock_pid_state(lock_path: Path) -> object:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
-        return None
-    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+        return _FINALIZATION_LOCK_PID_UNKNOWN
+    try:
+        nonblock_flag = _required_nonblocking_flag()
+    except OSError:
+        return _FINALIZATION_LOCK_PID_UNKNOWN
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     fd: int | None = None
     try:
@@ -294,9 +324,9 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
         finally:
             try:
                 handle.close()
-            except BaseException as cleanup_error:
+            except BaseException:
                 if read_error is not None:
-                    read_error.add_note(f"finalization lock cleanup failed: {cleanup_error}")
+                    read_error.add_note("finalization lock cleanup failed")
                 else:
                     raise
     except (OSError, RuntimeError, ValueError):
@@ -305,7 +335,7 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
                 os.close(fd)
             except BaseException:
                 pass
-        return None
+        return _FINALIZATION_LOCK_PID_UNKNOWN
     except BaseException:
         if fd is not None:
             try:
@@ -316,15 +346,20 @@ def _read_finalization_lock_pid(lock_path: Path) -> int | None:
     try:
         text = raw.decode("ascii")
     except UnicodeDecodeError:
-        return None
+        return _FINALIZATION_LOCK_PID_CORRUPT
     text = text.splitlines()
     if not text:
-        return None
+        return _FINALIZATION_LOCK_PID_EMPTY
     first = text[0].strip()
     if not first.isdigit():
-        return None
+        return _FINALIZATION_LOCK_PID_CORRUPT
     pid = int(first)
-    return pid if pid > 0 else None
+    return pid if pid > 0 else _FINALIZATION_LOCK_PID_CORRUPT
+
+
+def _read_finalization_lock_pid(lock_path: Path) -> int | None:
+    state = _read_finalization_lock_pid_state(lock_path)
+    return None if state is _FINALIZATION_LOCK_PID_UNKNOWN else state
 
 
 def _finalization_lock_identity_for_pid(pid: int) -> str | None:
@@ -349,6 +384,47 @@ def _finalization_lock_identity_for_pid(pid: int) -> str | None:
     if not boot_id or not start_time:
         return None
     return f"{boot_id}:{start_time}"
+
+
+def _finalization_lock_process_start_time_for_pid(pid: int) -> float | None:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+        close = raw.rindex(")")
+        rest = raw[close + 2 :].split()
+        if len(rest) < 20:
+            return None
+        start_time_ticks = int(rest[19])
+        proc_stat = Path("/proc/stat").read_text(encoding="utf-8")
+        boot_time = next(
+            int(line.split()[1])
+            for line in proc_stat.split("\n")
+            if line.startswith("btime ")
+        )
+        clock_ticks = os.sysconf("SC_CLK_TCK")
+    except (OSError, UnicodeError, ValueError, IndexError, StopIteration, TypeError):
+        return None
+    if start_time_ticks <= 0 or not isinstance(clock_ticks, int) or isinstance(clock_ticks, bool):
+        return None
+    if clock_ticks <= 0:
+        return None
+    return float(boot_time) + (float(start_time_ticks) / float(clock_ticks))
+
+
+def _finalization_lock_pid_started_after_lock(
+    pid: int,
+    lock_mtime: float,
+    *,
+    grace_seconds: float = 1.0,
+) -> bool | None:
+    process_start_time = _finalization_lock_process_start_time_for_pid(pid)
+    if process_start_time is None:
+        return None
+    try:
+        return process_start_time >= float(lock_mtime) + float(grace_seconds)
+    except (TypeError, ValueError, OverflowError):
+        return None
 
 
 def _process_is_zombie(pid: int) -> bool | None:
@@ -410,30 +486,36 @@ def _same_finalization_lock_snapshot(
     first: os.stat_result,
     second: os.stat_result,
 ) -> bool:
-    return (
-        first.st_dev,
-        first.st_ino,
-        first.st_nlink,
-        first.st_size,
-        first.st_mtime_ns,
-        first.st_ctime_ns,
-    ) == (
-        second.st_dev,
-        second.st_ino,
-        second.st_nlink,
-        second.st_size,
-        second.st_mtime_ns,
-        second.st_ctime_ns,
-    )
+    try:
+        first_snapshot = (
+            first.st_dev,
+            first.st_ino,
+            first.st_mode,
+            first.st_nlink,
+            first.st_uid,
+            first.st_gid,
+            first.st_size,
+            first.st_mtime_ns,
+            first.st_ctime_ns,
+        )
+        second_snapshot = (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+            second.st_nlink,
+            second.st_uid,
+            second.st_gid,
+            second.st_size,
+            second.st_mtime_ns,
+            second.st_ctime_ns,
+        )
+    except AttributeError:
+        return False
+    return first_snapshot == second_snapshot
 
 
 def _same_finalization_lock_identity(current: os.stat_result, expected: os.stat_result) -> bool:
-    return (
-        current.st_dev == expected.st_dev
-        and current.st_ino == expected.st_ino
-        and current.st_mode == expected.st_mode
-        and getattr(current, "st_nlink", 1) == getattr(expected, "st_nlink", 1)
-    )
+    return _same_finalization_lock_snapshot(current, expected)
 
 
 def _unlink_finalization_lock_at(
@@ -442,51 +524,117 @@ def _unlink_finalization_lock_at(
     *,
     expected_stat: os.stat_result | None = None,
 ) -> bool:
+    source_fd: int | None = None
+    operation_error: BaseException | None = None
     try:
-        current = os.stat(lock_path.name, dir_fd=parent_fd, follow_symlinks=False)
-    except FileNotFoundError:
-        return False
-    if not stat_module.S_ISREG(current.st_mode):
-        return False
-    if getattr(current, "st_nlink", 1) != 1:
-        return False
-    if expected_stat is not None and not _same_finalization_lock_identity(current, expected_stat):
-        return False
-    for _ in range(100):
-        cleanup_name = f"{lock_path.name}.{secrets.token_hex(8)}.cleanup"
+        nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+        if nofollow_flag is None:
+            return False
         try:
-            _rename_without_replacing(
+            nonblock_flag = _required_nonblocking_flag()
+        except OSError:
+            return False
+        try:
+            source_fd = os.open(
                 lock_path.name,
-                cleanup_name,
-                directory_fd=parent_fd,
-                field_name="finalization lock cleanup",
+                os.O_RDONLY | nofollow_flag | nonblock_flag | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=parent_fd,
             )
-        except FileExistsError:
-            continue
-        try:
-            claimed = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
-            if not stat_module.S_ISREG(claimed.st_mode) or getattr(claimed, "st_nlink", 1) != 1:
-                raise RuntimeError("finalization lock changed before cleanup")
-            if expected_stat is not None and not _same_finalization_lock_identity(claimed, expected_stat):
-                raise RuntimeError("finalization lock changed before cleanup")
-            os.unlink(cleanup_name, dir_fd=parent_fd)
-            _fsync_fd(parent_fd)
-        except BaseException as exc:
+            source_stat = os.fstat(source_fd)
+            current = os.stat(lock_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        except (FileNotFoundError, OSError, ValueError):
+            return False
+        if (
+            not stat_module.S_ISREG(source_stat.st_mode)
+            or source_stat.st_nlink != 1
+            or not _same_finalization_lock_snapshot(source_stat, current)
+            or (expected_stat is not None and not _same_finalization_lock_snapshot(source_stat, expected_stat))
+        ):
+            return False
+        for _ in range(100):
+            cleanup_name = f"{lock_path.name}.{secrets.token_hex(8)}.cleanup"
             try:
+                preclaim_stat = os.fstat(source_fd)
+                path_stat = os.stat(lock_path.name, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    not stat_module.S_ISREG(preclaim_stat.st_mode)
+                    or preclaim_stat.st_nlink != 1
+                    or not _same_finalization_lock_snapshot(preclaim_stat, path_stat)
+                    or (expected_stat is not None and not _same_finalization_lock_snapshot(preclaim_stat, expected_stat))
+                ):
+                    return False
                 _rename_without_replacing(
-                    cleanup_name,
                     lock_path.name,
+                    cleanup_name,
                     directory_fd=parent_fd,
-                    field_name="finalization lock cleanup restore",
+                    field_name="finalization lock cleanup",
                 )
-                _fsync_fd(parent_fd)
-            except BaseException as restore_error:
-                exc.add_note(f"finalization lock cleanup restore failed: {restore_error}")
-            if isinstance(exc, RuntimeError) and str(exc) == "finalization lock changed before cleanup":
+            except FileExistsError:
+                continue
+            except (OSError, ValueError):
                 return False
-            raise
-        return True
-    return False
+
+            claim_verified = False
+            unlinked = False
+            claimed: os.stat_result | None = None
+            try:
+                claimed = os.fstat(source_fd)
+                claimed_path = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if (
+                    not stat_module.S_ISREG(claimed.st_mode)
+                    or claimed.st_nlink != 1
+                    or not _same_finalization_lock_snapshot(claimed_path, claimed)
+                ):
+                    raise RuntimeError("finalization lock changed before cleanup")
+                claim_verified = True
+
+                final_claim = os.fstat(source_fd)
+                final_path = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                if not _same_finalization_lock_snapshot(final_claim, claimed) or not _same_finalization_lock_snapshot(
+                    final_path, final_claim
+                ):
+                    raise RuntimeError("finalization lock changed before cleanup")
+                # ponytail: Python has no unlink-by-fd primitive. The private same-UID
+                # namespace remains the trust boundary; remove it with a separate-UID broker.
+                os.unlink(cleanup_name, dir_fd=parent_fd)
+                unlinked = True
+                _fsync_fd(parent_fd)
+            except BaseException as exc:
+                if not unlinked and claim_verified and claimed is not None:
+                    try:
+                        restore_stat = os.fstat(source_fd)
+                        restore_path = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                        if _same_finalization_lock_snapshot(restore_stat, claimed) and _same_finalization_lock_snapshot(
+                            restore_path, restore_stat
+                        ):
+                            _rename_without_replacing(
+                                cleanup_name,
+                                lock_path.name,
+                                directory_fd=parent_fd,
+                                field_name="finalization lock cleanup restore",
+                            )
+                            _fsync_fd(parent_fd)
+                    except BaseException:
+                        exc.add_note("finalization lock cleanup restore failed")
+                if isinstance(exc, RuntimeError) and str(exc) == "finalization lock changed before cleanup":
+                    return False
+                raise
+            return True
+        return False
+    except BaseException as exc:
+        operation_error = exc
+        raise
+    finally:
+        if source_fd is not None:
+            try:
+                os.close(source_fd)
+            except BaseException:
+                if operation_error is None:
+                    raise
+                try:
+                    operation_error.add_note("finalization lock cleanup failed")
+                except BaseException:
+                    pass
 
 
 def _acquire_finalization_lock(state_path: Path) -> Path | None:
@@ -530,21 +678,48 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                     return None
                 if getattr(existing, "st_nlink", 1) != 1:
                     return None
-                owner_pid = _read_finalization_lock_pid(lock_path)
+                try:
+                    _required_nonblocking_flag()
+                except OSError:
+                    return None
+                owner_state = _read_finalization_lock_pid(lock_path)
+                if owner_state is None:
+                    return None
+                if owner_state in {_FINALIZATION_LOCK_PID_EMPTY, _FINALIZATION_LOCK_PID_CORRUPT}:
+                    owner_pid = None
+                else:
+                    owner_pid = owner_state
                 owner_identity = _read_finalization_lock_identity(lock_path)
                 owner_running = owner_pid is not None and _process_is_running(owner_pid)
                 if owner_running:
                     if owner_identity is None:
-                        return None
-                    owner_current_identity = _finalization_lock_identity_for_pid(owner_pid)
-                    if owner_current_identity is None:
-                        return None
-                    if owner_identity == owner_current_identity:
-                        return None
-                    if process_group_has_live_processes(owner_pid) is not False:
-                        return None
+                        if owner_pid == os.getpid():
+                            return None
+                        started_after_lock = _finalization_lock_pid_started_after_lock(owner_pid, existing.st_mtime)
+                        if (
+                            started_after_lock is not True
+                            or now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS
+                        ):
+                            return None
+                        group_live = process_group_has_live_processes(owner_pid)
+                        if group_live is not False:
+                            return None
+                    else:
+                        owner_current_identity = _finalization_lock_identity_for_pid(owner_pid)
+                        if owner_current_identity is None:
+                            return None
+                        if owner_identity == owner_current_identity:
+                            return None
+                        group_live = process_group_has_live_processes(owner_pid)
+                        if group_live is True:
+                            return None
+                        if group_live is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
+                            return None
                 if owner_pid is not None and not owner_running:
-                    if process_group_has_live_processes(owner_pid) is not False:
+                    group_live = process_group_has_live_processes(owner_pid)
+                    if group_live is True:
+                        return None
+                    if group_live is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
                         return None
                 if owner_pid is None and now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS:
                     return None
@@ -668,6 +843,8 @@ def _release_finalization_lock(lock_path: Path | None) -> None:
         try:
             current = os.stat(lock_path.name, dir_fd=parent_fd, follow_symlinks=False)
             owner_pid = _read_finalization_lock_pid(lock_path)
+            if owner_pid in {_FINALIZATION_LOCK_PID_EMPTY, _FINALIZATION_LOCK_PID_CORRUPT}:
+                owner_pid = None
             if owner_pid != os.getpid():
                 return
             owner_identity = _read_finalization_lock_identity(lock_path)
@@ -703,6 +880,8 @@ def _retain_finalization_lock_for_process(
             return False
     try:
         owner_pid = _read_finalization_lock_pid(lock_path)
+        if owner_pid in {_FINALIZATION_LOCK_PID_EMPTY, _FINALIZATION_LOCK_PID_CORRUPT}:
+            owner_pid = None
         if owner_pid != os.getpid():
             return False
         owner_identity = _read_finalization_lock_identity(lock_path)
@@ -718,7 +897,10 @@ def _retain_finalization_lock_for_process(
             field_name="finalization lock",
             encoding="ascii",
         )
-        if _read_finalization_lock_pid(lock_path) != pid:
+        retained_pid = _read_finalization_lock_pid(lock_path)
+        if retained_pid in {_FINALIZATION_LOCK_PID_EMPTY, _FINALIZATION_LOCK_PID_CORRUPT}:
+            retained_pid = None
+        if retained_pid != pid:
             return False
         retained_identity = _read_finalization_lock_identity(lock_path)
         return retained_identity == process_identity if process_identity else retained_identity is None
@@ -1001,9 +1183,40 @@ def _openai_compatible_transcribe_kwargs(args: argparse.Namespace, backend: str)
     return {
         "openai_compatible_model": getattr(args, "openai_compatible_model", DEFAULT_OPENAI_COMPATIBLE_MODEL),
         "openai_compatible_url": getattr(args, "openai_compatible_url", DEFAULT_OPENAI_COMPATIBLE_URL),
-        "openai_compatible_api_key": getattr(args, "openai_compatible_api_key", ""),
+        "openai_compatible_api_key": _openai_compatible_api_key_from_args(args),
         "openai_compatible_flex_processing": getattr(args, "openai_compatible_flex_processing", True),
     }
+
+
+def _openai_compatible_api_key_from_args(args: argparse.Namespace) -> str:
+    cached = getattr(args, "_resolved_openai_compatible_api_key", None)
+    if isinstance(cached, str):
+        return cached
+    raw = getattr(args, "openai_compatible_api_key", "")
+    use_stdin = _coerce_bool(
+        getattr(args, "openai_compatible_api_key_stdin", False),
+        field_name="openai_compatible_api_key_stdin",
+    )
+    if use_stdin:
+        if raw:
+            raise RuntimeError("openai-compatible API key must be provided by either stdin or environment, not both")
+        raw = sys.stdin.read(MAX_OPENAI_COMPATIBLE_API_KEY_CHARS + 1).strip()
+        if len(raw) > MAX_OPENAI_COMPATIBLE_API_KEY_CHARS:
+            raise RuntimeError(
+                f"openai-compatible API key is too large (max {MAX_OPENAI_COMPATIBLE_API_KEY_CHARS} characters)"
+            )
+    elif not raw:
+        raw = os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "")
+    key = _assert_clean_text(
+        raw,
+        field_name="openai-compatible API key",
+        max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+    ).strip()
+    try:
+        setattr(args, "_resolved_openai_compatible_api_key", key)
+    except (AttributeError, TypeError):
+        pass
+    return key
 
 
 def _openai_compatible_post_process_model(args: argparse.Namespace) -> str:
@@ -1035,6 +1248,12 @@ def _validate_pipeline_text_args(
         getattr(args, "openai_compatible_flex_processing", True),
         field_name="openai-compatible flex processing",
     )
+    _coerce_bool(
+        getattr(args, "openai_compatible_api_key_stdin", False),
+        field_name="openai-compatible_api_key_stdin",
+    )
+    if getattr(args, "openai_compatible_api_key_stdin", False) or getattr(args, "openai_compatible_api_key", ""):
+        _openai_compatible_api_key_from_args(args)
     _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity")
     _validate_ollama_http_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
     _validate_openai_compatible_http_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
@@ -1071,7 +1290,7 @@ def read_file_tail(path: Path, max_chars: int) -> str:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise OSError("secure file open is not supported on this platform")
-    nonblock_flag = getattr(os, "O_NONBLOCK", 0)
+    nonblock_flag = _required_nonblocking_flag()
     fd: int | None = None
     try:
         fd = os.open(path, os.O_RDONLY | nofollow_flag | nonblock_flag)
@@ -1163,9 +1382,9 @@ def read_file_tail(path: Path, max_chars: int) -> str:
     finally:
         try:
             handle.close()
-        except BaseException as cleanup_error:
+        except BaseException:
             if primary_error is not None:
-                primary_error.add_note(f"file tail cleanup failed: {cleanup_error}")
+                primary_error.add_note("file tail cleanup failed")
             else:
                 raise
     if _contains_escaped_null(text):
@@ -1221,10 +1440,30 @@ def print_result(payload: dict[str, object], json_output: bool) -> None:
         print(f"{APP_NAME}: {message}")
 
 
-def _redact_error_for_user(error: object) -> str:
+def _known_cli_secret_values(args: argparse.Namespace | None = None) -> tuple[str, ...]:
+    values = [os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "")]
+    if args is not None:
+        values.extend(
+            getattr(args, attribute, "")
+            for attribute in ("openai_compatible_api_key", "_resolved_openai_compatible_api_key")
+        )
+    return tuple(sorted({value for value in values if isinstance(value, str) and value}, key=len, reverse=True))
+
+
+def _redact_known_cli_secrets(text: str, secret_values: tuple[str, ...] = ()) -> str:
+    for secret in (*_known_cli_secret_values(), *secret_values):
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    return text
+
+
+def _redact_error_for_user(error: object, *, secret_values: tuple[str, ...] = ()) -> str:
     if isinstance(error, bool) or not isinstance(error, str):
         return "[invalid]"
-    return sanitize_error_message(error, max_chars=MAX_LOG_EXCERPT_CHARS)
+    return _redact_known_cli_secrets(
+        sanitize_error_message(error, max_chars=MAX_LOG_EXCERPT_CHARS),
+        secret_values,
+    )
 
 
 def _clear_transient_exception_metadata(error: BaseException) -> BaseException:
@@ -1285,19 +1524,21 @@ def _raise_backend_sanitized_exception(error: BaseException, *, message: str) ->
     )
 
 
-def _redact_error_payload(value: object) -> object:
+def _redact_error_payload(value: object, *, secret_values: tuple[str, ...] = ()) -> object:
+    if isinstance(value, str):
+        return _redact_known_cli_secrets(value, secret_values)
     if isinstance(value, dict):
         clean: dict[object, object] = {}
         for key, child in value.items():
             if isinstance(key, str) and key in {"detail", "error", "error_message"} and child is not None:
-                clean[key] = _redact_error_for_user(child)
+                clean[key] = _redact_error_for_user(child, secret_values=secret_values)
             else:
-                clean[key] = _redact_error_payload(child)
+                clean[key] = _redact_error_payload(child, secret_values=secret_values)
         return clean
     if isinstance(value, list):
-        return [_redact_error_payload(item) for item in value]
+        return [_redact_error_payload(item, secret_values=secret_values) for item in value]
     if isinstance(value, tuple):
-        return tuple(_redact_error_payload(item) for item in value)
+        return tuple(_redact_error_payload(item, secret_values=secret_values) for item in value)
     return value
 
 
@@ -1330,18 +1571,28 @@ class _ProfanityOutputLimitExceeded(Exception):
     pass
 
 
+_PROFANITY_REPLACEMENT_CACHE: tuple[
+    Path,
+    str,
+    tuple[tuple[str, str], ...],
+] | None = None
+
+
 def soften_profanity_text(text: str) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("text must be text")
     output = text
+    if len(output) > MAX_PROFANITY_OUTPUT_CHARS:
+        return output
+    compiled_rules = _compile_profanity_replacements_with_hints(
+        _profanity_replacement_pairs_from_file(),
+    )
     normalized_output: str | None = None
-    for pattern, replacement, pattern_hint in _profanity_replacements(text):
+    for pattern, replacement, pattern_hint in compiled_rules:
         if normalized_output is None:
             normalized_output = _normalize_profanity_candidate(output)
         if pattern_hint not in normalized_output:
             continue
-        if len(output) > MAX_PROFANITY_OUTPUT_CHARS:
-            break
         projected_chars = len(output)
 
         def replace(match: re.Match[str], value: str = replacement) -> str:
@@ -1353,10 +1604,11 @@ def soften_profanity_text(text: str) -> str:
             return replacement_value
 
         try:
-            output = pattern.sub(replace, output)
+            output, replacement_count = pattern.subn(replace, output)
         except _ProfanityOutputLimitExceeded:
             break
-        normalized_output = None
+        if replacement_count:
+            normalized_output = None
     return output
 
 
@@ -1390,17 +1642,29 @@ def _ensure_editable_profanity_filter_file() -> Path:
 
 
 def _profanity_replacement_pairs_from_file() -> tuple[tuple[str, str], ...]:
+    global _PROFANITY_REPLACEMENT_CACHE
     path = _ensure_editable_profanity_filter_file()
-    text = read_text_without_following_symlinks(
+    raw_text = read_text_without_following_symlinks(
         path,
         field_name="profanity filter file",
         max_bytes=MAX_PROFANITY_FILTER_BYTES,
     )
-    return parse_profanity_replacement_list(text)
+    digest = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+    cached = _PROFANITY_REPLACEMENT_CACHE
+    if cached is not None and cached[0] == path and cached[1] == digest:
+        return cached[2]
+    pairs = parse_profanity_replacement_list(raw_text)
+    _PROFANITY_REPLACEMENT_CACHE = (path, digest, pairs)
+    return pairs
 
 
 def _profanity_replacements(text: str = "") -> tuple[tuple[re.Pattern[str], str, str], ...]:
-    return _compile_profanity_replacements_with_hints(_profanity_replacement_pairs_from_file(), text=text)
+    if isinstance(text, bool) or not isinstance(text, str):
+        raise ValueError("text must be text")
+    return _compile_profanity_replacements_with_hints(
+        _profanity_replacement_pairs_from_file(),
+        text=text,
+    )
 
 
 def _reap_background_process(process: subprocess.Popen[bytes]) -> None:
@@ -1459,7 +1723,9 @@ def _apply_security_post_processing(text: str) -> tuple[str, dict[str, object]]:
     if directives.show_blacklist:
         blacklist_opened = _open_blacklist_document()
     sanitized, redactions = apply_security_mode(directives.text, entries)
-    _, blacklist_hits = apply_blacklist_mode(directives.text, entries)
+    blacklist_hits = 0
+    if entries:
+        _, blacklist_hits = apply_blacklist_mode(directives.text, entries)
     if directives.added_blacklist or blacklist_hits > 0:
         second_pass, second_pass_redactions = apply_security_mode(sanitized, entries)
         sanitized = second_pass
@@ -1516,7 +1782,9 @@ def _apply_security_mask_only(text: str) -> tuple[str, dict[str, object]]:
     directives = parse_security_directives(text)
     entries = load_blacklist_file(blacklist_file(), strict=True)
     sanitized, redactions = apply_security_mode(directives.text, entries)
-    _, blacklist_hits = apply_blacklist_mode(directives.text, entries)
+    blacklist_hits = 0
+    if entries:
+        _, blacklist_hits = apply_blacklist_mode(directives.text, entries)
     if blacklist_hits > 0:
         second_pass, second_pass_redactions = apply_security_mode(sanitized, entries)
         sanitized = second_pass
@@ -1535,6 +1803,11 @@ def _process_transcript(
     language: str,
 ) -> tuple[str, dict[str, object]]:
     post_process_backend = _effective_post_process_backend(args.post_process_backend, args.post_process_command)
+    openai_compatible_api_key = (
+        _openai_compatible_api_key_from_args(args)
+        if _is_remote_post_process_backend(post_process_backend)
+        else getattr(args, "openai_compatible_api_key", "")
+    )
     text, security_post_processing = _apply_security_post_processing(text)
     text = post_process_text(
         text,
@@ -1548,7 +1821,7 @@ def _process_transcript(
         args.post_process_prompt,
         _openai_compatible_post_process_model(args),
         args.openai_compatible_url,
-        getattr(args, "openai_compatible_api_key", ""),
+        openai_compatible_api_key,
         getattr(args, "openai_compatible_flex_processing", True),
     )
     if text.strip() and _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity"):
@@ -1640,7 +1913,7 @@ def _transcript_history_candidates(directory: Path):
             continue
         if getattr(file_stat, "st_nlink", 1) != 1:
             continue
-        yield file_stat.st_mtime, path
+        yield file_stat.st_mtime, path, file_stat
 
 
 def _is_transcript_artifact(path: Path) -> bool:
@@ -1650,6 +1923,21 @@ def _is_transcript_artifact(path: Path) -> bool:
     if name.startswith("."):
         return False
     return name.endswith(".txt") or name.endswith(ENCRYPTED_TRANSCRIPT_SUFFIX)
+
+
+def _transcript_group_key(path: Path) -> str:
+    if path.name.lower().endswith(ENCRYPTED_TRANSCRIPT_SUFFIX):
+        return str(path.with_name(path.name[: -len(".socenc")]))
+    return str(path)
+
+
+def _group_transcript_artifacts(paths: list[Path]) -> dict[str, list[Path]]:
+    groups: dict[str, list[Path]] = {}
+    for path in paths:
+        if not isinstance(path, Path):
+            continue
+        groups.setdefault(_transcript_group_key(path), []).append(path)
+    return groups
 
 
 def _safe_transcript_artifact_files(
@@ -1922,14 +2210,30 @@ def _persist_cleanup_failure_state(
         )
 
 
-def _read_stored_transcript_text(path: Path) -> str:
+def _read_stored_transcript_text(
+    path: Path,
+    *,
+    max_bytes: int | None = None,
+    expected_stat: os.stat_result | None = None,
+) -> str:
+    if max_bytes is not None and (
+        isinstance(max_bytes, bool)
+        or not isinstance(max_bytes, int)
+        or max_bytes < 1
+    ):
+        raise RuntimeError("transcript read size limit must be positive")
+    read_limit = MAX_STORED_TRANSCRIPT_BYTES if max_bytes is None else min(
+        max_bytes,
+        MAX_STORED_TRANSCRIPT_BYTES,
+    )
     if is_encrypted_path(path):
         payload = read_decrypted_bytes_from_file(
             path,
             kind="transcript",
             field_name="transcript file",
-            max_bytes=MAX_STORED_TRANSCRIPT_BYTES * 2,
+            max_bytes=read_limit,
             require_encrypted=True,
+            expected_stat=expected_stat,
         )
         if len(payload) > MAX_STORED_TRANSCRIPT_BYTES:
             raise RuntimeError("transcript file is too large")
@@ -1941,7 +2245,8 @@ def _read_stored_transcript_text(path: Path) -> str:
         return read_text_without_following_symlinks(
             path,
             field_name="transcript file",
-            max_bytes=MAX_STORED_TRANSCRIPT_BYTES,
+            max_bytes=read_limit,
+            expected_stat=expected_stat,
         )
     except UnicodeDecodeError as exc:
         raise RuntimeError(f"transcript file is not valid UTF-8: {path}") from exc
@@ -2182,6 +2487,7 @@ def _unlink_regular_leaf_with_parent_fsync(
                     raise RuntimeError(f"{field_name} changed before deletion: {path}")
                 if not _same_leaf_claim_identity(claimed, current):
                     raise RuntimeError(f"{field_name} changed before deletion: {path}")
+                secure_wipe_regular_file_at(parent_fd, cleanup_name, claimed, field_name=field_name)
                 os.unlink(cleanup_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
             except BaseException as exc:
@@ -2193,8 +2499,8 @@ def _unlink_regular_leaf_with_parent_fsync(
                         field_name=f"{field_name} cleanup restore",
                     )
                     _fsync_fd(parent_fd)
-                except BaseException as restore_error:
-                    exc.add_note(f"{field_name} cleanup restore failed: {restore_error}")
+                except BaseException:
+                    exc.add_note(f"{field_name} cleanup restore failed")
                 raise
             return True
         raise RuntimeError(f"failed to claim {field_name} cleanup path: {path}")
@@ -2216,6 +2522,10 @@ def _copy_recording_artifact_to_backup(
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise RuntimeError("secure recording cleanup backup copy is not supported on this platform")
+    try:
+        nonblock_flag = _required_nonblocking_flag()
+    except OSError:
+        raise RuntimeError("secure nonblocking file open is not supported on this platform") from None
     parent_fd = ensure_directory_without_following_symlinks(
         source.parent,
         field_name="recording cleanup backup directory",
@@ -2226,7 +2536,7 @@ def _copy_recording_artifact_to_backup(
     try:
         source_fd = os.open(
             source.name,
-            os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+            os.O_RDONLY | nonblock_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
             dir_fd=parent_fd,
         )
         assert_fd_is_regular_private_file(source_fd, field_name="recording cleanup source")
@@ -2277,7 +2587,7 @@ def _copy_recording_artifact_to_backup(
         if cleanup_errors:
             if primary_error is not None:
                 for cleanup_error in cleanup_errors:
-                    primary_error.add_note(f"recording cleanup backup copy cleanup failed: {cleanup_error}")
+                    primary_error.add_note("recording cleanup backup copy cleanup failed")
             else:
                 raise cleanup_errors[0]
 
@@ -2428,9 +2738,9 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
                     )
                 except BaseException as rollback_exc:
                     if isinstance(rollback_exc, Exception):
-                        raise RuntimeError(f"{exc}; {rollback_exc}") from exc
-                    exc.add_note(f"plaintext transcript rollback failed: {rollback_exc}")
-                    raise exc.with_traceback(exc.__traceback__)
+                        raise RuntimeError(f"{exc}; plaintext transcript rollback failed") from exc
+                    exc.add_note("plaintext transcript rollback failed")
+                    raise exc.with_traceback(exc.__traceback__) from None
                 raise RuntimeError(
                     f"failed to remove encrypted transcript sibling after plaintext storage: {encrypted_sibling}"
                 ) from exc
@@ -2626,7 +2936,7 @@ def _rollback_encrypted_artifact_after_plaintext_cleanup_failure(
 
 def _raise_encrypted_artifact_rollback_failure(primary_error: RuntimeError, rollback_error: BaseException) -> None:
     if isinstance(rollback_error, Exception):
-        raise RuntimeError(f"{primary_error}; {rollback_error}") from primary_error
+        raise RuntimeError(f"{primary_error}; encrypted artifact rollback failed") from primary_error
     primary_error.add_note(f"encrypted artifact rollback failed: {rollback_error}")
     raise primary_error.with_traceback(primary_error.__traceback__)
 
@@ -2762,7 +3072,7 @@ def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]
 
     try:
         candidates = heapq.nlargest(
-            max(limit * 4, limit + 16),
+            max(MAX_TRANSCRIPT_HISTORY_SCAN, limit),
             _transcript_history_candidates(directory),
             key=lambda candidate: (candidate[0], str(candidate[1])),
         )
@@ -2771,12 +3081,24 @@ def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]
 
     entries: list[dict[str, object]] = []
     unreadable_count = 0
-    for mtime, path in candidates:
+    scanned_chars = 0
+    for candidate in candidates:
+        mtime, path = candidate[:2]
+        expected_stat = candidate[2] if len(candidate) > 2 else None
+        remaining_scan_chars = MAX_TRANSCRIPT_HISTORY_SCAN_CHARS - scanned_chars
+        if remaining_scan_chars < 1:
+            break
         try:
-            text = _read_stored_transcript_text(path).strip()
+            read_kwargs: dict[str, object] = {"max_bytes": remaining_scan_chars}
+            if expected_stat is not None:
+                read_kwargs["expected_stat"] = expected_stat
+            text = _read_stored_transcript_text(path, **read_kwargs).strip()
         except _TRANSCRIPT_READ_EXCEPTIONS:
             unreadable_count += 1
             continue
+        scanned_chars += len(text)
+        if scanned_chars > MAX_TRANSCRIPT_HISTORY_SCAN_CHARS:
+            break
         if not text:
             continue
         modified_at = _transcript_modified_at(mtime)
@@ -2791,6 +3113,23 @@ def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]
         if len(entries) >= limit:
             break
     return entries, unreadable_count
+
+
+def _partition_transcript_cleanup_files(paths: list[Path]) -> tuple[list[Path], list[Path]]:
+    readable_transcripts: list[Path] = []
+    empty_transcripts: list[Path] = []
+    for group in _group_transcript_artifacts(paths).values():
+        group_has_content = False
+        group_has_unreadable = False
+        for path in group:
+            try:
+                if _read_stored_transcript_text(path).strip():
+                    group_has_content = True
+            except _TRANSCRIPT_READ_EXCEPTIONS:
+                group_has_unreadable = True
+        target = readable_transcripts if group_has_content or group_has_unreadable else empty_transcripts
+        target.extend(group)
+    return readable_transcripts, empty_transcripts
 
 
 def read_transcript_history(limit: int = 10) -> list[dict[str, object]]:
@@ -2816,7 +3155,7 @@ def build_transcripts_document(
         []
         if limit <= 0
         else heapq.nlargest(
-            max(limit * 4, limit + 16),
+            max(MAX_TRANSCRIPT_HISTORY_SCAN, limit),
             _transcript_history_candidates(directory),
             key=lambda candidate: (candidate[0], str(candidate[1])),
         )
@@ -2828,17 +3167,29 @@ def build_transcripts_document(
     ]
     count = 0
     truncated = False
+    scanned_chars = 0
 
     def _current_text() -> str:
         return "\n".join(lines).rstrip() + "\n"
 
-    for mtime, path in candidates:
+    for candidate in candidates:
+        mtime, path = candidate[:2]
+        expected_stat = candidate[2] if len(candidate) > 2 else None
+        remaining_scan_chars = MAX_TRANSCRIPT_HISTORY_SCAN_CHARS - scanned_chars
+        if remaining_scan_chars < 1:
+            break
         try:
-            text = _read_stored_transcript_text(path).strip()
+            read_kwargs: dict[str, object] = {"max_bytes": remaining_scan_chars}
+            if expected_stat is not None:
+                read_kwargs["expected_stat"] = expected_stat
+            text = _read_stored_transcript_text(path, **read_kwargs).strip()
         except _TRANSCRIPT_READ_EXCEPTIONS as exc:
             raise _transcript_read_failure(path, exc, reveal_metadata=reveal_metadata) from exc
         if not text:
             continue
+        scanned_chars += len(text)
+        if scanned_chars > MAX_TRANSCRIPT_HISTORY_SCAN_CHARS:
+            break
         display_text = _sanitize_transcript_display_text(text)
         display_name = _transcript_display_name(path)
         modified_at = _transcript_modified_at(mtime)
@@ -3371,47 +3722,45 @@ def _normalize_input_sources(sources: object) -> list[dict[str, object]]:
     if not isinstance(sources, list):
         raise RuntimeError("input sources must be a list")
 
+    def normalize_source_text(value: object, *, field_name: str, max_chars: int = MAX_INPUT_SOURCE_FIELD_CHARS) -> str:
+        if not isinstance(value, str) or isinstance(value, bool):
+            raise RuntimeError(f"{field_name} must be text")
+        if _contains_escaped_null(value):
+            raise RuntimeError(f"{field_name} contains invalid null byte")
+        if _contains_http_header_control_chars(value):
+            raise RuntimeError(f"{field_name} contains invalid control character")
+        try:
+            encoded_value = value.encode("utf-8")
+        except UnicodeEncodeError as exc:
+            raise RuntimeError(f"{field_name} contains invalid UTF-8") from exc
+        if len(value) > max_chars or len(encoded_value) > max_chars:
+            raise RuntimeError(f"{field_name} is too long (max {max_chars} bytes)")
+        return value
+
     normalized: list[dict[str, object]] = []
     for source in sources:
         source_id = source.id if hasattr(source, "id") else None
-        if not isinstance(source_id, str) or isinstance(source_id, bool):
-            raise RuntimeError("input source id must be text")
-        if _contains_escaped_null(source_id):
-            raise RuntimeError("input source id contains invalid null byte")
-        if _contains_http_header_control_chars(source_id):
-            raise RuntimeError("input source id contains invalid control character")
+        source_id = normalize_source_text(
+            source_id,
+            field_name="input source id",
+            max_chars=MAX_RECORDING_INPUT_DEVICE_CHARS,
+        )
 
         name = source.name if hasattr(source, "name") else None
-        if not isinstance(name, str) or isinstance(name, bool):
-            raise RuntimeError("input source name must be text")
-        if _contains_escaped_null(name):
-            raise RuntimeError("input source name contains invalid null byte")
-        if _contains_http_header_control_chars(name):
-            raise RuntimeError("input source name contains invalid control character")
+        name = normalize_source_text(
+            name,
+            field_name="input source name",
+            max_chars=MAX_RECORDING_INPUT_DEVICE_CHARS,
+        )
 
         description = source.description if hasattr(source, "description") else None
-        if not isinstance(description, str) or isinstance(description, bool):
-            raise RuntimeError("input source description must be text")
-        if _contains_escaped_null(description):
-            raise RuntimeError("input source description contains invalid null byte")
-        if _contains_http_header_control_chars(description):
-            raise RuntimeError("input source description contains invalid control character")
+        description = normalize_source_text(description, field_name="input source description")
 
         driver = source.driver if hasattr(source, "driver") else None
-        if not isinstance(driver, str) or isinstance(driver, bool):
-            raise RuntimeError("input source driver must be text")
-        if _contains_escaped_null(driver):
-            raise RuntimeError("input source driver contains invalid null byte")
-        if _contains_http_header_control_chars(driver):
-            raise RuntimeError("input source driver contains invalid control character")
+        driver = normalize_source_text(driver, field_name="input source driver")
 
         state = source.state if hasattr(source, "state") else None
-        if not isinstance(state, str) or isinstance(state, bool):
-            raise RuntimeError("input source state must be text")
-        if _contains_escaped_null(state):
-            raise RuntimeError("input source state contains invalid null byte")
-        if _contains_http_header_control_chars(state):
-            raise RuntimeError("input source state contains invalid control character")
+        state = normalize_source_text(state, field_name="input source state")
 
         default = source.default if hasattr(source, "default") else None
         if not isinstance(default, bool):
@@ -4152,6 +4501,8 @@ def _stabilize_recording_artifact_path(
                 claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
                 if not same_artifact_identity(claimed_stat, expected_stat):
                     raise RuntimeError(f"{field_name} changed before cleanup: {stable_path}")
+                if getattr(claimed_stat, "st_nlink", 1) == 1:
+                    secure_wipe_regular_file_at(parent_fd, cleanup_name, claimed_stat, field_name=field_name)
                 os.unlink(cleanup_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
             except BaseException as exc:
@@ -4163,8 +4514,8 @@ def _stabilize_recording_artifact_path(
                         field_name=f"{field_name} restore",
                     )
                     _fsync_fd(parent_fd)
-                except BaseException as restore_error:
-                    exc.add_note(f"stable recording artifact cleanup restore failed: {restore_error}")
+                except BaseException:
+                    exc.add_note("stable recording artifact cleanup restore failed")
                 raise
             return True
         raise RuntimeError(f"{field_name} cleanup path could not be claimed: {stable_path}")
@@ -4212,8 +4563,8 @@ def _stabilize_recording_artifact_path(
                         field_name="stable recording artifact backup restore",
                     )
                     _fsync_fd(parent_fd)
-                except BaseException as restore_error:
-                    exc.add_note(f"stable recording artifact backup restore failed: {restore_error}")
+                except BaseException:
+                    exc.add_note("stable recording artifact backup restore failed")
                 raise
             backup_name = ""
             return
@@ -4381,8 +4732,8 @@ def _stabilize_recording_artifact_path(
                                 _fsync_fd(parent_fd)
                     except FileNotFoundError:
                         pass
-                    except BaseException as cleanup_error:
-                        backup_error.add_note(f"recording artifact backup cleanup failed: {cleanup_error}")
+                    except BaseException:
+                        backup_error.add_note("recording artifact backup cleanup failed")
                     raise
             if not backup_name:
                 raise RuntimeError("failed to create stable recording artifact backup")
@@ -4416,14 +4767,14 @@ def _stabilize_recording_artifact_path(
     except (OSError, RuntimeError) as exc:
         try:
             rollback()
-        except BaseException as rollback_error:
-            exc.add_note(f"recording artifact rollback failed: {rollback_error}")
+        except BaseException:
+            exc.add_note("recording artifact rollback failed")
         raise RuntimeError(f"failed to stabilize recording artifact path: {exc}") from exc
     except BaseException as exc:
         try:
             rollback()
-        except BaseException as rollback_error:
-            exc.add_note(f"recording artifact rollback failed: {rollback_error}")
+        except BaseException:
+            exc.add_note("recording artifact rollback failed")
         raise
     finally:
         if parent_fd is not None:
@@ -4543,17 +4894,35 @@ def _is_finalization_lock_active(state_path: Path) -> bool:
     if not stat_module.S_ISREG(lock_stat.st_mode) or getattr(lock_stat, "st_nlink", 1) != 1:
         return True
     owner_pid = _read_finalization_lock_pid(lock_path)
+    if owner_pid in {_FINALIZATION_LOCK_PID_EMPTY, _FINALIZATION_LOCK_PID_CORRUPT}:
+        owner_pid = None
     if not owner_pid:
-        return True
+        return time.time() - lock_stat.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS
     if not _process_is_running(owner_pid):
-        return process_group_has_live_processes(owner_pid) is not False
+        group_live = process_group_has_live_processes(owner_pid)
+        if group_live is not None:
+            return group_live
+        return time.time() - lock_stat.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS
     owner_identity = _read_finalization_lock_identity(lock_path)
     if owner_identity is None:
+        if owner_pid == os.getpid():
+            return True
+        started_after_lock = _finalization_lock_pid_started_after_lock(owner_pid, lock_stat.st_mtime)
+        if (
+            started_after_lock is True
+            and time.time() - lock_stat.st_mtime > MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS
+        ):
+            group_live = process_group_has_live_processes(owner_pid)
+            if group_live is False:
+                return False
         return True
     current_identity = _finalization_lock_identity_for_pid(owner_pid)
     if current_identity is None or current_identity == owner_identity:
         return True
-    return process_group_has_live_processes(owner_pid) is not False
+    group_live = process_group_has_live_processes(owner_pid)
+    if group_live is not None:
+        return group_live
+    return time.time() - lock_stat.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS
 
 
 def _inflight_recording_artifact_paths(audio_path: Path) -> set[Path]:
@@ -4584,6 +4953,37 @@ def _inflight_recording_artifact_paths(audio_path: Path) -> set[Path]:
             for suffix in suffixes
         )
     }
+
+
+def _transcript_path_for_audio(audio_path: Path) -> Path:
+    transcript_root = transcript_dir()
+    try:
+        recordings_root = recordings_dir().resolve(strict=False)
+        canonical_audio_path = audio_path.resolve(strict=False)
+        canonical_audio_path.relative_to(recordings_root)
+    except ValueError:
+        canonical_audio_path = audio_path.resolve(strict=False)
+    except OSError:
+        canonical_audio_path = audio_path.absolute()
+    else:
+        legacy_transcript = transcript_root / f"{audio_path.stem}.txt"
+        if audio_path.suffix.lower() == ".flac":
+            wav_path = audio_path.with_suffix(".wav")
+            collision_candidates = (
+                wav_path,
+                encrypted_path_for(wav_path),
+                legacy_transcript,
+                encrypted_path_for(legacy_transcript),
+            )
+            if any(_path_exists_or_is_symlink(candidate) for candidate in collision_candidates):
+                return transcript_root / f"{audio_path.stem}.flac.txt"
+        return legacy_transcript
+
+    digest = hashlib.sha256(str(canonical_audio_path).encode("utf-8")).hexdigest()[:16]
+    suffix = f"-{digest}.txt"
+    max_stem_bytes = max(1, 255 - len(suffix.encode("utf-8")))
+    stem = audio_path.stem.encode("utf-8")[:max_stem_bytes].decode("utf-8", errors="ignore") or "transcript"
+    return transcript_root / f"{stem}{suffix}"
 
 
 def _finalizing_inflight_artifact_paths(
@@ -4637,7 +5037,7 @@ def _finalizing_inflight_artifact_paths(
         if audio_path is None:
             return set()
     if audio_path.suffix.lower() in {".wav", ".flac"}:
-        transcript_path = transcript_dir() / f"{audio_path.stem}.txt"
+        transcript_path = _transcript_path_for_audio(audio_path)
         in_flight_paths.add(transcript_path)
         in_flight_paths.add(encrypted_path_for(transcript_path))
         if audio_path.suffix.lower() == ".wav":
@@ -4722,6 +5122,68 @@ def delete_artifact(path: Path, *, expected_stat: os.stat_result | None = None) 
         )
     except RuntimeError:
         return False
+
+
+def prune_transcript_files_by_mtime(
+    paths: list[Path],
+    keep: int,
+    active_paths: set[Path],
+    dry_run: bool,
+    expected_stats: dict[Path, os.stat_result] | None = None,
+) -> dict[str, object]:
+    planned_paths: list[str] = []
+    deleted_paths: list[str] = []
+    failed_paths: list[str] = []
+    skipped_active: list[str] = []
+    normalized_active_paths = {path.resolve(strict=False) for path in active_paths}
+    scan_stats: dict[Path, os.stat_result] = {}
+    try:
+        sorted_paths = sorted_files(paths, scan_stats)
+    except DirectoryScanError as exc:
+        return {
+            "planned_paths": [],
+            "deleted_paths": [],
+            "failed_paths": [str(exc.directory)],
+            "skipped_active_paths": [],
+        }
+    grouped_paths: dict[str, list[Path]] = {}
+    for path in sorted_paths:
+        grouped_paths.setdefault(_transcript_group_key(path), []).append(path)
+    groups = sorted(
+        grouped_paths.values(),
+        key=lambda group: (
+            max(scan_stats[path].st_mtime for path in group),
+            max(str(path) for path in group),
+        ),
+        reverse=True,
+    )
+    inactive_groups: list[list[Path]] = []
+    skipped_group_count = 0
+    for group in groups:
+        if any(path.resolve(strict=False) in normalized_active_paths for path in group):
+            skipped_active.extend(str(path) for path in group)
+            skipped_group_count += 1
+        else:
+            inactive_groups.append(group)
+    inactive_keep = max(max(keep, 0) - skipped_group_count, 0)
+    for group in inactive_groups[inactive_keep:]:
+        for path in group:
+            if dry_run:
+                planned_paths.append(str(path))
+                continue
+            expected_stat = scan_stats.get(path)
+            if expected_stats is not None:
+                expected_stat = expected_stats.get(path, expected_stat)
+            if delete_artifact(path, expected_stat=expected_stat):
+                deleted_paths.append(str(path))
+            else:
+                failed_paths.append(str(path))
+    return {
+        "planned_paths": planned_paths,
+        "deleted_paths": deleted_paths,
+        "failed_paths": failed_paths,
+        "skipped_active_paths": skipped_active,
+    }
 
 
 def prune_files_by_mtime(
@@ -4915,6 +5377,7 @@ def prune_recording_groups(
         path
         for path in grouped_artifacts
         if path.resolve(strict=False) not in handled_paths
+        and _is_inflight_recording_artifact(path)
     ]
     file_cap_result = prune_files_by_mtime(
         remaining_artifacts,
@@ -4958,6 +5421,13 @@ def _command_start_locked(
             ),
         }
     if current.status == "finalizing":
+        if finalization_lock_path is not None and current.audio_path:
+            return finalize_recording(
+                args,
+                store,
+                current,
+                finalization_lock_path=finalization_lock_path,
+            )
         return {
             "status": "finalizing",
             "message": "finalization in progress; wait for completion",
@@ -4994,6 +5464,22 @@ def _command_start_locked(
             stopped_at=current.stopped_at or now_iso(),
             error="",
             inserted=False,
+        )
+    if (
+        current.status == "error"
+        and current.error == TRANSIENT_TRANSCRIPT_INSERT_ERROR
+        and not current.audio_path
+        and not current.log_path
+    ):
+        current = store.update(
+            status="idle",
+            transcript="",
+            transcript_path="",
+            error="",
+            inserted=False,
+            pid=None,
+            process_identity="",
+            stopped_at=current.stopped_at or now_iso(),
         )
     if current.status == "error" and (current.audio_path or current.log_path or current.transcript_path):
         return {
@@ -5144,8 +5630,8 @@ def _command_start_locked(
                         process.pid,
                         expected_process_identity=expected_process_identity,
                     )
-                except BaseException as cleanup_error:
-                    primary_error.add_note(f"recorder process cleanup failed: {cleanup_error}")
+                except BaseException:
+                    primary_error.add_note("recorder process cleanup failed")
                     artifacts_safe_to_remove = False
                 else:
                     if stopped:
@@ -5170,17 +5656,17 @@ def _command_start_locked(
                         process.pid,
                         expected_process_identity,
                     )
-                except BaseException as lock_error:
+                except BaseException:
                     retained = False
-                    primary_error.add_note(f"recorder lifecycle lock retention failed: {lock_error}")
+                    primary_error.add_note("recorder lifecycle lock retention failed")
                 if not retained:
                     primary_error.add_note("recorder lifecycle lock could not be retained")
         if artifacts_safe_to_remove:
             try:
                 if not cleanup_started_artifacts():
                     primary_error.add_note("recorder artifacts could not be cleaned")
-            except BaseException as cleanup_error:
-                primary_error.add_note(f"recorder artifact cleanup failed: {cleanup_error}")
+            except BaseException:
+                primary_error.add_note("recorder artifact cleanup failed")
         else:
             primary_error.add_note("recorder artifacts preserved because process stop was not confirmed")
 
@@ -5254,7 +5740,7 @@ def _command_start_locked(
                 cleanup_error.add_note("recorder lifecycle lock could not be retained")
             if isinstance(cleanup_error, Exception):
                 raise RuntimeError(f"{startup_errors[-1]}; recorder process cleanup failed") from cleanup_error
-            cleanup_error.add_note(f"recorder process cleanup failed: {cleanup_error}")
+            cleanup_error.add_note("recorder process cleanup failed")
             raise
         if not stopped:
             liveness_snapshot = _recorder_process_liveness_snapshot_for_failure(
@@ -6569,7 +7055,7 @@ def finalize_recording(
                 "speech_duration_seconds": silence.speech_seconds,
             }
 
-        text_path = transcript_dir() / f"{audio_path.stem}.txt"
+        text_path = _transcript_path_for_audio(audio_path)
         transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
         finalize_error_message = TRANSIENT_TRANSCRIPT_WRITE_ERROR
         try:
@@ -6689,7 +7175,10 @@ def finalize_recording(
             _finalize_store_update(inserted=True)
             inserted = True
             try:
-                inserted = bool(insert_text(text_to_insert, args.insert_method, typing_delay_ms))
+                insert_result = insert_text(text_to_insert, args.insert_method, typing_delay_ms)
+                if not isinstance(insert_result, bool):
+                    raise RuntimeError("insert_text returned a non-boolean result")
+                inserted = insert_result
             except BaseException as exc:
                 finalize_error_message = TRANSIENT_TRANSCRIPT_INSERT_ERROR
                 _raise_backend_sanitized_exception(
@@ -6829,7 +7318,7 @@ def finalize_recording(
         )
         transcript_stats: dict[Path, os.stat_result] = {}
         transcript_files = _safe_transcript_artifact_files(expected_stats=transcript_stats)
-        transcript_cleanup = prune_files_by_mtime(
+        transcript_cleanup = prune_transcript_files_by_mtime(
             transcript_files,
             keep_transcripts,
             active_artifact_paths(done_candidate, state_path=store.path),
@@ -7000,7 +7489,7 @@ def finalize_recording(
                     transcript_presence, _ = _safe_regular_leaf_probe(written_text_path)
                     if transcript_presence is not False:
                         raise RuntimeError("transcript cleanup could not be verified")
-                except BaseException as cleanup_exc:
+                except BaseException:
                     error_update["error"] = TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
                     transcript_presence, _ = _safe_regular_leaf_probe(written_text_path)
                     error_update["transcript_path"] = (
@@ -7284,6 +7773,10 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         state = store.read()
         _raise_if_state_unreadable(state)
         initial_status = state.status
+        preserve_transcript_after_insert_failure = (
+            state.status == "error"
+            and state.error == TRANSIENT_TRANSCRIPT_INSERT_ERROR
+        )
         if state.status == "recording":
             if state.pid is None:
                 error_text = "recording process pid is missing; recording state preserved"
@@ -7356,7 +7849,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     status="finalizing",
                     pid=None,
                     process_identity="",
-                    cleanup_backup_journal_restore=False,
+                    cleanup_backup_journal_restore=True,
                     error="discarding recording artifacts",
                 )
             restore_directory_entries_by_parent: dict[
@@ -7495,7 +7988,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                             for _, pending_entry in pending_restore_pairs
                         ),
                         cleanup_backup_journal_overflow=False,
-                        cleanup_backup_journal_restore=False,
+                        cleanup_backup_journal_restore=True,
                         error=error_text,
                     )
                     return {
@@ -7523,7 +8016,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         for _, pending_entry in pending_restore_pairs
                     ),
                     cleanup_backup_journal_overflow=False,
-                    cleanup_backup_journal_restore=False,
+                    cleanup_backup_journal_restore=bool(pending_restore_pairs),
                     error="",
                 )
         discarded_audio_path = _normalized_state_recording_artifact_path(
@@ -8275,8 +8768,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 inflight_deleted = False
         transcript_path: Path | None = None
         transcript_sibling_path: Path | None = None
-        transcript_deleted = True
-        if state.transcript_path:
+        transcript_deleted = not state.transcript_path and not preserve_transcript_after_insert_failure
+        if state.transcript_path and not preserve_transcript_after_insert_failure:
             transcript_present_before = False
             transcript_sibling_present_before = False
             try:
@@ -8370,7 +8863,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             or pending_cleanup_owner_paths
             or pending_cleanup_backup_entries
             or cleanup_backup_journal_overflow
-            or (state.transcript_path and not transcript_deleted)
+            or (
+                state.transcript_path
+                and not transcript_deleted
+                and not preserve_transcript_after_insert_failure
+            )
             or (discarded_finalizing_transcript_paths and not transcript_deleted)
         ):
             error_message = "failed to discard recording artifacts"
@@ -8436,7 +8933,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "inflight_artifact_count": len(discarded_inflight_paths),
                 "inflight_artifacts_deleted": inflight_deleted,
                 "cleanup_backups_deleted": cleanup_backups_deleted,
-                "transcript_deleted": bool(transcript_deleted and not state.transcript),
+            "transcript_deleted": bool(
+                transcript_deleted
+                and not preserve_transcript_after_insert_failure
+                and not state.transcript
+            ),
             }
             if initial_status == "finalizing":
                 payload["exit_code"] = 0
@@ -8490,7 +8991,9 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             "inflight_artifact_count": len(discarded_inflight_paths),
             "inflight_artifacts_deleted": inflight_deleted,
             "cleanup_backups_deleted": cleanup_backups_deleted,
-            "transcript_deleted": transcript_deleted,
+            "transcript_deleted": (
+                transcript_deleted and not preserve_transcript_after_insert_failure
+            ),
         }
     finally:
         _release_finalization_lock(lock_path)
@@ -8573,14 +9076,9 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
                 payload["error"] = error_text
                 payload["inserted"] = False
                 return payload
-            if zombie_state is None:
-                error_text = "recording process liveness could not be verified; recording state preserved"
-                payload["status"] = "error"
-                payload["message"] = error_text
-                payload["error"] = error_text
-                payload["inserted"] = False
-                return payload
-            allow_matching_identity = zombie_state
+            # A vanished leader has no zombie state. Stable absence still proves
+            # safety; an unknown group or identity probe remains fail-closed.
+            allow_matching_identity = zombie_state is True
             stable_absence, absence_error = _recording_process_stable_absence(
                 state.pid,
                 expected_identity,
@@ -8681,11 +9179,7 @@ def command_text_models(args: argparse.Namespace) -> dict[str, object]:
         raise RuntimeError("text models backend must be ollama or openai-compatible")
     if backend == "openai-compatible":
         url = _validate_openai_compatible_http_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
-        api_key = _assert_clean_text(
-            getattr(args, "openai_compatible_api_key", ""),
-            field_name="openai-compatible API key",
-            max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
-        )
+        api_key = _openai_compatible_api_key_from_args(args)
         payload = _normalize_text_models_payload(list_openai_compatible_models(url, api_key=api_key))
         return {
             "status": "done",
@@ -8811,7 +9305,20 @@ def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result, os.sta
     cleanup_attempted = False
     cleanup_succeeded = False
     try:
-        fd, path_text = tempfile.mkstemp(prefix=".benchmark-", suffix=".tmp.txt", dir=transcript_dir())
+        transcript_directory = transcript_dir()
+        directory_fd = open_directory_without_following_symlinks(
+            transcript_directory,
+            field_name="transcript directory",
+        )
+        try:
+            fd, path_text = tempfile.mkstemp(
+                prefix=".benchmark-",
+                suffix=".tmp.txt",
+                dir=f"/proc/self/fd/{directory_fd}",
+            )
+        finally:
+            os.close(directory_fd)
+        path_text = str(transcript_directory / Path(path_text).name)
         path = Path(path_text)
         file_stat = os.fstat(fd)
         if (
@@ -9289,13 +9796,25 @@ def _command_cleanup_locked(
             "skipped_active_paths": [],
         }
     else:
-        transcript_result = prune_files_by_mtime(
+        transcript_files, empty_transcript_files = _partition_transcript_cleanup_files(transcript_files)
+        retention_result = prune_transcript_files_by_mtime(
             transcript_files,
             keep_transcripts,
             active_paths,
             dry_run,
             expected_stats=transcript_stats,
         )
+        empty_result = prune_transcript_files_by_mtime(
+            empty_transcript_files,
+            0,
+            active_paths,
+            dry_run,
+            expected_stats=transcript_stats,
+        )
+        transcript_result = {
+            key: [*empty_result[key], *retention_result[key]]
+            for key in ("planned_paths", "deleted_paths", "failed_paths", "skipped_active_paths")
+        }
     transient_transcript_result = prune_stale_transient_transcripts(dry_run)
     recording_result = prune_recording_groups(keep_recordings, active_paths, dry_run, recording_max_age_days)
     deleted_transcripts = len(transcript_result["deleted_paths"])
@@ -9406,6 +9925,28 @@ def command_alarms_check(args: argparse.Namespace) -> dict[str, object]:
     mark = _coerce_bool(args.mark, field_name="mark")
     catch_up_minutes = _coerce_int(args.catch_up_minutes, field_name="catch-up-minutes", max_value=MAX_ALARM_CATCH_UP_MINUTES)
     return check_due_alarms(mark=mark, catch_up_minutes=catch_up_minutes)
+
+
+def command_alarms_import(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    raw = sys.stdin.read(MAX_SETTINGS_JSON_CHARS + 1)
+    if len(raw) > MAX_SETTINGS_JSON_CHARS:
+        raise RuntimeError(f"alarm JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
+    try:
+        value = json.loads(raw, parse_constant=_reject_non_finite_json_number)
+    except (json.JSONDecodeError, ValueError, RecursionError, MemoryError) as exc:
+        raise RuntimeError("alarm JSON could not be parsed") from exc
+    try:
+        alarm_store = normalize_alarm_store(value)
+    except SettingsExportError as exc:
+        raise RuntimeError("alarm JSON is invalid") from exc
+    with _locked_alarm_store() as store_path:
+        save_alarm_store(alarm_store, store_path)
+    return {
+        "status": "done",
+        "message": "alarms imported",
+        "alarms_count": len(alarm_store["alarms"]),
+    }
 
 
 def _diagnostics_state_payload(state: RecordingState) -> dict[str, object]:
@@ -9580,17 +10121,38 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
     with _locked_alarm_store() as store_path:
         alarm_store = load_alarm_store(store_path)
     payload = write_export(path, settings, alarm_store)
-    return {
+    result: dict[str, object] = {
         "status": "done",
         "message": "settings exported",
         "path_present": bool(path),
         "settings_count": len(payload["settings"]),
         "alarms_count": len(payload["alarms"]["alarms"]),
     }
+    raw_warnings = payload.get("post_commit_warnings", [])
+    allowed_warnings = {
+        POST_COMMIT_RECOVERY_BACKUP_CLEANUP_WARNING,
+        POST_COMMIT_DIRECTORY_CLOSE_WARNING,
+    }
+    post_commit_warnings: list[str] = []
+    if isinstance(raw_warnings, list):
+        for warning in raw_warnings:
+            if isinstance(warning, str) and warning in allowed_warnings and warning not in post_commit_warnings:
+                post_commit_warnings.append(warning)
+    if post_commit_warnings:
+        result.update(
+            {
+                "status": "warning",
+                "cleanup_warning": True,
+                "message": post_commit_warnings[0],
+                "warnings": list(post_commit_warnings),
+            }
+        )
+    return result
 
 
 def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
+    preview = _coerce_bool(getattr(args, "preview", False), field_name="preview")
     path = _require_json_path(
         args.input,
         field_name="settings import input",
@@ -9602,8 +10164,9 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
         getattr(args, "confirm_plaintext_settings_output", False),
         field_name="confirm_plaintext_settings_output",
     )
-    with _locked_alarm_store() as store_path:
-        save_alarm_store(payload["alarms"], store_path)
+    if not preview:
+        with _locked_alarm_store() as store_path:
+            save_alarm_store(payload["alarms"], store_path)
     result: dict[str, object] = {
         "status": "done",
         "message": "settings imported",
@@ -9612,6 +10175,9 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
         "alarms_count": len(payload["alarms"]["alarms"]),
         "export_version": payload["version"],
     }
+    if preview:
+        result["preview"] = True
+        result["alarms"] = payload["alarms"]
     if include_settings:
         result["settings"] = payload["settings"]
     else:
@@ -9652,7 +10218,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     language = _validate_pipeline_text_args(args, language=args.language)
     normalized_transcriber = normalize_backend(args.transcriber)
     audio_path = validate_audio_file(audio_path)
-    text_path = transcript_dir() / f"{audio_path.stem}.txt"
+    text_path = _transcript_path_for_audio(audio_path)
     artifact_encryption = _artifact_encryption_mode(args)
     transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
     preparation_error: BaseException | None = None
@@ -9750,7 +10316,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     )
     transcript_stats: dict[Path, os.stat_result] = {}
     transcript_files = _safe_transcript_artifact_files(expected_stats=transcript_stats)
-    transcript_cleanup = prune_files_by_mtime(
+    transcript_cleanup = prune_transcript_files_by_mtime(
         transcript_files,
         keep_transcripts,
         {stored_text_path} if stored_text_path is not None else set(),
@@ -9811,7 +10377,11 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
     parser.add_argument("--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL)
     parser.add_argument("--openai-compatible-text-model", default=DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
-    parser.add_argument("--openai-compatible-api-key", default="")
+    parser.add_argument(
+        "--openai-compatible-api-key-stdin",
+        action="store_true",
+        help="read OpenAI-compatible API key from stdin; otherwise use SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY",
+    )
     parser.add_argument(
         "--openai-compatible-flex-processing",
         action=argparse.BooleanOptionalAction,
@@ -9930,7 +10500,11 @@ def build_parser() -> argparse.ArgumentParser:
     text_models.add_argument("--backend", default="ollama", choices=["ollama", "openai-compatible"])
     text_models.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     text_models.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
-    text_models.add_argument("--openai-compatible-api-key", default="")
+    text_models.add_argument(
+        "--openai-compatible-api-key-stdin",
+        action="store_true",
+        help="read OpenAI-compatible API key from stdin; otherwise use SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY",
+    )
     text_models.set_defaults(handler=command_text_models)
 
     install_text_model = subparsers.add_parser("install-text-model")
@@ -10066,6 +10640,10 @@ def build_parser() -> argparse.ArgumentParser:
     alarms_check.add_argument("--catch-up-minutes", type=int, default=15)
     alarms_check.set_defaults(handler=command_alarms_check)
 
+    alarms_import = subparsers.add_parser("alarms-import")
+    add_common_options(alarms_import)
+    alarms_import.set_defaults(handler=command_alarms_import)
+
     settings_export = subparsers.add_parser("settings-export")
     add_common_options(settings_export)
     settings_export.add_argument("--settings-json", default="{}")
@@ -10084,6 +10662,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-plaintext-settings-output",
         action="store_true",
         help="include imported settings in JSON output; may expose personal context or vocabulary",
+    )
+    settings_import.add_argument(
+        "--preview",
+        action="store_true",
+        help="validate import without persisting alarms; returns normalized alarms for a later commit",
     )
     settings_import.set_defaults(handler=command_settings_import)
 
@@ -10115,7 +10698,11 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
     transcribe_file.add_argument("--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL)
     transcribe_file.add_argument("--openai-compatible-text-model", default=DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
-    transcribe_file.add_argument("--openai-compatible-api-key", default="")
+    transcribe_file.add_argument(
+        "--openai-compatible-api-key-stdin",
+        action="store_true",
+        help="read OpenAI-compatible API key from stdin; otherwise use SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY",
+    )
     transcribe_file.add_argument(
         "--openai-compatible-flex-processing",
         action=argparse.BooleanOptionalAction,
@@ -10153,19 +10740,22 @@ def run(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     json_output = False
     command_name = str(getattr(args, "command", "unknown"))
+    secret_values: tuple[str, ...] = _known_cli_secret_values(args)
     try:
         json_output = _coerce_bool(getattr(args, "json", False), field_name="json")
         configure_logging(getattr(args, "log_level", DEFAULT_LOG_LEVEL))
         _safe_log_event("info", "command_start", command=command_name)
-        payload = _redact_error_payload(args.handler(args))
+        payload = args.handler(args)
+        secret_values = _known_cli_secret_values(args)
+        payload = _redact_error_payload(payload, secret_values=secret_values)
         status = str(payload.get("status", "ok"))
         if status == "error":
             if payload.get("message"):
-                payload["message"] = _redact_error_for_user(payload["message"])
+                payload["message"] = _redact_error_for_user(payload["message"], secret_values=secret_values)
             if not payload.get("error"):
                 payload["error"] = payload.get("message") or "command failed"
         if "error" in payload and payload["error"] is not None:
-            payload["error"] = _redact_error_for_user(payload["error"])
+            payload["error"] = _redact_error_for_user(payload["error"], secret_values=secret_values)
         if payload.get("error"):
             _safe_log_event(
                 "error",
@@ -10173,7 +10763,7 @@ def run(argv: list[str] | None = None) -> int:
                 command=command_name,
                 status=status,
                 error_type="payload",
-                error_message=_redact_error_for_user(payload.get("error", "")),
+                error_message=_redact_error_for_user(payload.get("error", ""), secret_values=secret_values),
             )
         else:
             _safe_log_event("info", "command_done", command=command_name, status=status)
@@ -10185,7 +10775,8 @@ def run(argv: list[str] | None = None) -> int:
     except BrokenPipeError:
         return 1
     except Exception as exc:
-        error_message = _redact_error_for_user(str(exc))
+        secret_values = _known_cli_secret_values(args)
+        error_message = _redact_error_for_user(str(exc), secret_values=secret_values)
         _safe_log_event(
             "error",
             "command_exception",

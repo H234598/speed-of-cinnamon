@@ -13,7 +13,7 @@ _SECRET_PATTERNS = (
     re.compile(r"\bgh[pousr]_[A-Za-z0-9_]{12,}\b"),
     re.compile(r"\bgithub_pat_[A-Za-z0-9_]{12,}\b", re.IGNORECASE),
     re.compile(
-        r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\s*[:=]\s*[^\r\n,;]+"
+        r"(?i)\b(api[_-]?key|access[_-]?token|auth[_-]?token|password|secret)\s*(?::|=|%3a|%3d)\s*[^\r\n,;]+"
     ),
 )
 
@@ -289,6 +289,7 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 commands.append(command_text)
                 seen_commands.add(command_text)
 
+    ready = ready and not any(not bool(step.get("optional", False)) for step in steps)
     summary = "configured pipeline ready" if ready else "setup needed"
     return {
         "ready": ready,

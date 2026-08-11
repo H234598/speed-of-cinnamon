@@ -45,10 +45,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("self._source_pixbuf.scale_simple(", widget_source)
         self.assertIn("max_width = 720", widget_source)
         self.assertIn("max_height = 220", widget_source)
-        self.assertIn("height_limited_width = max(1, int(self.max_height * source_width / source_height))", widget_source)
-        self.assertIn("target_height = max(1, min(int(self.max_height)", widget_source)
+        self.assertIn("def _fit_size_for_allocation(self, width, height):", responsive_logo_source)
+        self.assertIn("available_height = max(1, int(height))", responsive_logo_source)
+        self.assertIn("float(available_height) / float(source_height)", responsive_logo_source)
+        self.assertNotIn("height_limited_width", responsive_logo_source)
+        self.assertNotIn("self._drawing_area.set_size_request(1, target_height)", responsive_logo_source)
         self.assertIn("def _show_fallback(self):", widget_source)
         self.assertIn("fallback = Gtk.Label(label=self._fallback_text)", widget_source)
+        self.assertIn("self._preview_box = box", widget_source)
+        self.assertIn("self._preview_box.pack_start(fallback, True, True, 0)", widget_source)
         self.assertIn("self._show_fallback()", widget_source)
         self.assertNotIn("subprocess", widget_source)
 
@@ -219,6 +224,21 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_selectExternalApiVoiceBackend: function(result)", source)
         self.assertIn('"external-api-voice"', source)
         self.assertIn('return _("Voice: External API ") + this._shortMenuText(externalModel, 96);', source)
+
+    def test_applet_normalizes_legacy_transcriber_aliases(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("const TRANSCRIBER_ALIASES = Object.freeze({", source)
+        for alias, canonical in {
+            "openai": "whisper",
+            "openai-whisper": "whisper",
+            "openai-compatible-api": "openai-compatible",
+            "external-api": "openai-compatible",
+            "custom": "command",
+            "template": "command",
+        }.items():
+            self.assertIn(f'"{alias}": "{canonical}"', source)
+        self.assertIn("normalizeTranscriberMethod(this.transcriber)", source)
+        self.assertIn("normalizeTranscriberMethod(value)", source)
 
     def test_applet_exposes_artifact_encryption_submenu(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -435,8 +455,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertLess(validate_index, set_index)
         self.assertIn("const MAX_EXTERNAL_API_ENV_BYTES = 65536;", source)
         self.assertIn("_externalApiEnvFileInfo: function(path, allowMissing)", source)
-        self.assertIn('query_info("standard::type,standard::size,unix::mode", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)', source)
+        self.assertIn('query_info("standard::type,standard::size,unix::mode,unix::nlink", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null)', source)
         self.assertIn("info.get_file_type() !== Gio.FileType.REGULAR", source)
+        self.assertIn('info.get_attribute_uint32("unix::mode")', source)
+        self.assertIn('External API config file must use mode 0600', source)
+        self.assertIn('info.get_attribute_uint32("unix::nlink")', source)
+        self.assertIn('External API config file must not be hardlinked', source)
         self.assertIn("External API config file is too large", source)
         self.assertIn("let info = this._externalApiEnvFileInfo(path, true);", source)
         ensure_start = source.index("_ensureExternalApiEnvFile: function()")
@@ -467,6 +491,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("Gio.File.new_for_path(GLib.path_get_dirname(path))", block)
         self.assertIn("Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS", block)
         self.assertIn("Gio.FileType.SYMBOLIC_LINK", block)
+        self.assertIn('info.get_attribute_uint32("unix::mode")', block)
+        self.assertIn('External API config directory must use mode 0700', block)
         self.assertIn("current = current.get_parent();", block)
         self.assertIn("this._assertExternalApiEnvDirectoryChainSafe(path);", source)
         read_start = source.index("_readExternalApiEnvFile: function(path)")
@@ -914,6 +940,152 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn('_("Exported settings: ") + payload.path', source)
         self.assertIn('_("Exported settings")', source)
 
+    def test_settings_export_post_commit_warning_uses_fixed_visible_status(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_exportSettings: function()")
+        end = source.index("\n  _importSettings:", start)
+        block = source[start:end]
+        warning_marker = "if (payload.cleanup_warning === true) {"
+        self.assertIn(warning_marker, block)
+        warning_start = block.index(warning_marker)
+        done_start = block.index('this._setStatus("done"')
+        warning_block = block[warning_start:done_start]
+
+        self.assertLess(warning_start, done_start)
+        self.assertRegex(
+            warning_block,
+            r'this\._setStatus\("(?:error|warning)", _\("[^"]+"\), this\.lastTranscript\);',
+        )
+        self.assertNotIn("payload.post_commit_warnings", warning_block)
+        self.assertNotIn("payload.warnings", warning_block)
+        self.assertNotIn("payload.message", warning_block)
+
+    def test_settings_export_starts_notification_session_before_processing(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_exportSettings: function()")
+        end = source.index("\n  _importSettings:", start)
+        block = source[start:end]
+        session_marker = "this.notificationSessionActive = true;"
+        key_marker = 'this.lastNotificationKey = "";'
+        processing_marker = 'this._setStatus("processing",'
+
+        self.assertIn(session_marker, block)
+        self.assertIn(key_marker, block)
+        self.assertIn(processing_marker, block)
+        input_index = block.index("let inputOption = this._settingsSnapshotInputOptionOrNull")
+        session_index = block.index(session_marker)
+        key_index = block.index(key_marker)
+        processing_index = block.index(processing_marker)
+        self.assertLess(input_index, session_index)
+        self.assertLess(input_index, key_index)
+        self.assertLess(session_index, key_index)
+        self.assertLess(key_index, processing_index)
+
+    def test_settings_export_args_failure_closes_notification_session(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_exportSettings: function()")
+        end = source.index("\n  _importSettings:", start)
+        block = source[start:end]
+        args_index = block.index("exportArgs = this._settingsExportArgs();")
+        catch_index = block.index("} catch (error) {", args_index)
+        spawn_index = block.index("this._spawnJson", catch_index)
+        failure_block = block[catch_index:spawn_index]
+
+        self.assertIn("this.notificationSessionActive = false;", failure_block)
+        self.assertIn('this.lastNotificationKey = "";', failure_block)
+        self.assertIn(
+            'this._setStatus("error", _("Could not prepare settings export"), this.lastTranscript);',
+            failure_block,
+        )
+
+    def test_warning_payload_is_terminal_before_generic_status_fallthrough(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_applyPayload: function(payload, statusRefreshToken)")
+        end = source.index("\n  _artifactEncryptionWarningKey:", start)
+        block = source[start:end]
+        warning_match = re.search(r'if\s*\([^)]*status === "warning"[^)]*\)\s*\{', block)
+        self.assertIsNotNone(warning_match)
+        assert warning_match is not None
+        fallthrough_index = block.index("let message = this._payloadMessage(payload, status);")
+        warning_block = block[warning_match.start():fallthrough_index]
+
+        self.assertLess(warning_match.start(), fallthrough_index)
+        self.assertIn("return;", warning_block)
+        self.assertNotIn("payload.warnings", warning_block)
+        self.assertNotIn("payload.post_commit_warnings", warning_block)
+
+    def test_warning_notification_is_critical_and_closes_session_without_notify_error_gate(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_maybeNotify: function(previousStatus, status, message)")
+        end = source.index("\n  _notify:", start)
+        block = source[start:end]
+        warning_marker = 'if (status === "warning") {'
+        self.assertIn(warning_marker, block)
+        warning_start = block.index(warning_marker)
+        error_start = block.index('if (status === "error") {', warning_start)
+        warning_block = block[warning_start:error_start]
+
+        self.assertNotIn("if (this.notifyError)", warning_block)
+        self.assertIn("this._sanitizeErrorMessage", warning_block)
+        self.assertRegex(warning_block, r"this\._notify\([\s\S]*?,\s*true\);")
+        self.assertIn("this.notificationSessionActive = false;", warning_block)
+        self.assertIn("return;", warning_block)
+
+    def test_cleanup_warning_notifies_once_critically_without_notify_error_gate(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_maybeNotify: function(previousStatus, status, message)")
+        end = source.index("\n  _notify:", start)
+        block = source[start:end]
+        warning_start = block.index('if (status === "warning") {')
+        error_start = block.index('if (status === "error") {', warning_start)
+        warning_block = block[warning_start:error_start]
+
+        self.assertNotIn("if (this.notifyError)", warning_block)
+        self.assertRegex(warning_block, r"this\._notify\([\s\S]*?,\s*true\);")
+        self.assertIn("this.lastNotificationKey = key;", warning_block)
+        self.assertIn("this.notificationSessionActive = false;", warning_block)
+
+    def test_critical_notification_falls_back_once_when_critical_notify_throws(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_notify: function(title, body, critical)")
+        end = source.index("\n  _shortTranscript:", start)
+        block = source[start:end]
+        critical_start = block.index("if (critical && Main.criticalNotify)")
+        normal_fallback_start = block.index("} else if (Main.notify)", critical_start)
+        critical_block = block[critical_start:normal_fallback_start]
+
+        self.assertIn("try {", critical_block)
+        self.assertIn("Main.criticalNotify(title, safeBody);", critical_block)
+        self.assertIn("catch", critical_block)
+        self.assertIn("if (Main.notify)", critical_block)
+        self.assertEqual(critical_block.count("Main.notify(title, safeBody);"), 1)
+
+    def test_warning_status_reuses_error_panel_style_and_icon(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        style_start = source.index("_panelStyleClassForStatus: function(status)")
+        style_end = source.index("\n  _statusIconNameForStatus:", style_start)
+        style_block = source[style_start:style_end]
+        icon_start = source.index("_statusIconSettingForStatus: function(status)")
+        icon_end = source.index("\n  _statusIconDefaultForStatus:", icon_start)
+        icon_block = source[icon_start:icon_end]
+
+        self.assertIn('status === "warning"', style_block)
+        self.assertIn('"speed-of-cinnamon-error"', style_block)
+        self.assertIn('status === "warning"', icon_block)
+        self.assertIn("this.statusIconError", icon_block)
+
+    def test_both_status_setters_sanitize_warning_messages(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method in [
+            ("_setStatusPreservingRecording: function(status, message, transcript)", "\n  _setStatus:"),
+            ("_setStatus: function(status, message, transcript)", "\n  _maybeNotify:"),
+        ]:
+            start = source.index(method)
+            end = source.index(next_method, start)
+            block = source[start:end]
+            self.assertIn('status === "warning"', block)
+            self.assertIn("this._sanitizeErrorMessage(safeMessage)", block)
+
     def test_applet_registers_optional_language_specific_hotkeys(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
@@ -1056,8 +1228,7 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("auto-paste-window-title", schema["layout"]["output-section"]["keys"])
         self.assertEqual(schema["auto-paste-window-title"]["default"], "codex")
-        self.assertIn("Built-in marker names match known window classes/app IDs", schema["auto-paste-window-title"]["tooltip"])
-        self.assertIn("codex matches known terminal identities and the window title", schema["auto-paste-window-title"]["tooltip"])
+        self.assertIn("Built-in marker names match the full window title or known window classes/app IDs", schema["auto-paste-window-title"]["tooltip"])
         self.assertIn("custom strings match the full window title case-insensitively", schema["auto-paste-window-title"]["tooltip"])
         self.assertIn("not after Clipboard only", schema["auto-paste-window-title"]["tooltip"])
         self.assertIn("Empty disables Auto-Submit", schema["auto-paste-window-title"]["tooltip"])
@@ -1110,7 +1281,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_autoPastePromptArgs: function()", source)
         self.assertIn('"--entry"', source)
         self.assertIn('"--title=Auto-Submit"', source)
-        self.assertIn('Built-in marker names match known window classes/app IDs; codex matches known terminal identities and the window title. Custom strings match the full window title case-insensitively. Empty disables Auto-Submit.', source)
+        self.assertIn('Built-in marker names match the full window title or known window classes/app IDs. Custom strings match the full window title case-insensitively. Empty disables Auto-Submit.', source)
         self.assertIn('"--entry-text=" + current', source)
         self.assertIn('if (!this._findTrustedProgramInPath("zenity"))', source)
         self.assertIn('this._spawnText(promptArgs, (output, result) => {', source)
@@ -1127,20 +1298,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setAutoPasteTitles([])', source)
         self.assertIn('_windowTitleMatchesAutoPaste: function()', source)
         self.assertIn('_markerAllowsAutoPasteIdentity: function(marker)', source)
-        self.assertIn('if (key === "codex") {\n          if (title.indexOf(key) >= 0 || this._windowIdentityMatchesAutoPaste(marker)) {', source)
         self.assertIn('if (AUTO_PASTE_IDENTITY_MARKERS[key]) {', source)
-        self.assertIn('if (key === "codex") {', source)
-        self.assertIn('if (this._windowIdentityMatchesAutoPaste(marker)) {', source)
+        self.assertIn('this._windowIdentityMatchesAutoPaste(marker) ||\n          this._windowIdentityValueMatchesMarker(title, key)', source)
         self.assertIn('_windowIdentityMatchesAutoPaste: function(marker)', source)
         self.assertIn('this._windowProbeValue(this.targetWindow, "get_title")', source)
         self.assertIn('let title = this._normalizedAutoPasteWindowTitle(this._windowProbeValue(this.targetWindow, "get_title") || this.targetWindowXTitle || "");', source)
-        self.assertIn('if (title === key) {', source)
+        self.assertIn('if (this._windowIdentityValueMatchesMarker(title, key)) {', source)
         self.assertIn('AUTO_PASTE_IDENTITY_MARKERS[key] || null', source)
         self.assertIn('for (let marker of markers)', source)
         self.assertIn('String(marker || "").trim().toLowerCase()', source)
         self.assertIn('let autoPasteTarget = method === "clipboard-paste" && this._windowTitleMatchesAutoPaste();', source)
         self.assertIn('let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;', source)
-        self.assertIn('let suppressAutoPasteEnter = method !== "clipboard-paste" || submitWithReturn;', source)
+        self.assertIn('let suppressAutoPasteEnter = method !== "clipboard-paste" || !canPasteWithKeyboard || submitWithReturn;', source)
         self.assertIn('let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter, autoPasteTarget);', source)
         self.assertIn('_preparedTranscriptText: function(transcript, suppressAutoPasteEnter, autoPasteTargetMatch)', source)
         self.assertIn('typeof autoPasteTargetMatch === "boolean"', source)
@@ -1174,7 +1343,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof delay === "number" && isFinite(delay)', source)
         self.assertIn("_normalizeTypingDelayMs(this.typingDelayMs)", source)
         self.assertIn('"--typing-delay-ms", String(this._normalizeTypingDelayMs(this.typingDelayMs))', source)
-        self.assertIn('_typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath) {', source)
+        self.assertIn('_typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath, expectedTargetWindowOverride) {', source)
 
     def test_recording_progress_path_uses_recording_limit_normalizer(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -1543,7 +1712,7 @@ class AppletStaticTest(unittest.TestCase):
 
         for signature in [
             "_pasteClipboardAfterFocus: function(sendEnter, expectedClipboardText, completionCallback, operationGuard, keyboardProgram)",
-            "_typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath)",
+            "_typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath, expectedTargetWindowOverride)",
             "_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs)",
             "_spawnKeyboardWhenClipboardReady: function(args, followUpArgs, expectedClipboardText, deadlineMs, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs)",
             "_spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard, processTimeoutMs)",
@@ -1663,7 +1832,7 @@ class AppletStaticTest(unittest.TestCase):
         type_end = insert_block.index('if (method !== "clipboard-paste")', type_start)
         type_block = insert_block[type_start:type_end]
         self.assertEqual(type_block.count('this._findTrustedProgramInPath("xdotool")'), 1)
-        self.assertIn("isCurrentInsert, xdotoolPath))", type_block)
+        self.assertIn("isCurrentInsert, xdotoolPath, expectedTargetWindow))", type_block)
 
         paste_start = insert_block.index('if (method !== "clipboard-paste")')
         paste_block = insert_block[paste_start:]
@@ -1737,7 +1906,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("return false;", paste_helper)
 
         type_helper_start = source.index(
-            "_typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath)"
+            "_typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath, expectedTargetWindowOverride)"
         )
         type_helper_end = source.index("\n  _coerceTypeText:", type_helper_start)
         type_helper = source[type_helper_start:type_helper_end]
@@ -2372,7 +2541,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (safePostProcessBackend === "openai-compatible" && (!openAiCompatibleUrlIncluded || !openAiCompatibleTextModelIncluded))', source)
         self.assertIn('if (!ollamaUrlIncluded && safePostProcessBackend === "ollama")', source)
         self.assertIn('let safePostProcessPrompt = this._coerceCliTextArgOrFallback(this._effectivePostProcessPrompt(), "post-process prompt", "");', source)
-        self.assertIn('let safeTranscriber = TRANSCRIBER_METHODS.indexOf(String(this.transcriber || "")) >= 0', source)
+        self.assertIn('let normalizedTranscriber = normalizeTranscriberMethod(this.transcriber);', source)
+        self.assertIn('let safeTranscriber = TRANSCRIBER_METHODS.indexOf(normalizedTranscriber) >= 0', source)
         self.assertIn('let safePostProcessBackend = POST_PROCESS_BACKENDS.indexOf(String(this.postProcessBackend || "")) >= 0', source)
         self.assertLess(block.index("let toggleArgs;"), block.index("this.isCommandRunning = true;"))
         self.assertIn("let toggleHandle = this._spawnJson(toggleArgs,", block)
@@ -2948,7 +3118,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('relistenToken = String(this.autoRelistenSequence) + ":" + recordingKey;', source)
         self.assertIn('this.autoRelistenPending = Boolean(relistenToken);', source)
         self.assertIn('this.autoRelistenPendingToken = relistenToken;', source)
-        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {\n        this.isCommandRunning = false;\n        if (this.cancelPendingWhileCommandRunning) {\n          this._applyPayloadSafely(nextPayload, undefined, true, "stop");\n        }\n        return;\n      }', source)
+        self.assertIn('if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {\n        this.isCommandRunning = false;\n        if (this.cancelPendingWhileCommandRunning || this.autoRelistenManualStopRequested) {\n          this._applyPayloadSafely(nextPayload, undefined, true, "stop");\n        }\n        return;\n      }', source)
         self.assertIn('if (nextPayload && nextPayload.error) {\n        this.autoTranscribeRecordingKey = "";\n      }', source)
         self.assertIn('const EMPTY_TRANSCRIPT_MARKERS = [', source)
         self.assertIn('"leere aufnahme"', source)
@@ -4864,6 +5034,7 @@ class AppletStaticTest(unittest.TestCase):
         duplicate_index = block.index("if (key === this.lastNotificationKey) {")
         cleanup_index = block.index("this.notificationSessionActive = false;", duplicate_index)
         self.assertIn('status === "done" || status === "error"', block[duplicate_index:cleanup_index])
+        self.assertIn('status === "warning"', block[duplicate_index:cleanup_index])
         self.assertIn('(status === "idle" && previousStatus !== "idle")', block[duplicate_index:cleanup_index])
         self.assertLess(duplicate_index, cleanup_index)
 
@@ -5687,7 +5858,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('return [this._cliCommand(), "diagnostics", "--applet", "--settings-json-stdin", "--json"];', source)
         self.assertIn('return [this._cliCommand(), "diagnostics", "--applet", "--settings-json-stdin", "--save", "--json"];', source)
         self.assertIn('return [this._cliCommand(), "settings-export", "--settings-json-stdin", "--json"];', source)
-        self.assertIn('return [this._cliCommand(), "settings-import", "--confirm-plaintext-settings-output", "--json"];', source)
+        self.assertIn('let args = [this._cliCommand(), "settings-import", "--confirm-plaintext-settings-output", "--json"];', source)
         self.assertNotIn('"settings-export", "--settings-json", JSON.stringify', source)
         self.assertNotIn('"doctor", "--applet", "--settings-json", JSON.stringify', source)
         self.assertNotIn('"setup", "--applet", "--settings-json", JSON.stringify', source)
@@ -5826,6 +5997,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let safeOpenAiCompatibleUrl = this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);', source)
         self.assertIn('let safePersonalContext = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.personalContext), "personal context", "");', source)
         self.assertIn('let safeVocabulary = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.vocabulary), "vocabulary", "");', source)
+        self.assertIn('throw new Error("Input device setting exceeds command limit");', source)
+        self.assertIn('throw new Error("Post-process prompt setting exceeds command limit");', source)
+        self.assertIn('throw new Error("Personal context setting exceeds command limit");', source)
+        self.assertIn('throw new Error("Vocabulary setting exceeds command limit");', source)
         self.assertIn("for (let key in CLI_TEXT_SETTINGS)", source)
         self.assertIn('let safeOllamaUrl = this._validatedExternalApiUrlOrFallback(this.ollamaUrl, "ollama URL", DEFAULT_OLLAMA_URL);', source)
         self.assertIn('let safeOpenAiCompatibleUrl = this._validatedExternalApiUrlOrFallback(this.openaiCompatibleUrl, "openai-compatible URL", DEFAULT_OPENAI_COMPATIBLE_URL);', source)
@@ -6837,7 +7012,7 @@ class AppletStaticTest(unittest.TestCase):
     def test_keyboard_group_cancel_notifies_active_insert_cleanup(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure)")
+        remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure, completionCallback)")
         remember_end = source.index("\n  _closeMenuForKeyboardInsert:", remember_start)
         remember_block = source[remember_start:remember_end]
         keyboard_start = source.index("_spawnKeyboardProcess: function(args, completionCallback, timeoutMs)")
@@ -6868,7 +7043,7 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_target_capture_fails_closed_when_insert_cleanup_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure)")
+        remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure, completionCallback)")
         remember_end = source.index("\n  _closeMenuForKeyboardInsert:", remember_start)
         remember_block = source[remember_start:remember_end]
         self.assertIn("let processCleanupSucceeded = true;", remember_block)
@@ -6881,7 +7056,8 @@ class AppletStaticTest(unittest.TestCase):
         hotkey_start = source.index("this._hotkeyCallbacks[HOTKEY_ID] = () => {")
         hotkey_end = source.index("this._hotkeyCallbacks[PRIMARY_HOTKEY_ID]", hotkey_start)
         hotkey_block = source[hotkey_start:hotkey_end]
-        self.assertIn('!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()', hotkey_block)
+        self.assertIn('!this._hasActiveRecordingState() && !this.isCommandRunning', hotkey_block)
+        self.assertIn('this._rememberFocusedWindow(false, startRecording)', hotkey_block)
         self.assertIn("return;", hotkey_block)
 
         language_start = source.index("_startWithLanguage: function(language, preserveTargetOnFailure)")
@@ -6889,7 +7065,7 @@ class AppletStaticTest(unittest.TestCase):
         language_block = source[language_start:language_end]
         self.assertIn("if (this._hasActiveRecordingState() || this.isCommandRunning || this._recordingCommandToken)", language_block)
         self.assertLess(language_block.index("this._hasActiveRecordingState()"), language_block.index("this._rememberFocusedWindow"))
-        self.assertIn("if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure)))", language_block)
+        self.assertIn("if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure), startRecording))", language_block)
         self.assertIn('let recordingStarted = this._toggleRecording("start") === true;', language_block)
         self.assertNotIn("this._toggleRecording();", language_block)
         self.assertNotIn("this._updatePanel();", language_block)
@@ -6898,14 +7074,14 @@ class AppletStaticTest(unittest.TestCase):
     def test_target_window_generation_invalidates_stale_insert_resources(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure)")
+        remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure, completionCallback)")
         remember_end = source.index("\n  _closeMenuForKeyboardInsert:", remember_start)
         remember_block = source[remember_start:remember_end]
         self.assertIn('for (let group of ["keyboard", "x11", "clipboard"])', remember_block)
         self.assertIn('this._terminateProcessesByGroup(group, true) === false', remember_block)
         self.assertIn('if (!preserveOnFailure) {\n      this._clearTargetWindowXid();\n    }', remember_block)
         self.assertIn(
-            "if (!(preserveOnFailure && this._hasRememberedTargetWindow())) {\n"
+            "if (!remembered && !(preserveOnFailure && this._hasRememberedTargetWindow())) {\n"
             "        this._clearTargetWindowXid();\n"
             "      }",
             remember_block,
@@ -7111,6 +7287,14 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("try {\n          let applied = this._applyImportedSettings(payload.settings || {});", import_block)
         self.assertIn('this._setStatus("error", _("Could not apply imported settings: ") + safeError', import_block)
 
+    def test_settings_import_commits_alarms_after_settings_and_rolls_back_on_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn("this._settingsImportArgs(true)", source)
+        self.assertIn("this._alarmsImportArgs()", source)
+        self.assertIn("inputText: JSON.stringify(alarmPayload)", source)
+        self.assertIn("this._applyImportedSettings(previousSettings)", source)
+        self.assertIn('this._recordLifecycleError("settings-import-rollback", rollbackError);', source)
+
     def test_settings_transfers_release_tokens_when_argument_building_fails(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         export_start = source.index("_exportSettings: function()")
@@ -7122,7 +7306,8 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertIn("try {\n      exportArgs = this._settingsExportArgs();", export_block)
         self.assertIn("this._spawnJson(exportArgs,", export_block)
-        self.assertIn("try {\n      importArgs = this._settingsImportArgs();", import_block)
+        self.assertIn("try {\n      previousSettings = this._settingsSnapshotForCli(false, true);", import_block)
+        self.assertIn("importArgs = this._settingsImportArgs(true);", import_block)
         self.assertIn("this._spawnJson(importArgs,", import_block)
         for block in (export_block, import_block):
             self.assertIn("if (this.settingsTransferToken === transferToken) {", block)
@@ -7156,6 +7341,125 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.historyRefreshToken = null;", block)
         self.assertIn('this._recordLifecycleError("history-refresh", error);', block)
         self.assertIn('this._setStatusPreservingRecording("error", _("Could not prepare transcript history")', block)
+
+    def test_history_refresh_releases_token_when_spawn_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_refreshHistory: function()")
+        end = source.index("\n  _listAllTranscripts:", start)
+        block = source[start:end]
+        self.assertIn("let refreshProcess = this._spawnJson(historyArgs,", block)
+        self.assertIn("if (!refreshProcess) {", block)
+        self.assertIn("this.historyRefreshToken = null;", block)
+        self.assertIn("this.historyRefreshQueued = false;", block)
+        self.assertIn("this._populateHistoryMenu([]);", block)
+        self.assertIn('this._setStatusPreservingRecording("error", _("Could not start transcript history refresh")', block)
+
+    def test_menu_refreshes_release_tokens_when_spawn_fails(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, token, message in [
+            (
+                "_refreshAlarmMenu: function()",
+                "\n  _populateAlarmMenu:",
+                "alarmMenuRefreshToken",
+                "Could not start alarm menu refresh",
+            ),
+            (
+                "_refreshModelMenu: function()",
+                "\n  _populateModelMenu:",
+                "modelMenuRefreshToken",
+                "Could not start voice model list refresh",
+            ),
+        ]:
+            with self.subTest(method=method):
+                start = source.index(method)
+                end = source.index(next_method, start)
+                block = source[start:end]
+                self.assertIn("let refreshProcess = this._spawnJson(", block)
+                self.assertIn("if (!refreshProcess) {", block)
+                self.assertIn(f"this.{token} = null;", block)
+                self.assertIn(f'_("{message}")', block)
+
+    def test_tokenized_json_actions_release_on_spawn_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        cases = [
+            ("_runDoctor: function(startupCheck)", "\n  _applyDoctorPayload:", "doctorProcess", "doctorCommandToken", "Doctor could not be started"),
+            ("_openProfanityFilterList: function()", "\n  _copySetupPlan:", "documentProcess", "setupDiagnosticsToken", "Could not start profanity replacement list"),
+            ("_copySetupPlan: function()", "\n  _setupCommandsText:", "setupPlanProcess", "setupDiagnosticsToken", "Could not start setup plan"),
+            ("_copySetupCommands: function()", "\n  _copyDiagnostics:", "setupCommandsProcess", "setupDiagnosticsToken", "Could not start setup commands"),
+            ("_copyDiagnostics: function()", "\n  _saveDiagnostics:", "diagnosticsProcess", "setupDiagnosticsToken", "Could not start diagnostics"),
+            ("_saveDiagnostics: function()", "\n  _benchmarkAudioFileDialogArgs:", "diagnosticsSaveProcess", "setupDiagnosticsToken", "Could not start diagnostics save"),
+            ("_benchmarkDownloadedModels: function(audioPath, flowToken)", "\n  _setAlarmOptionStatus:", "benchmarkProcess", "benchmarkFlowToken", "Could not start benchmark"),
+            ("_setAlarmEnabled: function(id, enabled)", "\n  _removeAlarm:", "actionProcess", "alarmActionToken", "Could not start alarm update"),
+            ("_removeAlarm: function(id)", "\n  _checkAlarms:", "actionProcess", "alarmActionToken", "Could not start alarm removal"),
+            ("_checkAlarms: function(manual)", "\n  _refreshInputSourceMenu:", "checkProcess", "alarmCheckToken", "Could not start alarm check"),
+            ("_downloadVoiceModel: function(model)", "\n  _removeVoiceModel:", "downloadProcess", "voiceModelActionToken", "Could not start model download"),
+            ("_removeVoiceModel: function(model)", "\n  _selectVoiceModel:", "removeProcess", "voiceModelActionToken", "Could not start model removal"),
+            ("_loadAllTranscriptsDocument: function()", "\n  _showTranscriptsWindow:", "historyDocumentProcess", "_cleanupCommandToken", "Could not start transcript list"),
+            ("_previewCleanup: function()", "\n  _cleanupOldFiles:", "cleanupPreviewProcess", "_cleanupCommandToken", "Could not start cleanup preview"),
+            ("_cleanupOldFiles: function()", "\n  _settingsSnapshot:", "cleanupProcess", "_cleanupCommandToken", "Could not start cleanup"),
+            ("_exportSettings: function()", "\n  _importSettings:", "exportProcess", "settingsTransferToken", "Could not start settings export"),
+            ("_importSettings: function()", "\n  _applyImportedSettings:", "importProcess", "settingsTransferToken", "Could not start settings import"),
+        ]
+        for method, next_method, handle, token, message in cases:
+            with self.subTest(method=method):
+                start = source.index(method)
+                end = source.index(next_method, start)
+                block = source[start:end]
+                self.assertIn(f"let {handle} = this._spawnJson(", block)
+                self.assertIn(f"if (!{handle} && this.{token} ===", block)
+                self.assertIn(f"this.{token} = null;", block)
+                self.assertIn(f'_("{message}")', block)
+
+    def test_settings_import_alarm_persistence_releases_and_rolls_back_on_spawn_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_importSettings: function()")
+        end = source.index("\n  _applyImportedSettings:", start)
+        block = source[start:end]
+        self.assertIn("let alarmImportProcess = this._spawnJson(alarmImportArgs,", block)
+        self.assertIn("if (!alarmImportProcess && this.settingsTransferToken === transferToken)", block)
+        self.assertIn("this._applyImportedSettings(previousSettings);", block)
+        self.assertIn('_("Could not start imported alarm persistence; settings restored")', block)
+
+    def test_ollama_and_maintenance_actions_release_on_spawn_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, handle, token, message in [
+            ("_activateOllamaTextModelFlow: function()", "\n  _ollamaModelPromptArgs:", "flowProcess", "ollamaModelFlowToken", "Could not start Ollama check"),
+            ("_chooseOllamaTextModel: function()", "\n  _promptChooseOllamaTextModel:", "flowProcess", "ollamaModelFlowToken", "Could not start Ollama model list"),
+            ("_promptChooseOllamaTextModel: function(models, flowToken)", "\n  _promptInstallOllamaTextModel:", "choiceProcess", "ollamaModelFlowToken", "Could not start Ollama model selection"),
+            ("_promptInstallOllamaTextModel: function(flowToken)", "\n  _installOllamaTextModel:", "promptProcess", "ollamaModelFlowToken", "Could not start Ollama model prompt"),
+            ("_installOllamaTextModel: function(model)", "\n  _refreshHistory:", "installProcess", "ollamaModelInstallToken", "Could not start Ollama model installation"),
+            ("_exportAllTranscripts: function()", "\n  _safePayloadCount:", "exportProcess", "_cleanupCommandToken", "Could not start transcript export"),
+            ("_maybeAutoTranscribeRecorded: function(payload, statusOverride)", "\n  _clearStatusTimer:", "stopProcess", "_recordingCommandToken", "Could not start timed recording command"),
+        ]:
+            with self.subTest(method=method):
+                start = source.index(method)
+                end = source.index(next_method, start)
+                block = source[start:end]
+                self.assertIn(f"let {handle} = this._spawn", block)
+                self.assertIn(f"if (!{handle} && this.{token} ===", block)
+                self.assertIn(f'_("{message}")', block)
+
+        start = source.index("_scheduleOllamaInstallWatchPoll: function(watchToken)")
+        end = source.index("\n  _scheduleSetupCheck:", start)
+        block = source[start:end]
+        self.assertIn("let pollProcess = this._spawnJson(textModelArgs,", block)
+        self.assertIn("if (!pollProcess && this.ollamaInstallWatchToken === watchToken)", block)
+        self.assertIn('_("Could not start Ollama installation watch")', block)
+
+    def test_text_dialog_tokens_release_on_spawn_failure(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        for method, next_method, handle, token, message in [
+            ("_promptCustomRecordingLimit: function()", "\n  _parseCustomRecordingLimit:", "recordingPromptProcess", "customLimitPromptToken", "Could not start custom duration prompt"),
+            ("_configureAutoPaste: function()", "\n  _setAutoPasteTitles:", "promptProcess", "autoPastePromptToken", "Could not start Auto-Submit prompt"),
+            ("_selectBenchmarkAudioFile: function()", "\n  _benchmarkDownloadedModels:", "audioDialogProcess", "benchmarkFlowToken", "Could not start benchmark audio selection"),
+        ]:
+            with self.subTest(method=method):
+                start = source.index(method)
+                end = source.index(next_method, start)
+                block = source[start:end]
+                self.assertIn(f"let {handle} = this._spawnText(", block)
+                self.assertIn(f"if (!{handle} && this.{token} ===", block)
+                self.assertIn(f'_("{message}")', block)
 
     def test_setup_and_diagnostics_actions_ignore_stale_responses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -7367,8 +7671,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn('return script.join("; ");', block)
         self.assertIn('read -r -p \\"Press Enter to close...\\" || true; exit \\"$rc\\"', source)
         self.assertIn('"if command -v ollama >/dev/null 2>&1; then",', source)
-        self.assertIn('ollama_log_file=\\"$(mktemp \\"${XDG_RUNTIME_DIR:-/tmp}/speed-of-cinnamon-ollama.XXXXXX.log\\")\\"', source)
-        self.assertIn('ollama serve >\\"$ollama_log_file\\" 2>&1 & sleep 2 || true', source)
+        self.assertIn('ollama serve >/dev/null 2>&1 & sleep 2 || true', source)
+        self.assertNotIn('ollama_log_file=', source)
         self.assertNotIn('/tmp/speed-of-cinnamon-ollama.log', source)
         self.assertIn('"else",', source)
         self.assertIn('"fi",', source)
@@ -7698,12 +8002,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this.selfProtectionNoticeKey = "";', source)
         self.assertIn("this.selfProtectionNoticeAtMs = 0;", source)
         self.assertIn("this._hotkeyCallbacks[HOTKEY_ID] = () => {", source)
-        self.assertIn('if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()) {', source)
-        self.assertIn('if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow(true)) {', source)
+        self.assertIn('if (!this._hasActiveRecordingState() && !this.isCommandRunning) {', source)
+        self.assertIn('this._rememberFocusedWindow(false, startRecording)', source)
+        self.assertIn('this._rememberFocusedWindow(true, startRecording)', source)
         self.assertIn('this._connectSafe(startPrimary, "activate", () => this._startWithLanguage(primary, true));', source)
         self.assertIn('this._connectSafe(startSecondary, "activate", () => this._startWithLanguage(secondary, true));', source)
         self.assertIn("_startWithLanguage: function(language, preserveTargetOnFailure)", source)
-        self.assertIn('if (!(preserveOnFailure && this._hasRememberedTargetWindow())) {', source)
+        self.assertIn('if (!remembered && !(preserveOnFailure && this._hasRememberedTargetWindow())) {', source)
         self.assertIn("_hasRememberedTargetWindow: function()", source)
         self.assertIn('on_applet_clicked: function() {', source)
         self.assertIn('if (!this._lifecycleAllowsWork()) {', source)
@@ -7715,7 +8020,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;", source)
         self.assertIn("_rememberActiveXWindow: function(completionCallback, expectedGeneration)", source)
         self.assertIn("_xdotoolOutput: function(args, maxBytes, completionCallback, timeoutMs, trustedProgramResolver)", source)
-        remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure)")
+        remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure, completionCallback)")
         remember_end = source.index("\n  _restoreTargetWindowForPaste:", remember_start)
         remember_block = source[remember_start:remember_end]
         usable_start = remember_block.index("if (this._isUsableTargetWindow(window))")
@@ -7761,7 +8066,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);', submit_timer_block)
         allowlist_guard_block = (
             'if (!this._windowTitleMatchesAutoPaste()) {\n'
-            '                      if (typeof completionCallback === "function") completionCallback(true);\n'
+            '                      fail(_("Target window changed before automatic submit"));\n'
             '                      return;\n'
             '                    }'
         )
@@ -7988,11 +8293,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("this.autoRelistenManualStopRequested = manualRelistenStopRequested;", source[toggle_index:toggle_end])
         self.assertIn('if (commandAction === "start") {\n      this.cancelIntentActive = false;\n      this.cancelRecoveryAttempts = 0;\n      this.lastNotificationKey = "";', source[toggle_index:toggle_end])
         self.assertNotIn('this.notificationSessionActive = true;\n    this.lastNotificationKey = "";', source[toggle_index:toggle_end])
-        self.assertIn('this.autoRelisten ? _("Stopping Auto Relisten...") : _("Stopping recording...")', source[toggle_index:toggle_end])
+        self.assertIn('activeRelistenFlow ? _("Stopping Auto Relisten...") : _("Stopping recording...")', source[toggle_index:toggle_end])
         self.assertIn("if (this.isCommandRunning) {", source[cancel_index:cancel_end])
         self.assertIn('this.cancelPendingWhileCommandRunning = activeAction !== "cancel";', source[cancel_index:cancel_end])
         self.assertIn("this.autoRelistenManualStopRequested = true;", source[cancel_index:cancel_end])
-        self.assertIn('this.autoRelisten ? _("Stopping Auto Relisten...") : _("Cancelling...")', source[cancel_index:cancel_end])
+        self.assertIn('activeRelistenFlow ? _("Stopping Auto Relisten...") : _("Cancelling...")', source[cancel_index:cancel_end])
         self.assertIn("this.cancelIntentActive = true;", source[cancel_index:cancel_end])
         self.assertIn("this.cancelRecoveryAttempts = 0;", source[cancel_index:cancel_end])
         self.assertIn("MAX_CANCEL_RECOVERY_ATTEMPTS", source[cancel_index:cancel_end])
@@ -8164,7 +8469,10 @@ class AppletStaticTest(unittest.TestCase):
         mismatch = block.index("if (relistenToken && this.autoRelistenPendingToken !== relistenToken)")
         mismatch_end = block.index("return;", mismatch)
         self.assertIn("this.isCommandRunning = false;", block[mismatch:mismatch_end])
-        self.assertIn("if (this.cancelPendingWhileCommandRunning)", block[mismatch:mismatch_end])
+        self.assertIn(
+            "if (this.cancelPendingWhileCommandRunning || this.autoRelistenManualStopRequested)",
+            block[mismatch:mismatch_end],
+        )
         self.assertIn('this._applyPayloadSafely(nextPayload, undefined, true, "stop");', block[mismatch:mismatch_end])
         toggle_start = source.index("_toggleRecording: function()")
         toggle_end = source.index("\n  _restartApplet:", toggle_start)
@@ -8767,7 +9075,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this.clipboardOverwriteDialog !== dialog)", source)
         self.assertNotIn("if (this.clipboardOverwriteDialog !== dialog || !isCurrentOperation())", source)
         self.assertIn("if (this.clipboardOverwriteDialog === dialog) {\n            this.clipboardOverwriteDialog = null;", source)
-        self.assertIn("if (canPasteWithKeyboard) {\n              continueWithApprovedSnapshot(clipboardSnapshot);", source)
+        self.assertNotIn("if (canPasteWithKeyboard) {\n              continueWithApprovedSnapshot(clipboardSnapshot);", source)
+        self.assertIn("this._clipboardPayloadSnapshotAsync((currentClipboardSnapshot) => {", source)
         self.assertIn('if (!this._dialogOpen(dialog, "clipboard-overwrite")) {', source)
         self.assertIn('this._setStatus("error", _("Clipboard overwrite prompt could not be opened"), transcript);', source)
         self.assertIn(
@@ -9454,10 +9763,8 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_toggleRecording: function()")
         end = source.index("\n  _restartApplet:", start)
         block = source[start:end]
-        self.assertLess(
-            block.index('this.autoRelisten ? _("Stopping Auto Relisten...") : _("Stopping recording...")'),
-            block.index("return;", block.index("if (this.isCommandRunning)")),
-        )
+        self.assertIn("let activeRelistenFlow = Boolean(", block)
+        self.assertIn('activeRelistenFlow ? _("Stopping Auto Relisten...") : _("Stopping recording...")', block)
         self.assertIn("let textInsertCleanupSucceeded = this._cancelTextInsertForSettingsChange();", block)
         self.assertNotIn("if (this.textInsertToken)", block)
         self.assertLess(
@@ -9828,12 +10135,9 @@ class AppletStaticTest(unittest.TestCase):
             finish_start,
         )
         finish_block = source[finish_start:finish_end]
-        empty_busy_index = finish_block.index(
-            "if (this.textInsertToken && this._isEmptyTranscriptText(transcript)) {"
-        )
         empty_finish_index = finish_block.index(
             "this._finishEmptyRelistenDone(payload);",
-            empty_busy_index,
+            0,
         )
         fingerprint_index = finish_block.index(
             "let insertFingerprint = this._autoInsertFingerprint(payload, transcript);"
@@ -9852,19 +10156,13 @@ class AppletStaticTest(unittest.TestCase):
         duplicate_end = finish_block.index("\n    let clearPendingFingerprint", duplicate_start)
         duplicate_block = finish_block[duplicate_start:duplicate_end]
 
-        self.assertIn(
-            "if (this.textInsertToken && this._isEmptyTranscriptText(transcript)) {\n"
-            "      return;\n"
-            "    }",
-            finish_block,
-        )
+        self.assertIn("if (this._isEmptyTranscriptText(transcript)) {", finish_block)
         self.assertIn(
             "if (this.autoInsertPendingFingerprint === insertFingerprint) {\n"
             "        return;\n"
             "      }",
             busy_block,
         )
-        self.assertLess(empty_busy_index, empty_finish_index)
         self.assertLess(empty_finish_index, busy_start)
         self.assertIn("this.autoRelistenPending = false;", busy_block)
         self.assertIn("this.autoRelistenPendingToken = \"\";", busy_block)
@@ -10636,7 +10934,8 @@ class AppletStaticTest(unittest.TestCase):
         hotkey_start = source.index("this._hotkeyCallbacks[HOTKEY_ID] = () => {")
         hotkey_end = source.index("this._hotkeyCallbacks[PRIMARY_HOTKEY_ID]", hotkey_start)
         hotkey_block = source[hotkey_start:hotkey_end]
-        self.assertIn('if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()) {', hotkey_block)
+        self.assertIn('if (!this._hasActiveRecordingState() && !this.isCommandRunning) {', hotkey_block)
+        self.assertIn('this._rememberFocusedWindow(false, startRecording)', hotkey_block)
         self.assertIn("this._toggleRecording();", hotkey_block)
 
         toggle_start = source.index("_toggleRecording: function()")

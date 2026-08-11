@@ -30,7 +30,9 @@ Then add `Speed of Cinnamon` from Cinnamon's applet settings. If needed, reload 
 Use `make uninstall-local` to remove the local applet, backend wrapper, installed Python package, and man pages. It
 preserves user data such as downloaded models, alarms, transcripts, diagnostics, and settings exports.
 
-Release archives can be built and verified from the repository:
+Release archives can be built and verified from the repository. See the canonical
+[Release Matrix](development.md#kanonische-release-matrix) for the exact mapping of normal checks, Snap requirements,
+Snap-free local targets, optional Generic RPM builds, and publish behavior:
 
 ```bash
 make dist-check
@@ -53,33 +55,13 @@ verifies package metadata and installed paths, and runs the packaged `/usr/bin/s
 extracted Python package. Both install paths include `speed-of-cinnamon(1)` and `speed-of-cinnamon-alarms(1)` man
 pages.
 
-Successful GitHub Actions runs upload the following artifacts: `speed-of-cinnamon-source-<commit>` with the source
-archive and checksum, plus `speed-of-cinnamon-rpm-<commit>` with the Fedora noarch RPM and source RPM,
-`speed-of-cinnamon-generic-rpm-<commit>` with the generic noarch RPM and source RPM, and
-`speed-of-cinnamon-snap-<commit>` with the Snap package.
-
-Pushing a version tag that matches `pyproject.toml`, for example `vX.Y.Z`, runs the release workflow. It validates workflow
-YAML in a dedicated lint step, then repeats the normal checks and publishes a GitHub Release with the source archive,
-checksum, Fedora noarch RPM, generic noarch RPM, Snap package, and their source RPMs. Tag-triggered releases build Snap
-packages by default and require a usable Snap build environment. The same
-workflow has manual inputs.
+See the [Release Matrix](development.md#kanonische-release-matrix) for release workflow commands and package options.
 Publishing requires repository secret `RELEASE_GITHUB_TOKEN` with `contents: write` scope for release creation and upload.
-Optional flags to skip package types when triggering manually:
 
-To trigger the workflow manually:
-
-```bash
-gh workflow run release.yml -f tag=v0.1.2
-```
-
-Release builds always include a Snap package; the release runner needs a working Snap build environment.
-Set `build_generic_rpm=false` to skip the generic RPM profile in the same way.
-Set `run_workflow_lint=false` to skip the workflow-lint step.
-
-To skip the workflow-lint preflight on a manual release run:
+To trigger the release workflow manually, use its defined inputs:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f run_workflow_lint=false
+gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_generic_rpm=false
 ```
 
 For an explicit release run, run:
@@ -88,28 +70,8 @@ For an explicit release run, run:
 gh workflow run release.yml -f tag=v0.1.2
 ```
 
-For a validation-only run that skips both optional package types:
-
-```bash
-gh workflow run release.yml -f tag=v0.1.2 -f build_generic_rpm=false
-```
-
-For local release validation checks without optional package types, keep everything local and skip optional builds as needed:
-
-```bash
-make release-dry-run BUILD_GENERIC_RPM=0
-```
-
-For a local publish run with the same reduced package set:
-
-```bash
-make release BUILD_GENERIC_RPM=0
-```
-
-Local flag values are validated before release steps run:
-
-- `SNAP_BUILD=1` for `release` and `release-dry-run`; use `release-dry-run-no-snap` only for local validation without Snap
-- `BUILD_GENERIC_RPM=0` or `BUILD_GENERIC_RPM=1`
+Use the [Release Matrix](development.md#kanonische-release-matrix) for local validation targets and manual workflow
+package options. Snap-free validation is local-only and uses `make release-dry-run-no-snap`.
 
 `make check` also runs `scripts/verify-authorship.sh`. That guard verifies the expected GitHub repository URL, commit
 author/committer identity, applet metadata, Python project metadata, RPM spec metadata, and rejects upstream author
@@ -292,7 +254,7 @@ They are also available as environment variables:
 
 ```text
 SPEED_OF_CINNAMON_CONTEXT
-SPEED_OF_CINNAMON_VOCABULARY
+SPEED_OF_CINNAMON_VOCABULARY (JSON array of terms)
 SPEED_OF_CINNAMON_PROMPT
 ```
 
@@ -541,6 +503,8 @@ For OpenAI API hosts, Flex processing is enabled by default for speech-to-text a
 If OpenAI rejects the Flex `service_tier`, the request fails visibly instead of silently retrying without Flex.
 If your server requires a bearer token, set `SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY` in the
 environment that starts the backend.
+For one-shot CLI use without exposing the token in process arguments, pipe it through stdin and add
+`--openai-compatible-api-key-stdin`.
 
 To inspect installed local text models from the backend:
 

@@ -12,6 +12,7 @@ from pathlib import Path
 from .path_safety import (
     assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
+    assert_safe_path_components,
     ensure_directory_without_following_symlinks,
     read_text_without_following_symlinks,
     write_text_atomically_without_following_symlinks,
@@ -28,7 +29,7 @@ _NORMALIZED_CARD_CANDIDATE_RE = re.compile(r"(?<!\d)(?:\d[\d\s-]{11,40}\d)(?!\d)
 
 
 def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
-    primary.add_note(f"blacklist lock cleanup failed: {cleanup_error}")
+    primary.add_note("blacklist lock cleanup failed")
 
 
 def _flock_retry(fd: int, operation: int) -> None:
@@ -45,10 +46,15 @@ _BLACKLIST_ADD_RE = re.compile(
 )
 _BLACKLIST_SHOW_RE = re.compile(
     r"(?im)^\s*(?:(?:bitte\s+)?(?:mir\s+)?(?:die\s+)?"
-    r"(?:blacklist|blackliste|sperrliste)\s+(?:anzeigen|anzeige|öffnen|open|show|zeigen|zeige)"
+    r"(?:blacklist|blackliste|sperrliste)\s+(?:anzeigen|anzeige|öffnen|offnen|open|show|zeigen|zeige)"
     r"|(?:bitte\s+)?(?:mir\s+)?(?:zeige|zeig|show|open|öffne)\s+(?:die\s+)?"
     r"(?:blacklist|blackliste|sperrliste)(?:\s+(?:anzeigen|anzeige|öffnen|open|show|zeigen|zeige))?)\s*$",
 )
+
+
+def _normalized_directive_line(value: str) -> str:
+    normalized, _ = _normalize_for_matching(value)
+    return normalized
 
 _EMAIL_RE = re.compile(
     r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b"
@@ -59,7 +65,9 @@ _PHONE_RE = re.compile(
 )
 _SPOKEN_SENSITIVE_LABEL_PATTERN = (
     r"(?:token|api[_-]?key|api\s+key|secret|apikey|bearer|password|passwort|kennwort|"
-    r"passcode|iban|name|adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id)"
+    r"passcode|iban|(?:full|voller)\s+name|name|adresse|anschrift|address|kundennummer|kundennr|kunden-nr|ssn|tax\s+id|"
+    r"customer(?:\s+(?:id|number))?|client\s+id|account\s+id|social\s+security(?:\s+number)?|"
+    r"sozialversicherungsnummer|steuer(?:identifikations)?nummer)"
 )
 _SECRET_VALUE_PATTERN = (
     r"(?:\"[^\n\"]{1,20000}\"|'[^\n']{1,20000}'|"
@@ -129,7 +137,9 @@ _LABELED_NAME_RE = re.compile(
     + _SPOKEN_NAME_VALUE_PATTERN
 )
 _NAME_RE = re.compile(
-    r"(?i)\b(?:mein\s+name\s+ist|ich\s+(?:heiße|heisse|heise|heisst|bin)|name\s+is|my\s+name\s+is)\s+"
+    r"(?i)\b(?:(?:mein\s+)?name\s+(?:ist|is|lautet|heißt|heisst|heist|heisse|heise)|"
+    r"(?:full|voller)\s+name\s+(?:ist|is|lautet|heißt|heisst|heist|heisse|heise)|"
+    r"my\s+name\s+is|ich\s+(?:heiße|heisse|heise|heisst|bin))\s+"
     + _SPOKEN_NAME_VALUE_PATTERN
 )
 _BANK_DATA_RE = re.compile(
@@ -137,11 +147,15 @@ _BANK_DATA_RE = re.compile(
 )
 _ID_NUMBER_RE = re.compile(
     r"(?i)\b(?:ssn|social\s+security(?:\s+number)?|sozialversicherungsnummer|"
-    r"steuer(?:identifikations)?nummer|tax\s+id)\b\s*[:=]?\s*[A-Z0-9][A-Z0-9 ._-]{5,24}"
+    r"steuer(?:identifikations)?nummer|tax\s+id)\b"
+    r"(?:\s+(?:ist|is|lautet|heißt|heisst|heist|heisse|heise))?\s*[:=]?\s*"
+    r"[A-Z0-9][A-Z0-9 ._-]{5,24}"
 )
 _CUSTOMER_ID_RE = re.compile(
     r"(?i)\b(?:kundennummer|kundennr|kunden-nr|customer(?:\s+(?:id|number))?|"
-    r"client\s+id|account\s+id)\b\s*[:=]?\s*[A-Z0-9][A-Z0-9._-]{3,}"
+    r"client\s+id|account\s+id)\b"
+    r"(?:\s+(?:ist|is|lautet|heißt|heisst|heist|heisse|heise))?\s*[:=]?\s*"
+    r"[A-Z0-9][A-Z0-9._-]{3,}"
 )
 _ADDRESS_RE = re.compile(
     r"(?i)\b(?:adresse|anschrift|address)\b\s*[:=]?\s*[^\n,;]{0,80}?"
@@ -193,7 +207,7 @@ _REDACTION_PLACEHOLDER_RE = re.compile(
 
 _MULTILINE_SENSITIVE_RE = re.compile(
     rf"(?i)\b(?P<label>{_SPOKEN_SENSITIVE_LABEL_PATTERN})\b"
-    r"(?:\s*(?::|=)|\s+(?:ist|is|lautet|heißt|heisst|heist|heisse|heise)\s*[:=]?)"
+    r"(?:\s*(?::|=)|\s+(?:ist|is|lautet|heißt|heisst|heist|heisse|heise)\s*[:=]?)?"
     r"[^\S\n]*\n+[^\S\n]*"
     r"(?P<value>(?:(?!\n[^\S\n]*\n)"
     rf"(?!\n[^\S\n]*(?:(?:und|and)[^\S\n]+)?(?:meine|my[^\S\n]+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)"
@@ -262,9 +276,16 @@ def _compile_blacklist_pattern_cached(
     return re.compile(rf"(?i)(?<!\w)(?:{escaped})(?!\w)")
 
 
+def _validate_blacklist_entries(entries: object, *, field_name: str = "blacklist") -> list[str] | tuple[object, ...]:
+    if not isinstance(entries, (list, tuple)):
+        raise ValueError(f"{field_name} must be a list or tuple")
+    return entries
+
+
 def _compile_blacklist_pattern(
     entries: list[str], *, preserve_sensitive_labels: bool = False
 ) -> re.Pattern[str] | None:
+    entries = _validate_blacklist_entries(entries)
     normalized: list[str] = []
     total_bytes = 0
     seen: set[str] = set()
@@ -280,13 +301,13 @@ def _compile_blacklist_pattern(
             entry_bytes = _safe_utf8_length(entry, field_name="blacklist entry")
         except ValueError:
             continue
-        if normalized and total_bytes + entry_bytes > _MAX_BLACKLIST_PATTERN_BYTES:
-            break
+        if total_bytes + entry_bytes > _MAX_BLACKLIST_PATTERN_BYTES:
+            raise ValueError("blacklist pattern exceeds maximum size")
+        if len(normalized) >= _MAX_BLACKLIST_ENTRIES:
+            raise ValueError("blacklist pattern exceeds maximum entries")
         normalized.append(entry)
         seen.add(entry_key)
         total_bytes += entry_bytes
-        if len(normalized) >= _MAX_BLACKLIST_ENTRIES:
-            break
     if not normalized:
         return None
     pattern_key = tuple(sorted(normalized, key=len, reverse=True))
@@ -488,14 +509,20 @@ def _normalize_blacklist_entry(value: str) -> str:
     entry = entry.strip(" .,:;!?()[]{}")
     entry = _DUPLICATE_SPACE_RE.sub(" ", entry)
     if len(entry) > _MAX_BLACKLIST_ENTRY_CHARS:
-        entry = entry[:_MAX_BLACKLIST_ENTRY_CHARS].strip()
+        raise ValueError("blacklist entry is too long")
     return entry
 
 
 def _safe_blacklist_path(path: Path) -> Path:
     if not isinstance(path, Path):
         raise RuntimeError("blacklist path must be a path")
-    path = path.expanduser()
+    try:
+        path = path.expanduser()
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError("blacklist path is not safe") from exc
+    if not path.is_absolute():
+        raise RuntimeError("blacklist path must be absolute")
+    assert_safe_path_components(path, field_name="blacklist file")
     assert_no_symlink_ancestors(path, field_name="blacklist file")
     return path
 
@@ -568,12 +595,18 @@ def _acquire_blacklist_lock(path: Path) -> int:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if nofollow_flag is None:
         raise ValueError("secure blacklist lock open is not supported on this platform")
+    cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     try:
         parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="blacklist lock directory")
     except (MemoryError, RecursionError, OSError, RuntimeError) as exc:
         raise ValueError("blacklist lock file path is not safe") from exc
     try:
-        fd = os.open(lock_path.name, os.O_RDWR | os.O_CREAT | nofollow_flag, 0o600, dir_fd=parent_fd)
+        fd = os.open(
+            lock_path.name,
+            os.O_RDWR | os.O_CREAT | nofollow_flag | cloexec_flag,
+            0o600,
+            dir_fd=parent_fd,
+        )
     except (MemoryError, RecursionError) as exc:
         error = ValueError("failed to open blacklist lock file")
         try:
@@ -722,13 +755,31 @@ def _placeholder_for_sensitive_label(label: str) -> str:
         return "[redacted password]"
     if normalized == "iban":
         return "[redacted iban]"
-    if normalized in {"name", "adresse", "anschrift", "address"}:
-        if normalized == "name":
+    if normalized in {"name", "full name", "voller name", "adresse", "anschrift", "address"}:
+        if normalized in {"name", "full name", "voller name"}:
             return "[redacted name]"
         return "[redacted address]"
-    if normalized in {"kundennummer", "kundennr", "kunden nr"}:
+    if normalized in {
+        "kundennummer",
+        "kundennr",
+        "kunden nr",
+        "customer",
+        "customer id",
+        "customer number",
+        "client id",
+        "account id",
+    }:
         return "[redacted customer id]"
-    if normalized in {"ssn", "tax id"}:
+    if normalized in {
+        "ssn",
+        "tax id",
+        "social security",
+        "social security number",
+        "sozialversicherungsnummer",
+        "steuernummer",
+        "steuer nummer",
+        "steueridentifikationsnummer",
+    }:
         return "[redacted id]"
     return "[redacted token]"
 
@@ -812,15 +863,18 @@ def parse_security_directives(text: str) -> SecurityParserResult:
     show_blacklist = False
 
     for line in lines:
-        match_add = _BLACKLIST_ADD_RE.match(line)
+        directive_line = _normalized_directive_line(line)
+        match_add = _BLACKLIST_ADD_RE.match(line) or _BLACKLIST_ADD_RE.match(directive_line)
         if match_add:
             entry = _normalize_blacklist_entry(match_add.group(1))
             entry_key = entry.casefold()
             if entry and entry_key not in added_keys:
+                if len(added) >= _MAX_BLACKLIST_ENTRIES:
+                    raise ValueError("blacklist directive exceeds maximum entries")
                 added.append(entry)
                 added_keys.add(entry_key)
             continue
-        if _BLACKLIST_SHOW_RE.match(line):
+        if _BLACKLIST_SHOW_RE.match(line) or _BLACKLIST_SHOW_RE.match(directive_line):
             show_blacklist = True
             continue
         kept.append(line)
@@ -875,6 +929,7 @@ def load_blacklist_file(path: Path, *, strict: bool = False) -> list[str]:
 
 
 def update_blacklist_file(path: Path, added: list[str]) -> list[str]:
+    added = _validate_blacklist_entries(added, field_name="blacklist additions")
     try:
         path = _safe_blacklist_path(path)
     except RuntimeError as exc:

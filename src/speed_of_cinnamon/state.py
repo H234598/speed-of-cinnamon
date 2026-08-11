@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import fcntl
+import time
 import re
 import stat
 from contextlib import contextmanager
@@ -34,6 +35,8 @@ MAX_PENDING_CLEANUP_BACKUP_ENTRIES = 4_096
 MAX_PENDING_CLEANUP_BACKUP_ENTRY_CHARS = 256
 MAX_CLEANUP_BACKUP_IDENTITY_VALUE = 18_446_744_073_709_551_615
 MAX_STATE_INT = 2_147_483_647
+STATE_LOCK_TIMEOUT_SECONDS = 5.0
+STATE_LOCK_RETRY_SECONDS = 0.01
 VALID_STATE_STATUSES = frozenset({"idle", "recording", "recorded", "processing", "finalizing", "done", "error"})
 _CLEANUP_BACKUP_BASENAME_PATTERN = re.compile(
     r"(?:"
@@ -42,6 +45,10 @@ _CLEANUP_BACKUP_BASENAME_PATTERN = re.compile(
     r"\.cleanup\.v2\.[0-9a-f]{32}\.[0-9a-f]{32}\.[0-9a-f]{32}"
     r")\.bak"
 )
+
+
+def _reject_non_finite_json_number(value: str) -> object:
+    raise ValueError(f"non-finite JSON number is not allowed: {value}")
 _STATE_READ_ERRORS = frozenset(
     {
         "state file could not be read",
@@ -56,16 +63,30 @@ def is_state_read_error(error: object) -> bool:
 
 
 def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
-    primary.add_note(f"state lock cleanup failed: {cleanup_error}")
+    primary.add_note("state lock cleanup failed")
 
 
-def _flock_retry(fd: int, operation: int) -> None:
+def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
+    if timeout_seconds is None:
+        while True:
+            try:
+                fcntl.flock(fd, operation)
+                return
+            except InterruptedError:
+                continue
+    deadline = time.monotonic() + timeout_seconds
+    nonblocking_operation = operation | fcntl.LOCK_NB
     while True:
         try:
-            fcntl.flock(fd, operation)
+            fcntl.flock(fd, nonblocking_operation)
             return
         except InterruptedError:
             continue
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("state lock acquisition timed out") from None
+            time.sleep(min(STATE_LOCK_RETRY_SECONDS, remaining))
 
 
 def _utf8_byte_count(value: str, *, field_name: str) -> int:
@@ -158,7 +179,7 @@ class StateStore:
         self.path = path
 
     @contextmanager
-    def _locked(self) -> Iterator[None]:
+    def _locked(self, *, shared: bool = False) -> Iterator[None]:
         lock_path = self.path.with_name(f".{self.path.name}.lock")
         assert_safe_path_components(lock_path, field_name="state lock path")
         assert_no_symlink_ancestors(lock_path, field_name="state lock path")
@@ -171,7 +192,11 @@ class StateStore:
             assert_fd_is_private_directory(parent_fd, field_name="state lock directory")
             fd = os.open(
                 lock_path.name,
-                os.O_RDWR | os.O_CREAT | nofollow_flag | nonblock_flag,
+                os.O_RDWR
+                | os.O_CREAT
+                | nofollow_flag
+                | nonblock_flag
+                | getattr(os, "O_CLOEXEC", 0),
                 0o600,
                 dir_fd=parent_fd,
             )
@@ -203,7 +228,11 @@ class StateStore:
         primary_error: BaseException | None = None
         try:
             assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
-            _flock_retry(fd, fcntl.LOCK_EX)
+            _flock_retry(
+                fd,
+                fcntl.LOCK_SH if shared else fcntl.LOCK_EX,
+                timeout_seconds=STATE_LOCK_TIMEOUT_SECONDS,
+            )
             assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
             yield
         except BaseException as exc:
@@ -450,6 +479,10 @@ class StateStore:
 
     @staticmethod
     def _normalize_state_data(raw: dict[str, Any]) -> dict[str, Any]:
+        known_fields = {state_field.name for state_field in fields(RecordingState)}
+        unknown_fields = set(raw) - known_fields
+        if unknown_fields:
+            raise ValueError("state contains unknown fields")
         if "status" not in raw:
             raise ValueError("state status is missing")
         normalized: dict[str, Any] = {}
@@ -535,6 +568,7 @@ class StateStore:
                 "cleanup_backup_journal_overflow",
                 False,
             )
+            or not normalized.get("cleanup_backup_journal_restore", False)
             or normalized["status"] not in {"finalizing", "error"}
             or normalized.get("pid") is not None
             or bool(normalized.get("process_identity", ""))
@@ -573,7 +607,7 @@ class StateStore:
         return normalized
 
     def read(self) -> RecordingState:
-        with self._locked():
+        with self._locked(shared=True):
             return self._read_unlocked()
 
     def _read_unlocked(self) -> RecordingState:
@@ -598,7 +632,7 @@ class StateStore:
             )
             if _contains_escaped_null(data_text):
                 return RecordingState(error="state file could not be read")
-            data = json.loads(data_text)
+            data = json.loads(data_text, parse_constant=_reject_non_finite_json_number)
             if not isinstance(data, dict):
                 return RecordingState(error="state file is malformed")
             normalized = StateStore._normalize_state_data(data)
@@ -644,9 +678,10 @@ class StateStore:
             if is_state_read_error(state.error):
                 raise RuntimeError(state.error)
             state_fields = {state_field.name for state_field in fields(RecordingState)}
+            if set(values) - state_fields:
+                raise ValueError("state update contains unknown fields")
             for key, value in values.items():
-                if key in state_fields:
-                    setattr(state, key, value)
+                setattr(state, key, value)
             return self._write_unlocked(state)
 
 

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import errno
+import fcntl
 import json
 import os
 import signal
@@ -9,8 +10,9 @@ import secrets
 import shutil
 import stat
 import subprocess  # nosec B404
+import sys
 import time
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,6 +26,7 @@ from .output import (
 )
 from .paths import APP_ID, APP_NAME, config_dir
 from .path_safety import (
+    assert_fd_is_private_directory,
     assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
     assert_safe_path_components,
@@ -32,6 +35,7 @@ from .path_safety import (
     _rename_without_replacing,
     write_bytes_atomically_without_following_symlinks,
 )
+from .secure_delete import secure_wipe_regular_file_at
 
 ARTIFACT_ENCRYPTION_OFF = "off"
 ARTIFACT_ENCRYPTION_PASSPHRASE = "passphrase"  # nosec B105
@@ -63,8 +67,10 @@ PASSPHRASE_ENV = "SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE"  # nosec B105
 PASSPHRASE_FILE_ENV = "SPEED_OF_CINNAMON_ENCRYPTION_PASSPHRASE_FILE"  # nosec B105
 DEFAULT_PASSPHRASE_FILE_NAME = "artifact.key"  # nosec B105
 DEFAULT_PASSPHRASE_HISTORY_FILE_NAME = "artifact.key.history"  # nosec B105
-MAX_PASSPHRASE_HISTORY_ENTRIES = 1
+MAX_PASSPHRASE_HISTORY_ENTRIES = 8
 MAX_PASSPHRASE_HISTORY_BYTES = 8192
+KEYRING_INITIALIZATION_LOCK_FILE_NAME = ".artifact-keyring.lock"
+KEYRING_INITIALIZATION_LOCK_TIMEOUT_SECONDS = 10.0
 _SECRET_TOOL_TIMEOUT_SECONDS = 10
 MAX_SECRET_TOOL_OUTPUT_BYTES = 64 * 1024
 MAX_SECRET_TOOL_ARG_CHARS = 4096
@@ -83,6 +89,10 @@ _ALLOWED_SECRET_TOOL_ENV = {
 }
 _SAFE_DBUS_SESSION_PREFIX = "unix:path="
 _ACL_XATTR = "system.posix_acl_access"
+
+
+def _reject_non_finite_json_number(value: str) -> object:
+    raise ValueError("non-finite JSON number is not allowed")
 
 
 def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
@@ -207,6 +217,12 @@ def is_encrypted_path(path: Path) -> bool:
     return isinstance(path, Path) and path.name.casefold().endswith(ENCRYPTED_SUFFIX)
 
 
+def _is_encrypted_envelope(envelope: object) -> bool:
+    return isinstance(envelope, dict) and envelope.get("magic") == ENVELOPE_MAGIC and isinstance(
+        envelope.get("ciphertext"), str
+    )
+
+
 def is_encrypted_payload(payload: bytes) -> bool:
     if isinstance(payload, bool) or not isinstance(payload, bytes):
         return False
@@ -216,12 +232,10 @@ def is_encrypted_payload(payload: bytes) -> bool:
     if not stripped.startswith(b"{"):
         return False
     try:
-        envelope = json.loads(stripped.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, MemoryError):
+        envelope = json.loads(stripped.decode("utf-8"), parse_constant=_reject_non_finite_json_number)
+    except (UnicodeDecodeError, ValueError, RecursionError, MemoryError):
         return False
-    return isinstance(envelope, dict) and envelope.get("magic") == ENVELOPE_MAGIC and isinstance(
-        envelope.get("ciphertext"), str
-    )
+    return _is_encrypted_envelope(envelope)
 
 
 def _is_json_like_payload(payload: bytes) -> bool:
@@ -376,8 +390,8 @@ def _read_default_passphrase_history(path: Path) -> list[str]:
         raise _PassphraseHistoryError("artifact encryption passphrase history could not be read")
     parse_failed = False
     try:
-        document = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, MemoryError):
+        document = json.loads(raw.decode("utf-8"), parse_constant=_reject_non_finite_json_number)
+    except (UnicodeDecodeError, ValueError, RecursionError, MemoryError):
         parse_failed = True
     if parse_failed:
         raise _PassphraseHistoryError("artifact encryption passphrase history is invalid")
@@ -424,12 +438,12 @@ def _write_default_passphrase_history(path: Path, previous_payload: bytes) -> No
     ):
         raise _PassphraseHistoryError("artifact encryption passphrase history could not be prepared")
     existing = _read_default_passphrase_history(path)
-    entries = existing[:MAX_PASSPHRASE_HISTORY_ENTRIES]
-    if previous_passphrase not in entries:
-        entries = [previous_passphrase]
+    entries = [previous_passphrase, *(value for value in existing if value != previous_passphrase)]
+    if len(entries) > MAX_PASSPHRASE_HISTORY_ENTRIES:
+        raise _PassphraseHistoryError("artifact encryption passphrase history is too large")
     document = {
         "version": 1,
-        "keys": [_b64encode(value.encode("utf-8")) for value in entries[:MAX_PASSPHRASE_HISTORY_ENTRIES]],
+        "keys": [_b64encode(value.encode("utf-8")) for value in entries],
     }
     rendered, render_error = _capture_normal_error(
         lambda: json.dumps(document, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n",
@@ -609,7 +623,6 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
     previous_payload: bytes | None = None
     transaction_active = False
     primary_error: BaseException | None = None
-    cleanup_error: BaseException | None = None
     deferred_error: BaseException | None = None
     existing_passphrase: str | None = None
 
@@ -638,9 +651,17 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         if not _same_leaf_inode(current_stat, expected_stat):
             raise OSError(f"{description} changed before cleanup")
 
-    def _remove_expected_file(name: str, expected_stat: os.stat_result | None, *, description: str) -> None:
+    def _remove_expected_file(
+        name: str,
+        expected_stat: os.stat_result | None,
+        *,
+        description: str,
+        secure_wipe: bool = True,
+    ) -> None:
         if expected_stat is None:
             raise OSError(f"{description} identity is unavailable")
+        if type(secure_wipe) is not bool:
+            raise TypeError(f"{description} secure wipe flag is invalid")
         _assert_expected_file(name, expected_stat, description=description)
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
         if nofollow_flag is None:
@@ -678,6 +699,13 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                 current_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
                 if not _same_leaf_inode(current_stat, claimed_stat):
                     raise OSError(f"{description} changed before cleanup")
+                if secure_wipe:
+                    secure_wipe_regular_file_at(
+                        parent_fd,
+                        cleanup_name,
+                        claimed_stat,
+                        field_name=f"{description} secure cleanup",
+                    )
                 os.unlink(cleanup_name, dir_fd=parent_fd)
                 unlinked = True
             except BaseException as exc:
@@ -903,6 +931,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                         backup_name,
                         existing_stat,
                         description="artifact encryption passphrase recovery backup",
+                        secure_wipe=False,
                     )
                     _fsync_fd(parent_fd)
             else:
@@ -997,6 +1026,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                             path.name,
                             existing_stat,
                             description="artifact encryption passphrase target",
+                            secure_wipe=False,
                         )
                         target_removed = True
                         _fsync_fd(parent_fd)
@@ -1081,7 +1111,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                 backup_name = ""
                 backup_created = False
                 transaction_active = False
-            except BaseException as cleanup_error:
+            except BaseException:
                 primary_error = ArtifactCryptoError(
                     "artifact encryption passphrase recovery backup could not be removed"
                 )
@@ -1103,7 +1133,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         except BaseException as rollback_error:
             _note_cleanup_failure(primary_error, rollback_error)
         raise
-    except (OSError, RuntimeError) as exc:
+    except (OSError, RuntimeError):
         if primary_error is not None:
             raise
         primary_error = ArtifactCryptoError("artifact encryption passphrase file could not be generated")
@@ -1204,6 +1234,7 @@ def _read_private_passphrase_file(
     if open_error is not None:
         raise open_error
     handle: Any | None = None
+    payload: bytes | None = None
     primary_error: BaseException | None = None
     try:
         validation_message: str | None = None
@@ -1268,6 +1299,8 @@ def _read_private_passphrase_file(
                 primary_error = cleanup_error
     if primary_error is not None:
         raise primary_error
+    if payload is None:
+        raise ArtifactCryptoError("artifact encryption passphrase file could not be read")
     if len(payload) > MAX_PASSPHRASE_FILE_BYTES:
         raise ArtifactCryptoError("artifact encryption passphrase file is too large")
     decoded_payload, decode_error = _capture_normal_error(
@@ -1341,6 +1374,11 @@ def _passphrase_from_sources(
     allow_implicit_default: bool = True,
 ) -> str | None:
     passphrase_file = _explicit_passphrase_file()
+    passphrase_env = os.environ.get(PASSPHRASE_ENV, "")
+    if passphrase_file is not None and passphrase_env:
+        raise ArtifactCryptoError(
+            "configure either artifact encryption passphrase environment or passphrase file, not both"
+        )
     if passphrase_file is not None:
         passphrase = _read_private_passphrase_file(
             passphrase_file,
@@ -1348,7 +1386,7 @@ def _passphrase_from_sources(
             rotate_weak_default=False,
         )
     else:
-        passphrase = os.environ.get(PASSPHRASE_ENV, "")
+        passphrase = passphrase_env
         if not passphrase:
             passphrase_file = _configured_passphrase_file(include_default=allow_implicit_default)
             if passphrase_file is not None:
@@ -1454,7 +1492,15 @@ def _safe_dbus_session_bus_address(value: str, runtime_dir: Path) -> bool:
         return False
     if not value.startswith(_SAFE_DBUS_SESSION_PREFIX):
         return False
-    bus_path = Path(value[len(_SAFE_DBUS_SESSION_PREFIX):])
+    address_body = value[len(_SAFE_DBUS_SESSION_PREFIX):]
+    bus_path_text, separator, parameters = address_body.partition(",")
+    if separator and (
+        not parameters.startswith("guid=")
+        or len(parameters) != len("guid=") + 32
+        or any(char not in "0123456789abcdefABCDEF" for char in parameters[len("guid="):])
+    ):
+        return False
+    bus_path = Path(bus_path_text)
     if not bus_path.is_absolute():
         return False
     if bus_path != runtime_dir / "bus":
@@ -1897,18 +1943,92 @@ def _store_keyring_key(key: bytes) -> None:
         raise ArtifactCryptoError("Secret Service keyring could not store the artifact encryption key")
 
 
+@contextmanager
+def _keyring_initialization_lock():
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if nofollow_flag is None:
+        raise ArtifactCryptoError("Secret Service keyring initialization locking is not supported")
+    lock_path = config_dir() / KEYRING_INITIALIZATION_LOCK_FILE_NAME
+    assert_no_symlink_ancestors(lock_path, field_name="artifact encryption keyring lock")
+    parent_fd = -1
+    lock_fd = -1
+    acquired = False
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(
+            lock_path.parent,
+            field_name="artifact encryption keyring lock directory",
+        )
+        assert_fd_is_private_directory(parent_fd, field_name="artifact encryption keyring lock directory")
+        lock_fd = os.open(
+            lock_path.name,
+            os.O_RDWR | os.O_CREAT | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+            0o600,
+            dir_fd=parent_fd,
+        )
+        assert_fd_is_regular_private_file(lock_fd, field_name="artifact encryption keyring lock")
+        deadline = time.monotonic() + KEYRING_INITIALIZATION_LOCK_TIMEOUT_SECONDS
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise ArtifactCryptoError("Secret Service keyring initialization lock timed out")
+                time.sleep(0.01)
+            except OSError as exc:
+                if exc.errno == errno.EINTR:
+                    continue
+                raise ArtifactCryptoError("Secret Service keyring initialization lock failed") from None
+            else:
+                acquired = True
+                break
+        yield
+    except (OSError, RuntimeError) as exc:
+        if isinstance(exc, ArtifactCryptoError):
+            raise
+        raise ArtifactCryptoError("Secret Service keyring initialization lock failed") from None
+    finally:
+        primary_error = sys.exc_info()[1]
+        cleanup_error: BaseException | None = None
+        if acquired:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+            except BaseException as exc:
+                cleanup_error = exc
+        if lock_fd >= 0:
+            try:
+                os.close(lock_fd)
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+        if parent_fd >= 0:
+            try:
+                os.close(parent_fd)
+            except BaseException as exc:
+                if cleanup_error is None:
+                    cleanup_error = exc
+        if cleanup_error is not None:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise ArtifactCryptoError("Secret Service keyring initialization lock cleanup failed") from None
+
+
 def _load_keyring_key() -> bytes:
     existing = _lookup_keyring_key()
     if existing is not None:
         return existing
-    key = secrets.token_bytes(KEY_SIZE_BYTES)
-    _store_keyring_key(key)
-    confirmed = _lookup_keyring_key()
-    if confirmed is None:
-        raise ArtifactCryptoError("Secret Service keyring did not return the stored artifact encryption key")
-    if confirmed != key:
-        raise ArtifactCryptoError("Secret Service keyring returned a different artifact encryption key after storing")
-    return confirmed
+    with _keyring_initialization_lock():
+        existing = _lookup_keyring_key()
+        if existing is not None:
+            return existing
+        key = secrets.token_bytes(KEY_SIZE_BYTES)
+        _store_keyring_key(key)
+        confirmed = _lookup_keyring_key()
+        if confirmed is None:
+            raise ArtifactCryptoError("Secret Service keyring did not return the stored artifact encryption key")
+        if confirmed != key:
+            raise ArtifactCryptoError("Secret Service keyring returned a different artifact encryption key after storing")
+        return confirmed
 
 
 def _passphrase_key_for_encryption(*, allow_implicit_default: bool = True) -> tuple[bytes, bytes]:
@@ -1945,7 +2065,10 @@ def _passphrase_for_decryption() -> str:
 
 
 def _passphrase_history_for_decryption(current_passphrase: str) -> list[str]:
-    if _explicit_passphrase_source_configured():
+    if os.environ.get(PASSPHRASE_ENV):
+        return []
+    explicit_file = _explicit_passphrase_file()
+    if explicit_file is not None and explicit_file != default_passphrase_file():
         return []
     try:
         history = _read_default_passphrase_history(default_passphrase_file())
@@ -2048,17 +2171,19 @@ def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = True) 
         raise ArtifactCryptoError("encrypted artifact payload is too large")
     if len(payload) > MAX_ENCRYPTED_ARTIFACT_BYTES and not require_encrypted:
         return payload
-    if not is_encrypted_payload(payload):
+    parse_failed = False
+    try:
+        envelope = json.loads(payload.decode("utf-8"), parse_constant=_reject_non_finite_json_number)
+    except (UnicodeDecodeError, ValueError, RecursionError, MemoryError):
+        parse_failed = True
+    if parse_failed:
         if require_encrypted:
             raise ArtifactCryptoError("encrypted artifact envelope is missing")
         return payload
-    parse_failed = False
-    try:
-        envelope = json.loads(payload.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, MemoryError):
-        parse_failed = True
-    if parse_failed:
-        raise ArtifactCryptoError("encrypted artifact envelope is malformed")
+    if not _is_encrypted_envelope(envelope):
+        if require_encrypted:
+            raise ArtifactCryptoError("encrypted artifact envelope is missing")
+        return payload
     if not isinstance(envelope, dict):
         raise ArtifactCryptoError("encrypted artifact envelope must be an object")
     version = envelope.get("version")
@@ -2137,7 +2262,45 @@ def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = True) 
     raise ArtifactCryptoError("encrypted artifact authentication failed")
 
 
-def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = None) -> bytes:
+def _same_private_file_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        first.st_dev,
+        first.st_ino,
+        first.st_mode,
+        getattr(first, "st_nlink", 1),
+        first.st_size,
+        first.st_mtime_ns,
+        first.st_ctime_ns,
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        second.st_mode,
+        getattr(second, "st_nlink", 1),
+        second.st_size,
+        second.st_mtime_ns,
+        second.st_ctime_ns,
+    )
+
+
+def _same_private_file_inode(first: os.stat_result, second: os.stat_result) -> bool:
+    return (
+        first.st_dev,
+        first.st_ino,
+        first.st_mode,
+    ) == (
+        second.st_dev,
+        second.st_ino,
+        second.st_mode,
+    )
+
+
+def read_private_bytes(
+    path: Path,
+    *,
+    field_name: str,
+    max_bytes: int | None = None,
+    expected_stat: os.stat_result | None = None,
+) -> bytes:
     public_field_name = _safe_public_field_label(field_name)
     if not isinstance(path, Path):
         raise ArtifactCryptoError(f"{public_field_name} must be a path")
@@ -2167,9 +2330,24 @@ def read_private_bytes(path: Path, *, field_name: str, max_bytes: int | None = N
     primary_error: BaseException | None = None
     try:
         assert_fd_is_regular_private_file(fd, field_name=field_name)
+        opened_stat: os.stat_result | None = None
+        if expected_stat is not None:
+            opened_stat = os.fstat(fd)
+            if not _same_private_file_snapshot(opened_stat, expected_stat):
+                raise OSError(f"{public_field_name} changed before reading")
+            current_path_stat = path.lstat()
+            if not _same_private_file_inode(current_path_stat, opened_stat):
+                raise OSError(f"{public_field_name} changed before reading")
         handle = os.fdopen(fd, "rb")
         fd = -1
         data = handle.read(effective_max_bytes + 1)
+        if expected_stat is not None and opened_stat is not None:
+            final_stat = os.fstat(handle.fileno())
+            if not _same_private_file_snapshot(final_stat, opened_stat):
+                raise OSError(f"{public_field_name} changed while reading")
+            final_path_stat = path.lstat()
+            if not _same_private_file_inode(final_path_stat, final_stat):
+                raise OSError(f"{public_field_name} changed while reading")
     except Exception:
         primary_error = ArtifactCryptoError(f"failed to read {public_field_name}")
     except BaseException as exc:
@@ -2223,10 +2401,12 @@ def read_decrypted_bytes_from_file(
     field_name: str,
     max_bytes: int | None = None,
     require_encrypted: bool = True,
+    expected_stat: os.stat_result | None = None,
 ) -> bytes:
     data = read_private_bytes(
         path,
         field_name=field_name,
         max_bytes=max_bytes,
+        expected_stat=expected_stat,
     )
     return decrypt_bytes(data, kind=kind, require_encrypted=require_encrypted)

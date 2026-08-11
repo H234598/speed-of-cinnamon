@@ -24,6 +24,8 @@ function loadAppletMethod(name, nextName, clock, extraContext = {}) {
     MAX_XDOTOOL_TARGET_OUTPUT_BYTES: 4096,
     PASTE_FOCUS_DELAY_MS: 25,
     PASTE_SUBMIT_DELAY_MS: 300,
+    FOCUS_RESTORE_POLL_MS: 20,
+    FOCUS_RESTORE_TIMEOUT_MS: 1000,
     X11_COMMAND_TIMEOUT_MS: 100,
     St: { ClipboardType: { CLIPBOARD: 1 } },
     Date: { now: () => clock.value },
@@ -35,6 +37,36 @@ function loadAppletMethod(name, nextName, clock, extraContext = {}) {
 function loadSpawnKeyboardArgs(clock) {
   return loadAppletMethod("_spawnKeyboardArgs", "_finishAppletTextInsert", clock);
 }
+
+test("built-in Auto-Submit marker matches title when class is unknown", () => {
+  const clock = { value: 0 };
+  const matchesMarker = loadAppletMethod(
+    "_windowIdentityValueMatchesMarker",
+    "_markerAllowsAutoPasteIdentity",
+    clock
+  );
+  const matchesTitle = loadAppletMethod(
+    "_windowTitleMatchesAutoPaste",
+    "_updateOpenAiFlexProcessingItem",
+    clock,
+    { AUTO_PASTE_IDENTITY_MARKERS: { pdf: ["evince"] } }
+  );
+  const applet = {
+    autoPasteWindowTitle: "PDF",
+    targetWindow: null,
+    targetWindowXTitle: "Quarterly report.pdf",
+    targetWindowXClass: "unknown-reader",
+    _autoPasteTitleValues: () => ["pdf"],
+    _isUsableTargetWindow: () => false,
+    _isTargetWindowXLookupPending: () => false,
+    _windowProbeValue: () => "",
+    _normalizedAutoPasteWindowTitle: (value) => String(value).trim().toLowerCase(),
+    _windowIdentityMatchesAutoPaste: () => false,
+    _windowIdentityValueMatchesMarker: matchesMarker,
+  };
+
+  assert.equal(matchesTitle.call(applet), true);
+});
 
 function loadSpawnKeyboardAfterFocus(clock) {
   return loadAppletMethod(
@@ -177,6 +209,63 @@ function makeRestoreApplet(clock) {
     completions,
     display,
     fallbacks: () => fallbacks,
+    invoke() {
+      return applet._restoreTargetWindowForPaste(
+        (result) => completions.push(result)
+      );
+    },
+  };
+}
+
+function makeDelayedRestoreApplet(clock) {
+  const completions = [];
+  const targetWindow = {};
+  let activations = 0;
+  let focusTimer = null;
+  const display = { focus_window: null };
+  const applet = {
+    targetWindow,
+    _restoreTargetWindowForPaste: loadAppletMethod(
+      "_restoreTargetWindowForPaste",
+      "_closeMenuForKeyboardInsert",
+      clock,
+      {
+        global: {
+          display,
+          get_current_time: () => 1,
+        },
+        Main: {
+          activateWindow() {
+            activations += 1;
+            return true;
+          },
+        },
+      }
+    ),
+    _activateTargetXWindow(callback) {
+      callback(false);
+      return false;
+    },
+    _isUsableTargetWindow: (window) => window === targetWindow,
+    _lifecycleAllowsWork: () => true,
+    _recordLifecycleError() {},
+    _runStateGuarded(_group, callback) {
+      callback();
+    },
+    _scheduleTrackedTimer(_name, _delay, callback) {
+      focusTimer = callback;
+      return 1;
+    },
+  };
+  return {
+    applet,
+    activations: () => activations,
+    completions,
+    display,
+    fireFocusTimer() {
+      assert.equal(typeof focusTimer, "function");
+      return focusTimer();
+    },
     invoke() {
       return applet._restoreTargetWindowForPaste(
         (result) => completions.push(result)
@@ -448,6 +537,42 @@ test("late callback preserves foreign paste timer owner", () => {
   assert.equal(state.applet._resourceRegistry.timers.paste, foreignTimerId);
 });
 
+test("stale focus callback cannot clear new insertion timer", () => {
+  const clock = { value: 1000 };
+  const state = makeApplet(clock);
+  const newCompletions = [];
+  const staleCompletions = [];
+
+  state.applet._spawnKeyboardAfterFocus(
+    ["xdotool", "key", "ctrl+v"],
+    null,
+    "new text",
+    { xid: "new" },
+    (result) => newCompletions.push(result),
+    () => true,
+  );
+  const newTimerId = state.applet.pasteTimer;
+  assert.notEqual(newTimerId, 0);
+
+  state.applet._spawnKeyboardAfterFocus(
+    ["xdotool", "key", "ctrl+v"],
+    null,
+    "stale text",
+    { xid: "stale" },
+    (result) => staleCompletions.push(result),
+    () => false,
+  );
+
+  assert.deepEqual(staleCompletions, [false]);
+  assert.equal(state.applet.pasteTimer, newTimerId);
+  assert.equal(state.applet._resourceRegistry.timers.paste, newTimerId);
+  assert.equal(state.clearPasteTimerCalls(), 1);
+
+  state.applet.fireTimer(newTimerId);
+  state.reads[0](null, "new text");
+  assert.deepEqual(newCompletions, [true]);
+});
+
 test("matching clipboard callback before deadline is exactly once", () => {
   const clock = { value: 1000 };
   const state = makeApplet(clock);
@@ -465,6 +590,45 @@ test("matching clipboard callback before deadline is exactly once", () => {
   assert.equal(state.clearPasteTimerCalls(), 1);
   assert.equal(state.applet.pasteTimer, 0);
   assert.equal(state.timers.size, 0);
+});
+
+test("duplicate clipboard callback while paste is pending is ignored", () => {
+  const clock = { value: 1000 };
+  const state = makeApplet(clock);
+  state.applet.queueProcessCallbacks = true;
+  state.applet.invoke();
+
+  clock.value = 1050;
+  state.reads[0](null, "text");
+  state.reads[0](null, "text");
+
+  assert.deepEqual(state.completions, []);
+  assert.equal(state.processes.length, 1);
+  assert.equal(state.processCallbacks.length, 1);
+
+  state.processCallbacks[0](true);
+
+  assert.deepEqual(state.completions, [true]);
+});
+
+test("paste without follow-up revalidates target before completion", () => {
+  const clock = { value: 1000 };
+  const state = makeApplet(clock);
+  let targetChecks = 0;
+  state.applet.queueProcessCallbacks = true;
+  state.applet._targetXWindowMatchesSnapshot = (_snapshot, callback) => {
+    targetChecks += 1;
+    callback(targetChecks === 1);
+    return targetChecks === 1;
+  };
+  state.applet.invoke("text");
+
+  state.reads[0](null, "text");
+  assert.equal(state.processCallbacks.length, 1);
+  state.processCallbacks[0](true);
+
+  assert.equal(targetChecks, 2);
+  assert.deepEqual(state.completions, [false]);
 });
 
 test("clipboard mismatch retries with one owner before success", () => {
@@ -516,6 +680,29 @@ test("successful paste starts follow-up Enter as second process", () => {
 
   assert.deepEqual(state.completions, [true]);
   assert.deepEqual(state.processes, [firstArgs, followUpArgs]);
+});
+
+test("submit title mismatch fails instead of claiming success", () => {
+  const clock = { value: 1000 };
+  const state = makeApplet(clock);
+  const firstArgs = ["xdotool", "key", "ctrl+v"];
+  const followUpArgs = ["xdotool", "key", "Return"];
+
+  state.applet._windowTitleMatchesAutoPaste = () => false;
+  state.applet._spawnKeyboardArgs(
+    firstArgs,
+    followUpArgs,
+    { xid: "1" },
+    null,
+    null,
+    (result) => state.completions.push(result),
+    () => true
+  );
+
+  state.applet.fireTimer(state.applet.pasteTimer);
+
+  assert.deepEqual(state.completions, [false]);
+  assert.deepEqual(state.processes, [firstArgs]);
 });
 
 test("stale operation completes without process start", () => {
@@ -938,6 +1125,22 @@ test("focused target restore skips redundant compositor activation", () => {
   assert.equal(state.fallbacks(), 0);
 });
 
+test("target restore waits for observed focus after compositor activation", () => {
+  const clock = { value: 1000 };
+  const state = makeDelayedRestoreApplet(clock);
+
+  assert.equal(state.invoke(), true);
+  assert.equal(state.activations(), 1);
+  assert.deepEqual(state.completions, []);
+
+  state.fireFocusTimer();
+  assert.deepEqual(state.completions, []);
+
+  state.display.focus_window = state.applet.targetWindow;
+  state.fireFocusTimer();
+  assert.deepEqual(state.completions, [true]);
+});
+
 test("direct typing derives bounded timeout from codepoints and delay", () => {
   const clock = { value: 1000 };
   const state = makeTypeApplet(clock, 8);
@@ -993,4 +1196,67 @@ test("direct typing accepts exact maximum timeout and rejects next codepoint", (
   assert.equal(aboveLimit.calls.length, 0);
   assert.equal(aboveLimit.statuses.length, 1);
   assert.equal(aboveLimit.statuses[0].status, "error");
+});
+
+function makeAsyncTargetRememberApplet(clock) {
+  let pendingCallback = null;
+  const completions = [];
+  const applet = {
+    targetWindow: null,
+    targetWindowGeneration: 0,
+    targetWindowXPendingGeneration: 0,
+    targetWindowXid: "",
+    targetWindowXTitle: "",
+    targetWindowXClass: "",
+    lastTranscript: "",
+    _rememberFocusedWindow: loadAppletMethod(
+      "_rememberFocusedWindow",
+      "_restoreTargetWindowForPaste",
+      clock,
+      {
+        global: { display: { focus_window: null } },
+      }
+    ),
+    _terminateProcessesByGroup: () => true,
+    _isUsableTargetWindow: () => false,
+    _windowLooksLikeSpeedOfCinnamon: () => false,
+    _rememberActiveXWindow(callback) {
+      pendingCallback = callback;
+      return true;
+    },
+    _clearTargetWindowXid() {
+      this.targetWindowXid = "";
+      this.targetWindowXTitle = "";
+      this.targetWindowXClass = "";
+    },
+    _hasRememberedTargetWindow() {
+      return /^[0-9]+$/.test(String(this.targetWindowXid || "").trim());
+    },
+    _setStatusPreservingRecording() {},
+    _recordLifecycleError() {},
+    _lifecycleAllowsWork: () => true,
+  };
+  return {
+    applet,
+    completions,
+    resolve(value) {
+      pendingCallback(value);
+    },
+  };
+}
+
+test("async X11 target resolution gates completion until fallback resolves", () => {
+  const state = makeAsyncTargetRememberApplet({ value: 1000 });
+
+  assert.equal(
+    state.applet._rememberFocusedWindow(false, (result) => state.completions.push(result)),
+    true
+  );
+  assert.deepEqual(state.completions, []);
+  assert.equal(state.applet.targetWindowXPendingGeneration, 1);
+
+  state.resolve(true);
+
+  assert.deepEqual(state.completions, [true]);
+  assert.equal(state.applet.targetWindowXPendingGeneration, 0);
 });

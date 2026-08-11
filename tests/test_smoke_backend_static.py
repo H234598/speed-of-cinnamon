@@ -19,9 +19,12 @@ class SmokeBackendStaticTest(unittest.TestCase):
         self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', source)
         self.assertIn('smoke_tmp_root="$(resolve_smoke_tmp_root)"', source)
         self.assertIn('smoke_root="$(mktemp -d "${smoke_tmp_root}/speed-of-cinnamon-smoke-XXXXXX")"', source)
+        self.assertIn('smoke_root_identity=""', source)
         self.assertIn('smoke_root_abs="$(realpath "${smoke_root}")', source)
         self.assertIn('temporary smoke directory escaped temporary root', source)
         self.assertIn('"${safe_fs_cmd[@]}" remove smoke-backend "${smoke_root}" --kind dir', source)
+        self.assertIn('--expected-identity "${smoke_root_identity}"', source)
+        self.assertIn('refusing smoke cleanup without verified identity', source)
         self.assertNotIn('mktemp -d "${TMPDIR:-/tmp}/speed-of-cinnamon-smoke-XXXXXX"', source)
         self.assertNotIn('rm -rf -- "${smoke_root}"', source)
 

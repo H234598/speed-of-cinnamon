@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import fcntl
 import gzip
 import json
 import logging
@@ -10,6 +11,7 @@ import re
 import secrets
 import stat as stat_module
 import string
+import threading
 import unicodedata
 import time
 import zlib
@@ -43,9 +45,11 @@ COMPRESS_AFTER_DAYS = 3
 MAX_LOG_ROTATION_CANDIDATES = 100
 MAX_LOG_MESSAGE_CHARS = 320
 MAX_LOG_FIELD_CHARS = 160
+MAX_LOG_VALUE_DEPTH = 32
 LOG_MAINTENANCE_INTERVAL_SECONDS = 60.0
 LOGGER_NAME = "speed_of_cinnamon"
 HOME_DIR = str(Path.home())
+_CONFIGURE_LOCK = threading.RLock()
 
 
 def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
@@ -84,6 +88,9 @@ _OPENAI_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{12,}\b")
 _SHORT_API_KEY_RE = re.compile(r"\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b")
 _LOG_MATCH_IGNORE_CATEGORIES = frozenset({"Mn", "Mc", "Me", "Cf"})
 _URL_CREDENTIAL_RE = re.compile(r"([a-z][a-z0-9+.-]{0,255}+://)([^/@\s]+)@")
+_URL_SCHEME_RE = re.compile(r"(?i)\b[a-z][a-z0-9+.-]{0,255}://")
+_URL_CREDENTIAL_LOOKAHEAD_CHARS = 4_096
+_URL_AUTHORITY_END_CHARS = frozenset({"/", "?", "#", " ", "\t", "\r", "\n"})
 _PATH_STOP_CHARS = frozenset({" ", "\t", "\n", "\r", ")", "}", "]"})
 _PATH_PREFIX_BOUNDARY_BLOCKED_CHARS = frozenset(
     set(string.ascii_letters + string.digits + "._-/")
@@ -92,6 +99,57 @@ _PATH_SCHEME_CHARS = frozenset(string.ascii_letters + string.digits + "+-.")
 _CSI_MAX_PREFIX_BYTES = 64
 _ERROR_SCAN_MAX_CHARS = 8192
 _MAX_ERROR_INPUT_CHARS = 65_536
+
+
+def _log_lock_path(base_dir: Path) -> Path:
+    return base_dir / ".speed-of-cinnamon.log.lock"
+
+
+def _acquire_log_lock(base_dir: Path) -> int:
+    try:
+        directory_fd = ensure_directory_without_following_symlinks(base_dir, field_name="log directory")
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise RuntimeError("log directory is unsafe") from None
+        raise
+    try:
+        assert_fd_is_private_directory(directory_fd, field_name="log directory")
+    finally:
+        os.close(directory_fd)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    try:
+        fd = open_file_without_following_symlinks(
+            _log_lock_path(base_dir),
+            flags,
+            0o600,
+            field_name="log lock",
+        )
+    except OSError as exc:
+        if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
+            raise RuntimeError("log directory is unsafe") from None
+        raise
+    try:
+        os.fchmod(fd, 0o600)
+        assert_fd_is_regular_private_file(fd, field_name="log lock", require_private_mode=True)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+                return fd
+            except InterruptedError:
+                continue
+    except BaseException:
+        try:
+            os.close(fd)
+        except OSError:
+            pass
+        raise
+
+
+def _release_log_lock(fd: int) -> None:
+    try:
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
 
 
 def _is_ignored_char(char: str) -> bool:
@@ -250,7 +308,7 @@ def _redact_local_absolute_paths(value: str) -> str:
         index += 1
     return "".join(out)
 _ERROR_DETAIL_RE = re.compile(
-    r"(?i)(?:\b(?:stdout|stderr)\s*:|\b(?:raw\s+)?transcript\s*(?::|\b(?:text|words|payload|for)\b)|\bprompt\s*:|command\s+output\s*:|backend\s+output\s*:)"
+    r"(?i)(?:\b(?:stdout|stderr)\s*:|\b(?:raw\s+)?(?:transcript|transkript)\s*(?::|\b(?:text|words|payload|for)\b)|\bprompt\s*:|command\s+output\s*:|backend\s+output\s*:)"
 )
 _ERROR_OUTPUT_LIKELY_RE = re.compile(r"(?i)\b(traceback|exception|at|exit\s+code|stderr|stdout|command\s+output|process\s+exited|python|failed\s+with|npm|node)\b")
 _ERROR_SECRET_WORD_RE = re.compile(r"(?i)\bsecret\b")
@@ -314,7 +372,8 @@ class JsonLogFormatter(logging.Formatter):
             for key, value in fields.items():
                 clean_key = sanitize_key(key)
                 if clean_key:
-                    payload[clean_key] = sanitize_value(clean_key, value)
+                    sensitive_key = key if isinstance(key, str) else clean_key
+                    payload[clean_key] = sanitize_value(sensitive_key, value)
         return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
 
@@ -348,34 +407,11 @@ class SizeCappedJsonFileHandler(logging.Handler):
         if now < self._retry_until:
             return
         try:
-            daily_path = _active_log_path(self.base_dir)
-            if self.path != daily_path:
-                self.close()
-                self.path = daily_path
-                self._next_maintenance_at = 0.0
-            line = self.format(record) + "\n"
-            encoded = line.encode("utf-8")
-            if len(encoded) > MAX_DAILY_LOG_BYTES:
-                line = _oversized_record_line(record)
-                encoded = line.encode("utf-8")
+            lock_fd = _acquire_log_lock(self.base_dir)
             try:
-                current_size = self.path.stat().st_size
-            except OSError:
-                current_size = None
-            if current_size is not None and current_size + len(encoded) > MAX_DAILY_LOG_BYTES:
-                self.close()
-                _rotate_active_if_needed(self.path, force=True)
-                rotated = True
-            else:
-                rotated = False
-            self._open()
-            if self.stream is None:
-                raise RuntimeError("failed to open log file")
-            self.stream.write(line)
-            self.stream.flush()
-            self._maintain_after_emit(force=rotated)
-            self._retry_count = 0
-            self._retry_until = 0.0
+                self._emit_locked(record)
+            finally:
+                _release_log_lock(lock_fd)
         except Exception:
             self.close()
             try:
@@ -388,6 +424,36 @@ class SizeCappedJsonFileHandler(logging.Handler):
             self._retry_count += 1
             delay = min(self._retry_base_delay * (2 ** (self._retry_count - 1)), 60.0)
             self._retry_until = now + delay
+
+    def _emit_locked(self, record: logging.LogRecord) -> None:
+        daily_path = _active_log_path(self.base_dir)
+        if self.path != daily_path:
+            self.close()
+            self.path = daily_path
+            self._next_maintenance_at = 0.0
+        line = self.format(record) + "\n"
+        encoded = line.encode("utf-8")
+        if len(encoded) > MAX_DAILY_LOG_BYTES:
+            line = _oversized_record_line(record)
+            encoded = line.encode("utf-8")
+        try:
+            current_size = self.path.stat().st_size
+        except OSError:
+            current_size = None
+        if current_size is not None and current_size + len(encoded) > MAX_DAILY_LOG_BYTES:
+            self.close()
+            _rotate_active_if_needed(self.path, force=True)
+            rotated = True
+        else:
+            rotated = False
+        self._open()
+        if self.stream is None:
+            raise RuntimeError("failed to open log file")
+        self.stream.write(line)
+        self.stream.flush()
+        self._maintain_after_emit(force=rotated)
+        self._retry_count = 0
+        self._retry_until = 0.0
 
     def _is_log_path_insecure(self) -> bool:
         parent_fd = None
@@ -585,10 +651,20 @@ def _public_log_boundary(function: Callable[..., Any]) -> Callable[..., Any]:
 @_public_log_boundary
 def configure_logging(level: str = DEFAULT_LOG_LEVEL, *, base_dir: Path | None = None) -> None:
     normalized = validate_log_level(level)
+    with _CONFIGURE_LOCK:
+        _configure_logging_unlocked(normalized, base_dir=base_dir)
+
+
+def _configure_logging_unlocked(normalized: str, *, base_dir: Path | None = None) -> None:
     logger = logging.getLogger(LOGGER_NAME)
-    for handler in logger.handlers:
-        handler.close()
+    old_handlers = list(logger.handlers)
     logger.handlers.clear()
+    for handler in old_handlers:
+        handler.acquire()
+        try:
+            handler.close()
+        finally:
+            handler.release()
     logger.propagate = False
     if normalized == "off":
         logger.disabled = True
@@ -598,9 +674,13 @@ def configure_logging(level: str = DEFAULT_LOG_LEVEL, *, base_dir: Path | None =
     level_value = _log_level_value(normalized)
     logger.setLevel(level_value)
     directory = base_dir or logs_dir()
-    maintain_logs(directory)
-    log_path = _active_log_path(directory)
-    _rotate_active_if_needed(log_path)
+    lock_fd = _acquire_log_lock(directory)
+    try:
+        maintain_logs(directory)
+        log_path = _active_log_path(directory)
+        _rotate_active_if_needed(log_path)
+    finally:
+        _release_log_lock(lock_fd)
 
     handler = SizeCappedJsonFileHandler(log_path, directory)
     handler.setFormatter(JsonLogFormatter())
@@ -609,13 +689,14 @@ def configure_logging(level: str = DEFAULT_LOG_LEVEL, *, base_dir: Path | None =
 
 
 def log_event(level: str, event: str, **fields: object) -> None:
-    logger = logging.getLogger(LOGGER_NAME)
-    if logger.disabled:
-        return
-    normalized = validate_log_level(level)
-    if normalized == "off":
-        return
-    logger.log(_log_level_value(normalized), event, extra={"fields": fields})
+    with _CONFIGURE_LOCK:
+        logger = logging.getLogger(LOGGER_NAME)
+        if logger.disabled:
+            return
+        normalized = validate_log_level(level)
+        if normalized == "off":
+            return
+        logger.log(_log_level_value(normalized), event, extra={"fields": fields})
 
 
 @_public_log_boundary
@@ -641,9 +722,11 @@ def sanitize_key(key: object) -> str:
     return safe[:64]
 
 
-def sanitize_value(key: str, value: object) -> object:
+def sanitize_value(key: str, value: object, *, _depth: int = 0) -> object:
     if _is_sensitive_key(key):
         return "[redacted]"
+    if isinstance(value, BaseException):
+        return sanitize_error_message(str(value), max_chars=MAX_LOG_FIELD_CHARS)
     if isinstance(value, bool) or value is None:
         return value
     if isinstance(value, int):
@@ -655,13 +738,18 @@ def sanitize_value(key: str, value: object) -> object:
     if isinstance(value, Path):
         return _safe_path(value)
     if isinstance(value, (list, tuple, set)):
-        return [sanitize_value(key, item) for item in islice(value, 8)]
+        if _depth >= MAX_LOG_VALUE_DEPTH:
+            return "[redacted]"
+        return [sanitize_value(key, item, _depth=_depth + 1) for item in islice(value, 8)]
     if isinstance(value, dict):
+        if _depth >= MAX_LOG_VALUE_DEPTH:
+            return "[redacted]"
         clean: dict[str, object] = {}
         for raw_key, raw_value in islice(value.items(), 16):
             child_key = sanitize_key(raw_key)
             if child_key:
-                clean[child_key] = sanitize_value(child_key, raw_value)
+                sensitive_key = raw_key if isinstance(raw_key, str) else child_key
+                clean[child_key] = sanitize_value(sensitive_key, raw_value, _depth=_depth + 1)
         return clean
     return sanitize_text(str(value), max_chars=MAX_LOG_FIELD_CHARS)
 
@@ -713,7 +801,18 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
         return "[invalid]"
     input_was_truncated = len(value) > max_chars
     if input_was_truncated:
-        value = value[:max_chars]
+        visible_value = value[:max_chars]
+        credential_probe = value[: max_chars + _URL_CREDENTIAL_LOOKAHEAD_CHARS]
+        redacted_probe = _URL_CREDENTIAL_RE.sub(r"\1[redacted]@", credential_probe)
+        if redacted_probe != credential_probe:
+            value = redacted_probe[:max_chars]
+        else:
+            value = visible_value
+            for scheme_match in _URL_SCHEME_RE.finditer(visible_value):
+                authority = visible_value[scheme_match.end() :]
+                if authority and not any(char in _URL_AUTHORITY_END_CHARS for char in authority):
+                    value = visible_value[: scheme_match.end()] + "[redacted]"
+                    break
     if any(_is_ignored_char(char) for char in value):
         redacted_value = _sub_with_ignored_projection(
             value,
@@ -1461,7 +1560,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         except BaseException:
                             archive_rollback_safe = False
                         if isinstance(delete_error, OSError):
-                            raise delete_error
+                            raise delete_error from None
                         source_cleanup_errors.append(delete_error)
                         if archive_rollback_safe:
                             break
@@ -1575,7 +1674,7 @@ def _merge_old_months(directory: Path, today: date) -> None:
                                 field_name="monthly log archive backup",
                             )
                             if not _same_log_inode(backup_stat, archive_stat):
-                                raise RuntimeError("monthly log archive backup changed during rollback")
+                                raise RuntimeError("monthly log archive backup changed during rollback") from None
                             _rename_without_replacing(
                                 archive_backup_name,
                                 archive.name,

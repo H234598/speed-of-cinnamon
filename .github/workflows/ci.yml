@@ -121,7 +121,7 @@ jobs:
     runs-on: ubuntu-24.04
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      BUILD_SNAP: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_snap && '1' || '0') }}
+      SNAP_BUILD: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_snap && '1' || '0') }}
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
       QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}
     steps:
@@ -146,7 +146,7 @@ jobs:
           printf '%s  %s\n' "${archive_sha256}" "/tmp/${archive}" | sha256sum -c -
           tar -xzf "/tmp/${archive}" -C /tmp actionlint
           sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
-          if [[ "${BUILD_SNAP}" == "1" ]]; then
+          if [[ "${SNAP_BUILD}" == "1" ]]; then
             if [[ -d /snap/bin ]]; then
               printf '/snap/bin\n' >> "${GITHUB_PATH}"
               export PATH="/snap/bin:${PATH}"
@@ -230,16 +230,16 @@ jobs:
         run: make rpm-generic-check
       - name: Build Snap package
         run: |
-          if [[ "${BUILD_SNAP}" == "1" ]]; then
+          if [[ "${SNAP_BUILD}" == "1" ]]; then
             export PATH="/snap/bin:${PATH}"
-            make snap
+            make SNAP_BUILD="${SNAP_BUILD}" snap
           fi
-        if: env.BUILD_SNAP == '1'
+        if: env.SNAP_BUILD == '1'
       - name: Verify Snap package
-        if: env.BUILD_SNAP == '1'
+        if: env.SNAP_BUILD == '1'
         run: |
           export PATH="/snap/bin:${PATH}"
-          make snap-check
+          make SNAP_BUILD="${SNAP_BUILD}" snap-check
       - name: Upload source release archive
         if: github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -271,7 +271,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
       - name: Upload Snap package
-        if: env.BUILD_SNAP == '1' && github.event_name != 'pull_request'
+        if: env.SNAP_BUILD == '1' && github.event_name != 'pull_request'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: speed-of-cinnamon-snap-${{ github.sha }}

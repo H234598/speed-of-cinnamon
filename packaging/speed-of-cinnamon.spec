@@ -35,22 +35,15 @@ and inserts text through Cinnamon's clipboard path or X11 helper tools.
 
 %install
 install -d %{buildroot}%{_bindir}
-cat > %{buildroot}%{_bindir}/speed-of-cinnamon <<'EOF'
-#!/usr/bin/python3
+cat > %{buildroot}%{_bindir}/speed-of-cinnamon <<EOF
+#!%{__python3}
 from speed_of_cinnamon.cli import main
 
 raise SystemExit(main())
 EOF
 chmod 0755 %{buildroot}%{_bindir}/speed-of-cinnamon
 
-pyver="$(
-  %{__python3} - <<'PY'
-import sys
-
-print(f"{sys.version_info.major}.{sys.version_info.minor}")
-PY
-)"
-pydir="%{buildroot}%{_prefix}/lib/python${pyver}/site-packages"
+pydir="%{buildroot}%{python3_sitelib}"
 install -d "${pydir}"
 if find src/speed_of_cinnamon \( -type l -o -type f -links +1 \) -print -quit | grep -q .; then
   echo "refusing unsafe python package source tree" >&2
@@ -87,7 +80,7 @@ PYTHONPATH="${PWD}/src" %{__python3} -m unittest discover -s tests
 %{_datadir}/cinnamon/applets/speed-of-cinnamon@H234598
 %{_mandir}/man1/speed-of-cinnamon.1*
 %{_mandir}/man1/speed-of-cinnamon-alarms.1*
-%{_prefix}/lib/python*/site-packages/speed_of_cinnamon
+%{python3_sitelib}/speed_of_cinnamon
 
 %changelog
 * Tue Jun 02 2026 H234598 <54270221+H234598@users.noreply.github.com> - 0.1.2-2

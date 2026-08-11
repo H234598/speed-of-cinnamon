@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import array
+import errno
 import io
 import math
 import os
@@ -36,6 +37,7 @@ from .path_safety import (
     ensure_directory_without_following_symlinks,
     open_directory_without_following_symlinks,
 )
+from .secure_delete import secure_wipe_regular_file_at
 
 
 class RecorderError(RuntimeError):
@@ -272,9 +274,12 @@ MAX_RECORDING_PATH_CHARS = 240
 MAX_RECORDING_STEM_CHARS = 120
 MAX_RECORDING_SECONDS = 3_600
 MAX_RECORDING_INPUT_DEVICE_CHARS = 256
+MAX_INPUT_SOURCE_FIELD_CHARS = 512
 MAX_PACTL_OUTPUT_CHARS = 1_000_000
 MAX_PACTL_TIMEOUT_SECONDS = 10
 MAX_PROCESS_STOP_TIMEOUT_SECONDS = 60
+RECORDER_STARTUP_CHECK_SECONDS = 0.1
+RECORDER_STARTUP_POLL_SECONDS = 0.01
 MAX_FFMPEG_OUTPUT_BYTES = 256 * 1024
 MAX_FFMPEG_ARTIFACT_BYTES = 256 * 1024 * 1024
 MAX_RECORDING_LEVEL_BYTES = 128_000
@@ -286,6 +291,7 @@ SILENCE_DETECT_NOISE = "-62dB"
 SILENCE_DETECT_DURATION_SECONDS = 0.02
 SILENCE_TRIM_NOISE = SILENCE_DETECT_NOISE
 SILENCE_TRIM_DURATION_SECONDS = SILENCE_DETECT_DURATION_SECONDS
+MAX_SILENCE_TRIM_NOISE_CHARS = 32
 SILENCE_DETECT_TIMEOUT_SECONDS = 60
 SILENCE_SKIP_RATIO = 0.999
 SILENCE_SKIP_MAX_SPEECH_SECONDS = 0.6
@@ -295,6 +301,11 @@ _SILENCE_START_RE = re.compile(r"silence_start:\s*([0-9]+(?:\.[0-9]+)?)")
 _SILENCE_END_RE = re.compile(
     r"silence_end:\s*([0-9]+(?:\.[0-9]+)?)\s*\|\s*silence_duration:\s*([0-9]+(?:\.[0-9]+)?)"
 )
+_SILENCE_TRIM_NOISE_RE = re.compile(
+    r"-?(?:\d+(?:\.\d*)?|\.\d+)(?:dB|dBFS)?\Z",
+    re.IGNORECASE,
+)
+_BOOT_ID_CACHE: str | None = None
 
 
 def _contains_escaped_null(value: str) -> bool:
@@ -408,12 +419,14 @@ def _decode_ffmpeg_output(payload: object) -> str:
 
 def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
     try:
+        descendant_scan = _process_tree_descendant_identities(process.pid)
+        descendant_identities = descendant_scan or {}
         process_finished = process.poll() is not None
         if not _recording_process_identity_is_current(process):
             return False
         group_live = process_group_has_live_processes(process.pid)
         session_group_ids = _same_session_process_group_ids(process.pid)
-        cleanup_incomplete = group_live is None
+        cleanup_incomplete = group_live is None or descendant_scan is None
         pipe_holders: dict[int, str] = {}
         if process_finished:
             pipe_scan = _process_pipe_holder_identities(process)
@@ -422,7 +435,9 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
             else:
                 pipe_holders = pipe_scan
             if group_live is False and not pipe_holders and not cleanup_incomplete:
-                return True
+                descendant_tree_cleanup = _kill_output_process_tree(descendant_identities)
+                descendant_tree_stopped = _wait_for_output_process_tree_stop(descendant_identities)
+                return descendant_tree_cleanup and descendant_tree_stopped
             try:
                 raw = Path(f"/proc/{process.pid}/stat").read_text(encoding="ascii").strip()
                 close = raw.rindex(")")
@@ -438,6 +453,7 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
     if not _recording_process_identity_is_current(process):
         return False
     pipe_tree_cleanup = _kill_output_process_tree(pipe_holders)
+    descendant_tree_cleanup = _kill_output_process_tree(descendant_identities)
     try:
         os.killpg(process.pid, signal.SIGKILL)
     except ProcessLookupError:
@@ -460,7 +476,15 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
                 return False
     session_stopped = _wait_for_recorder_session_stop(process.pid)
     pipe_tree_stopped = _wait_for_output_process_tree_stop(pipe_holders)
-    return session_stopped and pipe_tree_cleanup and pipe_tree_stopped and not cleanup_incomplete
+    descendant_tree_stopped = _wait_for_output_process_tree_stop(descendant_identities)
+    return (
+        session_stopped
+        and pipe_tree_cleanup
+        and pipe_tree_stopped
+        and descendant_tree_cleanup
+        and descendant_tree_stopped
+        and not cleanup_incomplete
+    )
 
 
 def _reap_timed_out_recorder_process(process: subprocess.Popen[bytes]) -> bool:
@@ -470,6 +494,20 @@ def _reap_timed_out_recorder_process(process: subprocess.Popen[bytes]) -> bool:
     except (OSError, ValueError, subprocess.TimeoutExpired):
         return False
     return terminated
+
+
+def _reap_unidentified_recorder_process(process: subprocess.Popen[bytes]) -> None:
+    try:
+        if process.poll() is None:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except (OSError, ValueError):
+                process.kill()
+        process.communicate(timeout=1)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
+        raise RecorderError("ffmpeg process cleanup failed") from exc
 
 
 def _create_bounded_output_captures(
@@ -486,8 +524,8 @@ def _create_bounded_output_captures(
     except BaseException as exc:
         try:
             _finish_bounded_output_captures(stdout_capture, stderr_capture)
-        except BaseException as cleanup_error:
-            exc.add_note(f"recorder output capture cleanup failed: {cleanup_error}")
+        except BaseException:
+            exc.add_note("recorder output capture cleanup failed")
         raise
 
 
@@ -502,8 +540,8 @@ def _communicate_recorder_process_bounded(
     except subprocess.TimeoutExpired as exc:
         try:
             terminated = _reap_timed_out_recorder_process(process)
-        except BaseException as cleanup_error:
-            exc.add_note(f"{process_name} process cleanup failed: {cleanup_error}")
+        except BaseException:
+            exc.add_note(f"{process_name} process cleanup failed")
         else:
             if not terminated:
                 exc.add_note(f"{process_name} process cleanup was incomplete")
@@ -511,8 +549,8 @@ def _communicate_recorder_process_bounded(
     except BaseException as exc:
         try:
             _reap_timed_out_recorder_process(process)
-        except BaseException as cleanup_error:
-            exc.add_note(f"{process_name} process cleanup failed: {cleanup_error}")
+        except BaseException:
+            exc.add_note(f"{process_name} process cleanup failed")
         raise
 
 
@@ -522,6 +560,30 @@ def _run_ffmpeg_bounded(
     timeout: int,
     pass_fds: tuple[int, ...],
 ) -> subprocess.CompletedProcess[bytes]:
+    if not isinstance(timeout, (int, float)) or isinstance(timeout, bool):
+        raise RecorderError("ffmpeg timeout must be numeric")
+    if not _is_finite_number(timeout):
+        raise RecorderError("ffmpeg timeout must be finite")
+    if timeout <= 0:
+        raise RecorderError("ffmpeg timeout must be positive")
+    if timeout > MAX_PROCESS_STOP_TIMEOUT_SECONDS:
+        raise RecorderError(
+            f"ffmpeg timeout exceeds safe limit of {MAX_PROCESS_STOP_TIMEOUT_SECONDS}s"
+        )
+    if not isinstance(command, (list, tuple)):
+        raise RecorderError("ffmpeg command arguments must be a sequence")
+    if not command:
+        raise RecorderError("ffmpeg command is empty")
+    if not all(isinstance(item, str) for item in command):
+        raise RecorderError("ffmpeg command arguments must be text")
+    if not command[0].strip():
+        raise RecorderError("ffmpeg executable is empty")
+    if _contains_escaped_null(command[0]) or any(_contains_escaped_null(arg) for arg in command[1:]):
+        raise RecorderError("ffmpeg command contains invalid null byte")
+    if _contains_http_header_control_chars(command[0]) or any(
+        _contains_http_header_control_chars(arg) for arg in command[1:]
+    ):
+        raise RecorderError("ffmpeg command contains invalid control character")
     with tempfile.TemporaryFile() as stdout_file, tempfile.TemporaryFile() as stderr_file:
         stdout_capture, stderr_capture = _create_bounded_output_captures(
             stdout_file,
@@ -540,6 +602,17 @@ def _run_ffmpeg_bounded(
                 shell=False,
                 start_new_session=True,
             )
+            if type(proc).__module__ == "subprocess":
+                process_identity = _recording_process_identity_for_pid(proc.pid)
+                if not process_identity:
+                    try:
+                        _reap_unidentified_recorder_process(proc)
+                    except RecorderError as cleanup_error:
+                        error = RecorderError("ffmpeg process identity is unavailable")
+                        error.add_note("ffmpeg process cleanup failed")
+                        raise error from cleanup_error
+                    raise RecorderError("ffmpeg process identity is unavailable")
+                setattr(proc, "_soc_process_identity", process_identity)
             try:
                 setattr(
                     proc,
@@ -554,15 +627,15 @@ def _run_ffmpeg_bounded(
             except BaseException as capture_error:
                 try:
                     terminated = _reap_timed_out_recorder_process(proc)
-                except BaseException as cleanup_error:
-                    capture_error.add_note(f"ffmpeg process cleanup failed: {cleanup_error}")
+                except BaseException:
+                    capture_error.add_note("ffmpeg process cleanup failed")
                 else:
                     if not terminated:
                         capture_error.add_note("ffmpeg process cleanup was incomplete")
                 try:
                     _finish_bounded_output_captures(stdout_capture, stderr_capture)
-                except BaseException as retry_error:
-                    capture_error.add_note(f"ffmpeg output capture cleanup failed: {retry_error}")
+                except BaseException:
+                    capture_error.add_note("ffmpeg output capture cleanup failed")
                 raise
             if stdout_capture.overflowed:
                 raise RecorderError("ffmpeg command stdout exceeded safe output limit")
@@ -583,11 +656,19 @@ def _run_ffmpeg_bounded(
             primary_error = exc
             raise
         finally:
+            if proc is not None and primary_error is not None:
+                try:
+                    if proc.poll() is None:
+                        terminated = _reap_timed_out_recorder_process(proc)
+                        if not terminated:
+                            primary_error.add_note("ffmpeg process cleanup was incomplete")
+                except BaseException:
+                    primary_error.add_note("ffmpeg process cleanup failed")
             try:
                 _finish_bounded_output_captures(stdout_capture, stderr_capture)
-            except BaseException as cleanup_error:
+            except BaseException:
                 if primary_error is not None:
-                    primary_error.add_note(f"ffmpeg output capture cleanup failed: {cleanup_error}")
+                    primary_error.add_note("ffmpeg output capture cleanup failed")
                 else:
                     raise
 
@@ -695,23 +776,38 @@ def _wait_for_recorder_session_stop(session_id: int, timeout_seconds: float = 1.
         time.sleep(0.01)
 
 
-def _recording_process_identity_for_pid(pid: int) -> str | None:
-    rest = _recording_process_stat_fields(pid)
-    if rest is None or len(rest) < 20:
-        return None
+def _kernel_boot_id() -> str | None:
+    global _BOOT_ID_CACHE
+    if _BOOT_ID_CACHE:
+        return _BOOT_ID_CACHE
     try:
         boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
     except (OSError, UnicodeDecodeError):
         return None
-    start_time = rest[19]
-    if not boot_id or not start_time:
+    if not boot_id:
         return None
-    return f"{boot_id}:{start_time}"
+    _BOOT_ID_CACHE = boot_id
+    return boot_id
+
+
+def _recording_process_identity_for_pid(pid: int) -> str | None:
+    rest = _recording_process_stat_fields(pid)
+    if rest is None or len(rest) < 20:
+        return None
+    boot_id = _kernel_boot_id()
+    start_time = rest[19]
+    if not start_time:
+        return None
+    if boot_id:
+        return f"{boot_id}:{start_time}"
+    # ponytail: retain start-time protection when boot_id is unreadable; upgrade
+    # to boot_id once runtime exposes it again.
+    return f"pid:{pid}:{start_time}"
 
 
 def _recording_process_identity_matches(pid: int, expected_process_identity: str | None) -> bool:
     if expected_process_identity is None:
-        return True
+        return False
     if not isinstance(expected_process_identity, str) or isinstance(expected_process_identity, bool):
         raise RecorderError("expected_process_identity must be text")
     if not expected_process_identity:
@@ -722,10 +818,53 @@ def _recording_process_identity_matches(pid: int, expected_process_identity: str
     return current_identity == expected_process_identity
 
 
+def _send_process_signal_with_pidfd(
+    pid: int,
+    expected_process_identity: str | None,
+    signal_name: str,
+) -> bool | None:
+    if expected_process_identity is None:
+        return None
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+    if not callable(pidfd_open) or not callable(pidfd_send_signal):
+        return None
+    signal_number = getattr(signal, "SIG" + signal_name.lstrip("-"), None)
+    if not isinstance(signal_number, int) or isinstance(signal_number, bool):
+        return None
+    try:
+        pidfd = pidfd_open(pid, 0)
+    except (AttributeError, NotImplementedError, TypeError):
+        return None
+    except OSError as exc:
+        if exc.errno in {errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM}:
+            return None
+        return False
+    if not isinstance(pidfd, int) or isinstance(pidfd, bool) or pidfd < 0:
+        _close_fd_quietly(pidfd if isinstance(pidfd, int) and not isinstance(pidfd, bool) else None)
+        return False
+    try:
+        if not _recording_process_identity_matches(pid, expected_process_identity):
+            return False
+        try:
+            pidfd_send_signal(pidfd, signal_number, None, 0)
+        except (AttributeError, NotImplementedError, TypeError):
+            return None
+        except ProcessLookupError:
+            return False
+        except OSError as exc:
+            if exc.errno in {errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP}:
+                return None
+            return False
+        return True
+    finally:
+        _close_fd_quietly(pidfd)
+
+
 def _recording_process_identity_is_current(process: subprocess.Popen[bytes]) -> bool:
     expected_identity = vars(process).get("_soc_process_identity")
     if expected_identity is None:
-        return True
+        return type(process).__module__ != "subprocess"
     if not isinstance(expected_identity, str) or not expected_identity:
         return False
     pid = getattr(process, "pid", None)
@@ -847,6 +986,7 @@ def _unlink_recording_path_if_same(path: Path, expected_stat: os.stat_result) ->
                         or getattr(claimed, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
                     ):
                         raise OSError("recording artifact changed before cleanup")
+                    secure_wipe_regular_file_at(parent_fd, cleanup_name, claimed, field_name="recording artifact")
                     os.unlink(cleanup_name, dir_fd=parent_fd)
                     _fsync_fd(parent_fd)
                 except BaseException:
@@ -1158,8 +1298,11 @@ def trim_recording_silence(
         raise RecorderError("recording audio path must be a path")
     if not isinstance(noise, str) or isinstance(noise, bool):
         raise RecorderError("silence trim noise threshold must be text")
+    noise = noise.strip()
     if not noise.strip():
         raise RecorderError("silence trim noise threshold must not be empty")
+    if len(noise) > MAX_SILENCE_TRIM_NOISE_CHARS or not _SILENCE_TRIM_NOISE_RE.fullmatch(noise):
+        raise RecorderError("silence trim noise threshold is invalid")
     if (
         not isinstance(duration_seconds, (int, float))
         or isinstance(duration_seconds, bool)
@@ -1527,9 +1670,9 @@ def read_recording_level(audio_path: Path) -> RecordingLevel:
         finally:
             try:
                 handle.close()
-            except BaseException as cleanup_error:
+            except BaseException:
                 if handle_primary_error is not None:
-                    handle_primary_error.add_note(f"recorder audio cleanup failed: {cleanup_error}")
+                    handle_primary_error.add_note("recorder audio cleanup failed")
                 else:
                     raise
     except (OSError, ValueError) as exc:
@@ -1763,7 +1906,7 @@ def choose_recorder(preference: str, audio_path: Path, max_seconds: int, input_d
                     if preference == "parecord":
                         raise RecorderError("timeout is required to enforce max-seconds with parecord")
                     continue
-                argv = ["timeout", "--kill-after=1", str(max_seconds), *argv]
+                argv = ["timeout", "--signal=INT", "--kill-after=1", str(max_seconds), *argv]
             return RecorderCommand(candidate, argv)
         if candidate == "arecord" and _which("arecord"):
             argv = ["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1"]
@@ -1787,10 +1930,23 @@ def parse_pactl_sources(text: str, default_source: str = "", include_monitors: b
     def _current_source_is_safe() -> bool:
         if current is None:
             return False
-        return not any(
-            _contains_escaped_null(value) or _contains_http_header_control_chars(value)
-            for value in current.values()
-        )
+        try:
+            fields_are_bounded = not any(
+                _contains_escaped_null(value)
+                or _contains_http_header_control_chars(value)
+                or len(value) > MAX_INPUT_SOURCE_FIELD_CHARS
+                or len(value.encode("utf-8")) > MAX_INPUT_SOURCE_FIELD_CHARS
+                for value in current.values()
+            )
+        except UnicodeEncodeError:
+            return False
+        if not fields_are_bounded:
+            return False
+        name = current.get("name", "")
+        try:
+            return len(name) <= MAX_RECORDING_INPUT_DEVICE_CHARS and len(name.encode("utf-8")) <= MAX_RECORDING_INPUT_DEVICE_CHARS
+        except UnicodeEncodeError:
+            return False
 
     def finish() -> None:
         if not current or not current.get("name"):
@@ -1863,6 +2019,11 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
                         env=_filtered_environment(),
                         start_new_session=True,
                     )
+                    if type(proc).__module__ == "subprocess":
+                        process_identity = _recording_process_identity_for_pid(proc.pid)
+                        if not process_identity:
+                            raise RecorderError("pactl process identity is unavailable")
+                        setattr(proc, "_soc_process_identity", process_identity)
                     try:
                         setattr(
                             proc,
@@ -1884,15 +2045,15 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
                 except BaseException as capture_error:
                     try:
                         terminated = _reap_timed_out_recorder_process(proc)
-                    except BaseException as cleanup_error:
-                        capture_error.add_note(f"pactl process cleanup failed: {cleanup_error}")
+                    except BaseException:
+                        capture_error.add_note("pactl process cleanup failed")
                     else:
                         if not terminated:
                             capture_error.add_note("pactl process cleanup was incomplete")
                     try:
                         _finish_bounded_output_captures(stdout_capture, stderr_capture)
-                    except BaseException as retry_error:
-                        capture_error.add_note(f"pactl output capture cleanup failed: {retry_error}")
+                    except BaseException:
+                        capture_error.add_note("pactl output capture cleanup failed")
                     raise
                 if stdout_capture.overflowed or stderr_capture.overflowed:
                     raise RecorderError(f"pactl command output exceeded {MAX_PACTL_OUTPUT_CHARS} bytes")
@@ -1911,9 +2072,9 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
             finally:
                 try:
                     _finish_bounded_output_captures(stdout_capture, stderr_capture)
-                except BaseException as cleanup_error:
+                except BaseException:
                     if primary_error is not None:
-                        primary_error.add_note(f"pactl output capture cleanup failed: {cleanup_error}")
+                        primary_error.add_note("pactl output capture cleanup failed")
                     else:
                         raise
     except subprocess.TimeoutExpired as exc:
@@ -1931,9 +2092,19 @@ def list_input_sources(include_monitors: bool = False) -> list[InputSource]:
     return parse_pactl_sources(proc_output, default_source, include_monitors)
 
 
-def _run_kill(command: list[str] | tuple[str, ...], *, check_exit: bool) -> None:
-    if not isinstance(command, (list, tuple)) or any(not isinstance(item, str) for item in command) or not isinstance(check_exit, bool):
+def _run_kill(
+    command: list[str] | tuple[str, ...], *, check_exit: bool, timeout_seconds: float = 1.0
+) -> None:
+    if (
+        not isinstance(command, (list, tuple))
+        or any(not isinstance(item, str) for item in command)
+        or not isinstance(check_exit, bool)
+    ):
         raise RecorderError("invalid kill command")
+    if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
+        raise RecorderError("kill timeout must be numeric")
+    if not _is_finite_number(timeout_seconds) or timeout_seconds <= 0:
+        raise RecorderError("kill timeout must be positive and finite")
     if not command:
         raise RecorderError("empty kill command is not allowed")
     kill_command = command[0].strip()
@@ -1952,14 +2123,14 @@ def _run_kill(command: list[str] | tuple[str, ...], *, check_exit: bool) -> None
             check=check_exit,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
-            timeout=1,
+            timeout=timeout_seconds,
             shell=False,
             env=_filtered_environment(),
         )
     except subprocess.TimeoutExpired as exc:
-        raise RecorderError(f"kill command timed out: {runtime_command}") from exc
+        raise RecorderError("kill command timed out") from exc
     except OSError as exc:
-        raise RecorderError(f"failed to run kill command {runtime_command}: {exc}") from exc
+        raise RecorderError("failed to run kill command") from exc
 
 
 def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
@@ -2066,6 +2237,23 @@ def _process_is_gone(process_target: str) -> bool:
     return False
 
 
+def _reap_recorder_process_if_zombie(pid: int) -> bool:
+    stat_fields = _recording_process_stat_fields(pid)
+    if stat_fields is None:
+        return True
+    if not stat_fields or stat_fields[0] not in {"Z", "X", "x"}:
+        return True
+    try:
+        waited_pid, _status = os.waitpid(pid, os.WNOHANG)
+    except ChildProcessError:
+        return False
+    except (OSError, ValueError):
+        return False
+    if waited_pid == pid:
+        return True
+    return _recording_process_stat_fields(pid) is None
+
+
 def _recording_process_is_absent(pid: int) -> bool:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
@@ -2151,13 +2339,13 @@ def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
             return
         try:
             expected_stat = os.fstat(fd)
-        except BaseException as cleanup_error:
-            primary.add_note(f"recorder log cleanup inspection failed: {cleanup_error}")
+        except BaseException:
+            primary.add_note("recorder log cleanup inspection failed")
             return
         try:
             _unlink_recorder_log_if_same(log_path, expected_stat)
-        except BaseException as cleanup_error:
-            primary.add_note(f"recorder log cleanup failed: {cleanup_error}")
+        except BaseException:
+            primary.add_note("recorder log cleanup failed")
 
     try:
         try:
@@ -2217,6 +2405,7 @@ def _unlink_recorder_log_if_same(log_path: Path, expected_stat: os.stat_result) 
                     claimed = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
                     if not _same_file_identity(claimed, expected_stat):
                         raise OSError("recorder log changed before cleanup")
+                    secure_wipe_regular_file_at(parent_fd, cleanup_name, claimed, field_name="recorder log")
                     os.unlink(cleanup_name, dir_fd=parent_fd)
                     _fsync_fd(parent_fd)
                 except BaseException:
@@ -2322,8 +2511,8 @@ def _finish_recorder_log_capture(capture: _RecorderLogCapture | None, primary: B
         return
     try:
         capture.finish()
-    except BaseException as cleanup_error:
-        primary.add_note(f"recorder log capture cleanup failed: {cleanup_error}")
+    except BaseException:
+        primary.add_note("recorder log capture cleanup failed")
 
 
 def _cleanup_created_recorder_log(
@@ -2377,8 +2566,8 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             return
         try:
             terminated = _reap_timed_out_recorder_process(process)
-        except BaseException as cleanup_error:
-            primary.add_note(f"recorder process cleanup failed: {cleanup_error}")
+        except BaseException:
+            primary.add_note("recorder process cleanup failed")
         else:
             if not terminated:
                 primary.add_note("recorder process cleanup was incomplete")
@@ -2407,15 +2596,35 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             env=_filtered_environment(),  # nosec B603
         )
         process_pid = getattr(process, "pid", None)
-        if isinstance(process_pid, int) and not isinstance(process_pid, bool) and process_pid > 0:
-            process_identity = _recording_process_identity_for_pid(process_pid)
-            if not process_identity:
-                raise RecorderError("recorder process identity is unavailable")
-            setattr(process, "_soc_process_identity", process_identity)
+        if not isinstance(process_pid, int) or isinstance(process_pid, bool) or process_pid <= 0:
+            raise RecorderError("recorder process pid is invalid")
         try:
             setattr(process, "_soc_output_pipe_targets", _pipe_targets_for_process(process, log_capture))
         except (AttributeError, TypeError):
             pass
+        startup_deadline = time.monotonic() + RECORDER_STARTUP_CHECK_SECONDS
+        process_identity = None
+        while True:
+            startup_status = process.poll()
+            if startup_status is not None:
+                if not isinstance(startup_status, int) or isinstance(startup_status, bool):
+                    raise RecorderError("recorder returned an invalid startup status")
+                raise RecorderError(f"recorder exited during startup with status {startup_status}")
+            if process_identity is None:
+                process_identity = _recording_process_identity_for_pid(process_pid)
+                if process_identity:
+                    setattr(process, "_soc_process_identity", process_identity)
+            remaining_seconds = startup_deadline - time.monotonic()
+            if remaining_seconds <= 0:
+                break
+            time.sleep(min(RECORDER_STARTUP_POLL_SECONDS, remaining_seconds))
+        if not process_identity:
+            raise RecorderError("recorder process identity is unavailable")
+        final_startup_status = process.poll()
+        if final_startup_status is not None:
+            if not isinstance(final_startup_status, int) or isinstance(final_startup_status, bool):
+                raise RecorderError("recorder returned an invalid startup status")
+            raise RecorderError(f"recorder exited during startup with status {final_startup_status}")
         log_capture.close_writer()
         return process
     except (OSError, ValueError) as exc:
@@ -2433,8 +2642,8 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         _finish_recorder_log_capture(log_capture, exc)
         try:
             _cleanup_created_recorder_log(log_path, log_file, created_log, expected_stat=opened_stat)
-        except BaseException as cleanup_error:
-            exc.add_note(f"recorder log cleanup failed: {cleanup_error}")
+        except BaseException:
+            exc.add_note("recorder log cleanup failed")
         raise
     finally:
         if log_capture is None:
@@ -2468,7 +2677,7 @@ def stop_process(
         raise RecorderError(
             f"timeout_seconds exceeds safe limit of {MAX_PROCESS_STOP_TIMEOUT_SECONDS}s"
         )
-    if expected_process_identity is None and not allow_unverified_process:
+    if expected_process_identity is None:
         raise RecorderError("expected_process_identity is required to stop recorder process")
     process_group_target: bool | None
     process_group_id: int | None = None
@@ -2501,6 +2710,16 @@ def stop_process(
         process_target = f"-{pid}"
     except (OSError, OverflowError, ValueError) as exc:
         raise RecorderError(f"failed to inspect recorder process {pid}: {exc}") from exc
+
+    def refresh_descendant_identities() -> bool:
+        nonlocal descendant_identities
+        if not process_group_target:
+            return True
+        descendant_scan = _process_tree_descendant_identities(pid)
+        if descendant_scan is None:
+            return False
+        descendant_identities.update(descendant_scan)
+        return True
 
     def target_identity_still_safe() -> bool:
         if _recording_process_identity_matches(pid, expected_process_identity):
@@ -2542,60 +2761,112 @@ def stop_process(
             and process_session_id is not None
             and process_group_id != process_session_id
         ):
-            return _same_session_has_live_processes(process_session_id) is False
+            if _same_session_has_live_processes(process_session_id) is not False:
+                return False
+        if not _reap_recorder_process_if_zombie(pid):
+            return False
         return _process_is_gone(process_target)
 
     if not target_identity_still_safe():
         return False
-    if process_group_target:
-        descendant_scan = _process_tree_descendant_identities(pid)
-        if descendant_scan is None:
-            return False
-        descendant_identities = descendant_scan
+    if not refresh_descendant_identities():
+        return False
 
-    def signal_process_target(signal_name: str) -> None:
-        _run_kill(["kill", signal_name, "--", process_target], check_exit=False)
+    def signal_process_target(signal_name: str) -> bool:
+        if not target_identity_still_safe():
+            return False
         if not process_group_target:
-            return
+            pidfd_result = _send_process_signal_with_pidfd(pid, expected_process_identity, signal_name)
+            if pidfd_result is True:
+                return True
+            if pidfd_result is False:
+                return False
+        kill_timeout_seconds = min(1.0, timeout_seconds / 3)
+        _run_kill(
+            ["kill", signal_name, "--", process_target],
+            check_exit=False,
+            timeout_seconds=kill_timeout_seconds,
+        )
+        if not process_group_target:
+            return True
         if process_group_id is None or process_session_id is None:
-            return
+            return False
         session_group_ids = _same_session_process_group_ids(process_session_id)
         if session_group_ids is None:
-            return
+            return False
+        kill_timeout_seconds = min(
+            1.0,
+            timeout_seconds / (3 * max(1, len(session_group_ids))),
+        )
         for session_group_id in sorted(session_group_ids):
             if session_group_id == process_group_id:
                 continue
-            _run_kill(["kill", signal_name, "--", f"-{session_group_id}"], check_exit=False)
-
-    signal_process_target("-INT")
+            _run_kill(
+                ["kill", signal_name, "--", f"-{session_group_id}"],
+                check_exit=False,
+                timeout_seconds=kill_timeout_seconds,
+            )
+        return True
 
     deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
+    kill_settle_seconds = min(0.2, timeout_seconds / 5) if timeout_seconds > 0.1 else 0.0
+    graceful_deadline = deadline - kill_settle_seconds
+    if not signal_process_target("-INT"):
+        return False
+    now = time.monotonic()
+    while now < graceful_deadline:
         if process_target_is_gone():
             return True
         if not target_identity_still_safe():
             return False
         time.sleep(0.1)
+        now = time.monotonic()
 
     if process_target_is_gone():
         return True
     if not target_identity_still_safe():
         return False
-    signal_process_target("-TERM")
+    if time.monotonic() >= deadline:
+        return False
+    if not refresh_descendant_identities():
+        return False
+    if not signal_process_target("-TERM"):
+        return False
 
-    time.sleep(0.5)
+    while True:
+        now = time.monotonic()
+        if now >= deadline:
+            break
+        if process_target_is_gone():
+            return True
+        if not target_identity_still_safe():
+            return False
+        time.sleep(min(0.1, deadline - now))
     if process_target_is_gone():
         return True
     if not target_identity_still_safe():
         return False
 
     try:
-        signal_process_target("-KILL")
+        if not refresh_descendant_identities():
+            return False
+        if not signal_process_target("-KILL"):
+            return False
     except RecorderError as exc:
         raise RecorderError(f"failed to stop recorder process {pid}: {exc}") from exc
     if not _kill_output_process_tree(descendant_identities):
         return False
-    time.sleep(0.1)
+    kill_deadline = deadline + kill_settle_seconds
+    while kill_settle_seconds:
+        now = time.monotonic()
+        if process_target_is_gone():
+            return True
+        if not target_identity_still_safe():
+            return False
+        remaining_seconds = kill_deadline - now
+        if remaining_seconds <= 0:
+            break
+        time.sleep(min(0.01, remaining_seconds))
     if process_target_is_gone():
         return True
     if not target_identity_still_safe():

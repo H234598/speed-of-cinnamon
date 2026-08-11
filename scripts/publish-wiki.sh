@@ -77,14 +77,23 @@ if [[ "${work_dir_abs}" != "${work_root}/speed-of-cinnamon-publish-wiki-"* ]]; t
   exit 1
 fi
 work_dir="${work_dir_abs}"
+work_dir_identity=""
 cleanup() {
-  if [[ -n "${work_dir}" && -e "${work_dir}" ]]; then
-    if ! "${safe_fs_cmd[@]}" remove publish-wiki "${work_dir}" --kind dir; then
+  if [[ -n "${work_dir_identity}" ]]; then
+    if ! "${safe_fs_cmd[@]}" remove publish-wiki "${work_dir}" --kind dir \
+      --expected-identity "${work_dir_identity}"; then
       printf 'failed to clean wiki publish workspace: %s\n' "${work_dir}" >&2
     fi
+  else
+    printf 'refusing wiki publish cleanup without verified identity: %s\n' "${work_dir}" >&2
   fi
 }
 trap cleanup EXIT
+
+if ! work_dir_identity="$("${safe_fs_cmd[@]}" identity publish-wiki "${work_dir}" --kind dir)"; then
+  printf 'failed to capture wiki publish workspace identity: %s\n' "${work_dir}" >&2
+  exit 1
+fi
 
 if ! git clone "${wiki_url}" "${work_dir}/wiki"; then
   printf 'failed to clone wiki repository; refusing to initialize a replacement wiki checkout: %s\n' "${wiki_url}" >&2
@@ -106,6 +115,11 @@ require_source_file "${repo_dir}/docs/fedora-cinnamon-runbook.md" "wiki source"
 "${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/fedora-cinnamon-runbook.md" "${work_dir}/wiki/Fedora-Cinnamon-Runbook.md" 0644
 
 cd "${work_dir}/wiki"
+remote_head_ref="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD || true)"
+wiki_branch="master"
+if [[ "${remote_head_ref}" == origin/* && "${remote_head_ref#origin/}" != "" ]]; then
+  wiki_branch="${remote_head_ref#origin/}"
+fi
 if [[ -z "$(git status --porcelain -- .)" ]]; then
   printf 'Wiki already up to date.\n'
   exit 0
@@ -113,5 +127,5 @@ fi
 
 git add Home.md User-Guide.md CLI-Reference.md Architecture.md Development.md Fedora-Cinnamon-Runbook.md
 git commit -m "Update Speed of Cinnamon documentation"
-git push origin HEAD:master
+git push origin "HEAD:${wiki_branch}"
 printf 'Updated wiki at %s\n' "${wiki_url}"

@@ -125,7 +125,7 @@ jobs:
       contents: write
     runs-on: ubuntu-24.04
     env:
-      BUILD_SNAP: "1"
+      SNAP_BUILD: "1"
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
@@ -260,11 +260,11 @@ jobs:
       - name: Build Snap package
         run: |
           export PATH="/snap/bin:${PATH}"
-          make snap
+          make SNAP_BUILD="${SNAP_BUILD}" snap
       - name: Verify Snap package
         run: |
           export PATH="/snap/bin:${PATH}"
-          make snap-check
+          make SNAP_BUILD="${SNAP_BUILD}" snap-check
       - name: Shellcheck scripts
         run: shellcheck scripts/*.sh
       - name: Upload source release archive

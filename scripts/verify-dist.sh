@@ -26,7 +26,7 @@ if [[ -L "${dist_dir}" || ! -d "${dist_dir}" ]]; then
   exit 1
 fi
 
-for tool in realpath stat tar awk mktemp find grep python3; do
+for tool in realpath stat tar awk mktemp find grep python3 sha256sum; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -92,6 +92,56 @@ if [[ "${tarball_bytes}" -le 0 || "${tarball_bytes}" -gt "${MAX_DIST_ARCHIVE_BYT
   exit 1
 fi
 
+checksum_path="${tarball}.sha256"
+if [[ -L "${checksum_path}" || ! -f "${checksum_path}" ]]; then
+  printf 'archive checksum file missing or invalid: %s\n' "${checksum_path}" >&2
+  exit 1
+fi
+if ! checksum_path="$(realpath "${checksum_path}" 2>/dev/null)"; then
+  printf 'failed to resolve archive checksum file\n' >&2
+  exit 1
+fi
+if [[ -L "${checksum_path}" || ! -f "${checksum_path}" || ! "${checksum_path}" == "${repo_dir}/dist/"* ]]; then
+  printf 'archive checksum file missing or invalid: %s\n' "${checksum_path}" >&2
+  exit 1
+fi
+if [[ "$(stat -c '%h' "${checksum_path}")" -ne 1 ]]; then
+  printf 'archive checksum file must not be hardlinked: %s\n' "${checksum_path}" >&2
+  exit 1
+fi
+checksum_value="$(python3 - "${checksum_path}" "$(basename "${tarball}")" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+checksum_path, expected_name = sys.argv[1:]
+raw = Path(checksum_path).read_bytes()
+if len(raw) > 4096:
+    raise SystemExit("archive checksum file is too large")
+try:
+    text = raw.decode("ascii")
+except UnicodeDecodeError:
+    raise SystemExit("archive checksum file is not ASCII") from None
+lines = text.splitlines()
+if len(lines) != 1:
+    raise SystemExit("archive checksum file must contain exactly one entry")
+parts = lines[0].split()
+if len(parts) != 2 or not re.fullmatch(r"[0-9a-fA-F]{64}", parts[0]):
+    raise SystemExit("archive checksum file has invalid format")
+if parts[1].lstrip("*") != expected_name:
+    raise SystemExit("archive checksum file target does not match archive")
+print(parts[0].lower())
+PY
+)" || {
+  printf 'archive checksum file has invalid format: %s\n' "${checksum_path}" >&2
+  exit 1
+}
+actual_checksum="$(sha256sum "${tarball}" | awk '{print tolower($1)}')"
+if [[ "${actual_checksum}" != "${checksum_value}" ]]; then
+  printf 'archive checksum mismatch: %s\n' "${tarball}" >&2
+  exit 1
+fi
+
 tmp_root="${TMPDIR:-/tmp}"
 if contains_control_chars "${tmp_root}"; then
   printf 'temporary root contains control characters\n' >&2
@@ -117,8 +167,6 @@ if ! tmp_root="$(realpath "${tmp_root}" 2>/dev/null)"; then
   printf 'failed to resolve temporary root\n' >&2
   exit 1
 fi
-mkdir -p "${tmp_root}"
-
 tmp_dir="$(mktemp -d "${tmp_root}/speed-of-cinnamon-dist-verify-XXXXXX")"
 if [[ -L "${tmp_dir}" ]]; then
   printf 'temporary dist verification directory must not be a symlink: %s\n' "${tmp_dir}" >&2
@@ -133,13 +181,25 @@ if [[ "${tmp_dir_abs}" != "${tmp_root}/speed-of-cinnamon-dist-verify-"* ]]; then
   exit 1
 fi
 tmp_dir="${tmp_dir_abs}"
+tmp_dir_identity=""
 cleanup_tmpdir() {
-  "${safe_fs_cmd[@]}" remove verify-dist "${tmp_dir}" --kind dir >/dev/null 2>&1 || true
+  if [[ -n "${tmp_dir_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove verify-dist "${tmp_dir}" --kind dir \
+      --expected-identity "${tmp_dir_identity}" >/dev/null 2>&1 || true
+  else
+    printf 'refusing dist verification cleanup without verified identity: %s\n' "${tmp_dir}" >&2
+  fi
 }
 trap cleanup_tmpdir EXIT
 
+if ! tmp_dir_identity="$("${safe_fs_cmd[@]}" identity verify-dist "${tmp_dir}" --kind dir)"; then
+  printf 'failed to capture dist verification directory identity: %s\n' "${tmp_dir}" >&2
+  exit 1
+fi
+
 tarball_snapshot="${tmp_dir}/speed-of-cinnamon-verify.tar.gz"
-if ! "${safe_fs_cmd[@]}" copy-file verify-dist "${tarball}" "${tarball_snapshot}" 0644; then
+if ! "${safe_fs_cmd[@]}" copy-file verify-dist "${tarball}" "${tarball_snapshot}" 0644 \
+  --max-bytes "${MAX_DIST_ARCHIVE_BYTES}"; then
   printf 'failed to snapshot archive for verification: %s\n' "${tarball}" >&2
   exit 1
 fi
@@ -151,6 +211,12 @@ if [[ "$(stat -c '%h' "${tarball_snapshot}")" -ne 1 ]]; then
   printf 'archive snapshot must not be hardlinked: %s\n' "${tarball_snapshot}" >&2
   exit 1
 fi
+snapshot_bytes="$(stat -c '%s' "${tarball_snapshot}")"
+if [[ "${snapshot_bytes}" -le 0 || "${snapshot_bytes}" -gt "${MAX_DIST_ARCHIVE_BYTES}" ]]; then
+  printf 'archive snapshot size is outside allowed bounds: %s bytes\n' "${snapshot_bytes}" >&2
+  exit 1
+fi
+tarball_bytes="${snapshot_bytes}"
 
 if ! tar -tzf "${tarball_snapshot}" | awk -F'/' '
   /(^|\/)\.\.(\/|$)/ || /^\// { print; bad = 1 }

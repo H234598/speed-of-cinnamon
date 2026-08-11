@@ -65,6 +65,7 @@ resolve_smoke_tmp_root() {
 }
 
 smoke_root=""
+smoke_root_identity=""
 if [[ "${SPEED_OF_CINNAMON_SMOKE_REAL_STATE:-0}" != "1" ]]; then
   smoke_tmp_root="$(resolve_smoke_tmp_root)"
   smoke_root="$(mktemp -d "${smoke_tmp_root}/speed-of-cinnamon-smoke-XXXXXX")"
@@ -81,7 +82,19 @@ if [[ "${SPEED_OF_CINNAMON_SMOKE_REAL_STATE:-0}" != "1" ]]; then
     exit 1
   fi
   smoke_root="${smoke_root_abs}"
-  trap '"${safe_fs_cmd[@]}" remove smoke-backend "${smoke_root}" --kind dir >/dev/null 2>&1 || true' EXIT
+  cleanup_smoke() {
+    if [[ -n "${smoke_root_identity}" ]]; then
+      "${safe_fs_cmd[@]}" remove smoke-backend "${smoke_root}" --kind dir \
+        --expected-identity "${smoke_root_identity}" >/dev/null 2>&1 || true
+    else
+      printf 'refusing smoke cleanup without verified identity: %s\n' "${smoke_root}" >&2
+    fi
+  }
+  trap cleanup_smoke EXIT
+  if ! smoke_root_identity="$("${safe_fs_cmd[@]}" identity smoke-backend "${smoke_root}" --kind dir)"; then
+    printf 'failed to capture smoke directory identity: %s\n' "${smoke_root}" >&2
+    exit 1
+  fi
   export XDG_STATE_HOME="${smoke_root}/state"
   export XDG_DATA_HOME="${smoke_root}/data"
   export XDG_CACHE_HOME="${smoke_root}/cache"

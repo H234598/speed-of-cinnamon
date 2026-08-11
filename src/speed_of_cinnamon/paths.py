@@ -22,25 +22,18 @@ _MAX_XDG_DERIVED_SUFFIX = f"/{APP_ID}/settings-export.json"
 
 
 def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
-    primary.add_note(f"runtime directory cleanup failed: {cleanup_error}")
+    primary.add_note("runtime directory cleanup failed")
 
 
 def _contains_escaped_null(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise RuntimeError("value must be text")
-    lowered = (value or "").lower()
-    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+    return "\x00" in value
 
 
 def _contains_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise RuntimeError("value must be text")
-    lowered = (value or "").lower()
-    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
-    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
-        return True
-    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
-        return True
     return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
 
 
@@ -130,19 +123,11 @@ def _private_runtime_temp_root() -> Path:
         assert_no_symlink_ancestors(temp_root, field_name="temporary directory")
     uid = os.getuid() if hasattr(os, "getuid") else os.getpid()
     private_root = temp_root / f"{APP_ID}-{uid}"
-    if private_root.is_symlink():
-        raise RuntimeError("temporary directory must not be a symlink")
-    try:
-        private_root.mkdir(mode=0o700, parents=True, exist_ok=True)
-    except OSError as exc:
-        raise RuntimeError("temporary directory is not safe") from exc
-    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if getattr(os, "O_NOFOLLOW", None) is None:
         raise RuntimeError("secure temporary directory open is not supported on this platform")
-    open_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | nofollow_flag
     try:
-        fd = os.open(private_root, open_flags)
-    except OSError as exc:
+        fd = ensure_directory_without_following_symlinks(private_root, field_name="temporary directory")
+    except (OSError, RuntimeError) as exc:
         raise RuntimeError("temporary directory is not safe") from exc
     try:
         primary_error: BaseException | None = None
@@ -193,6 +178,11 @@ def _safe_home_path(*parts: str) -> Path:
             or _has_oversized_path_component(candidate)
             or _contains_escaped_null(candidate_text)
             or _contains_control_chars(candidate_text)
+            or len(candidate_text) + len(_MAX_XDG_DERIVED_SUFFIX) > MAX_XDG_PATH_CHARS
+            or _is_oversized_utf8_text(
+                candidate_text + _MAX_XDG_DERIVED_SUFFIX,
+                max_chars=MAX_XDG_PATH_CHARS,
+            )
         ):
             raise RuntimeError("home path is invalid")
         assert_safe_path_components(candidate, field_name="home path")

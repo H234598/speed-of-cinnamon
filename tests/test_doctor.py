@@ -11,7 +11,9 @@ from speed_of_cinnamon import doctor
 
 
 def which_from(names: set[str]) -> mock.Mock:
-    return mock.Mock(side_effect=lambda name, path=None: f"/usr/bin/{name}" if name in names else None)
+    return mock.Mock(
+        side_effect=lambda name, path=None: f"/usr/bin/{name}" if name in names or name == "printf" else None
+    )
 
 
 class DoctorTest(unittest.TestCase):
@@ -95,6 +97,20 @@ class DoctorTest(unittest.TestCase):
         )
         self.assertFalse(status["ok"])
         self.assertIn("command template is too large", status["detail"])
+
+    def test_transcriber_rejects_invalid_custom_command_template(self) -> None:
+        for command, detail in (
+            ("printf ok | cat", "unsupported shell operator"),
+            ("printf {unknown}", "unsupported placeholder"),
+            ("missing-transcriber-command {audio}", "is not available"),
+        ):
+            with self.subTest(command=command):
+                status = doctor._transcriber_status(
+                    {"transcriber": "command", "transcriber-command": command},
+                    {},
+                )
+                self.assertFalse(status["ok"])
+                self.assertIn(detail, status["detail"])
 
     def test_applet_pipeline_requires_cinnamon_session(self) -> None:
         tools = {"python3", "pw-record", "pactl", "xdotool"}
@@ -648,7 +664,7 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["configured"]["transcriber"]["ok"])
         self.assertEqual(payload["configured"]["transcriber"]["value"], "openai-compatible")
         self.assertIn("https://api.example.test", payload["configured"]["transcriber"]["detail"])
-        self.assertNotIn("/v1", payload["configured"]["transcriber"]["detail"])
+        self.assertIn("/v1", payload["configured"]["transcriber"]["detail"])
 
     def test_external_api_transcriber_rejects_invalid_model_text(self) -> None:
         for model, detail in (
@@ -803,6 +819,7 @@ class DoctorTest(unittest.TestCase):
         serialized = json.dumps(payload)
         self.assertTrue(payload["ok"])
         self.assertIn("http://127.0.0.1:8000", payload["configured"]["postprocessor"]["detail"])
+        self.assertIn("/v1/...", payload["configured"]["postprocessor"]["detail"])
         self.assertNotIn("secret-token", serialized)
         self.assertNotIn("/v1/secret-token", serialized)
 
@@ -897,6 +914,19 @@ class DoctorTest(unittest.TestCase):
         )
         self.assertFalse(status["ok"])
         self.assertIn("post-process command is too large", status["detail"])
+
+    def test_postprocessor_rejects_invalid_custom_command_template(self) -> None:
+        for command, detail in (
+            ("printf {text} | cat", "unsupported shell operator"),
+            ("printf {unknown}", "unsupported placeholder"),
+            ("missing-polisher-command {text}", "is not available"),
+        ):
+            with self.subTest(command=command):
+                status = doctor._postprocessor_status(
+                    {"post-process-backend": "command", "post-process-command": command},
+                )
+                self.assertFalse(status["ok"])
+                self.assertIn(detail, status["detail"])
 
     def test_openai_compatible_postprocessor_rejects_url_query_without_echoing_secret(self) -> None:
         tools = {"python3", "pw-record"}
@@ -1154,6 +1184,12 @@ class DoctorTest(unittest.TestCase):
     def test_parse_settings_json_rejects_non_object_root(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be an object"):
             doctor.parse_settings_json("[\"en\"]")
+
+    def test_parse_settings_json_rejects_non_finite_numbers(self) -> None:
+        for literal in ("NaN", "Infinity", "-Infinity"):
+            with self.subTest(literal=literal):
+                with self.assertRaisesRegex(ValueError, "non-finite numbers"):
+                    doctor.parse_settings_json(f'{{"max-seconds":{literal}}}')
 
     def test_parse_settings_json_wraps_json_recursion_error(self) -> None:
         with mock.patch("speed_of_cinnamon.doctor.json.loads", side_effect=RecursionError("too deep")):

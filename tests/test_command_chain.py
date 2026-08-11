@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
+import time
 import unittest
 import tempfile
+from pathlib import Path
 from unittest import mock
 
 from speed_of_cinnamon import command_chain as command_chain_module
@@ -47,6 +50,10 @@ class CommandChainTest(unittest.TestCase):
         with self.assertRaisesRegex(CommandChainError, "label must be text"):
             split_command_chain("printf hello", label=123)
 
+    def test_split_command_chain_rejects_control_characters_in_label(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "label contains invalid control character"):
+            split_command_chain("printf hello", label="command\nspoof")
+
     def test_split_command_chain_supports_and_and_rejects_unsupported_operators(self) -> None:
         self.assertEqual(
             split_command_chain("printf hello && printf world"),
@@ -60,6 +67,17 @@ class CommandChainTest(unittest.TestCase):
 
         with self.assertRaisesRegex(CommandChainError, "unsupported shell operator"):
             split_command_chain("python3 -c \"print(1)\" 2> /tmp/log")
+
+    def test_split_command_chain_preserves_quoted_and_escaped_and_and(self) -> None:
+        self.assertEqual(split_command_chain('printf "&&"'), [["printf", "&&"]])
+        self.assertEqual(split_command_chain("printf '&&'"), [["printf", "&&"]])
+        self.assertEqual(split_command_chain(r"printf \&&"), [["printf", "&&"]])
+        self.assertEqual(
+            split_command_chain('printf "a && b" && printf c'),
+            [["printf", "a && b"], ["printf", "c"]],
+        )
+        with self.assertRaisesRegex(CommandChainError, "empty command command segment before &&"):
+            split_command_chain("printf && && printf c")
 
     def test_split_command_chain_rejects_null_bytes(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "invalid command command: contains invalid null byte"):
@@ -175,7 +193,8 @@ class CommandChainTest(unittest.TestCase):
         self.assertNotIn("LD_PRELOAD", captured_env)
         self.assertNotIn("PYTHONPATH", captured_env)
         self.assertNotIn("SPEED_OF_CINNAMON_CONTEXT", captured_env)
-        self.assertEqual(captured_env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertNotIn("XDG_RUNTIME_DIR", captured_env)
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", captured_env)
         self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 
     def test_command_environment_strips_shell_state_variables(self) -> None:
@@ -204,7 +223,7 @@ class CommandChainTest(unittest.TestCase):
         self.assertNotIn("PS4", env)
         self.assertNotIn("BASH_XTRACEFD", env)
         self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1000")
-        self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)
 
     def test_module_environment_builders_strip_shell_state_variables(self) -> None:
         with mock.patch.dict(
@@ -244,7 +263,14 @@ class CommandChainTest(unittest.TestCase):
             self.assertNotIn("CDPATH", env)
             self.assertNotIn("PS4", env)
             self.assertNotIn("BASH_XTRACEFD", env)
-            self.assertEqual(env["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertNotIn("XDG_RUNTIME_DIR", envs[1])
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", envs[1])
+        self.assertEqual(envs[0]["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertEqual(envs[4]["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertEqual(envs[5]["XDG_RUNTIME_DIR"], "/run/user/1000")
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", envs[2])
+        self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", envs[3])
+        for env in [envs[0], envs[4], envs[5]]:
             self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
 
     def test_command_path_ignores_trusted_path_environment_override(self) -> None:
@@ -292,6 +318,19 @@ class CommandChainTest(unittest.TestCase):
 
         self.assertEqual(result, output_text)
         self.assertGreaterEqual(captured["max_output_bytes"], len(raw_output_text.encode("utf-8")))
+
+    def test_run_command_chain_preserves_leading_and_trailing_spaces(self) -> None:
+        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+            del argv, input_bytes, kwargs
+            return 0, b"  spaced \t\r\n", b""
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+        ):
+            result = run_command_chain([("cmd",)], "", label="post-process")
+
+        self.assertEqual(result, "  spaced \t")
 
     def test_run_command_chain_rejects_multibyte_output_over_character_limit(self) -> None:
         output_text = "\U0001f600" * 5
@@ -390,6 +429,45 @@ class CommandChainTest(unittest.TestCase):
         self.assertNotIn("--api-key", message)
         self.assertNotIn("SECRET_TOKEN", message)
 
+    def test_run_process_bounded_output_kills_descendant_that_changes_session(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "escaped-child.pid"
+            code = (
+                "import os, sys, time\n"
+                "child = os.fork()\n"
+                "if child == 0:\n"
+                "    os.setsid()\n"
+                "    open(sys.argv[1], 'w', encoding='ascii').write(str(os.getpid()))\n"
+                "    time.sleep(2)\n"
+                "else:\n"
+                "    time.sleep(2)\n"
+            )
+            with self.assertRaisesRegex(CommandChainError, "timed out"):
+                run_process_bounded_output(
+                    [sys.executable, "-c", code, str(marker)],
+                    timeout_seconds=1,
+                    max_output_bytes=128,
+                    env={},
+                    label="post-process",
+                )
+
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline and not marker.exists():
+                time.sleep(0.01)
+            self.assertTrue(marker.exists())
+            child_pid = int(marker.read_text(encoding="ascii"))
+            while time.monotonic() < deadline:
+                try:
+                    raw = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                except FileNotFoundError:
+                    break
+                state = raw[raw.rindex(")") + 2 :].split()[0]
+                if state in {"Z", "X", "x"}:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("session-escaped descendant survived command timeout")
+
     def test_run_process_bounded_output_starts_new_session(self) -> None:
         with mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen", side_effect=FileNotFoundError) as mocked_popen:
             with self.assertRaises(FileNotFoundError):
@@ -403,6 +481,296 @@ class CommandChainTest(unittest.TestCase):
 
         self.assertTrue(mocked_popen.call_args.kwargs["start_new_session"])
 
+    def test_run_process_bounded_output_rejects_dangerous_environment(self) -> None:
+        with mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen") as mocked_popen:
+            with self.assertRaisesRegex(CommandChainError, "environment key is not allowed: LD_PRELOAD"):
+                run_process_bounded_output(
+                    ["command"],
+                    timeout_seconds=1,
+                    max_output_bytes=128,
+                    env={"LD_PRELOAD": "/tmp/evil.so"},
+                    label="post-process",
+                )
+
+        mocked_popen.assert_not_called()
+
+    def test_run_process_bounded_output_rejects_unbounded_input_and_output(self) -> None:
+        with mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen") as mocked_popen:
+            with self.assertRaisesRegex(CommandChainError, "input bytes must not exceed"):
+                run_process_bounded_output(
+                    ["command"],
+                    b"x" * (command_chain_module.MAX_BOUNDED_PROCESS_INPUT_BYTES + 1),
+                    timeout_seconds=1,
+                    max_output_bytes=128,
+                    env={},
+                    label="post-process",
+                )
+            with self.assertRaisesRegex(CommandChainError, "max_output_bytes must not exceed"):
+                run_process_bounded_output(
+                    ["command"],
+                    timeout_seconds=1,
+                    max_output_bytes=command_chain_module.MAX_BOUNDED_PROCESS_OUTPUT_BYTES + 1,
+                    env={},
+                    label="post-process",
+                )
+
+        mocked_popen.assert_not_called()
+
+    def test_run_process_bounded_output_rejects_control_characters_in_label(self) -> None:
+        with mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen") as mocked_popen:
+            with self.assertRaisesRegex(CommandChainError, "label contains invalid control character"):
+                run_process_bounded_output(
+                    ["command"],
+                    timeout_seconds=1,
+                    max_output_bytes=128,
+                    env={},
+                    label="post\nprocess",
+                )
+
+        mocked_popen.assert_not_called()
+
+    def test_run_process_bounded_output_cleans_process_tree_when_identity_is_missing(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 1234
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen", return_value=proc),
+            mock.patch("speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid", return_value=None),
+            mock.patch("speed_of_cinnamon.command_chain._terminate_bounded_process", return_value=True) as mocked_cleanup,
+        ):
+            with self.assertRaisesRegex(CommandChainError, "process identity could not be verified"):
+                run_process_bounded_output(
+                    ["command"],
+                    timeout_seconds=1,
+                    max_output_bytes=128,
+                    env={},
+                    label="post-process",
+                )
+
+        mocked_cleanup.assert_called_once_with(proc)
+
+    def test_run_process_bounded_output_cleans_up_when_selector_fails(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 1234
+        proc.returncode = None
+        proc.stdout = None
+        proc.stderr = None
+        selector = mock.Mock()
+        selector.get_map.return_value = {"stream": mock.Mock(fileobj=mock.Mock())}
+        selector.select.side_effect = OSError("selector failed")
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen", return_value=proc),
+            mock.patch("speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid", return_value="current"),
+            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
+            mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value=None),
+            mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg,
+            mock.patch("speed_of_cinnamon.command_chain.selectors.DefaultSelector", return_value=selector),
+        ):
+            with self.assertRaisesRegex(OSError, "selector failed") as caught:
+                run_process_bounded_output(
+                    ["command"],
+                    timeout_seconds=1,
+                    max_output_bytes=128,
+                    env={},
+                    label="post-process",
+                )
+
+        mocked_killpg.assert_called_once_with(1234, command_chain_module.signal.SIGKILL)
+        proc.wait.assert_called_once_with(timeout=1)
+        self.assertNotIn("cleanup", " ".join(getattr(caught.exception, "__notes__", ())))
+
+    def test_run_process_bounded_output_does_not_wait_for_inherited_pipe_after_root_exit(self) -> None:
+        code = (
+            "import os, time\n"
+            "child = os.fork()\n"
+            "if child == 0:\n"
+            "    time.sleep(1.5)\n"
+            "else:\n"
+            "    os._exit(0)\n"
+        )
+        started = time.monotonic()
+        returncode, stdout, stderr = run_process_bounded_output(
+            [sys.executable, "-c", code],
+            timeout_seconds=2,
+            max_output_bytes=128,
+            env={},
+            label="post-process",
+        )
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, b"")
+        self.assertEqual(stderr, b"")
+        self.assertLess(time.monotonic() - started, 1.0)
+
+    def test_run_process_bounded_output_cleans_pipe_holder_after_root_exit_race(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "child.pid"
+            code = (
+                "import os, sys, time\n"
+                "child = os.fork()\n"
+                "if child == 0:\n"
+                "    open(sys.argv[1], 'w', encoding='ascii').write(str(os.getpid()))\n"
+                "    time.sleep(3)\n"
+                "else:\n"
+                "    while not os.path.exists(sys.argv[1]): time.sleep(0.001)\n"
+                "    time.sleep(0.01)\n"
+                "    os._exit(0)\n"
+            )
+            returncode, stdout, stderr = run_process_bounded_output(
+                [sys.executable, "-c", code, str(marker)],
+                timeout_seconds=2,
+                max_output_bytes=128,
+                env={},
+                label="post-process",
+            )
+
+            self.assertEqual(returncode, 0)
+            self.assertEqual(stdout, b"")
+            self.assertEqual(stderr, b"")
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline and not marker.exists():
+                time.sleep(0.01)
+            self.assertTrue(marker.exists())
+            child_pid = int(marker.read_text(encoding="ascii"))
+            while time.monotonic() < deadline:
+                try:
+                    raw = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                except FileNotFoundError:
+                    break
+                state = raw[raw.rindex(")") + 2 :].split()[0]
+                if state in {"Z", "X", "x"}:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("pipe-holder descendant survived root-exit cleanup")
+
+    def test_run_process_bounded_output_cleans_session_descendant_after_pipes_close(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "child.pid"
+            code = (
+                "import os, sys, time\n"
+                "child = os.fork()\n"
+                "if child == 0:\n"
+                "    open(sys.argv[1], 'w', encoding='ascii').write(str(os.getpid()))\n"
+                "    os.close(1)\n"
+                "    os.close(2)\n"
+                "    time.sleep(3)\n"
+                "else:\n"
+                "    while not os.path.exists(sys.argv[1]): time.sleep(0.001)\n"
+                "    os._exit(0)\n"
+            )
+            returncode, stdout, stderr = run_process_bounded_output(
+                [sys.executable, "-c", code, str(marker)],
+                timeout_seconds=2,
+                max_output_bytes=128,
+                env={},
+                label="post-process",
+            )
+
+            self.assertEqual(returncode, 0)
+            self.assertEqual(stdout, b"")
+            self.assertEqual(stderr, b"")
+            self.assertTrue(marker.exists())
+            child_pid = int(marker.read_text(encoding="ascii"))
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                try:
+                    raw = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                except FileNotFoundError:
+                    break
+                state = raw[raw.rindex(")") + 2 :].split()[0]
+                if state in {"Z", "X", "x"}:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("session descendant survived after output pipes closed")
+
+    def test_run_process_bounded_output_fails_closed_when_root_tree_scan_is_incomplete(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "child.pid"
+            code = (
+                "import os, sys, time\n"
+                "child = os.fork()\n"
+                "if child == 0:\n"
+                "    open(sys.argv[1], 'w', encoding='ascii').write(str(os.getpid()))\n"
+                "    time.sleep(3)\n"
+                "else:\n"
+                "    while not os.path.exists(sys.argv[1]): time.sleep(0.001)\n"
+                "    os._exit(0)\n"
+            )
+            with mock.patch(
+                "speed_of_cinnamon.command_chain._process_tree_descendant_identities",
+                return_value=None,
+            ):
+                with self.assertRaisesRegex(CommandChainError, "descendant cleanup scan was incomplete"):
+                    run_process_bounded_output(
+                        [sys.executable, "-c", code, str(marker)],
+                        timeout_seconds=2,
+                        max_output_bytes=128,
+                        env={},
+                        label="post-process",
+                    )
+
+            self.assertTrue(marker.exists())
+            child_pid = int(marker.read_text(encoding="ascii"))
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline:
+                try:
+                    raw = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                except FileNotFoundError:
+                    break
+                state = raw[raw.rindex(")") + 2 :].split()[0]
+                if state in {"Z", "X", "x"}:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("pipe-holder survived incomplete tree-scan cleanup")
+
+    def test_run_process_bounded_output_cleans_session_escaped_descendant_after_root_exit(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "escaped-child.pid"
+            code = (
+                "import os, sys, time\n"
+                "child = os.fork()\n"
+                "if child == 0:\n"
+                "    os.setsid()\n"
+                "    open(sys.argv[1], 'w', encoding='ascii').write(str(os.getpid()))\n"
+                "    time.sleep(2)\n"
+                "else:\n"
+                "    deadline = time.monotonic() + 0.2\n"
+                "    while not os.path.exists(sys.argv[1]) and time.monotonic() < deadline:\n"
+                "        time.sleep(0.01)\n"
+                "    time.sleep(0.2)\n"
+                "    os._exit(0)\n"
+            )
+            returncode, stdout, stderr = run_process_bounded_output(
+                [sys.executable, "-c", code, str(marker)],
+                timeout_seconds=2,
+                max_output_bytes=128,
+                env={},
+                label="post-process",
+            )
+
+            self.assertEqual(returncode, 0)
+            self.assertEqual(stdout, b"")
+            self.assertEqual(stderr, b"")
+            deadline = time.monotonic() + 1
+            while time.monotonic() < deadline and not marker.exists():
+                time.sleep(0.01)
+            self.assertTrue(marker.exists())
+            child_pid = int(marker.read_text(encoding="ascii"))
+            while time.monotonic() < deadline:
+                try:
+                    raw = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                except FileNotFoundError:
+                    break
+                state = raw[raw.rindex(")") + 2 :].split()[0]
+                if state in {"Z", "X", "x"}:
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("session-escaped descendant survived successful command")
+
     def test_terminate_bounded_process_kills_process_group(self) -> None:
         proc = mock.Mock()
         proc.pid = 1234
@@ -412,6 +780,67 @@ class CommandChainTest(unittest.TestCase):
 
         mocked_killpg.assert_called_once_with(1234, command_chain_module.signal.SIGKILL)
         proc.kill.assert_not_called()
+
+    def test_terminate_bounded_process_rejects_reused_process_identity(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 1234
+        proc._soc_process_identity = "old-process"
+
+        with (
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_identity_is_current",
+                return_value=False,
+            ),
+            mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg,
+        ):
+            self.assertFalse(command_chain_module._terminate_bounded_process(proc))
+
+        mocked_killpg.assert_not_called()
+        proc.kill.assert_not_called()
+
+    def test_terminate_bounded_process_confirms_root_without_process_tree(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 1234
+        with (
+            mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value=None),
+            mock.patch("speed_of_cinnamon.command_chain.os.killpg"),
+        ):
+            self.assertTrue(command_chain_module._terminate_bounded_process(proc))
+
+    def test_terminate_bounded_process_does_not_signal_reaped_root_group(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 1234
+        proc.returncode = 0
+        with (
+            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
+            mock.patch("speed_of_cinnamon.command_chain._output_process_is_reaped", return_value=True),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._process_tree_descendant_identities",
+                return_value={5678: "child-identity"},
+            ),
+            mock.patch("speed_of_cinnamon.command_chain._kill_output_process_tree", return_value=True),
+            mock.patch("speed_of_cinnamon.command_chain._wait_for_output_process_tree_stop", return_value=True),
+            mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg,
+        ):
+            self.assertTrue(command_chain_module._terminate_bounded_process(proc))
+
+        mocked_killpg.assert_not_called()
+        proc.wait.assert_called_once_with(timeout=1)
+
+    def test_terminate_bounded_process_fails_closed_for_reaped_root_with_unknown_tree(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 1234
+        proc.returncode = 0
+        with (
+            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
+            mock.patch("speed_of_cinnamon.command_chain._output_process_is_reaped", return_value=True),
+            mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value=None),
+            mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg,
+        ):
+            self.assertFalse(command_chain_module._terminate_bounded_process(proc))
+
+        mocked_killpg.assert_not_called()
+        proc.wait.assert_called_once_with(timeout=1)
 
     def test_run_command_chain_rejects_invalid_command_input_utf8(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "input is not valid UTF-8"):
@@ -575,9 +1004,26 @@ class CommandChainTest(unittest.TestCase):
             with self.assertRaisesRegex(CommandChainError, "timed out"):
                 run_command_chain([("slow",)], "", label="post-process", timeout_seconds=1)
 
+    def test_run_command_chain_redacts_execution_error_detail(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=OSError("/secret/transcript-token.txt"),
+            ),
+        ):
+            with self.assertRaisesRegex(CommandChainError, "command execution failed") as caught:
+                run_command_chain([("cmd",)], "", label="post-process")
+
+        self.assertNotIn("/secret/transcript-token.txt", str(caught.exception))
+
     def test_run_command_chain_rejects_empty_chain(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command chain is empty"):
             run_command_chain([], "seed", label="post-process")
+
+    def test_run_command_chain_rejects_control_characters_in_label(self) -> None:
+        with self.assertRaisesRegex(CommandChainError, "label contains invalid control character"):
+            run_command_chain([("printf", "ok")], "seed", label="post\nprocess")
 
     def test_run_command_chain_rejects_invalid_limits(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "max_output_chars must be positive"):
@@ -685,8 +1131,15 @@ class CommandChainTest(unittest.TestCase):
     def test_read_file_head_rejects_invalid_utf8(self) -> None:
         with tempfile.TemporaryFile() as handle:
             handle.write(b"ok\xff")
-            with self.assertRaisesRegex(CommandChainError, "not valid UTF-8"):
+            with self.assertRaisesRegex(CommandChainError, "not valid UTF-8") as caught:
                 _read_file_head(handle, 10)
+
+        self.assertNotIn("invalid start byte", str(caught.exception))
+
+    def test_read_file_head_handles_multibyte_character_at_limit(self) -> None:
+        with tempfile.TemporaryFile() as handle:
+            handle.write("😀x".encode("utf-8"))
+            self.assertEqual(_read_file_head(handle, 1), "😀")
 
     def test_read_file_head_rejects_invalid_file(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "file must be a binary file handle"):

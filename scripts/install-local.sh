@@ -160,7 +160,6 @@ resolve_tmp_root() {
     printf 'failed to resolve temporary root: %s\n' "${base}" >&2
     exit 1
   fi
-  mkdir -p "${base}"
   printf '%s\n' "${base}"
 }
 
@@ -312,10 +311,13 @@ install_workspace_cleanup() {
     printf 'preserving install recovery workspace: %s\n' "${staged_workspace}" >&2
     return 0
   fi
-  if [[ -n "${staged_workspace}" && -e "${staged_workspace}" ]]; then
-    if ! safe_fs remove install "${staged_workspace}" --kind dir; then
+  if [[ -n "${staged_workspace_identity}" ]]; then
+    if ! safe_fs remove install "${staged_workspace}" --kind dir \
+      --expected-identity "${staged_workspace_identity}"; then
       printf 'failed to clean install staging workspace: %s\n' "${staged_workspace}" >&2
     fi
+  else
+    printf 'refusing install cleanup without verified identity: %s\n' "${staged_workspace}" >&2
   fi
 }
 
@@ -374,7 +376,12 @@ rollback_attempted=0
 rollback_failed=0
 install_complete=0
 staged_workspace="$(mktemp -d "${app_data}/install-stage-XXXXXX")"
+staged_workspace_identity=""
 trap install_exit_cleanup EXIT
+if ! staged_workspace_identity="$(safe_fs identity install "${staged_workspace}" --kind dir)"; then
+  printf 'failed to capture install staging workspace identity: %s\n' "${staged_workspace}" >&2
+  exit 1
+fi
 validate_staged_workspace
 rollback_root="${staged_workspace}/rollback"
 safe_fs mkdirs install "${rollback_root}"

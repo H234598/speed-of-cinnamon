@@ -133,8 +133,13 @@ def _rename_without_replacing(
     *,
     directory_fd: int,
     target_directory_fd: int | None = None,
+    expected_source_stat: os.stat_result | None = None,
     action: str,
 ) -> None:
+    if expected_source_stat is not None:
+        source_stat = _lstat_at(directory_fd, source_name)
+        if source_stat is None or not _same_identity(source_stat, expected_source_stat):
+            raise OSError(f"source changed during {action}: {source_name}")
     try:
         libc = ctypes.CDLL(None, use_errno=True)
         renameat2 = libc.renameat2
@@ -164,6 +169,16 @@ def _cleanup_temporary_file(
 ) -> None:
     if expected_stat is None:
         return
+    try:
+        parent_stat = os.fstat(parent_fd)
+    except OSError:
+        return
+    if (
+        parent_stat.st_uid != os.geteuid()
+        or parent_stat.st_mode & 0o022
+        or (parent_stat.st_mode & 0o170000) != 0o040000
+    ):
+        return
     current_stat = _lstat_at(parent_fd, temporary_name)
     if current_stat is None or not _same_identity(current_stat, expected_stat):
         return
@@ -175,25 +190,13 @@ def _cleanup_temporary_file(
                 cleanup_name,
                 directory_fd=parent_fd,
                 action=f"{action} temporary cleanup",
+                expected_source_stat=expected_stat,
             )
         except FileExistsError:
             continue
         except FileNotFoundError:
             return
         try:
-            claimed_stat = _lstat_at(parent_fd, cleanup_name)
-            if claimed_stat is None:
-                return
-            if not _same_identity(claimed_stat, expected_stat):
-                with context_suppress():
-                    _rename_without_replacing(
-                        cleanup_name,
-                        temporary_name,
-                        directory_fd=parent_fd,
-                        action=f"{action} temporary restore",
-                    )
-                    os.fsync(parent_fd)
-                return
             os.unlink(cleanup_name, dir_fd=parent_fd)
             os.fsync(parent_fd)
         except BaseException:
@@ -203,6 +206,7 @@ def _cleanup_temporary_file(
                     temporary_name,
                     directory_fd=parent_fd,
                     action=f"{action} temporary restore",
+                    expected_source_stat=expected_stat,
                 )
                 os.fsync(parent_fd)
             raise
@@ -242,6 +246,24 @@ def _assert_expected_identity(
         return
     if current_stat is None or _stat_identity(current_stat) != _parse_identity(expected_identity, action=action):
         raise OSError(f"{role} changed during {action}: {path}")
+
+
+def _require_private_identity_removal_parent(
+    parent_fd: int,
+    *,
+    action: str,
+    path: Path,
+) -> None:
+    try:
+        parent_stat = os.fstat(parent_fd)
+    except OSError as exc:
+        raise OSError(f"could not inspect removal parent during {action}: {path}") from exc
+    if (
+        parent_stat.st_uid != os.geteuid()
+        or parent_stat.st_mode & 0o022
+        or not stat_is_dir_no_follow(parent_stat.st_mode)
+    ):
+        raise OSError(f"identity-checked removal requires private parent during {action}: {path}")
 
 
 def _check_leaf(parent_fd: int, name: str, path: Path, *, action: str, kind: str, must_exist: bool) -> None:
@@ -422,12 +444,16 @@ def cmd_write_wrapper(args: argparse.Namespace) -> None:
     _write_bytes_atomic(dst, content.encode("utf-8"), 0o755, action=args.action)
 
 
-def _hash_open_file(handle: object) -> str:
+def _hash_open_file(handle: object, *, max_bytes: int | None = None) -> str:
     hasher = hashlib.sha256()
+    total_bytes = 0
     while True:
         chunk = handle.read(COPY_CHUNK_SIZE)
         if not chunk:
             break
+        total_bytes += len(chunk)
+        if max_bytes is not None and total_bytes > max_bytes:
+            raise OSError("source exceeds copy size limit")
         hasher.update(chunk)
     return hasher.hexdigest()
 
@@ -444,6 +470,7 @@ def _copy_file_atomically_from_checked_source(
     mode: int,
     action: str,
     dst_must_not_exist: bool,
+    max_bytes: int | None,
 ) -> None:
     parent_fd, leaf = _open_parent(dst, action=action)
     if parent_fd is None:
@@ -462,12 +489,16 @@ def _copy_file_atomically_from_checked_source(
         fd = os.open(tmp_name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=parent_fd)
         tmp_stat = os.fstat(fd)
         copied_hasher = hashlib.sha256()
+        copied_bytes = 0
         with os.fdopen(fd, "wb", closefd=True) as output:
             fd = None
             while True:
                 chunk = source_handle.read(COPY_CHUNK_SIZE)
                 if not chunk:
                     break
+                copied_bytes += len(chunk)
+                if max_bytes is not None and copied_bytes > max_bytes:
+                    raise OSError(f"source exceeds copy size limit during {action}: {src}")
                 copied_hasher.update(chunk)
                 output.write(chunk)
             output.flush()
@@ -513,6 +544,9 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
     src_fd, src_name = _open_parent(src, action=args.action)
     if src_fd is None:
         fail(f"failed to open parent directory during {args.action}: {src}")
+    max_bytes = getattr(args, "max_bytes", None)
+    if max_bytes is not None and max_bytes < 0:
+        fail(f"copy size limit must not be negative during {args.action}: {src}")
     try:
         _check_leaf(src_fd, src_name, src, action=args.action, kind="file", must_exist=True)
         source_checked = _lstat_at(src_fd, src_name)
@@ -528,7 +562,7 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
                 fail(f"source changed during {args.action}: {src}")
             if source_before.st_nlink != 1:
                 fail(f"source file must not be hardlinked during {args.action}: {src}")
-            source_digest = _hash_open_file(handle)
+            source_digest = _hash_open_file(handle, max_bytes=max_bytes)
             handle.seek(0)
             _copy_file_atomically_from_checked_source(
                 src,
@@ -541,6 +575,7 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
                 mode=int(args.mode, 8),
                 action=args.action,
                 dst_must_not_exist=args.dst_must_not_exist,
+                max_bytes=max_bytes,
             )
     finally:
         os.close(src_fd)
@@ -589,11 +624,21 @@ def cmd_identity(args: argparse.Namespace) -> None:
         os.close(parent_fd)
 
 
-def _reject_unsafe_tree(tree: Path, label: str, *, reject_symlink_ancestors: bool = False) -> None:
+def _reject_unsafe_tree(
+    tree: Path,
+    label: str,
+    *,
+    reject_symlink_ancestors: bool = False,
+) -> tuple[int, int, int]:
     if reject_symlink_ancestors:
         _reject_symlink_ancestors(tree, label)
-    if not tree.exists() or tree.is_symlink() or not tree.is_dir():
+    try:
+        root_stat = tree.lstat()
+    except OSError as exc:
+        fail(f"failed to inspect {label}: {tree}: {exc}")
+    if stat_is_symlink_no_follow(root_stat.st_mode) or not stat_is_dir_no_follow(root_stat.st_mode):
         fail(f"refusing to install unsafe {label}: {tree}")
+    root_identity = _stat_identity(root_stat)
     for root, dirs, files in os.walk(tree):
         root_path = Path(root)
         for name in [*dirs, *files]:
@@ -608,6 +653,13 @@ def _reject_unsafe_tree(tree: Path, label: str, *, reject_symlink_ancestors: boo
                 fail(f"refusing to install unsupported file type in {label}: {path}")
             if stat_is_file_no_follow(stat_result.st_mode) and stat_result.st_nlink != 1:
                 fail(f"refusing to install hardlinked {label}: {path}")
+    try:
+        final_root_stat = tree.lstat()
+    except OSError as exc:
+        fail(f"failed to inspect {label} after traversal: {tree}: {exc}")
+    if _stat_identity(final_root_stat) != root_identity:
+        fail(f"{label} root changed during traversal: {tree}")
+    return root_identity
 
 
 def _reject_symlink_ancestors(path: Path, label: str) -> None:
@@ -622,11 +674,19 @@ def _reject_symlink_ancestors(path: Path, label: str) -> None:
             fail(f"refusing to install {label} through symlinked ancestor: {ancestor}")
 
 
-def _tree_signature(tree: Path, *, include_identity: bool = True, reject_symlink_ancestors: bool = False) -> dict[str, tuple[object, ...]]:
+def _tree_signature(
+    tree: Path,
+    *,
+    include_identity: bool = True,
+    reject_symlink_ancestors: bool = False,
+    expected_root_identity: tuple[int, int, int] | None = None,
+) -> dict[str, tuple[object, ...]]:
     if reject_symlink_ancestors:
         _reject_symlink_ancestors(tree, "source tree")
     signature: dict[str, tuple[object, ...]] = {}
     root_stat = tree.lstat()
+    if expected_root_identity is not None and _stat_identity(root_stat) != expected_root_identity:
+        fail(f"source tree root changed during signature: {tree}")
     if include_identity:
         signature["."] = (
             root_stat.st_dev,
@@ -667,6 +727,13 @@ def _tree_signature(tree: Path, *, include_identity: bool = True, reject_symlink
             else:
                 size = stat_result.st_size if stat_is_file_no_follow(stat_result.st_mode) else 0
                 signature[rel_path] = (0, 0, stat_result.st_mode, size, digest)
+    if expected_root_identity is not None:
+        try:
+            final_root_stat = tree.lstat()
+        except OSError as exc:
+            fail(f"failed to inspect source tree after signature: {tree}: {exc}")
+        if _stat_identity(final_root_stat) != expected_root_identity:
+            fail(f"source tree root changed during signature: {tree}")
     return signature
 
 
@@ -674,8 +741,13 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
     source = _validate_absolute(args.source, "source tree")
     target = _validate_absolute(args.target, "target tree")
     label = str(args.label or "tree")
-    _reject_unsafe_tree(source, f"{label} source tree", reject_symlink_ancestors=True)
-    source_signature = _tree_signature(source, include_identity=False, reject_symlink_ancestors=True)
+    source_root_identity = _reject_unsafe_tree(source, f"{label} source tree", reject_symlink_ancestors=True)
+    source_signature = _tree_signature(
+        source,
+        include_identity=False,
+        reject_symlink_ancestors=True,
+        expected_root_identity=source_root_identity,
+    )
     parent_fd, leaf = _open_parent(target, action=args.action, create=True)
     if parent_fd is None:
         fail(f"failed to open parent directory during {args.action}: {target}")
@@ -690,10 +762,20 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
         os.mkdir(stage_name, 0o700, dir_fd=parent_fd)
         _fsync_directory_fd(parent_fd, action=args.action)
         staged_tree = parent_path / stage_name / leaf
-        if _tree_signature(source, include_identity=False, reject_symlink_ancestors=True) != source_signature:
+        if _tree_signature(
+            source,
+            include_identity=False,
+            reject_symlink_ancestors=True,
+            expected_root_identity=source_root_identity,
+        ) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
         shutil.copytree(source, staged_tree, symlinks=True)
-        if _tree_signature(source, include_identity=False, reject_symlink_ancestors=True) != source_signature:
+        if _tree_signature(
+            source,
+            include_identity=False,
+            reject_symlink_ancestors=True,
+            expected_root_identity=source_root_identity,
+        ) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
         if _tree_signature(staged_tree, include_identity=False) != source_signature:
             fail(f"staged copy changed during {args.action}: {target}")
@@ -789,6 +871,7 @@ def cmd_remove(args: argparse.Namespace) -> None:
     try:
         stat_result = _lstat_at(parent_fd, leaf)
         if expected_identity is not None:
+            _require_private_identity_removal_parent(parent_fd, action=args.action, path=path)
             _assert_expected_identity(
                 parent_fd,
                 leaf,
@@ -828,6 +911,7 @@ def cmd_remove_leaf(args: argparse.Namespace) -> None:
     try:
         stat_result = _lstat_at(parent_fd, leaf)
         if expected_identity is not None:
+            _require_private_identity_removal_parent(parent_fd, action=args.action, path=path)
             _assert_expected_identity(
                 parent_fd,
                 leaf,
@@ -839,6 +923,8 @@ def cmd_remove_leaf(args: argparse.Namespace) -> None:
         if stat_result is None:
             return
         mode = stat_result.st_mode
+        if expected_identity is not None:
+            _require_private_identity_removal_parent(parent_fd, action=args.action, path=path)
         if stat_is_dir_no_follow(mode):
             _rmtree_safe(leaf, dir_fd=parent_fd, action=args.action)
         else:
@@ -859,6 +945,7 @@ def cmd_rmdir(args: argparse.Namespace) -> None:
     try:
         stat_result = _lstat_at(parent_fd, leaf)
         if expected_identity is not None:
+            _require_private_identity_removal_parent(parent_fd, action=args.action, path=path)
             _assert_expected_identity(
                 parent_fd,
                 leaf,
@@ -873,6 +960,8 @@ def cmd_rmdir(args: argparse.Namespace) -> None:
             fail(f"refusing to follow symlink during {args.action}: {path}")
         if not stat_is_dir_no_follow(stat_result.st_mode):
             fail(f"path must be a directory during {args.action}: {path}")
+        if expected_identity is not None:
+            _require_private_identity_removal_parent(parent_fd, action=args.action, path=path)
         try:
             os.rmdir(leaf, dir_fd=parent_fd)
             _fsync_directory_fd(parent_fd, action=args.action)
@@ -916,6 +1005,7 @@ def build_parser() -> argparse.ArgumentParser:
     copy_file.add_argument("dst")
     copy_file.add_argument("mode")
     copy_file.add_argument("--dst-must-not-exist", action="store_true")
+    copy_file.add_argument("--max-bytes", type=int)
     copy_file.set_defaults(func=cmd_copy_file)
 
     assert_file = subparsers.add_parser("assert-file")

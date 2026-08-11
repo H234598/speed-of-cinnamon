@@ -213,7 +213,18 @@ try:
                 )
                 backup_created = True
             activation_attempted = True
-            _run_safe_fs("replace", "build-snap", staging_path, final_path, "--src-kind", "file")
+            _run_safe_fs(
+                "replace",
+                "build-snap",
+                staging_path,
+                final_path,
+                "--src-kind",
+                "file",
+                "--expected-src-identity",
+                _safe_fs_identity(staging_stat),
+                "--expected-dst-identity",
+                "missing",
+            )
         except BaseException as exc:
             try:
                 _rollback(
@@ -295,7 +306,6 @@ if ! repo_tmp_abs="$(realpath "${repo_tmp_root}")"; then
   printf 'failed to resolve temporary root: %s\n' "${repo_tmp_root}" >&2
   exit 1
 fi
-mkdir -p "${repo_tmp_root}"
 if [[ "${repo_tmp_abs}" == "${repo_dir}" || "${repo_tmp_abs}" == "${repo_dir}/"* ]]; then
   printf 'snap temporary root must be outside repository: %s\n' "${repo_tmp_root}" >&2
   exit 1
@@ -319,15 +329,32 @@ snap_workspace="${snap_workspace_abs}"
 snapcraft_file_rendered="${snap_workspace}/snap/snapcraft.yaml"
 snap_workspace_dist="${snap_workspace}/dist/snap"
 tmp_output=""
+tmp_output_identity=""
+snap_workspace_identity=""
+snap_stage_path=""
+snap_stage_identity=""
 cleanup_tmpdir() {
   if [[ -n "${tmp_output}" ]]; then
-    "${safe_fs_cmd[@]}" remove-leaf build-snap "${tmp_output}" >/dev/null 2>&1 || true
+    "${safe_fs_cmd[@]}" remove-leaf build-snap "${tmp_output}" \
+      --expected-identity "${tmp_output_identity}" >/dev/null 2>&1 || true
   fi
-  if [[ -n "${snap_workspace}" ]]; then
-    "${safe_fs_cmd[@]}" remove build-snap "${snap_workspace}" --kind dir >/dev/null 2>&1 || true
+  if [[ -n "${snap_stage_path}" && -n "${snap_stage_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove-leaf build-snap "${snap_stage_path}" \
+      --expected-identity "${snap_stage_identity}" >/dev/null 2>&1 || true
+  fi
+  if [[ -n "${snap_workspace}" && -n "${snap_workspace_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove build-snap "${snap_workspace}" --kind dir \
+      --expected-identity "${snap_workspace_identity}" >/dev/null 2>&1 || true
+  elif [[ -n "${snap_workspace}" ]]; then
+    printf 'refusing snap workspace cleanup without verified identity: %s\n' "${snap_workspace}" >&2
   fi
 }
 trap cleanup_tmpdir EXIT
+
+if ! snap_workspace_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snap_workspace}" --kind dir)"; then
+  printf 'failed to capture temporary snap workspace identity: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
 
 if ! "${safe_fs_cmd[@]}" install-tree build-snap "${repo_dir}/snap" "${snap_workspace}/snap" "snap source tree"; then
   printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
@@ -335,6 +362,37 @@ if ! "${safe_fs_cmd[@]}" install-tree build-snap "${repo_dir}/snap" "${snap_work
 fi
 if ! "${safe_fs_cmd[@]}" install-tree build-snap "${repo_dir}/src" "${snap_workspace}/src" "Python source tree"; then
   printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
+remove_python_bytecode_from_snap_source() {
+  local candidate candidate_identity
+
+  while IFS= read -r -d '' candidate; do
+    if ! candidate_identity="$("${safe_fs_cmd[@]}" identity build-snap "${candidate}" --kind dir)"; then
+      printf 'failed to capture bytecode directory identity: %s\n' "${candidate}" >&2
+      return 1
+    fi
+    if ! "${safe_fs_cmd[@]}" remove build-snap "${candidate}" --kind dir \
+      --expected-identity "${candidate_identity}"; then
+      printf 'failed to remove bytecode directory: %s\n' "${candidate}" >&2
+      return 1
+    fi
+  done < <(find "${snap_workspace}/src" -type d -name "__pycache__" -print0)
+
+  while IFS= read -r -d '' candidate; do
+    if ! candidate_identity="$("${safe_fs_cmd[@]}" identity build-snap "${candidate}" --kind file)"; then
+      printf 'failed to capture bytecode file identity: %s\n' "${candidate}" >&2
+      return 1
+    fi
+    if ! "${safe_fs_cmd[@]}" remove-leaf build-snap "${candidate}" \
+      --expected-identity "${candidate_identity}"; then
+      printf 'failed to remove bytecode file: %s\n' "${candidate}" >&2
+      return 1
+    fi
+  done < <(find "${snap_workspace}/src" -type f \( -name "*.pyc" -o -name "*.pyo" \) -print0)
+}
+if ! remove_python_bytecode_from_snap_source; then
+  printf 'failed to remove stale Python bytecode from Snap source tree.\n' >&2
   exit 1
 fi
 if ! "${safe_fs_cmd[@]}" copy-file build-snap "${repo_dir}/pyproject.toml" "${snap_workspace}/pyproject.toml" 0644; then
@@ -345,11 +403,11 @@ if ! "${safe_fs_cmd[@]}" copy-file build-snap "${repo_dir}/README.md" "${snap_wo
   printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
   exit 1
 fi
-if ! "${safe_fs_cmd[@]}" remove build-snap "${snap_workspace_dist}" --kind dir; then
+if ! "${safe_fs_cmd[@]}" remove build-snap "${snap_workspace_dist}" --kind dir --expected-identity missing; then
   printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
   exit 1
 fi
-mkdir -p "${snap_workspace_dist}"
+"${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace_dist}"
 
 python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}" <<'PYCODE'
 import os
@@ -405,7 +463,38 @@ finally:
     os.close(parent_fd)
 PYCODE
 snapcraft_mode="$(stat -c '%a' "${snapcraft_file}")"
-chmod "${snapcraft_mode}" "${snapcraft_file_rendered}"
+if ! snapcraft_rendered_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snapcraft_file_rendered}" --kind file)"; then
+  printf 'failed to capture rendered snapcraft manifest identity: %s\n' "${snapcraft_file_rendered}" >&2
+  exit 1
+fi
+python3 - "${snapcraft_file_rendered}" "${snapcraft_mode}" "${snapcraft_rendered_identity}" <<'PY'
+import os
+import stat
+import sys
+
+path, mode_text, expected_identity = sys.argv[1:]
+flags = os.O_RDWR
+if hasattr(os, "O_NOFOLLOW"):
+    flags |= os.O_NOFOLLOW
+try:
+    fd = os.open(path, flags)
+except OSError as exc:
+    print(f"failed to open rendered snapcraft manifest safely: {path}: {exc}", file=sys.stderr)
+    raise SystemExit(1)
+try:
+    file_stat = os.fstat(fd)
+    if not stat.S_ISREG(file_stat.st_mode) or getattr(file_stat, "st_nlink", 1) != 1:
+        print(f"rendered snapcraft manifest must be a private regular file: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    actual_identity = f"{file_stat.st_dev}:{file_stat.st_ino}:{file_stat.st_mode}"
+    if actual_identity != expected_identity:
+        print(f"rendered snapcraft manifest changed before chmod: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    os.fchmod(fd, int(mode_text, 8))
+    os.fsync(fd)
+finally:
+    os.close(fd)
+PY
 
 if ! ( cd "${snap_workspace}" && umask 022 && snapcraft pack --destructive-mode ); then
   printf 'snapcraft build failed.\n' >&2
@@ -417,7 +506,7 @@ if [[ -L "${dist_parent}" ]]; then
   printf 'dist directory must not be a symlink: %s\n' "${dist_parent}" >&2
   exit 1
 fi
-mkdir -p "${dist_parent}"
+"${safe_fs_cmd[@]}" mkdirs build-snap "${dist_parent}"
 if [[ -L "${dist_parent}" ]]; then
   printf 'dist directory must not be a symlink: %s\n' "${dist_parent}" >&2
   exit 1
@@ -427,66 +516,14 @@ if [[ -L "${dist_dir}" ]]; then
   printf 'dist snap directory must not be a symlink: %s\n' "${dist_dir}" >&2
   exit 1
 fi
-mkdir -p "${dist_dir}"
+"${safe_fs_cmd[@]}" mkdirs build-snap "${dist_dir}"
 if [[ -L "${dist_dir}" ]]; then
   printf 'dist snap directory must not be a symlink: %s\n' "${dist_dir}" >&2
   exit 1
 fi
 
-cleanup_existing_dist_snaps() {
-  local cleanup_list
-  local keep_name=$1
-  local existing_snap
-  local existing_real
-  local -a existing_dist_snaps=()
-
-  if find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_*.snap" ! -type f -print -quit | grep -q .; then
-    printf 'refusing to clean non-regular snap artifact from output directory: %s\n' "${dist_dir}" >&2
-    exit 1
-  fi
-
-  cleanup_list="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-cleanup-XXXXXX")"
-  find "${dist_dir}" -maxdepth 1 -type f -name "speed-of-cinnamon_*.snap" ! -name "${keep_name}" -print0 | sort -z > "${cleanup_list}"
-  mapfile -d '' -t existing_dist_snaps < "${cleanup_list}"
-  "${safe_fs_cmd[@]}" remove build-snap "${cleanup_list}" --kind file
-
-  for existing_snap in "${existing_dist_snaps[@]}"; do
-    existing_real="$(realpath "${existing_snap}")"
-    if [[ "${existing_real}" != "${dist_dir}/speed-of-cinnamon_"*".snap" ]]; then
-      printf 'refusing to clean snap artifact outside output directory: %s\n' "${existing_snap}" >&2
-      exit 1
-    fi
-    "${safe_fs_cmd[@]}" remove build-snap "${existing_snap}" --kind file
-  done
-}
-
-cleanup_existing_root_snaps() {
-  local cleanup_list
-  local existing_root_snap
-  local existing_real
-  local -a existing_root_snaps=()
-
-  if find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" ! -type f -print -quit | grep -q .; then
-    printf 'refusing to clean non-regular snap artifact from repository root: %s\n' "${repo_dir}" >&2
-    exit 1
-  fi
-
-  cleanup_list="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-root-cleanup-XXXXXX")"
-  find "${repo_dir}" -maxdepth 1 -type f -name "speed-of-cinnamon_${version}_*.snap" -print0 | sort -z > "${cleanup_list}"
-  mapfile -d '' -t existing_root_snaps < "${cleanup_list}"
-  "${safe_fs_cmd[@]}" remove build-snap "${cleanup_list}" --kind file
-
-  for existing_root_snap in "${existing_root_snaps[@]}"; do
-    existing_real="$(realpath "${existing_root_snap}")"
-    if [[ "${existing_real}" != "${repo_dir}/speed-of-cinnamon_${version}_"*".snap" ]]; then
-      printf 'refusing to clean snap artifact outside repository root: %s\n' "${existing_root_snap}" >&2
-      exit 1
-    fi
-    "${safe_fs_cmd[@]}" remove build-snap "${existing_root_snap}" --kind file
-  done
-}
-
 tmp_output="$(mktemp "${repo_tmp_root}/speed-of-cinnamon-snap-output-XXXXXX")"
+tmp_output_identity="$("${safe_fs_cmd[@]}" identity build-snap "${tmp_output}" --kind file)"
 
 {
   find "${snap_workspace}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -type f -print0
@@ -521,9 +558,14 @@ for path in "${snap_files[@]}"; do
   fi
 done
 
-output_path="${dist_dir}/$(basename "${snap_files[0]}")"
-activate_snap_output "${dist_parent}/.build-snap.finalize.lock" "${snap_files[0]}" "${output_path}"
-cleanup_existing_dist_snaps "$(basename "${output_path}")"
-cleanup_existing_root_snaps
+snap_filename="$(basename "${snap_files[0]}")"
+snap_stage_path="${dist_dir}/.${snap_filename}.$(python3 -c 'import secrets; print(secrets.token_hex(16))').staging"
+if ! "${safe_fs_cmd[@]}" copy-file build-snap "${snap_files[0]}" "${snap_stage_path}" 0644 --dst-must-not-exist; then
+  printf 'failed to copy built snap into output filesystem: %s\n' "${snap_files[0]}" >&2
+  exit 1
+fi
+snap_stage_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snap_stage_path}" --kind file)"
+output_path="${dist_dir}/${snap_filename}"
+activate_snap_output "${dist_parent}/.build-snap.finalize.lock" "${snap_stage_path}" "${output_path}"
 printf 'Built %s\n' "${output_path}" >&2
 printf '%s\n' "${output_path}"

@@ -151,44 +151,26 @@ Successful GitHub Actions runs upload:
 - `speed-of-cinnamon-generic-rpm-<commit>` with the generic noarch RPM and source RPM.
 - `speed-of-cinnamon-snap-<commit>` with the Snap package.
 
-For manual release validation/publication, use workflow dispatch:
+For manual release validation/publication, use the canonical [Release Matrix](docs/development.md#kanonische-release-matrix)
+in the Development documentation. It defines normal checks, Snap requirements, Snap-free local targets, optional
+Generic RPM builds, and publish behavior.
+
+For manual CI dispatch, use `ci.yml` inputs `build_snap` and `build_generic_rpm`:
 
 ```bash
-gh workflow run release.yml -f tag=vX.Y.Z -f build_snap=false -f build_generic_rpm=true
-gh workflow run release.yml -f tag=vX.Y.Z -f build_generic_rpm=false
-gh workflow run release.yml -f tag=vX.Y.Z -f build_snap=false -f build_generic_rpm=false -f run_workflow_lint=false
-gh workflow run release.yml -f tag=vX.Y.Z -f build_snap=false -f run_workflow_lint=false
+gh workflow run ci.yml -f build_snap=false -f build_generic_rpm=false
 ```
 
-For real publishing with the same package set used by tag-triggered releases, use:
+For manual release dispatch, use only `release.yml` inputs `tag`, `dry_run`, and `build_generic_rpm`:
 
 ```bash
-gh workflow run release.yml -f tag=vX.Y.Z -f build_snap=false
+gh workflow run release.yml -f tag=vX.Y.Z -f dry_run=true -f build_generic_rpm=false
 ```
 
-Tag-triggered releases skip Snap generation by default. Use `build_snap=true` only when the release runner has a working
-Snap build environment.
+Publishing in a non-dry-run release requires repository secret `RELEASE_GITHUB_TOKEN` with `contents: write` scope.
 
-Publishing in that workflow requires repository secret `RELEASE_GITHUB_TOKEN` with `contents: write` scope.
-
-For local release validation, use:
-
-```bash
-make release-dry-run SNAP_BUILD=0 BUILD_GENERIC_RPM=0
-```
-
-`release-dry-run` validates all artifacts in the same order as release while skipping optional package types; it does not publish.
-
-For local publishing from a machine without snap support and without generic RPMs in the release set:
-
-```bash
-make release SNAP_BUILD=0 BUILD_GENERIC_RPM=0
-```
-
-Flag values are validated locally:
-
-- `SNAP_BUILD=0|1`
-- `BUILD_GENERIC_RPM=0|1`
+Use the [Release Matrix](docs/development.md#kanonische-release-matrix) for local release validation and publishing
+commands. Snap-free local validation uses `make release-dry-run-no-snap`; `release` and `release-dry-run` require Snap.
 
 Release publishing is documented in [Development](docs/development.md).
 

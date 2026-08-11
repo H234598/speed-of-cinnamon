@@ -106,10 +106,12 @@ if [[ "${absolute}" != "${snap_dir}/"* ]]; then
   exit 1
 fi
 
-if [[ ! "$(basename "${absolute}")" == speed-of-cinnamon_*_*.snap ]]; then
+snap_filename="$(basename "${absolute}")"
+if [[ ! "${snap_filename}" =~ ^speed-of-cinnamon_([^_]+)_[^/]+\.snap$ ]]; then
   printf 'unexpected snap file name: %s\n' "${snap_path}" >&2
   exit 1
 fi
+snap_filename_version="${BASH_REMATCH[1]}"
 
 size="$(wc -c < "${absolute}")"
 if [[ "${size}" -le 0 ]]; then
@@ -142,8 +144,6 @@ if ! tmp_root="$(realpath "${tmp_root}" 2>/dev/null)"; then
   printf 'failed to resolve temporary root\n' >&2
   exit 1
 fi
-mkdir -p "${tmp_root}"
-
 tmp_dir="$(mktemp -d "${tmp_root}/speed-of-cinnamon-snap-verify-XXXXXX")"
 if [[ -L "${tmp_dir}" ]]; then
   printf 'temporary snap verification directory must not be a symlink: %s\n' "${tmp_dir}" >&2
@@ -158,13 +158,25 @@ if [[ "${tmp_dir_abs}" != "${tmp_root}/speed-of-cinnamon-snap-verify-"* ]]; then
   exit 1
 fi
 tmp_dir="${tmp_dir_abs}"
+tmp_dir_identity=""
 cleanup_tmpdir() {
-  "${safe_fs_cmd[@]}" remove verify-snap "${tmp_dir}" --kind dir >/dev/null 2>&1 || true
+  if [[ -n "${tmp_dir_identity}" ]]; then
+    "${safe_fs_cmd[@]}" remove verify-snap "${tmp_dir}" --kind dir \
+      --expected-identity "${tmp_dir_identity}" >/dev/null 2>&1 || true
+  else
+    printf 'refusing snap verification cleanup without verified identity: %s\n' "${tmp_dir}" >&2
+  fi
 }
 trap cleanup_tmpdir EXIT
 
+if ! tmp_dir_identity="$("${safe_fs_cmd[@]}" identity verify-snap "${tmp_dir}" --kind dir)"; then
+  printf 'failed to capture snap verification directory identity: %s\n' "${tmp_dir}" >&2
+  exit 1
+fi
+
 snap_snapshot="${tmp_dir}/speed-of-cinnamon-verify.snap"
-if ! "${safe_fs_cmd[@]}" copy-file verify-snap "${absolute}" "${snap_snapshot}" 0644; then
+if ! "${safe_fs_cmd[@]}" copy-file verify-snap "${absolute}" "${snap_snapshot}" 0644 \
+  --max-bytes "${MAX_SNAP_ARCHIVE_BYTES}"; then
   printf 'failed to snapshot snap package for verification: %s\n' "${absolute}" >&2
   exit 1
 fi
@@ -176,6 +188,12 @@ if [[ "$(stat -c '%h' "${snap_snapshot}")" -ne 1 ]]; then
   printf 'snap snapshot must not be hardlinked: %s\n' "${snap_snapshot}" >&2
   exit 1
 fi
+snapshot_size="$(wc -c < "${snap_snapshot}")"
+if [[ "${snapshot_size}" -le 0 || "${snapshot_size}" -gt "${MAX_SNAP_ARCHIVE_BYTES}" ]]; then
+  printf 'snap snapshot has invalid size: %s bytes\n' "${snapshot_size}" >&2
+  exit 1
+fi
+size="${snapshot_size}"
 
 snap_listing="${tmp_dir}/snap-listing.txt"
 unsquashfs -lln -no-progress "${snap_snapshot}" > "${snap_listing}"
@@ -195,10 +213,21 @@ REQUIRED_ENTRIES = {
     "squashfs-root/bin/speed-of-cinnamon",
     "squashfs-root/src/speed_of_cinnamon/cli.py",
 }
+REQUIRED_RUNTIME_ENTRIES = {
+    "squashfs-root/usr/bin/python3",
+    "squashfs-root/usr/bin/secret-tool",
+    "squashfs-root/usr/lib/python3/dist-packages/cryptography/__init__.py",
+}
 REQUIRED_REGULAR_ENTRIES = {
     "squashfs-root/meta/snap.yaml",
     "squashfs-root/bin/speed-of-cinnamon",
     "squashfs-root/src/speed_of_cinnamon/cli.py",
+    "squashfs-root/usr/bin/secret-tool",
+    "squashfs-root/usr/lib/python3/dist-packages/cryptography/__init__.py",
+}
+REQUIRED_EXECUTABLE_ENTRIES = {
+    "squashfs-root/bin/speed-of-cinnamon",
+    "squashfs-root/usr/bin/secret-tool",
 }
 
 
@@ -341,6 +370,13 @@ for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
         raise SystemExit(f"snap package contains path that is too long: {path_text}")
     if len([part for part in validated_path.parts if part]) > MAX_SNAP_PATH_DEPTH:
         raise SystemExit(f"snap package contains path that is too deep: {path_text}")
+    if (
+        path_text.endswith("/__pycache__")
+        or "/__pycache__/" in path_text
+        or path_text.endswith(".pyc")
+        or path_text.endswith(".pyo")
+    ):
+        raise SystemExit(f"snap package contains stale Python bytecode: {path_text}")
     seen[path_text] = mode
     try:
         size = int(size_text)
@@ -358,17 +394,43 @@ for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
 missing = REQUIRED_ENTRIES - seen.keys()
 if missing:
     raise SystemExit(f"snap package is missing required entries: {sorted(missing)}")
+missing_runtime = REQUIRED_RUNTIME_ENTRIES - seen.keys()
+if missing_runtime:
+    raise SystemExit(f"snap package is missing required runtime entries: {sorted(missing_runtime)}")
 
 for required_entry in REQUIRED_REGULAR_ENTRIES:
     if seen[required_entry][0] != "-":
         raise SystemExit(f"snap package required entry is not regular file: {required_entry} ({seen[required_entry]})")
+for required_entry in REQUIRED_EXECUTABLE_ENTRIES:
+    if symbolic_mode_to_octal(seen[required_entry]) != 0o755:
+        raise SystemExit(f"snap package required executable has disallowed permissions: {required_entry}")
 PY
 
 snap_yaml="${tmp_dir}/snap.yaml"
 snap_backend="${tmp_dir}/speed-of-cinnamon"
 unsquashfs -cat "${snap_snapshot}" meta/snap.yaml > "${snap_yaml}"
 unsquashfs -cat "${snap_snapshot}" bin/speed-of-cinnamon > "${snap_backend}"
-grep -Fxq 'name: speed-of-cinnamon' "${snap_yaml}"
+python3 - "${snap_yaml}" "${snap_filename_version}" <<'PY'
+from pathlib import Path
+import sys
+
+snap_yaml_path, expected_version = sys.argv[1:]
+fields: dict[str, str] = {}
+for raw_line in Path(snap_yaml_path).read_text(encoding="utf-8").split("\n"):
+    if raw_line.startswith("name:") or raw_line.startswith("version:"):
+        key, raw_value = raw_line.split(":", 1)
+        if key in fields:
+            raise SystemExit(f"snap metadata contains duplicate {key} field")
+        value = raw_value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        fields[key] = value
+
+if fields.get("name") != "speed-of-cinnamon":
+    raise SystemExit("snap metadata name does not match speed-of-cinnamon")
+if fields.get("version") != expected_version:
+    raise SystemExit("snap metadata version does not match snap filename")
+PY
 grep -Fq 'src/speed_of_cinnamon/cli.py' "${snap_backend}"
 
 printf 'Verified snap package: %s (%s bytes)\n' "${absolute}" "${size}"

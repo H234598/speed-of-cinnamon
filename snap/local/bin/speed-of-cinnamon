@@ -1,10 +1,18 @@
 #!/bin/sh
 set -eu
+TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
 
 if [ -n "${SNAP:-}" ]; then
   SNAP_ROOT="${SNAP}"
 else
   SNAP_ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 fi
+export PATH="${SNAP_ROOT}/usr/sbin:${SNAP_ROOT}/usr/bin:${SNAP_ROOT}/sbin:${SNAP_ROOT}/bin:${TRUSTED_COMMAND_PATH}"
+python3_path="$(command -v -- python3 || true)"
+if [ -z "${python3_path}" ]; then
+  printf '%s\n' 'python3 runtime is unavailable in Snap environment' >&2
+  exit 127
+fi
 export PYTHONPATH="${SNAP_ROOT}/src"
-exec python3 "${SNAP_ROOT}/src/speed_of_cinnamon/cli.py" "$@"
+exec "${python3_path}" -m speed_of_cinnamon.cli "$@"

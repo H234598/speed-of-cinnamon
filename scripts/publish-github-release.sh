@@ -4,6 +4,7 @@ umask 077
 IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 readonly RELEASE_TARGET_REPOSITORY="H234598/speed-of-cinnamon"
+readonly RELEASE_EXPECTED_BRANCH="main"
 export PATH="${TRUSTED_COMMAND_PATH}"
 
 usage() {
@@ -80,6 +81,11 @@ existing_was_prerelease="false"
 existing_release_title=""
 existing_release_title_captured="false"
 existing_notes_file=""
+existing_notes_file_identity=""
+notes_file=""
+notes_file_identity=""
+staging_dir=""
+staging_dir_identity=""
 created_release="false"
 uploaded_asset_names=()
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
@@ -269,6 +275,10 @@ resolve_github_remote_repo() {
     printf '%s\n' "${BASH_REMATCH[1]}"
     return 0
   fi
+  if [[ "${remote_url}" =~ ^ssh://git@github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)(\.git)?$ ]]; then
+    printf '%s\n' "${BASH_REMATCH[1]}"
+    return 0
+  fi
   return 1
 }
 
@@ -333,6 +343,35 @@ cleanup_release_state() {
   rollback_release_state "${rollback_release_tag}" "${rollback_repo}" "${existing_release_state}" "${existing_draft_state}" "${created_release_state}"
 }
 
+cleanup_notes() {
+  cleanup_release_state
+  if [[ -n "${notes_file}" ]]; then
+    if [[ -n "${notes_file_identity}" ]]; then
+      "${safe_fs_cmd[@]}" remove-leaf publish "${notes_file}" \
+        --expected-identity "${notes_file_identity}" >/dev/null 2>&1 || true
+    else
+      printf 'refusing release notes cleanup without verified identity: %s\n' "${notes_file}" >&2
+    fi
+  fi
+  if [[ -n "${existing_notes_file}" ]]; then
+    if [[ -n "${existing_notes_file_identity}" ]]; then
+      "${safe_fs_cmd[@]}" remove-leaf publish "${existing_notes_file}" \
+        --expected-identity "${existing_notes_file_identity}" >/dev/null 2>&1 || true
+    else
+      printf 'refusing existing release notes cleanup without verified identity: %s\n' "${existing_notes_file}" >&2
+    fi
+  fi
+  if [[ -n "${staging_dir}" ]]; then
+    if [[ -n "${staging_dir_identity}" ]]; then
+      "${safe_fs_cmd[@]}" remove publish "${staging_dir}" --kind dir \
+        --expected-identity "${staging_dir_identity}" >/dev/null 2>&1 || true
+    else
+      printf 'refusing release staging cleanup without verified identity: %s\n' "${staging_dir}" >&2
+    fi
+  fi
+}
+trap cleanup_notes EXIT
+
 require_one "source archive" "${source_archives[@]}"
 require_one "checksum file" "${checksums[@]}"
 require_one "RPM" "${rpms[@]}"
@@ -357,6 +396,7 @@ done
 require_regular_source_file "${safe_fs}" "safe local filesystem helper"
 
 staging_dir=""
+staging_dir_identity=""
 upload_refs=()
 staging_root="${TMPDIR:-/tmp}"
 declare -A staged_names_seen=()
@@ -401,6 +441,10 @@ if [[ "${staging_dir_abs}" != "${staging_root}/speed-of-cinnamon-release-upload-
   exit 1
 fi
 staging_dir="${staging_dir_abs}"
+if ! staging_dir_identity="$("${safe_fs_cmd[@]}" identity publish "${staging_dir}" --kind dir)"; then
+  printf 'failed to capture release staging directory identity: %s\n' "${staging_dir}" >&2
+  exit 1
+fi
 
 fsync_regular_file() {
   local path=$1
@@ -434,12 +478,13 @@ chmod_and_fsync_regular_file() {
   local path=$1
   local mode=$2
   local label=$3
-  python3 - "$path" "$mode" "$label" <<'PY'
+  local expected_identity=$4
+  python3 - "$path" "$mode" "$label" "$expected_identity" <<'PY'
 import os
 import stat
 import sys
 
-path, raw_mode, label = sys.argv[1:]
+path, raw_mode, label, expected_identity = sys.argv[1:]
 try:
     mode = int(raw_mode, 8)
 except ValueError:
@@ -460,6 +505,10 @@ try:
         raise SystemExit(1)
     if getattr(file_stat, "st_nlink", 1) != 1:
         print(f"{label} must not be hardlinked: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    actual_identity = f"{file_stat.st_dev}:{file_stat.st_ino}:{file_stat.st_mode}"
+    if actual_identity != expected_identity:
+        print(f"{label} changed before chmod: {path}", file=sys.stderr)
         raise SystemExit(1)
     os.fchmod(fd, mode)
     os.fsync(fd)
@@ -490,9 +539,9 @@ for asset in "${assets[@]}"; do
     printf 'failed to stage release asset for upload: %s\n' "${asset}" >&2
     exit 1
   fi
-  chmod_and_fsync_regular_file "${staged_path}" 0444 "staged release asset"
+  staged_asset_identity="$("${safe_fs_cmd[@]}" identity publish "${staged_path}" --kind file)"
+  chmod_and_fsync_regular_file "${staged_path}" 0444 "staged release asset" "${staged_asset_identity}"
   upload_refs+=("${staged_path}")
-  uploaded_asset_names+=("${staged_name}")
   verify_staged_asset_path "${staged_path}"
   if [[ "${asset}" == "${source_archives[0]}" ]]; then
     source_archive_ref="${staged_path}"
@@ -570,6 +619,27 @@ if [[ "${commit}" != "${tag_commit}" ]]; then
   exit 1
 fi
 
+current_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+if [[ -n "${current_branch}" ]]; then
+  if [[ "${current_branch}" != "${RELEASE_EXPECTED_BRANCH}" ]]; then
+    printf 'release must run from %s, got %s\n' "${RELEASE_EXPECTED_BRANCH}" "${current_branch}" >&2
+    exit 1
+  fi
+elif [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" ]]; then
+  if [[ "${GITHUB_REF_NAME:-}" != "${RELEASE_EXPECTED_BRANCH}" ]]; then
+    printf 'workflow-dispatch release must originate from %s\n' "${RELEASE_EXPECTED_BRANCH}" >&2
+    exit 1
+  fi
+elif [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then
+  if [[ "${GITHUB_REF_NAME:-}" != "${tag}" ]]; then
+    printf 'detached release checkout does not match release tag: %s\n' "${tag}" >&2
+    exit 1
+  fi
+else
+  printf 'release requires %s branch checkout or verified GitHub release ref\n' "${RELEASE_EXPECTED_BRANCH}" >&2
+  exit 1
+fi
+
 checksum="$(awk 'NF {print $1; exit}' "${checksum_ref}")"
 if [[ ! "${checksum}" =~ ^[0-9A-Fa-f]{64}$ ]]; then
   printf 'invalid sha256 checksum: %s\n' "${checksum}" >&2
@@ -631,22 +701,27 @@ if [[ "${notes_file_abs}" != "${notes_tmp_root}/speed-of-cinnamon-release-notes-
   exit 1
 fi
 notes_file="${notes_file_abs}"
+if ! notes_file_identity="$("${safe_fs_cmd[@]}" identity publish "${notes_file}" --kind file)"; then
+  printf 'failed to capture release notes file identity: %s\n' "${notes_file}" >&2
+  exit 1
+fi
 write_regular_file_from_stdin() {
   local path=$1
   local label=$2
+  local expected_identity=$3
 
   python3 -c '
 import os
 import stat
 import sys
 
-path, label = sys.argv[1:3]
+path, label, expected_identity = sys.argv[1:4]
 payload = sys.stdin.buffer.read()
-flags = os.O_WRONLY | os.O_CREAT
+flags = os.O_WRONLY
 if hasattr(os, "O_NOFOLLOW"):
     flags |= os.O_NOFOLLOW
 try:
-    fd = os.open(path, flags, 0o600)
+    fd = os.open(path, flags)
 except OSError as exc:
     print(f"failed to open {label} for writing: {path}: {exc}", file=sys.stderr)
     raise SystemExit(1)
@@ -657,6 +732,10 @@ try:
         raise SystemExit(1)
     if getattr(file_stat, "st_nlink", 1) != 1:
         print(f"{label} must not be hardlinked: {path}", file=sys.stderr)
+        raise SystemExit(1)
+    actual_identity = f"{file_stat.st_dev}:{file_stat.st_ino}:{file_stat.st_mode}"
+    if actual_identity != expected_identity:
+        print(f"{label} changed before writing: {path}", file=sys.stderr)
         raise SystemExit(1)
     os.ftruncate(fd, 0)
     view = memoryview(payload)
@@ -669,20 +748,9 @@ try:
     os.fsync(fd)
 finally:
     os.close(fd)
-' "${path}" "${label}"
+' "${path}" "${label}" "${expected_identity}"
 }
-cleanup_notes() {
-  cleanup_release_state
-  "${safe_fs_cmd[@]}" remove-leaf publish "${notes_file}" >/dev/null 2>&1 || true
-  if [[ -n "${existing_notes_file}" ]]; then
-    "${safe_fs_cmd[@]}" remove-leaf publish "${existing_notes_file}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${staging_dir}" ]]; then
-    "${safe_fs_cmd[@]}" remove publish "${staging_dir}" --kind dir >/dev/null 2>&1 || true
-  fi
-}
-trap cleanup_notes EXIT
-write_regular_file_from_stdin "${notes_file}" "release notes file" <<EOF
+write_regular_file_from_stdin "${notes_file}" "release notes file" "${notes_file_identity}" <<EOF
 Speed of Cinnamon ${tag}
 
 Cinnamon-native voice typing for Fedora Cinnamon.
@@ -712,7 +780,12 @@ if [[ -z "${GH_TOKEN:-${GITHUB_TOKEN:-}}" ]]; then
   printf 'GH_TOKEN or GITHUB_TOKEN must be set to publish a release.\n' >&2
   exit 1
 fi
-if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
+release_probe_headers=""
+if release_probe_headers="$(gh api --include --silent "repos/${repo}/releases/tags/${tag}" 2>/dev/null)"; then
+  :
+fi
+release_probe_status="$(awk '$1 ~ /^HTTP\/[0-9]+(\.[0-9]+)?$/ { status = $2 } END { print status }' <<<"${release_probe_headers}")"
+if [[ "${release_probe_status}" == "200" ]]; then
   existing_release="true"
   existing_was_draft="$(gh release view "${tag}" --repo "${repo}" --json isDraft --jq '.isDraft')"
   existing_was_prerelease="$(gh release view "${tag}" --repo "${repo}" --json isPrerelease --jq '.isPrerelease')"
@@ -733,8 +806,12 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
     exit 1
   fi
   existing_notes_file="${existing_notes_file_abs}"
+  if ! existing_notes_file_identity="$("${safe_fs_cmd[@]}" identity publish "${existing_notes_file}" --kind file)"; then
+    printf 'failed to capture existing release notes file identity: %s\n' "${existing_notes_file}" >&2
+    exit 1
+  fi
   if ! gh release view "${tag}" --repo "${repo}" --json body --jq '.body // ""' \
-      | write_regular_file_from_stdin "${existing_notes_file}" "existing release notes file"; then
+      | write_regular_file_from_stdin "${existing_notes_file}" "existing release notes file" "${existing_notes_file_identity}"; then
     printf 'failed to snapshot existing release notes for rollback: %s\n' "${tag}" >&2
     exit 1
   fi
@@ -754,7 +831,7 @@ if gh release view "${tag}" --repo "${repo}" >/dev/null 2>&1; then
     printf 'failed to prepare existing release as draft: %s\n' "${tag}" >&2
     exit 1
   fi
-else
+elif [[ "${release_probe_status}" == "404" ]]; then
   if ! gh release create "${tag}" \
       --repo "${repo}" \
       --title "Speed of Cinnamon ${tag}" \
@@ -766,12 +843,18 @@ else
   fi
   created_release="true"
   mark_release_mutation
-fi
-
-if ! gh release upload "${tag}" "${upload_refs[@]}" --repo "${repo}"; then
-  printf 'failed to upload one or more release assets.\n' >&2
+else
+  printf 'could not determine release state for %s (HTTP status: %s)\n' "${tag}" "${release_probe_status:-unknown}" >&2
   exit 1
 fi
+
+for upload_ref in "${upload_refs[@]}"; do
+  if ! gh release upload "${tag}" "${upload_ref}" --repo "${repo}"; then
+    printf 'failed to upload release asset: %s\n' "$(basename "${upload_ref}")" >&2
+    exit 1
+  fi
+  uploaded_asset_names+=("$(basename "${upload_ref}")")
+done
 
 if ! gh release edit "${tag}" \
     --repo "${repo}" \

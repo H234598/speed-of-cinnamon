@@ -139,7 +139,7 @@ snap-check: release-validate-flags
 	@if [ "$(SNAP_BUILD)" = "0" ]; then \
 	  printf 'Skipping snap verification (SNAP_BUILD=0). Set SNAP_BUILD=1 to verify a built snap.\n'; \
 	else \
-	  mapfile -d '' snap_file_list < <(find dist/snap -maxdepth 1 -name 'speed-of-cinnamon_*_*.snap' -type f -print0 | sort -z); \
+	  mapfile -d '' snap_file_list < <(find dist/snap -maxdepth 1 -name 'speed-of-cinnamon_$(PROJECT_VERSION)_*.snap' -type f -print0 | sort -z); \
 	  snap_file_count="$${#snap_file_list[@]}"; \
 	  if [ "$${snap_file_count}" -ne 1 ]; then \
 	    printf 'expected exactly one snap package, found %s\n' "$${snap_file_count}" >&2; \

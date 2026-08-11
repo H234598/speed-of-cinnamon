@@ -71,6 +71,26 @@ class SafeLocalFsTest(unittest.TestCase):
             self.assertTrue(source_flags[0] & getattr(SAFE_LOCAL_FS.os, "O_NONBLOCK", 0))
             self.assertEqual(target.read_text(encoding="utf-8"), "safe\n")
 
+    def test_copy_file_enforces_max_bytes_before_activation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.txt"
+            target = root / "target.txt"
+            source.write_bytes(b"12345")
+            args = SAFE_LOCAL_FS.argparse.Namespace(
+                action="test",
+                src=str(source),
+                dst=str(target),
+                mode="0600",
+                dst_must_not_exist=False,
+                max_bytes=4,
+            )
+
+            with self.assertRaisesRegex(OSError, "copy size limit"):
+                SAFE_LOCAL_FS.cmd_copy_file(args)
+
+            self.assertFalse(target.exists())
+
     def test_copy_file_does_not_clobber_raced_destination(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -228,6 +248,37 @@ class SafeLocalFsTest(unittest.TestCase):
             self.assertIn("destination changed", result.stderr)
             self.assertEqual(target.read_text(encoding="utf-8"), "foreign\n")
 
+    def test_identity_checked_removals_reject_shared_parent(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            root.chmod(0o777)
+            file_target = root / "file.txt"
+            file_target.write_text("safe\n", encoding="utf-8")
+            directory_target = root / "directory"
+            directory_target.mkdir()
+            leaf_target = root / "leaf.txt"
+            leaf_target.write_text("safe\n", encoding="utf-8")
+
+            cases = [
+                ("remove-leaf", leaf_target, ()),
+                ("remove", file_target, ("--kind", "file")),
+                ("rmdir", directory_target, ()),
+            ]
+            for command, target, extra_args in cases:
+                with self.subTest(command=command):
+                    result = run_helper(
+                        command,
+                        "test",
+                        str(target),
+                        *extra_args,
+                        "--expected-identity",
+                        "0:0:0",
+                    )
+
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("requires private parent", result.stderr)
+                    self.assertTrue(target.exists())
+
     def test_atomic_write_preserves_replaced_temp_during_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             module = SAFE_LOCAL_FS
@@ -260,6 +311,52 @@ class SafeLocalFsTest(unittest.TestCase):
                     module._write_bytes_atomic(target, b"new\n", 0o600, action="test")
 
             self.assertEqual(list(root.glob(".target.txt.*.tmp")), [])
+
+    def test_cleanup_does_not_delete_replaced_cleanup_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = SAFE_LOCAL_FS
+            root = Path(tmp)
+            temporary = root / ".target.txt.tmp"
+            temporary.write_bytes(b"original\n")
+            expected_stat = temporary.stat()
+            parent_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            real_lstat_at = module._lstat_at
+            raced = False
+
+            def replace_cleanup_entry(parent: int, name: str):
+                nonlocal raced
+                result = real_lstat_at(parent, name)
+                if name.endswith(".cleanup") and result is not None and not raced:
+                    cleanup_entry = Path(f"/proc/self/fd/{parent}") / name
+                    cleanup_entry.unlink()
+                    cleanup_entry.write_bytes(b"attacker\n")
+                    raced = True
+                return result
+
+            try:
+                with mock.patch.object(module, "_lstat_at", side_effect=replace_cleanup_entry):
+                    module._cleanup_temporary_file(parent_fd, temporary.name, expected_stat, action="test")
+            finally:
+                os.close(parent_fd)
+
+            self.assertFalse(raced)
+            self.assertFalse(temporary.exists())
+
+    def test_cleanup_skips_shared_parent_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            module = SAFE_LOCAL_FS
+            root = Path(tmp)
+            temporary = root / ".target.txt.tmp"
+            temporary.write_bytes(b"original\n")
+            expected_stat = temporary.stat()
+            root.chmod(0o777)
+            parent_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                module._cleanup_temporary_file(parent_fd, temporary.name, expected_stat, action="test")
+            finally:
+                os.close(parent_fd)
+
+            self.assertTrue(temporary.exists())
 
     def test_atomic_copy_preserves_replaced_temp_during_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

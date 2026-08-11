@@ -7,6 +7,7 @@ import logging
 import os
 import stat as stat_module
 import tempfile
+import threading
 import time
 import unittest
 from contextlib import redirect_stderr
@@ -221,6 +222,14 @@ class AppLoggingTest(unittest.TestCase):
             "[redacted error details]",
         )
 
+    def test_sanitize_error_message_redacts_german_transcript_details(self) -> None:
+        sanitized = app_logging.sanitize_error_message(
+            "custom command failed: Transkript: Alice trifft sich morgen im Buero",
+            max_chars=240,
+        )
+
+        self.assertEqual(sanitized, "[redacted error details]")
+
     def test_sanitize_error_message_redacts_secret_even_after_text_mutation(self) -> None:
         with mock.patch("speed_of_cinnamon.app_logging.HOME_DIR", "/tmp/fake-home"):
             self.assertEqual(
@@ -312,6 +321,26 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(app_logging.sanitize_value("passphrase", "correct horse battery staple"), "[redacted]")
         self.assertEqual(app_logging.sanitize_value("openai-compatible-api-key", "sk-short"), "[redacted]")
 
+    def test_sanitize_value_redacts_sensitive_suffix_before_key_truncation(self) -> None:
+        record = logging.LogRecord("test", logging.INFO, __file__, 1, "event", (), None)
+        record.fields = {("a" * 65) + "_password": "visible"}
+        rendered = app_logging.JsonLogFormatter().format(record)
+        self.assertIn("[redacted]", rendered)
+        self.assertNotIn("visible", rendered)
+
+    def test_sanitize_value_bounds_nested_container_depth(self) -> None:
+        payload: object = "leaf"
+        for _ in range(1_500):
+            payload = {"nested": payload}
+
+        sanitized = app_logging.sanitize_value("payload", payload)
+        cursor = sanitized
+        for _ in range(1_500):
+            if not isinstance(cursor, dict):
+                break
+            cursor = cursor.get("nested")
+        self.assertEqual(cursor, "[redacted]")
+
     def test_sanitize_value_does_not_redact_innocent_key_substrings(self) -> None:
         for key in ("monkey", "turkey", "keyboard", "context_id"):
             with self.subTest(key=key):
@@ -389,6 +418,12 @@ class AppLoggingTest(unittest.TestCase):
         sanitized = app_logging.sanitize_text("https://secret-token@example.test/path", max_chars=120)
         self.assertEqual(sanitized, "https://[redacted]@example.test/path")
         self.assertNotIn("secret-token", sanitized)
+
+    def test_sanitize_text_redacts_url_credentials_before_truncation(self) -> None:
+        value = "https://" + ("secret-token-" * 30) + "@example.test/path"
+        sanitized = app_logging.sanitize_text(value, max_chars=120)
+        self.assertNotIn("secret-token-", sanitized)
+        self.assertIn("[redacted]", sanitized)
 
     def test_sanitize_text_redacts_obfuscated_url_credentials_and_paths(self) -> None:
         for value, secret in (
@@ -646,6 +681,15 @@ class AppLoggingTest(unittest.TestCase):
             self.assertNotIn("sk-secret", json.dumps(payload))
             self.assertNotIn("abc123", json.dumps(payload))
             self.assertNotIn("bare123", json.dumps(payload))
+
+    def test_formatter_redacts_exception_field_with_error_rules(self) -> None:
+        record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+        record.fields = {"error": RuntimeError("backend output: TOP_SECRET_VALUE")}
+
+        payload = json.loads(app_logging.JsonLogFormatter().format(record))
+
+        self.assertEqual(payload["error"], "[redacted error details]")
+        self.assertNotIn("TOP_SECRET_VALUE", json.dumps(payload))
 
     def test_info_is_not_logged_when_default_error_level_is_used(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1855,6 +1899,37 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertEqual(list(real_dir.iterdir()), [])
             self.assertTrue(symlink_dir.is_symlink())
+
+    def test_configure_logging_waits_for_active_handler_lock(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            logger = logging.getLogger(app_logging.LOGGER_NAME)
+            self.assertEqual(len(logger.handlers), 1)
+            handler = logger.handlers[0]
+            completed = threading.Event()
+            errors: list[BaseException] = []
+
+            def reconfigure() -> None:
+                try:
+                    app_logging.configure_logging("error", base_dir=log_dir)
+                except BaseException as exc:
+                    errors.append(exc)
+                finally:
+                    completed.set()
+
+            handler.acquire()
+            thread = threading.Thread(target=reconfigure)
+            thread.start()
+            try:
+                self.assertFalse(completed.wait(0.05))
+            finally:
+                handler.release()
+            thread.join(timeout=2)
+            app_logging.configure_logging("off", base_dir=log_dir)
+
+            self.assertFalse(thread.is_alive())
+            self.assertEqual(errors, [])
 
     def test_maintain_logs_compresses_daily_logs_older_than_three_days(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

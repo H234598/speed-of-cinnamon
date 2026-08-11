@@ -47,6 +47,8 @@ const NON_TEXT_TEXT_CLIPBOARD_TARGETS = {
 const SELF_PROTECTION_NOTICE_COOLDOWN_MS = 180000;
 const CLIPBOARD_OVERWRITE_APPROVAL_TTL_MS = 5000;
 const CLIPBOARD_TARGET_TIMEOUT_SECONDS = 1;
+const FOCUS_RESTORE_POLL_MS = 20;
+const FOCUS_RESTORE_TIMEOUT_MS = CLIPBOARD_TARGET_TIMEOUT_SECONDS * 1000;
 const CLIPBOARD_COMMAND_TIMEOUT_MS = 1500;
 const CLIPBOARD_PAYLOAD_FINGERPRINT_MAX_BUDGET_MS = 6000;
 const CLIPBOARD_MAX_TARGETS = 16;
@@ -340,6 +342,18 @@ const TRANSCRIBER_METHODS = [
   "openai-compatible",
   "command"
 ];
+const TRANSCRIBER_ALIASES = Object.freeze({
+  "openai": "whisper",
+  "openai-whisper": "whisper",
+  "openai-compatible-api": "openai-compatible",
+  "external-api": "openai-compatible",
+  "custom": "command",
+  "template": "command"
+});
+function normalizeTranscriberMethod(value) {
+  let normalized = String(value || "").trim().toLowerCase();
+  return TRANSCRIBER_ALIASES[normalized] || normalized;
+}
 const POST_PROCESS_BACKENDS = [
   "none",
   "command",
@@ -512,7 +526,20 @@ MyApplet.prototype = {
       if (this._blockedHotkeyIds && this._blockedHotkeyIds[HOTKEY_ID] === true) {
         return;
       }
-      if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow()) {
+      if (!this._hasActiveRecordingState() && !this.isCommandRunning) {
+        let callbackDelivered = false;
+        let startRecording = (remembered) => {
+          callbackDelivered = true;
+          if (remembered) {
+            this._toggleRecording();
+          }
+        };
+        if (!this._rememberFocusedWindow(false, startRecording)) {
+          return;
+        }
+        if (!callbackDelivered) {
+          return;
+        }
         return;
       }
       this._toggleRecording();
@@ -3756,8 +3783,14 @@ MyApplet.prototype = {
       return 0;
     }
     if (this._orphanedTimers.length > 0 && key !== "process-cleanup-retry") {
+      let orphanForRequestedKey = this._orphanedTimers.some((entry) => {
+        return entry && String(entry.name || "timer") === key;
+      });
       let orphanCleanupSucceeded = this._retryOrphanedTimers();
-      if (!orphanCleanupSucceeded || this._orphanedTimers.length > 0) {
+      let requestedKeyStillOrphaned = this._orphanedTimers.some((entry) => {
+        return entry && String(entry.name || "timer") === key;
+      });
+      if (orphanForRequestedKey && (!orphanCleanupSucceeded || requestedKeyStillOrphaned)) {
         this._recordLifecycleError("timer-state", new Error("An orphaned timer is still pending"));
         return 0;
       }
@@ -4151,7 +4184,20 @@ MyApplet.prototype = {
 
     this.toggleItem = new PopupMenu.PopupIconMenuItem(_("Start dictation"), "audio-input-microphone-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(this.toggleItem, "activate", () => {
-      if (!this._hasActiveRecordingState() && !this.isCommandRunning && !this._rememberFocusedWindow(true)) {
+      if (!this._hasActiveRecordingState() && !this.isCommandRunning) {
+        let callbackDelivered = false;
+        let startRecording = (remembered) => {
+          callbackDelivered = true;
+          if (remembered) {
+            this._toggleRecording();
+          }
+        };
+        if (!this._rememberFocusedWindow(true, startRecording)) {
+          return;
+        }
+        if (!callbackDelivered) {
+          return;
+        }
         return;
       }
       this._toggleRecording();
@@ -5580,8 +5626,9 @@ MyApplet.prototype = {
     let safeVocabulary = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.vocabulary), "vocabulary", "");
     let safeRecorder = this._normalizeRecorder(this.recorder);
     let safeLanguage = this._normalizeLanguage(languageOverride, this._currentLanguage());
-    let safeTranscriber = TRANSCRIBER_METHODS.indexOf(String(this.transcriber || "")) >= 0
-      ? String(this.transcriber)
+    let normalizedTranscriber = normalizeTranscriberMethod(this.transcriber);
+    let safeTranscriber = TRANSCRIBER_METHODS.indexOf(normalizedTranscriber) >= 0
+      ? normalizedTranscriber
       : "auto";
     let safePostProcessBackend = POST_PROCESS_BACKENDS.indexOf(String(this.postProcessBackend || "")) >= 0
       ? String(this.postProcessBackend)
@@ -5642,7 +5689,9 @@ MyApplet.prototype = {
     let openAiCompatibleModelIncluded = safeOpenAiCompatibleModel.trim() === "" || safeOpenAiCompatibleModel.trim() === DEFAULT_OPENAI_COMPATIBLE_MODEL;
     let openAiCompatibleTextModelIncluded = safeOpenAiCompatibleTextModel.trim() === "" || safeOpenAiCompatibleTextModel.trim() === DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL;
     if (safeInputDevice.trim() !== "") {
-      this._appendCliOptionWithinBudget(args, "--input-device", safeInputDevice);
+      if (!this._appendCliOptionWithinBudget(args, "--input-device", safeInputDevice)) {
+        throw new Error("Input device setting exceeds command limit");
+      }
     }
     if (safeTranscriberCommand.trim() !== "") {
       transcriberCommandIncluded = this._appendCliOptionWithinBudget(args, "--transcriber-command", safeTranscriberCommand);
@@ -5674,16 +5723,22 @@ MyApplet.prototype = {
       }
     }
     if (safePostProcessPrompt.trim() !== "") {
-      this._appendCliOptionWithinBudget(args, "--post-process-prompt", safePostProcessPrompt);
+      if (!this._appendCliOptionWithinBudget(args, "--post-process-prompt", safePostProcessPrompt)) {
+        throw new Error("Post-process prompt setting exceeds command limit");
+      }
     }
     if (safeWhisperModel.trim() !== "") {
       whisperModelIncluded = this._appendCliOptionWithinBudget(args, "--whisper-model", safeWhisperModel);
     }
     if (safePersonalContext.trim() !== "") {
-      this._appendCliOptionWithinBudget(args, "--personal-context", safePersonalContext);
+      if (!this._appendCliOptionWithinBudget(args, "--personal-context", safePersonalContext)) {
+        throw new Error("Personal context setting exceeds command limit");
+      }
     }
     if (safeVocabulary.trim() !== "") {
-      this._appendCliOptionWithinBudget(args, "--vocabulary", safeVocabulary);
+      if (!this._appendCliOptionWithinBudget(args, "--vocabulary", safeVocabulary)) {
+        throw new Error("Vocabulary setting exceeds command limit");
+      }
     }
     if (!transcriberCommandIncluded && safeTranscriber === "command") {
       args[args.indexOf("--transcriber") + 1] = "auto";
@@ -5891,8 +5946,16 @@ MyApplet.prototype = {
     return [this._cliCommand(), "settings-export", "--settings-json-stdin", "--json"];
   },
 
-  _settingsImportArgs: function() {
-    return [this._cliCommand(), "settings-import", "--confirm-plaintext-settings-output", "--json"];
+  _settingsImportArgs: function(preview) {
+    let args = [this._cliCommand(), "settings-import", "--confirm-plaintext-settings-output", "--json"];
+    if (preview === true) {
+      args.push("--preview");
+    }
+    return args;
+  },
+
+  _alarmsImportArgs: function() {
+    return [this._cliCommand(), "alarms-import", "--json"];
   },
 
   _cliCommand: function() {
@@ -6093,7 +6156,7 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Could not prepare custom duration prompt"), this.lastTranscript);
       return;
     }
-    this._spawnText(recordingPromptArgs, (output, result) => {
+    let recordingPromptProcess = this._spawnText(recordingPromptArgs, (output, result) => {
       if (this.customLimitPromptToken !== promptToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -6111,6 +6174,11 @@ MyApplet.prototype = {
       }
       this._selectRecordingLimit(seconds);
     }, { resourceGroup: "settings-prompt" });
+    if (!recordingPromptProcess && this.customLimitPromptToken === promptToken) {
+      this.customLimitPromptToken = null;
+      this._recordLifecycleError("recording-limit-prompt", new Error("Subprocess could not be started"));
+      this._setStatusPreservingRecording("error", _("Could not start custom duration prompt"), this.lastTranscript);
+    }
   },
 
   _parseCustomRecordingLimit: function(value) {
@@ -6393,7 +6461,7 @@ MyApplet.prototype = {
       "zenity",
       "--entry",
       "--title=Auto-Submit",
-      "--text=Built-in marker names match known window classes/app IDs; codex matches known terminal identities and the window title. Custom strings match the full window title case-insensitively. Empty disables Auto-Submit.",
+      "--text=Built-in marker names match the full window title or known window classes/app IDs. Custom strings match the full window title case-insensitively. Empty disables Auto-Submit.",
       "--entry-text=" + current
     ];
   },
@@ -6432,7 +6500,7 @@ MyApplet.prototype = {
       this._setTextOptionStatus(_("Could not prepare Auto-Submit prompt"));
       return;
     }
-    this._spawnText(promptArgs, (output, result) => {
+    let promptProcess = this._spawnText(promptArgs, (output, result) => {
       if (this.autoPastePromptToken !== promptToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -6446,6 +6514,11 @@ MyApplet.prototype = {
       }
       this._setAutoPasteTitles(this._autoPasteTitleValues(output));
     }, { timeoutMs: 0, resourceGroup: "settings-prompt" });
+    if (!promptProcess && this.autoPastePromptToken === promptToken) {
+      this.autoPastePromptToken = null;
+      this._recordLifecycleError("auto-paste-prompt", new Error("Subprocess could not be started"));
+      this._setTextOptionStatus(_("Could not start Auto-Submit prompt"));
+    }
   },
 
   _setAutoPasteTitles: function(values) {
@@ -6534,18 +6607,15 @@ MyApplet.prototype = {
         continue;
       }
       if (AUTO_PASTE_IDENTITY_MARKERS[key]) {
-        if (key === "codex") {
-          if (title.indexOf(key) >= 0 || this._windowIdentityMatchesAutoPaste(marker)) {
-            return true;
-          }
-          continue;
-        }
-        if (this._windowIdentityMatchesAutoPaste(marker)) {
+        if (
+          this._windowIdentityMatchesAutoPaste(marker) ||
+          this._windowIdentityValueMatchesMarker(title, key)
+        ) {
           return true;
         }
         continue;
       }
-      if (title === key) {
+      if (this._windowIdentityValueMatchesMarker(title, key)) {
         return true;
       }
     }
@@ -6758,12 +6828,26 @@ MyApplet.prototype = {
       );
       return false;
     }
-    if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure))) {
+    let callbackDelivered = false;
+    let started = true;
+    let startRecording = (remembered, targetCaptureFailed) => {
+      callbackDelivered = true;
+      if (!remembered && !targetCaptureFailed) {
+        started = false;
+        return;
+      }
+      this.activeLanguage = this._normalizeLanguage(language, this._primaryLanguage());
+      this.activeLanguageExplicit = true;
+      let recordingStarted = this._toggleRecording("start") === true;
+      started = recordingStarted;
+    };
+    if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure), startRecording)) {
       return false;
     }
-    this.activeLanguage = this._normalizeLanguage(language, this._primaryLanguage());
-    this.activeLanguageExplicit = true;
-    let recordingStarted = this._toggleRecording("start") === true;
+    if (!callbackDelivered) {
+      return false;
+    }
+    let recordingStarted = started;
     return recordingStarted;
   },
 
@@ -6885,6 +6969,11 @@ MyApplet.prototype = {
         return false;
       }
       if (activeRecordingCommandAction === "start") {
+        let activeRelistenFlow = Boolean(
+          this.autoRelistenPending ||
+          this.autoRelistenPendingToken ||
+          this.autoTranscribeRecordingKey
+        );
         this.stopPendingWhileCommandRunning = true;
         this.autoRelistenManualStopRequested = true;
         this.autoRelistenPending = false;
@@ -6892,7 +6981,7 @@ MyApplet.prototype = {
         this.autoRelistenPendingLanguage = "";
         this._setStatus(
           "processing",
-          this.autoRelisten ? _("Stopping Auto Relisten...") : _("Stopping recording..."),
+          activeRelistenFlow ? _("Stopping Auto Relisten...") : _("Stopping recording..."),
           this.lastTranscript
         );
       }
@@ -6978,7 +7067,7 @@ MyApplet.prototype = {
       let requestStopAfterStart = (
         stopPending &&
         commandAction === "start" &&
-        (payloadStatus === "recording" || payloadStatus === "recorded")
+        (payloadStatus === "processing" || payloadStatus === "recording" || payloadStatus === "recorded")
       );
       this.stopPendingWhileCommandRunning = false;
       if (requestStopAfterStart) {
@@ -7216,6 +7305,11 @@ MyApplet.prototype = {
     }
     let explicitCancel = arguments.length === 0;
     let activeAction = String(this._recordingCommandToken && this._recordingCommandToken.action || "");
+    let activeRelistenFlow = Boolean(
+      this.autoRelistenPending ||
+      this.autoRelistenPendingToken ||
+      this.autoTranscribeRecordingKey
+    );
     if ((explicitCancel && activeAction !== "cancel") || !this.cancelIntentActive) {
       this.cancelIntentActive = true;
       this.cancelRecoveryAttempts = 0;
@@ -7230,7 +7324,7 @@ MyApplet.prototype = {
       this.cancelPendingWhileCommandRunning = activeAction !== "cancel";
       this._setStatus(
         "processing",
-        this.autoRelisten ? _("Stopping Auto Relisten...") : _("Cancelling..."),
+        activeRelistenFlow ? _("Stopping Auto Relisten...") : _("Cancelling..."),
         this.lastTranscript
       );
       return;
@@ -7502,7 +7596,7 @@ MyApplet.prototype = {
       this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
       return;
     }
-    this._spawnJson(doctorArgs, (payload) => {
+    let doctorProcess = this._spawnJson(doctorArgs, (payload) => {
       if (this.doctorCommandToken !== doctorToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -7536,6 +7630,14 @@ MyApplet.prototype = {
       timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS,
       resourceGroup: "doctor"
     });
+    if (!doctorProcess && this.doctorCommandToken === doctorToken) {
+      this.doctorCommandToken = null;
+      this._doctorCommandRunning = false;
+      let message = startupCheck ? _("Doctor could not be started") : _("Doctor could not be started");
+      this._recordLifecycleError("doctor", new Error("Subprocess could not be started"));
+      this._setDoctorSummary(message);
+      this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
+    }
   },
 
   _applyDoctorPayload: function(payload, startupCheck) {
@@ -7756,7 +7858,7 @@ MyApplet.prototype = {
       this._failSetupDiagnosticsAction(actionToken, error, _("Could not prepare profanity replacement list"));
       return;
     }
-    this._spawnJson(documentArgs, (payload) => {
+    let documentProcess = this._spawnJson(documentArgs, (payload) => {
       try {
         if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
           return;
@@ -7778,6 +7880,13 @@ MyApplet.prototype = {
         this._failSetupDiagnosticsAction(actionToken, error, _("Could not open profanity replacement list"));
       }
     }, inputOption);
+    if (!documentProcess && this.setupDiagnosticsToken === actionToken) {
+      this._failSetupDiagnosticsAction(
+        actionToken,
+        new Error("Subprocess could not be started"),
+        _("Could not start profanity replacement list")
+      );
+    }
   },
 
   _copySetupPlan: function() {
@@ -7798,7 +7907,7 @@ MyApplet.prototype = {
       this._failSetupDiagnosticsAction(actionToken, error, _("Could not prepare setup plan"));
       return;
     }
-    this._spawnJson(setupArgs, (payload) => {
+    let setupPlanProcess = this._spawnJson(setupArgs, (payload) => {
       try {
         if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
           return;
@@ -7822,6 +7931,13 @@ MyApplet.prototype = {
         this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy setup plan"));
       }
     }, inputOption);
+    if (!setupPlanProcess && this.setupDiagnosticsToken === actionToken) {
+      this._failSetupDiagnosticsAction(
+        actionToken,
+        new Error("Subprocess could not be started"),
+        _("Could not start setup plan")
+      );
+    }
   },
 
   _setupCommandsText: function(payload) {
@@ -7861,7 +7977,7 @@ MyApplet.prototype = {
       this._failSetupDiagnosticsAction(actionToken, error, _("Could not prepare setup commands"));
       return;
     }
-    this._spawnJson(setupArgs, (payload) => {
+    let setupCommandsProcess = this._spawnJson(setupArgs, (payload) => {
       try {
         if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
           return;
@@ -7890,6 +8006,13 @@ MyApplet.prototype = {
         this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy setup commands"));
       }
     }, inputOption);
+    if (!setupCommandsProcess && this.setupDiagnosticsToken === actionToken) {
+      this._failSetupDiagnosticsAction(
+        actionToken,
+        new Error("Subprocess could not be started"),
+        _("Could not start setup commands")
+      );
+    }
   },
 
   _copyDiagnostics: function() {
@@ -7910,7 +8033,7 @@ MyApplet.prototype = {
       this._failSetupDiagnosticsAction(actionToken, error, _("Could not prepare diagnostics"));
       return;
     }
-    this._spawnJson(diagnosticsArgs, (payload) => {
+    let diagnosticsProcess = this._spawnJson(diagnosticsArgs, (payload) => {
       try {
         if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
           return;
@@ -7931,6 +8054,13 @@ MyApplet.prototype = {
         this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy diagnostics"));
       }
     }, inputOption);
+    if (!diagnosticsProcess && this.setupDiagnosticsToken === actionToken) {
+      this._failSetupDiagnosticsAction(
+        actionToken,
+        new Error("Subprocess could not be started"),
+        _("Could not start diagnostics")
+      );
+    }
   },
 
   _saveDiagnostics: function() {
@@ -7951,7 +8081,7 @@ MyApplet.prototype = {
       this._failSetupDiagnosticsAction(actionToken, error, _("Could not prepare diagnostics save"));
       return;
     }
-    this._spawnJson(diagnosticsSaveArgs, (payload) => {
+    let diagnosticsSaveProcess = this._spawnJson(diagnosticsSaveArgs, (payload) => {
       try {
         if (this.setupDiagnosticsToken !== actionToken || !this._lifecycleAllowsWork()) {
           return;
@@ -7967,6 +8097,13 @@ MyApplet.prototype = {
         this._failSetupDiagnosticsAction(actionToken, error, _("Could not save diagnostics"));
       }
     }, inputOption);
+    if (!diagnosticsSaveProcess && this.setupDiagnosticsToken === actionToken) {
+      this._failSetupDiagnosticsAction(
+        actionToken,
+        new Error("Subprocess could not be started"),
+        _("Could not start diagnostics save")
+      );
+    }
   },
 
   _benchmarkAudioFileDialogArgs: function() {
@@ -8106,8 +8243,7 @@ MyApplet.prototype = {
       "  exit 1",
       "fi",
       "if command -v ollama >/dev/null 2>&1; then",
-      "  ollama_log_file=\"$(mktemp \"${XDG_RUNTIME_DIR:-/tmp}/speed-of-cinnamon-ollama.XXXXXX.log\")\"",
-      "  ollama serve >\"$ollama_log_file\" 2>&1 & sleep 2 || true",
+      "  ollama serve >/dev/null 2>&1 & sleep 2 || true",
       "fi",
       "if command -v ollama >/dev/null 2>&1; then ollama list >/dev/null 2>&1 && echo 'Ollama is reachable on 127.0.0.1:11434.' || { echo 'Ollama installed, but the local API is not reachable yet.'; exit 1; }; fi"
     ]);
@@ -8234,7 +8370,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not prepare benchmark audio selection"), this.lastTranscript);
       return;
     }
-    this._spawnText(audioDialogArgs, (output, result) => {
+    let audioDialogProcess = this._spawnText(audioDialogArgs, (output, result) => {
       if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -8260,6 +8396,11 @@ MyApplet.prototype = {
       }
       this._benchmarkDownloadedModels(audioPath, flowToken);
     }, { timeoutMs: 0, resourceGroup: "benchmark" });
+    if (!audioDialogProcess && this.benchmarkFlowToken === flowToken) {
+      this.benchmarkFlowToken = null;
+      this._recordLifecycleError("benchmark-flow", new Error("Subprocess could not be started"));
+      this._setStatus("error", _("Could not start benchmark audio selection"), this.lastTranscript);
+    }
   },
 
   _benchmarkDownloadedModels: function(audioPath, flowToken) {
@@ -8283,7 +8424,7 @@ MyApplet.prototype = {
     this.benchmarkFlowToken = flowToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Benchmarking downloaded models..."), this.lastTranscript);
-    this._spawnJson(benchmarkArgs, (payload) => {
+    let benchmarkProcess = this._spawnJson(benchmarkArgs, (payload) => {
       try {
         if (this.benchmarkFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
           this._releaseBusyStateAfterProcessCleanup("benchmark", "benchmarkCleanupFailed");
@@ -8316,6 +8457,11 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not complete benchmark"), this.lastTranscript);
       }
     }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS, resourceGroup: "benchmark" });
+    if (!benchmarkProcess && this.benchmarkFlowToken === flowToken) {
+      this.benchmarkFlowToken = null;
+      this.isCommandRunning = false;
+      this._setStatus("error", _("Could not start benchmark"), this.lastTranscript);
+    }
   },
 
   _setAlarmOptionStatus: function(message) {
@@ -8367,7 +8513,7 @@ MyApplet.prototype = {
       }
       return;
     }
-    this._spawnJson(alarmListArgs, (payload) => {
+    let refreshProcess = this._spawnJson(alarmListArgs, (payload) => {
       if (this.alarmMenuRefreshToken !== refreshToken) {
         return;
       }
@@ -8406,6 +8552,17 @@ MyApplet.prototype = {
         }
       }
     }, { resourceGroup: "alarm-menu-refresh", invalidatesStatus: false });
+    if (!refreshProcess) {
+      if (this.alarmMenuRefreshToken === refreshToken) {
+        this.alarmMenuRefreshToken = null;
+        this.alarmMenuRefreshQueued = false;
+        this._populateAlarmMenu([], "", _("Could not start alarm menu refresh"));
+        if (canReportAlarmStatus()) {
+          this._setAlarmErrorStatus(_("Could not start alarm menu refresh"));
+        }
+      }
+      return;
+    }
   },
 
   _populateAlarmMenu: function(alarms, summary, message) {
@@ -8554,7 +8711,7 @@ MyApplet.prototype = {
     }
     let canUpdateAlarmStatus = () => !this.isCommandRunning &&
       !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
-    this._spawnJson(alarmEnableArgs, (payload) => {
+    let actionProcess = this._spawnJson(alarmEnableArgs, (payload) => {
       try {
         if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
           return;
@@ -8591,6 +8748,12 @@ MyApplet.prototype = {
         }
       }
     }, { resourceGroup: "alarm-action" });
+    if (!actionProcess && this.alarmActionToken === actionToken) {
+      this.alarmActionToken = null;
+      if (canUpdateAlarmStatus()) {
+        this._setAlarmErrorStatus(_("Could not start alarm update"));
+      }
+    }
   },
 
   _removeAlarm: function(id) {
@@ -8614,7 +8777,7 @@ MyApplet.prototype = {
     }
     let canUpdateAlarmStatus = () => !this.isCommandRunning &&
       !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
-    this._spawnJson(alarmRemoveArgs, (payload) => {
+    let actionProcess = this._spawnJson(alarmRemoveArgs, (payload) => {
       try {
         if (this.alarmActionToken !== actionToken || !this._lifecycleAllowsWork()) {
           return;
@@ -8642,6 +8805,12 @@ MyApplet.prototype = {
         }
       }
     }, { resourceGroup: "alarm-action" });
+    if (!actionProcess && this.alarmActionToken === actionToken) {
+      this.alarmActionToken = null;
+      if (canUpdateAlarmStatus()) {
+        this._setAlarmErrorStatus(_("Could not start alarm removal"));
+      }
+    }
   },
 
   _checkAlarms: function(manual) {
@@ -8667,7 +8836,7 @@ MyApplet.prototype = {
     }
     let canUpdateManualStatus = () => manual && !this.isCommandRunning &&
       !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
-    this._spawnJson(alarmCheckArgs, (payload) => {
+    let checkProcess = this._spawnJson(alarmCheckArgs, (payload) => {
       try {
         if (this.alarmCheckToken !== checkToken || !this._lifecycleAllowsWork()) {
           return;
@@ -8724,6 +8893,12 @@ MyApplet.prototype = {
         }
       }
     }, { resourceGroup: "alarm-check" });
+    if (!checkProcess && this.alarmCheckToken === checkToken) {
+      this.alarmCheckToken = null;
+      if (canUpdateManualStatus()) {
+        this._setAlarmErrorStatus(_("Could not start alarm check"));
+      }
+    }
   },
 
   _refreshInputSourceMenu: function() {
@@ -8962,7 +9137,7 @@ MyApplet.prototype = {
       }
       return;
     }
-    this._spawnJson(modelArgs, (payload) => {
+    let refreshProcess = this._spawnJson(modelArgs, (payload) => {
       if (this.modelMenuRefreshToken !== refreshToken) {
         return;
       }
@@ -8990,6 +9165,16 @@ MyApplet.prototype = {
         }
       }
     }, { resourceGroup: "model-menu-refresh", invalidatesStatus: false });
+    if (!refreshProcess) {
+      if (this.modelMenuRefreshToken === refreshToken) {
+        this.modelMenuRefreshToken = null;
+        this._populateModelMenu([], _("Could not start voice model list refresh"));
+        if (canReportModelStatus()) {
+          this._setStatusPreservingRecording("error", _("Could not start voice model list refresh"), this.lastTranscript);
+        }
+      }
+      return;
+    }
   },
 
   _populateModelMenu: function(models, message) {
@@ -9386,7 +9571,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not prepare model download"), this.lastTranscript);
       return;
     }
-    this._spawnJson(downloadArgs, (payload) => {
+    let downloadProcess = this._spawnJson(downloadArgs, (payload) => {
       if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
         this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");
         return;
@@ -9415,6 +9600,12 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not complete model download"), this.lastTranscript);
       }
     }, { resourceGroup: "voice-model" });
+    if (!downloadProcess && this.voiceModelActionToken === actionToken) {
+      this.voiceModelActionToken = null;
+      this.isCommandRunning = false;
+      this._recordLifecycleError("model-action", new Error("Subprocess could not be started"));
+      this._setStatus("error", _("Could not start model download"), this.lastTranscript);
+    }
   },
 
   _removeVoiceModel: function(model) {
@@ -9444,7 +9635,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not prepare model removal"), this.lastTranscript);
       return;
     }
-    this._spawnJson(removeArgs, (payload) => {
+    let removeProcess = this._spawnJson(removeArgs, (payload) => {
       if (this.voiceModelActionToken !== actionToken || !this._lifecycleAllowsWork()) {
         this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");
         return;
@@ -9485,6 +9676,12 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not complete model removal"), this.lastTranscript);
       }
     }, { resourceGroup: "voice-model" });
+    if (!removeProcess && this.voiceModelActionToken === actionToken) {
+      this.voiceModelActionToken = null;
+      this.isCommandRunning = false;
+      this._recordLifecycleError("model-action", new Error("Subprocess could not be started"));
+      this._setStatus("error", _("Could not start model removal"), this.lastTranscript);
+    }
   },
 
   _selectVoiceModel: function(model, preserveRecording) {
@@ -9663,6 +9860,7 @@ MyApplet.prototype = {
 
   _assertExternalApiEnvDirectoryChainSafe: function(path) {
     let current = Gio.File.new_for_path(GLib.path_get_dirname(path));
+    let isConfigDirectory = true;
     while (current) {
       let info = current.query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
       if (!info || info.get_file_type() === Gio.FileType.SYMBOLIC_LINK) {
@@ -9670,6 +9868,13 @@ MyApplet.prototype = {
       }
       if (info.get_file_type() !== Gio.FileType.DIRECTORY) {
         throw new Error("External API config path ancestor is not a directory");
+      }
+      if (isConfigDirectory) {
+        let mode = info.get_attribute_uint32("unix::mode");
+        if (!Number.isFinite(mode) || (mode & 0o777) !== 0o700) {
+          throw new Error("External API config directory must use mode 0700");
+        }
+        isConfigDirectory = false;
       }
       current = current.get_parent();
     }
@@ -9699,9 +9904,17 @@ MyApplet.prototype = {
   _externalApiEnvFileInfo: function(path, allowMissing) {
     let file = Gio.File.new_for_path(path);
     try {
-      let info = file.query_info("standard::type,standard::size,unix::mode", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+      let info = file.query_info("standard::type,standard::size,unix::mode,unix::nlink", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
       if (info.get_file_type() !== Gio.FileType.REGULAR) {
         throw new Error("External API config file must be a regular file");
+      }
+      let mode = info.get_attribute_uint32("unix::mode");
+      if (!Number.isFinite(mode) || (mode & 0o777) !== 0o600) {
+        throw new Error("External API config file must use mode 0600");
+      }
+      let linkCount = info.get_attribute_uint32("unix::nlink");
+      if (!Number.isFinite(linkCount) || linkCount !== 1) {
+        throw new Error("External API config file must not be hardlinked");
       }
       if (Number(info.get_size()) > MAX_EXTERNAL_API_ENV_BYTES) {
         throw new Error("External API config file is too large");
@@ -10864,7 +11077,7 @@ MyApplet.prototype = {
     let flowToken = {};
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Checking Ollama..."), this.lastTranscript);
-    this._spawnJson(textModelArgs, (payload) => {
+    let flowProcess = this._spawnJson(textModelArgs, (payload) => {
       try {
         if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
           return;
@@ -10910,6 +11123,12 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not check Ollama"), this.lastTranscript);
       }
     }, { resourceGroup: "ollama" });
+    if (!flowProcess && this.ollamaModelFlowToken === flowToken) {
+      if (!this._clearOllamaModelFlowOrReport(flowToken)) {
+        return;
+      }
+      this._setStatus("error", _("Could not start Ollama check"), this.lastTranscript);
+    }
   },
 
   _ollamaModelPromptArgs: function() {
@@ -11046,7 +11265,7 @@ MyApplet.prototype = {
     let flowToken = {};
     this.ollamaModelFlowToken = flowToken;
     this._setStatus("processing", _("Loading Ollama text models..."), this.lastTranscript);
-    this._spawnJson(textModelArgs, (payload) => {
+    let flowProcess = this._spawnJson(textModelArgs, (payload) => {
       try {
         if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
           return;
@@ -11092,6 +11311,12 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not load Ollama models"), this.lastTranscript);
       }
     }, { resourceGroup: "ollama" });
+    if (!flowProcess && this.ollamaModelFlowToken === flowToken) {
+      if (!this._clearOllamaModelFlowOrReport(flowToken)) {
+        return;
+      }
+      this._setStatus("error", _("Could not start Ollama model list"), this.lastTranscript);
+    }
   },
 
   _promptChooseOllamaTextModel: function(models, flowToken) {
@@ -11109,7 +11334,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not prepare Ollama model selection"), this.lastTranscript);
       return;
     }
-    this._spawnText(choiceArgs, (output, result) => {
+    let choiceProcess = this._spawnText(choiceArgs, (output, result) => {
       if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -11180,6 +11405,12 @@ MyApplet.prototype = {
       }
       finish(_("Ollama model selection was invalid"));
     }, { timeoutMs: 0, resourceGroup: "ollama" });
+    if (!choiceProcess && this.ollamaModelFlowToken === flowToken) {
+      if (!this._clearOllamaModelFlowOrReport(flowToken)) {
+        return;
+      }
+      this._setStatus("error", _("Could not start Ollama model selection"), this.lastTranscript);
+    }
   },
 
   _promptInstallOllamaTextModel: function(flowToken) {
@@ -11215,7 +11446,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not prepare Ollama model prompt"), this.lastTranscript);
       return;
     }
-    this._spawnText(promptArgs, (output, result) => {
+    let promptProcess = this._spawnText(promptArgs, (output, result) => {
       if (this.ollamaModelFlowToken !== flowToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -11250,6 +11481,12 @@ MyApplet.prototype = {
       }
       this._installOllamaTextModel(model);
     }, { timeoutMs: 0, resourceGroup: "ollama" });
+    if (!promptProcess && this.ollamaModelFlowToken === flowToken) {
+      if (!this._clearOllamaModelFlowOrReport(flowToken)) {
+        return;
+      }
+      this._setStatus("error", _("Could not start Ollama model prompt"), this.lastTranscript);
+    }
   },
 
   _installOllamaTextModel: function(model) {
@@ -11281,7 +11518,7 @@ MyApplet.prototype = {
     let installToken = {};
     this.ollamaModelInstallToken = installToken;
     this._setStatus("processing", _("Installing Ollama model: ") + model, this.lastTranscript);
-    this._spawnJson(installArgs, (payload) => {
+    let installProcess = this._spawnJson(installArgs, (payload) => {
       try {
         if (this.ollamaModelInstallToken !== installToken) {
           return;
@@ -11348,6 +11585,15 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not complete Ollama model installation"), this.lastTranscript);
       }
     }, { timeoutMs: BENCHMARK_COMMAND_TIMEOUT_MS, resourceGroup: "ollama" });
+    if (!installProcess && this.ollamaModelInstallToken === installToken) {
+      this.ollamaModelInstallToken = null;
+      this.ollamaModelInstallRunning = false;
+      this.isCommandRunning = false;
+      if (!this._clearOllamaModelFlowOrReport(flowToken)) {
+        return;
+      }
+      this._setStatus("error", _("Could not start Ollama model installation"), this.lastTranscript);
+    }
   },
 
   _refreshHistory: function() {
@@ -11384,7 +11630,7 @@ MyApplet.prototype = {
       }
       return;
     }
-    this._spawnJson(historyArgs, (payload) => {
+    let refreshProcess = this._spawnJson(historyArgs, (payload) => {
       if (this.historyRefreshToken !== refreshToken) {
         return;
       }
@@ -11422,6 +11668,17 @@ MyApplet.prototype = {
         }
       }
     }, { resourceGroup: "history-refresh", invalidatesStatus: false });
+    if (!refreshProcess) {
+      if (this.historyRefreshToken === refreshToken) {
+        this.historyRefreshToken = null;
+        this.historyRefreshQueued = false;
+        this._populateHistoryMenu([]);
+        if (canReportHistoryStatus()) {
+          this._setStatusPreservingRecording("error", _("Could not start transcript history refresh"), this.lastTranscript);
+        }
+      }
+      return;
+    }
   },
 
   _listAllTranscripts: function() {
@@ -11549,7 +11806,7 @@ MyApplet.prototype = {
     let cleanupToken = {};
     this._cleanupCommandToken = cleanupToken;
     this._setStatus("processing", _("Preparing transcript list..."), this.lastTranscript);
-    this._spawnJson(historyDocumentArgs, (payload) => {
+    let historyDocumentProcess = this._spawnJson(historyDocumentArgs, (payload) => {
       if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -11575,6 +11832,12 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not complete transcript list"), this.lastTranscript);
       }
     }, { resourceGroup: "maintenance" });
+    if (!historyDocumentProcess && this._cleanupCommandToken === cleanupToken) {
+      this._cleanupCommandToken = null;
+      this.isCommandRunning = false;
+      this._recordLifecycleError("maintenance-command", new Error("Subprocess could not be started"));
+      this._setStatus("error", _("Could not start transcript list"), this.lastTranscript);
+    }
   },
 
   _showTranscriptsWindow: function(content, count, truncated) {
@@ -11678,7 +11941,7 @@ MyApplet.prototype = {
     let cleanupToken = {};
     this._cleanupCommandToken = cleanupToken;
     this._setStatus("processing", _("Exporting transcripts..."), this.lastTranscript);
-    this._spawnJson(exportArgs, (payload) => {
+    let exportProcess = this._spawnJson(exportArgs, (payload) => {
       if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -11716,6 +11979,12 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not complete transcript export"), this.lastTranscript);
       }
     }, { resourceGroup: "maintenance" });
+    if (!exportProcess && this._cleanupCommandToken === cleanupToken) {
+      this._cleanupCommandToken = null;
+      this.isCommandRunning = false;
+      this._recordLifecycleError("maintenance-command", new Error("Subprocess could not be started"));
+      this._setStatus("error", _("Could not start transcript export"), this.lastTranscript);
+    }
   },
 
   _safePayloadCount: function(value) {
@@ -11915,7 +12184,7 @@ MyApplet.prototype = {
     let cleanupToken = {};
     this._cleanupCommandToken = cleanupToken;
     this._setStatus("processing", _("Previewing cleanup..."), this.lastTranscript);
-    this._spawnJson(cleanupPreviewArgs, (payload) => {
+    let cleanupPreviewProcess = this._spawnJson(cleanupPreviewArgs, (payload) => {
       if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -11937,6 +12206,12 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not complete cleanup preview"), this.lastTranscript);
       }
     }, { resourceGroup: "maintenance" });
+    if (!cleanupPreviewProcess && this._cleanupCommandToken === cleanupToken) {
+      this._cleanupCommandToken = null;
+      this.isCommandRunning = false;
+      this._recordLifecycleError("maintenance-command", new Error("Subprocess could not be started"));
+      this._setStatus("error", _("Could not start cleanup preview"), this.lastTranscript);
+    }
   },
 
   _cleanupOldFiles: function() {
@@ -11954,7 +12229,7 @@ MyApplet.prototype = {
     let cleanupToken = {};
     this._cleanupCommandToken = cleanupToken;
     this._setStatus("processing", _("Cleaning old files..."), this.lastTranscript);
-    this._spawnJson(cleanupArgs, (payload) => {
+    let cleanupProcess = this._spawnJson(cleanupArgs, (payload) => {
       if (this._cleanupCommandToken !== cleanupToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -11977,6 +12252,12 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not complete cleanup"), this.lastTranscript);
       }
     }, { resourceGroup: "maintenance" });
+    if (!cleanupProcess && this._cleanupCommandToken === cleanupToken) {
+      this._cleanupCommandToken = null;
+      this.isCommandRunning = false;
+      this._recordLifecycleError("maintenance-command", new Error("Subprocess could not be started"));
+      this._setStatus("error", _("Could not start cleanup"), this.lastTranscript);
+    }
   },
 
   _settingsSnapshot: function() {
@@ -12203,6 +12484,8 @@ MyApplet.prototype = {
     if (!inputOption) {
       return;
     }
+    this.notificationSessionActive = true;
+    this.lastNotificationKey = "";
     let transferToken = {};
     this.settingsTransferToken = transferToken;
     this._setStatus("processing", _("Exporting settings..."), this.lastTranscript);
@@ -12213,11 +12496,13 @@ MyApplet.prototype = {
       if (this.settingsTransferToken === transferToken) {
         this.settingsTransferToken = null;
       }
+      this.notificationSessionActive = false;
+      this.lastNotificationKey = "";
       this._recordLifecycleError("settings-transfer", error);
       this._setStatus("error", _("Could not prepare settings export"), this.lastTranscript);
       return;
     }
-    this._spawnJson(exportArgs, (payload) => {
+    let exportProcess = this._spawnJson(exportArgs, (payload) => {
       if (this.settingsTransferToken !== transferToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -12225,6 +12510,11 @@ MyApplet.prototype = {
         if (payload.error) {
           this.settingsTransferToken = null;
           this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
+          return;
+        }
+        if (payload.cleanup_warning === true) {
+          this.settingsTransferToken = null;
+          this._setStatus("warning", _("Settings exported, but private cleanup requires attention"), this.lastTranscript);
           return;
         }
         this.settingsTransferToken = null;
@@ -12237,6 +12527,13 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not complete settings export"), this.lastTranscript);
       }
     }, Object.assign({}, inputOption, { resourceGroup: "settings-transfer" }));
+    if (!exportProcess && this.settingsTransferToken === transferToken) {
+      this.settingsTransferToken = null;
+      this.notificationSessionActive = false;
+      this.lastNotificationKey = "";
+      this._recordLifecycleError("settings-transfer", new Error("Subprocess could not be started"));
+      this._setStatus("error", _("Could not start settings export"), this.lastTranscript);
+    }
   },
 
   _importSettings: function() {
@@ -12247,8 +12544,12 @@ MyApplet.prototype = {
     this.settingsTransferToken = transferToken;
     this._setStatus("processing", _("Importing settings..."), this.lastTranscript);
     let importArgs;
+    let alarmImportArgs;
+    let previousSettings;
     try {
-      importArgs = this._settingsImportArgs();
+      previousSettings = this._settingsSnapshotForCli(false, true);
+      importArgs = this._settingsImportArgs(true);
+      alarmImportArgs = this._alarmsImportArgs();
     } catch (error) {
       if (this.settingsTransferToken === transferToken) {
         this.settingsTransferToken = null;
@@ -12257,7 +12558,7 @@ MyApplet.prototype = {
       this._setStatus("error", _("Could not prepare settings import"), this.lastTranscript);
       return;
     }
-    this._spawnJson(importArgs, (payload) => {
+    let importProcess = this._spawnJson(importArgs, (payload) => {
       if (this.settingsTransferToken !== transferToken || !this._lifecycleAllowsWork()) {
         return;
       }
@@ -12267,12 +12568,64 @@ MyApplet.prototype = {
           this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
           return;
         }
-        this.settingsTransferToken = null;
         try {
           let applied = this._applyImportedSettings(payload.settings || {});
-          this._setStatus("done", _("Imported settings: ") + String(applied), this.lastTranscript);
+          let alarmPayload = payload.alarms;
+          if (!alarmPayload || typeof alarmPayload !== "object" || Array.isArray(alarmPayload)) {
+            throw new Error("Imported alarms are invalid");
+          }
+          let alarmImportProcess = this._spawnJson(alarmImportArgs, (alarmResult) => {
+            if (this.settingsTransferToken !== transferToken || !this._lifecycleAllowsWork()) {
+              return;
+            }
+            try {
+              if (alarmResult.error) {
+                let rollbackSucceeded = true;
+                try {
+                  this._applyImportedSettings(previousSettings);
+                } catch (rollbackError) {
+                  rollbackSucceeded = false;
+                  this._recordLifecycleError("settings-import-rollback", rollbackError);
+                }
+                this.settingsTransferToken = null;
+                if (rollbackSucceeded) {
+                  this._setStatus("error", _("Could not persist imported alarms; settings restored"), this.lastTranscript);
+                } else {
+                  this._setStatus("error", _("Could not persist imported alarms; settings rollback failed"), this.lastTranscript);
+                }
+                return;
+              }
+              this.settingsTransferToken = null;
+              this._setStatus("done", _("Imported settings: ") + String(applied), this.lastTranscript);
+            } catch (error) {
+              if (this.settingsTransferToken === transferToken) {
+                this.settingsTransferToken = null;
+              }
+              this._recordLifecycleError("settings-transfer", error);
+              this._setStatus("error", _("Could not complete settings import"), this.lastTranscript);
+            }
+          }, {
+            inputText: JSON.stringify(alarmPayload),
+            resourceGroup: "settings-transfer",
+          });
+          if (!alarmImportProcess && this.settingsTransferToken === transferToken) {
+            let rollbackSucceeded = true;
+            try {
+              this._applyImportedSettings(previousSettings);
+            } catch (rollbackError) {
+              rollbackSucceeded = false;
+              this._recordLifecycleError("settings-import-rollback", rollbackError);
+            }
+            this.settingsTransferToken = null;
+            if (rollbackSucceeded) {
+              this._setStatus("error", _("Could not start imported alarm persistence; settings restored"), this.lastTranscript);
+            } else {
+              this._setStatus("error", _("Could not start imported alarm persistence; settings rollback failed"), this.lastTranscript);
+            }
+          }
         } catch (err) {
           let safeError = this._sanitizeErrorMessage(err);
+          this.settingsTransferToken = null;
           this._setStatus("error", _("Could not apply imported settings: ") + safeError, this.lastTranscript);
         }
       } catch (error) {
@@ -12283,6 +12636,11 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not complete settings import"), this.lastTranscript);
       }
     }, { resourceGroup: "settings-transfer" });
+    if (!importProcess && this.settingsTransferToken === transferToken) {
+      this.settingsTransferToken = null;
+      this._recordLifecycleError("settings-transfer", new Error("Subprocess could not be started"));
+      this._setStatus("error", _("Could not start settings import"), this.lastTranscript);
+    }
   },
 
   _applyImportedSettings: function(settings) {
@@ -12493,10 +12851,24 @@ MyApplet.prototype = {
       return this._coerceImportedEnumSetting(value, ARTIFACT_ENCRYPTION_MODES, fallback);
     }
     if (key === "transcriber") {
-      return this._coerceImportedEnumSetting(value, TRANSCRIBER_METHODS, fallback);
+      return this._coerceImportedEnumSetting(
+        normalizeTranscriberMethod(value),
+        TRANSCRIBER_METHODS,
+        fallback,
+      );
     }
     if (key === "post-process-backend") {
       return this._coerceImportedEnumSetting(value, POST_PROCESS_BACKENDS, fallback);
+    }
+    if (
+      key === "status-icon-ready" ||
+      key === "status-icon-recording" ||
+      key === "status-icon-processing" ||
+      key === "status-icon-recorded" ||
+      key === "status-icon-error" ||
+      key === "status-icon-setup"
+    ) {
+      return this._coerceImportedEnumSetting(value, Object.keys(STATUS_ICON_ALLOWLIST), fallback);
     }
     if (!Object.prototype.hasOwnProperty.call(IMPORT_TEXT_SETTINGS, key)) {
       return fallback;
@@ -13226,6 +13598,9 @@ MyApplet.prototype = {
   },
 
   _applyPayload: function(payload, statusRefreshToken) {
+    if (payload === null || typeof payload !== "object" || Array.isArray(payload)) {
+      payload = { error: _("Backend returned an invalid response") };
+    }
     if (typeof statusRefreshToken === "number" && statusRefreshToken !== this._statusRefreshToken) {
       return;
     }
@@ -13239,6 +13614,7 @@ MyApplet.prototype = {
     }
     let cancelIntentActive = this.cancelIntentActive === true;
     let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));
+    let wasActiveRecordingState = this._hasActiveRecordingState();
     let hasTerminalCleanupResult = this._updateRecordingArtifactState(payload, status);
     if (payload.error || status === "error") {
       let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));
@@ -13260,10 +13636,16 @@ MyApplet.prototype = {
       }
       let preserveRecordingOnError = arguments.length > 2 && arguments[2] === true;
       let activeBackendStatus = status === "recording" || status === "recorded" || status === "processing";
+      let preserveStopFailure = (
+        preserveRecordingOnError &&
+        sourceCommandAction === "stop" &&
+        wasActiveRecordingState
+      );
       let preserveActiveRecordingState = (
         payload.transport_error === true &&
         (preserveRecordingOnError || (typeof statusRefreshToken === "number" && this._hasActiveRecordingState()))
       ) || (preserveRecordingOnError && activeBackendStatus);
+      preserveActiveRecordingState = preserveActiveRecordingState || preserveStopFailure;
       if (preserveActiveRecordingState) {
         if (preserveRecordingOnError) {
           this.recordingArtifactsPresent = true;
@@ -13282,6 +13664,11 @@ MyApplet.prototype = {
         this._setStatus("error", errorMessage, this.lastTranscript);
       }
       this._maybeWarnRejectedArtifactPassphrase(errorMessage);
+      return;
+    }
+    if (status === "warning") {
+      let warningMessage = this._payloadMessage(payload, status);
+      this._setStatus("warning", warningMessage, this.lastTranscript);
       return;
     }
     this._applyPayloadLanguage(payload, status);
@@ -13581,14 +13968,14 @@ MyApplet.prototype = {
     this._recordingCommandToken = recordingCommandToken;
     this.isCommandRunning = true;
     this._setStatus("processing", _("Transcribing timed-out recording..."), this.lastTranscript);
-    this._spawnJson(stopArgs, (nextPayload) => {
+    let stopProcess = this._spawnJson(stopArgs, (nextPayload) => {
       if (this._recordingCommandToken !== recordingCommandToken || !this._lifecycleAllowsWork()) {
         return;
       }
       this._recordingCommandToken = null;
       if (relistenToken && this.autoRelistenPendingToken !== relistenToken) {
         this.isCommandRunning = false;
-        if (this.cancelPendingWhileCommandRunning) {
+        if (this.cancelPendingWhileCommandRunning || this.autoRelistenManualStopRequested) {
           this._applyPayloadSafely(nextPayload, undefined, true, "stop");
         }
         return;
@@ -13599,6 +13986,15 @@ MyApplet.prototype = {
       this.isCommandRunning = false;
       this._applyPayloadSafely(nextPayload, undefined, true, "stop");
     });
+    if (!stopProcess && this._recordingCommandToken === recordingCommandToken) {
+      this._recordingCommandToken = null;
+      this.autoTranscribeRecordingKey = "";
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.isCommandRunning = false;
+      this._recordLifecycleError("recording-stop", new Error("Subprocess could not be started"));
+      this._setStatusPreservingRecording("error", _("Could not start timed recording command"), this.lastTranscript);
+    }
   },
 
   _clearStatusTimer: function() {
@@ -13661,7 +14057,7 @@ MyApplet.prototype = {
         this._setStatus("error", _("Could not continue Ollama installation watch"), this.lastTranscript);
         return false;
       }
-      this._spawnJson(textModelArgs, (payload) => {
+      let pollProcess = this._spawnJson(textModelArgs, (payload) => {
         if (this.ollamaInstallWatchToken !== watchToken || !this._lifecycleAllowsWork()) {
           return;
         }
@@ -13715,6 +14111,13 @@ MyApplet.prototype = {
           this._setStatus("error", _("Ollama status check failed: ") + safeError, this.lastTranscript);
         }
       }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS, resourceGroup: "ollama" });
+      if (!pollProcess && this.ollamaInstallWatchToken === watchToken) {
+        this.ollamaInstallWatchToken = null;
+        if (!this._clearOllamaModelFlowOrReport()) {
+          return false;
+        }
+        this._setStatus("error", _("Could not start Ollama installation watch"), this.lastTranscript);
+      }
       return false;
     }, true, "ollamaInstallWatchTimer");
     if (!timerId && this.ollamaInstallWatchToken === watchToken) {
@@ -13948,7 +14351,20 @@ MyApplet.prototype = {
       pendingGeneration === Number(this.targetWindowGeneration || 0);
   },
 
-  _rememberFocusedWindow: function(preserveOnFailure) {
+  _rememberFocusedWindow: function(preserveOnFailure, completionCallback) {
+    let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    let completionDelivered = false;
+    let deliver = (result, targetCaptureFailed) => {
+      if (completionDelivered) {
+        return;
+      }
+      completionDelivered = true;
+      try {
+        complete(result === true, targetCaptureFailed === true);
+      } catch (error) {
+        this._recordLifecycleError("x11-focus-completion", error);
+      }
+    };
     this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
     let targetGeneration = this.targetWindowGeneration;
     this.targetWindowXPendingGeneration = 0;
@@ -13963,12 +14379,14 @@ MyApplet.prototype = {
       this.targetWindow = null;
       this._clearTargetWindowXid();
       this._setStatusPreservingRecording("error", _("Previous text insertion could not be stopped"), this.lastTranscript);
+      deliver(false, false);
       return false;
     }
     let window = global.display ? global.display.focus_window : null;
     if (this._isUsableTargetWindow(window)) {
       this.targetWindow = window;
       this._clearTargetWindowXid();
+      deliver(true);
       return true;
     }
     if (window && this._windowLooksLikeSpeedOfCinnamon(window)) {
@@ -13989,15 +14407,17 @@ MyApplet.prototype = {
         targetGeneration !== this.targetWindowGeneration ||
         targetGeneration !== Number(this.targetWindowXPendingGeneration || 0)
       ) {
+        deliver(false, false);
         return;
       }
       this.targetWindowXPendingGeneration = 0;
-      if (remembered) {
-        return;
-      }
-      if (!(preserveOnFailure && this._hasRememberedTargetWindow())) {
+      if (!remembered && !(preserveOnFailure && this._hasRememberedTargetWindow())) {
         this._clearTargetWindowXid();
       }
+      deliver(
+        remembered || (preserveOnFailure && this._hasRememberedTargetWindow()),
+        !remembered
+      );
     }, targetGeneration);
     return true;
   },
@@ -14034,7 +14454,27 @@ MyApplet.prototype = {
         this._recordLifecycleError("x11-focus", err);
       }
       if (activated) {
-        return completeFocusedTarget();
+        let focusDeadline = Date.now() + FOCUS_RESTORE_TIMEOUT_MS;
+        let focusTimer = this._scheduleTrackedTimer("x11-focus", FOCUS_RESTORE_POLL_MS, () => {
+          if (!this._lifecycleAllowsWork() || !this._isUsableTargetWindow(this.targetWindow)) {
+            complete(false);
+            return false;
+          }
+          if (global.display && global.display.focus_window === this.targetWindow) {
+            completeFocusedTarget();
+            return false;
+          }
+          if (Date.now() >= focusDeadline) {
+            complete(false);
+            return false;
+          }
+          return true;
+        });
+        if (!focusTimer) {
+          complete(false);
+          return false;
+        }
+        return true;
       }
     }
     return this._activateTargetXWindow(complete);
@@ -15310,10 +15750,6 @@ MyApplet.prototype = {
               complete(false);
               return;
             }
-            if (canPasteWithKeyboard) {
-              continueWithApprovedSnapshot(clipboardSnapshot);
-              return;
-            }
             this._clipboardPayloadSnapshotAsync((currentClipboardSnapshot) => {
               try {
                 if (!isCurrentOperation()) {
@@ -15401,7 +15837,7 @@ MyApplet.prototype = {
     return this._spawnKeyboardAfterFocus(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, isCurrentOperation);
   },
 
-  _typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath) {
+  _typeTextAfterFocus: function(text, completionCallback, operationGuard, xdotoolPath, expectedTargetWindowOverride) {
     let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
     if (!isCurrentOperation()) {
       if (typeof completionCallback === "function") completionCallback(false);
@@ -15434,7 +15870,7 @@ MyApplet.prototype = {
     if (!xdotool) {
       return false;
     }
-    let expectedTargetWindow = this._targetXWindowSnapshot();
+    let expectedTargetWindow = expectedTargetWindowOverride || this._targetXWindowSnapshot();
     if (!expectedTargetWindow) {
       this._setStatus("error", _("Target window unavailable for direct typing"), this.lastTranscript);
       return false;
@@ -15478,7 +15914,6 @@ MyApplet.prototype = {
 
   _spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs) {
     let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
-    this._clearPasteTimer();
     let completed = false;
     let complete = (result) => {
       if (completed) {
@@ -15497,6 +15932,7 @@ MyApplet.prototype = {
       complete(false);
       return false;
     }
+    this._clearPasteTimer();
     if (!this._scheduleTrackedTimer("paste", PASTE_FOCUS_DELAY_MS, () => {
       if (this.appletRemoved || !isCurrentOperation()) {
         complete(false);
@@ -15756,7 +16192,25 @@ MyApplet.prototype = {
               return;
             }
             if (!followUpArgs) {
-              if (typeof completionCallback === "function") completionCallback(true);
+              try {
+                this._targetXWindowMatchesSnapshot(expectedTargetWindow, (pasteTargetMatches) => {
+                  try {
+                    if (!isCurrentOperation()) {
+                      fail();
+                      return;
+                    }
+                    if (!pasteTargetMatches) {
+                      fail(_("Target window changed after automatic paste"));
+                      return;
+                    }
+                    if (typeof completionCallback === "function") completionCallback(true);
+                  } catch (error) {
+                    this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
+                  }
+                });
+              } catch (error) {
+                this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
+              }
               return;
             }
             if (!this._scheduleTrackedTimer("paste", PASTE_SUBMIT_DELAY_MS, () => {
@@ -15776,7 +16230,7 @@ MyApplet.prototype = {
                       return;
                     }
                     if (!this._windowTitleMatchesAutoPaste()) {
-                      if (typeof completionCallback === "function") completionCallback(true);
+                      fail(_("Target window changed before automatic submit"));
                       return;
                     }
                     this._spawnKeyboardProcess(followUpArgs, (submitCompleted) => {
@@ -15817,9 +16271,6 @@ MyApplet.prototype = {
 
   _finishAppletTextInsert: function(payload) {
     let transcript = String(payload.transcript || "");
-    if (this.textInsertToken && this._isEmptyTranscriptText(transcript)) {
-      return;
-    }
     if (this._isEmptyTranscriptText(transcript)) {
       this._finishEmptyRelistenDone(payload);
       return;
@@ -16235,7 +16686,7 @@ MyApplet.prototype = {
     }
     let canPasteWithKeyboard = Boolean(keyboardProgram);
     let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;
-    let suppressAutoPasteEnter = method !== "clipboard-paste" || submitWithReturn;
+    let suppressAutoPasteEnter = method !== "clipboard-paste" || !canPasteWithKeyboard || submitWithReturn;
     let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter, autoPasteTarget);
     let insertToken = {};
     let insertTargetGeneration = Number(this.targetWindowGeneration || 0);
@@ -16309,6 +16760,12 @@ MyApplet.prototype = {
             release();
             return false;
           }
+          let expectedTargetWindow = this._targetXWindowSnapshot();
+          if (!expectedTargetWindow) {
+            this._setStatus("error", _("Target window unavailable for direct typing"), transcript);
+            release();
+            return false;
+          }
           this._restoreTargetWindowForPaste((restored) => {
             try {
               if (!isCurrentInsert()) {
@@ -16320,20 +16777,35 @@ MyApplet.prototype = {
                 complete(false);
                 return;
               }
-              if (!this._typeTextAfterFocus(text, (completed) => {
-                let typeCompleted = completed === true;
+              this._targetXWindowMatchesSnapshot(expectedTargetWindow, (targetMatches) => {
                 try {
-                  if (typeCompleted && isCurrentInsert()) {
-                    this._setStatus("done", _("Typed into target window"), transcript);
+                  if (!isCurrentInsert()) {
+                    complete(false);
+                    return;
+                  }
+                  if (!targetMatches) {
+                    this._setStatus("error", _("Target window changed before direct typing"), transcript);
+                    complete(false);
+                    return;
+                  }
+                  if (!this._typeTextAfterFocus(text, (completed) => {
+                    let typeCompleted = completed === true;
+                    try {
+                      if (typeCompleted && isCurrentInsert()) {
+                        this._setStatus("done", _("Typed into target window"), transcript);
+                      }
+                    } catch (error) {
+                      typeCompleted = false;
+                      this._recordLifecycleError("keyboard-insert-status", error);
+                    }
+                    complete(typeCompleted);
+                  }, isCurrentInsert, xdotoolPath, expectedTargetWindow)) {
+                    complete(false);
                   }
                 } catch (error) {
-                  typeCompleted = false;
-                  this._recordLifecycleError("keyboard-insert-status", error);
+                  failPreparation(error, true);
                 }
-                complete(typeCompleted);
-              }, isCurrentInsert, xdotoolPath)) {
-                complete(false);
-              }
+              });
             } catch (error) {
               failPreparation(error, true);
             }
@@ -16688,12 +17160,14 @@ MyApplet.prototype = {
     try {
       this._statusRefreshToken++;
       let safeMessage = typeof message === "string" ? message : "";
-      this.lastMessage = status === "error"
+      this.lastMessage = status === "error" || status === "warning"
         ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
         : this._uiMessageText(safeMessage);
       if (typeof transcript === "string" && transcript !== "") {
         this.lastTranscript = transcript;
       }
+      this._setMenuItemSensitiveSafely(this.copyLastItem, Boolean(this.lastTranscript));
+      this._setMenuItemSensitiveSafely(this.insertLastItem, Boolean(this.lastTranscript));
       this._setMenuItemSensitiveSafely(this.cancelItem, this._hasCancelableRecordingWork());
       this._updatePanel();
     } catch (error) {
@@ -16711,7 +17185,7 @@ MyApplet.prototype = {
       let previousStatus = this.status;
       this.status = status;
       let safeMessage = (typeof message === "string" ? message : "");
-      this.lastMessage = status === "error"
+      this.lastMessage = status === "error" || status === "warning"
         ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
         : this._uiMessageText(safeMessage);
       if (typeof transcript === "string" && transcript !== "") {
@@ -16735,7 +17209,7 @@ MyApplet.prototype = {
     }
     let key = status === "recording" ? status : status + "\n" + String(message || "");
     if (key === this.lastNotificationKey) {
-      if (status === "done" || status === "error" || (status === "idle" && previousStatus !== "idle")) {
+      if (status === "done" || status === "error" || status === "warning" || (status === "idle" && previousStatus !== "idle")) {
         this.notificationSessionActive = false;
       }
       return;
@@ -16762,6 +17236,15 @@ MyApplet.prototype = {
       this.notificationSessionActive = false;
       return;
     }
+    if (status === "warning") {
+      let safeWarningMessage = this._sanitizeErrorMessage(
+        message || _("Settings exported, but private cleanup requires attention")
+      );
+      this._notify(_("Speed of Cinnamon"), safeWarningMessage, true);
+      this.lastNotificationKey = key;
+      this.notificationSessionActive = false;
+      return;
+    }
     if (status === "error") {
       if (this.notifyError) {
         this._notify(_("Speed of Cinnamon"), message || _("Dictation failed"), true);
@@ -16782,7 +17265,13 @@ MyApplet.prototype = {
     try {
       let safeBody = this._sanitizeErrorMessage(body);
       if (critical && Main.criticalNotify) {
-        Main.criticalNotify(title, safeBody);
+        try {
+          Main.criticalNotify(title, safeBody);
+        } catch (criticalError) {
+          if (Main.notify) {
+            Main.notify(title, safeBody);
+          }
+        }
       } else if (Main.notify) {
         Main.notify(title, safeBody);
       }
@@ -16931,7 +17420,9 @@ MyApplet.prototype = {
     if (status === "recording") return "speed-of-cinnamon-recording";
     if (status === "processing") return "speed-of-cinnamon-processing";
     if (status === "recorded") return "speed-of-cinnamon-recorded";
+    if (status === "done") return "speed-of-cinnamon-recorded";
     if (status === "error") return "speed-of-cinnamon-error";
+    if (status === "warning") return "speed-of-cinnamon-error";
     if (status === "setup") return "speed-of-cinnamon-setup";
     return "speed-of-cinnamon-ready";
   },
@@ -16939,6 +17430,7 @@ MyApplet.prototype = {
   _statusIconNameForStatus: function(status) {
     if (status === "recording") return "media-record-symbolic";
     if (status === "processing") return "view-refresh-symbolic";
+    if (status === "done") return "audio-input-microphone-symbolic";
     return "audio-input-microphone-symbolic";
   },
 
@@ -16951,6 +17443,7 @@ MyApplet.prototype = {
     if (status === "processing") return this.statusIconProcessing;
     if (status === "recorded" || status === "done") return this.statusIconRecorded;
     if (status === "error") return this.statusIconError;
+    if (status === "warning") return this.statusIconError;
     if (status === "setup") return this.statusIconSetup;
     return this.statusIconReady;
   },
@@ -17073,6 +17566,10 @@ MyApplet.prototype = {
         label = "RDY";
         tooltip = this.lastMessage || _("Ready to transcribe");
         toggleText = _("Transcribe recording");
+      } else if (this.status === "done") {
+        label = "OK";
+        tooltip = this.lastMessage || _("Transcription completed");
+        statusText = "done";
       } else if (this.status === "setup") {
         label = "SET";
         tooltip = this.lastMessage || _("Setup needed");

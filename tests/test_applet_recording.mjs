@@ -40,6 +40,286 @@ function loadAppletMethod(name, nextName, clock, extraContext = {}) {
   });
 }
 
+test("empty done payload follows relisten completion while insert is active", () => {
+  const clock = { value: 0 };
+  const finishAppletTextInsert = loadAppletMethod(
+    "_finishAppletTextInsert",
+    "_insertTranscriptText",
+    clock
+  );
+  const completedPayloads = [];
+  const applet = {
+    textInsertToken: "active-insert",
+    _isEmptyTranscriptText: (value) => String(value || "").trim() === "",
+    _finishEmptyRelistenDone(payload) {
+      completedPayloads.push(payload);
+    },
+  };
+
+  finishAppletTextInsert.call(applet, { status: "done", transcript: "" });
+
+  assert.equal(completedPayloads.length, 1);
+  assert.equal(completedPayloads[0].status, "done");
+});
+
+test("preserved status refreshes transcript action sensitivity", () => {
+  const clock = { value: 0 };
+  const setStatusPreservingRecording = loadAppletMethod(
+    "_setStatusPreservingRecording",
+    "_setStatus",
+    clock
+  );
+  const copyItem = {};
+  const insertItem = {};
+  const cancelItem = {};
+  const applet = {
+    status: "recording",
+    _statusRefreshToken: 0,
+    lastTranscript: "",
+    copyLastItem: copyItem,
+    insertLastItem: insertItem,
+    cancelItem,
+    _lifecycleAllowsWork: () => true,
+    _hasActiveRecordingState: () => true,
+    _hasCancelableRecordingWork: () => true,
+    _uiMessageText: (value) => value,
+    _sanitizeErrorMessage: (value) => value,
+    _setMenuItemSensitiveSafely(item, sensitive) {
+      item.sensitive = sensitive;
+    },
+    _updatePanel() {},
+  };
+
+  setStatusPreservingRecording.call(applet, "done", "Transcript ready", "hello");
+
+  assert.equal(applet.lastTranscript, "hello");
+  assert.equal(copyItem.sensitive, true);
+  assert.equal(insertItem.sensitive, true);
+  assert.equal(cancelItem.sensitive, true);
+});
+
+test("settings import preserves only allowlisted status icons", () => {
+  const clock = { value: 0 };
+  const coerceImportedSetting = loadAppletMethod(
+    "_coerceImportedSetting",
+    "_coerceImportedEnumSetting",
+    clock,
+    {
+      BOOLEAN_IMPORT_SETTINGS: {},
+      STATUS_ICON_ALLOWLIST: { "soc-original": true, "ready-01": true },
+    }
+  );
+  const applet = {
+    _coerceImportedEnumSetting(value, allowedValues, fallback) {
+      return allowedValues.includes(value) ? value : fallback;
+    },
+  };
+
+  assert.equal(
+    coerceImportedSetting.call(applet, "status-icon-ready", "ready-01", "soc-original"),
+    "ready-01"
+  );
+  assert.equal(
+    coerceImportedSetting.call(applet, "status-icon-ready", "ready-999", "soc-original"),
+    "soc-original"
+  );
+});
+
+test("invalid backend payload fails closed without breaking recording state handling", () => {
+  for (const payload of [null, undefined, [], "invalid"]) {
+    const harness = makeRecordingApplet({ realStopPayload: true });
+    const { applet } = harness;
+
+    assert.doesNotThrow(() => applet._applyPayload(payload));
+    assert.equal(applet.status, "error");
+    assert.match(applet.lastMessage, /Backend returned an invalid response/);
+  }
+});
+
+test("recording starts when only focus target capture fails", () => {
+  const clock = { value: 0 };
+  const startWithLanguage = loadAppletMethod(
+    "_startWithLanguage",
+    "_populateLanguageMenu",
+    clock
+  );
+  let toggleCalls = 0;
+  const applet = {
+    status: "idle",
+    lastTranscript: "",
+    isCommandRunning: false,
+    _recordingCommandToken: null,
+    _hasActiveRecordingState: () => false,
+    _setStatusPreservingRecording() {},
+    _rememberFocusedWindow(_preserveTargetOnFailure, completionCallback) {
+      completionCallback(false, true);
+      return true;
+    },
+    _normalizeLanguage: (value) => value,
+    _primaryLanguage: () => "en",
+    _toggleRecording(action) {
+      assert.equal(action, "start");
+      toggleCalls += 1;
+      return true;
+    },
+  };
+
+  assert.equal(startWithLanguage.call(applet, "en"), true);
+  assert.equal(toggleCalls, 1);
+});
+
+test("language start does not report success before focus callback", () => {
+  const clock = { value: 0 };
+  const startWithLanguage = loadAppletMethod(
+    "_startWithLanguage",
+    "_populateLanguageMenu",
+    clock
+  );
+  let completeFocus;
+  let toggleCalls = 0;
+  const applet = {
+    status: "idle",
+    lastTranscript: "",
+    isCommandRunning: false,
+    _recordingCommandToken: null,
+    _hasActiveRecordingState: () => false,
+    _setStatusPreservingRecording() {},
+    _rememberFocusedWindow(_preserveTargetOnFailure, completionCallback) {
+      completeFocus = completionCallback;
+      return true;
+    },
+    _normalizeLanguage: (value) => value,
+    _primaryLanguage: () => "en",
+    _toggleRecording(action) {
+      assert.equal(action, "start");
+      toggleCalls += 1;
+      return true;
+    },
+  };
+
+  assert.equal(startWithLanguage.call(applet, "en"), false);
+  assert.equal(toggleCalls, 0);
+  completeFocus(true, false);
+  assert.equal(toggleCalls, 1);
+});
+
+test("unrelated orphaned timer does not block status timer scheduling", () => {
+  const clock = { value: 0 };
+  let nextTimerId = 1;
+  let retryCalls = 0;
+  const scheduleTrackedTimer = loadAppletMethod(
+    "_scheduleTrackedTimer",
+    "_init",
+    clock,
+    {
+      Mainloop: {
+        timeout_add() {
+          return nextTimerId++;
+        },
+        timeout_add_seconds() {
+          return nextTimerId++;
+        },
+        source_remove() {
+          return true;
+        },
+      },
+    }
+  );
+  const applet = {
+    appletRemoved: false,
+    lifecycleState: "active",
+    spawnGeneration: 1,
+    _orphanedTimers: [{ name: "clipboard", sourceId: 99, propertyName: "clipboardTimer" }],
+    _resourceRegistry: { timers: {} },
+    _lifecycleAllowsWork: () => true,
+    _retryOrphanedTimers() {
+      retryCalls += 1;
+      return false;
+    },
+    _clearTrackedTimer: () => true,
+    _trackTimer(name, sourceId, propertyName) {
+      this._resourceRegistry.timers[name] = sourceId;
+      if (propertyName) {
+        this[propertyName] = sourceId;
+      }
+      return sourceId;
+    },
+    _recordLifecycleError() {},
+  };
+
+  const scheduled = scheduleTrackedTimer.call(
+    applet,
+    "status",
+    10,
+    () => false,
+    false,
+    "statusTimer"
+  );
+
+  assert.equal(retryCalls, 1);
+  assert.equal(scheduled, 1);
+  assert.equal(applet.statusTimer, 1);
+});
+
+test("direct typing aborts when target changes during focus restore", () => {
+  const clock = { value: 0 };
+  const insertTranscriptText = loadAppletMethod(
+    "_insertTranscriptText",
+    "_restartRelistenRecording",
+    clock
+  );
+  let restoreCallback = null;
+  let typedCalls = 0;
+  let targetChecks = 0;
+  const expectedTarget = {
+    xid: "10",
+    windowClass: "editor",
+    windowTitle: "notes",
+    targetWindowGeneration: 1,
+  };
+  const applet = {
+    insertMethod: "type",
+    textInsertCancellationFailed: false,
+    textInsertToken: null,
+    clipboardOverwriteDialog: null,
+    autoInsertConflictToken: null,
+    autoRelistenPending: false,
+    targetWindowGeneration: 1,
+    lastTranscript: "",
+    _lifecycleAllowsWork: () => true,
+    _hasPendingTextInsertResources: () => false,
+    _normalizeOutputMethod: () => "type",
+    _findTrustedProgramInPath: () => "/usr/bin/xdotool",
+    _preparedTranscriptText: (value) => value,
+    _isEmptyTranscriptText: () => false,
+    _closeMenuForKeyboardInsert: () => true,
+    _targetXWindowSnapshot: () => expectedTarget,
+    _restoreTargetWindowForPaste(callback) {
+      restoreCallback = callback;
+      return true;
+    },
+    _targetXWindowMatchesSnapshot(_snapshot, callback) {
+      targetChecks += 1;
+      callback(false);
+      return false;
+    },
+    _typeTextAfterFocus() {
+      typedCalls += 1;
+      return true;
+    },
+    _setStatus() {},
+    _setStatusPreservingRecording() {},
+    _recordLifecycleError() {},
+  };
+
+  assert.equal(insertTranscriptText.call(applet, "secret", () => {}), null);
+  assert.equal(typeof restoreCallback, "function");
+  restoreCallback(true);
+
+  assert.equal(targetChecks, 1);
+  assert.equal(typedCalls, 0);
+});
+
 const backgroundCleanupGroups = [
   "status",
   "history-refresh",
@@ -103,6 +383,7 @@ function makeRecordingApplet(options = {}) {
     recordingMaxSeconds: 0,
 
     autoRelisten: true,
+    autoTranscribeTimeout: false,
     notificationSessionActive: false,
     autoRelistenPending: false,
     autoRelistenPendingToken: "",
@@ -252,7 +533,7 @@ function makeRecordingApplet(options = {}) {
     },
     _spawnJson(args, callback) {
       requests.push({ args, callback });
-      return { pid: requests.length };
+      return options.spawnReturnsNull ? null : { pid: requests.length };
     },
     _lifecycleAllowsWork() {
       return true;
@@ -261,6 +542,15 @@ function makeRecordingApplet(options = {}) {
     _applyPayload: applyPayload,
     _normalizePayloadStatus(value) {
       return String(value || "").trim().toLowerCase();
+    },
+    _payloadStringMarker(payload, keys, fallback) {
+      for (const key of keys || []) {
+        const value = payload && payload[key];
+        if (typeof value === "string" && value.trim() !== "") {
+          return value.trim();
+        }
+      }
+      return fallback || "";
     },
     _applyPayloadLanguage() {},
     _updateRecordingTiming() {},
@@ -283,9 +573,11 @@ function makeRecordingApplet(options = {}) {
       relistenCalls.push(args);
       return false;
     },
-    _maybeAutoTranscribeRecorded(...args) {
-      transcribeCalls.push(args);
-    },
+    _maybeAutoTranscribeRecorded: options.realTimedAutoTranscribe === true
+      ? loadAppletMethod("_maybeAutoTranscribeRecorded", "_clearStatusTimer", clock)
+      : function(...args) {
+          transcribeCalls.push(args);
+        },
     _setStatus(status, message, transcript) {
       statusEvents.push({ status, message, transcript });
       this.status = status;
@@ -411,6 +703,20 @@ test("queued manual stop handles recorded start payload", () => {
   assert.equal(harness.requests[1].args[0], "stop");
 });
 
+test("queued manual stop handles processing start payload", () => {
+  const harness = makeRecordingApplet();
+  const { applet } = harness;
+
+  assert.equal(applet._toggleRecording("start"), true);
+  assert.equal(applet._toggleRecording(), true);
+
+  harness.requests[0].callback({ status: "processing" });
+
+  assert.equal(applet.stopPendingWhileCommandRunning, false);
+  assert.equal(harness.requests.length, 2);
+  assert.equal(harness.requests[1].args[0], "stop");
+});
+
 test("background cleanup failure still cleans text groups but does not spawn", () => {
   const harness = makeRecordingApplet({
     failedCleanupGroups: ["status"],
@@ -490,6 +796,30 @@ for (const testCase of applyPayloadSourceCases) {
     }
   });
 }
+
+test("stop error preserves recoverable recording state", () => {
+  const harness = makeRecordingApplet({ realStopPayload: true });
+  const { applet } = harness;
+
+  applet.status = "processing";
+  applet.recordingArtifactsPresent = false;
+  applet._applyPayloadSafely(
+    {
+      status: "error",
+      error: "recording process could not be stopped safely",
+    },
+    undefined,
+    true,
+    "stop"
+  );
+
+  assert.equal(applet.status, "processing");
+  assert.equal(applet.recordingArtifactsPresent, true);
+  assert.equal(applet._hasActiveRecordingState(), true);
+  assert.equal(harness.preservedStatusEvents.at(-1).status, "error");
+  assert.equal(harness.statusEvents.length, 0);
+  assert.equal(harness.pollCalls.length, 1);
+});
 
 test("real stop payload does not enqueue another stop request", () => {
   const harness = makeRecordingApplet({ realStopPayload: true });
@@ -587,6 +917,16 @@ test("real cancel queues behind start and spawns once after callback", () => {
   assert.equal(harness.pollCalls.length, pollsBeforeStaleCallback);
   assert.equal(harness.insertCalls.length, insertsBeforeStaleCallback);
   assert.equal(harness.relistenCalls.length, relistensBeforeStaleCallback);
+});
+
+test("manual cancel does not claim auto relisten when only setting is enabled", () => {
+  const harness = makeRecordingApplet({ realStopPayload: true });
+  const { applet } = harness;
+
+  assert.equal(applet._toggleRecording("start"), true);
+  applet._cancelRecording();
+
+  assert.equal(harness.statusEvents.at(-1).message, "Cancelling...");
 });
 
 for (const terminalStatus of ["done", "idle"]) {
@@ -1164,6 +1504,32 @@ test("stale direct cancel callback cannot mutate newer command state", () => {
   assert.equal(harness.relistenCalls.length, 0);
 });
 
+test("stale start callback cannot mutate newer command state", () => {
+  const harness = makeRecordingApplet({ realStopPayload: true });
+  const { applet } = harness;
+
+  assert.equal(applet._toggleRecording("start"), true);
+  const staleCallback = harness.requests[0].callback;
+  const newerToken = { action: "stop" };
+  applet._recordingCommandToken = newerToken;
+  applet.isCommandRunning = true;
+  applet.status = "processing";
+  applet.lastMessage = "newer stop";
+  applet.lastTranscript = "preserved";
+  const pollsBefore = harness.pollCalls.length;
+
+  staleCallback({ status: "recording", transcript: "stale transcript" });
+
+  assert.equal(applet._recordingCommandToken, newerToken);
+  assert.equal(applet.isCommandRunning, true);
+  assert.equal(applet.status, "processing");
+  assert.equal(applet.lastMessage, "newer stop");
+  assert.equal(applet.lastTranscript, "preserved");
+  assert.equal(harness.pollCalls.length, pollsBefore);
+  assert.equal(harness.insertCalls.length, 0);
+  assert.equal(harness.relistenCalls.length, 0);
+});
+
 test("exhausted recorded status poll cannot spawn or repoll", () => {
   const harness = makeRecordingApplet({ realStopPayload: true });
   const { applet } = harness;
@@ -1329,4 +1695,102 @@ test("recording start cleans each process group exactly once", () => {
       1
     );
   }
+});
+
+test("timed auto-transcribe starts one stop per recorded payload", () => {
+  const harness = makeRecordingApplet({
+    realTimedAutoTranscribe: true,
+  });
+  const applet = harness.applet;
+  applet.autoRelisten = false;
+  applet.autoTranscribeTimeout = true;
+  applet.notificationSessionActive = true;
+
+  const payload = { status: "recorded", audio_path: "/tmp/recording.flac" };
+  applet._maybeAutoTranscribeRecorded(payload, "recorded");
+  applet._maybeAutoTranscribeRecorded(payload, "recorded");
+
+  assert.equal(harness.requests.length, 1);
+  assert.equal(harness.requests[0].args[0], "stop");
+  assert.equal(applet.isCommandRunning, true);
+  assert.equal(harness.statusEvents.at(-1).status, "processing");
+
+  harness.requests[0].callback({ status: "done", transcript: "timed result" });
+  assert.equal(applet.isCommandRunning, false);
+  assert.equal(applet._recordingCommandToken, null);
+  assert.equal(harness.appliedPayloads.at(-1).status, "done");
+});
+
+test("manual toggle consumes timed stop payload without relistening", () => {
+  const harness = makeRecordingApplet({
+    realTimedAutoTranscribe: true,
+  });
+  const applet = harness.applet;
+  applet.autoRelisten = true;
+  applet.autoTranscribeTimeout = true;
+  applet.notificationSessionActive = true;
+
+  applet._maybeAutoTranscribeRecorded(
+    { status: "recorded", audio_path: "/tmp/recording.flac" },
+    "recorded"
+  );
+  assert.equal(harness.requests.length, 1);
+  assert.equal(applet.autoRelistenPending, true);
+
+  assert.equal(applet._toggleRecording(), true);
+  assert.equal(applet.autoRelistenPending, false);
+  assert.equal(applet.autoRelistenManualStopRequested, true);
+
+  harness.requests[0].callback({
+    status: "done",
+    transcript: "manual timed result",
+  });
+
+  assert.equal(harness.appliedPayloads.at(-1).transcript, "manual timed result");
+  assert.equal(harness.relistenCalls.length, 0);
+  assert.equal(applet.isCommandRunning, false);
+});
+
+test("timed auto-transcribe spawn failure releases recording state", () => {
+  const harness = makeRecordingApplet({
+    realTimedAutoTranscribe: true,
+    spawnReturnsNull: true,
+  });
+  const applet = harness.applet;
+  applet.autoRelisten = false;
+  applet.autoTranscribeTimeout = true;
+  applet.notificationSessionActive = true;
+
+  applet._maybeAutoTranscribeRecorded(
+    { status: "recorded", audio_path: "/tmp/recording.flac" },
+    "recorded"
+  );
+
+  assert.equal(applet.isCommandRunning, false);
+  assert.equal(applet._recordingCommandToken, null);
+  assert.equal(applet.autoTranscribeRecordingKey, "");
+  assert.equal(harness.preservedStatusEvents.at(-1).status, "error");
+});
+
+test("recording status uses distinct panel classes and dynamic icon names", () => {
+  const styleForStatus = loadAppletMethod(
+    "_panelStyleClassForStatus",
+    "_statusIconNameForStatus",
+    { value: 1000 }
+  );
+  const iconForStatus = loadAppletMethod(
+    "_statusIconNameForStatus",
+    "_resetStatusIconCache",
+    { value: 1000 }
+  );
+
+  assert.equal(styleForStatus("recording"), "speed-of-cinnamon-recording");
+  assert.equal(styleForStatus("processing"), "speed-of-cinnamon-processing");
+  assert.equal(styleForStatus("recorded"), "speed-of-cinnamon-recorded");
+  assert.equal(styleForStatus("done"), "speed-of-cinnamon-recorded");
+  assert.equal(styleForStatus("error"), "speed-of-cinnamon-error");
+  assert.equal(iconForStatus("recording"), "media-record-symbolic");
+  assert.equal(iconForStatus("processing"), "view-refresh-symbolic");
+  assert.equal(iconForStatus("recorded"), "audio-input-microphone-symbolic");
+  assert.equal(iconForStatus("done"), "audio-input-microphone-symbolic");
 });

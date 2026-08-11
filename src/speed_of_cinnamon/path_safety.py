@@ -12,6 +12,8 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .secure_delete import secure_wipe_regular_file_at
+
 DEFAULT_MAX_TEXT_READ_BYTES = 1_000_000
 
 
@@ -270,6 +272,30 @@ def _rename_without_replacing(
         raise OSError("secure rename failed")
 
 
+def _rename_exchange(
+    source_name: str,
+    target_name: str,
+    *,
+    directory_fd: int,
+    target_directory_fd: int | None = None,
+    field_name: str,
+) -> None:
+    renameat2 = _resolve_renameat2(field_name=field_name)
+    destination_fd = directory_fd if target_directory_fd is None else target_directory_fd
+    result = renameat2(
+        directory_fd,
+        os.fsencode(source_name),
+        destination_fd,
+        os.fsencode(target_name),
+        2,
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        if error_number == errno.ENOENT:
+            raise FileNotFoundError(errno.ENOENT, "secure exchange source or target missing")
+        raise OSError("secure exchange failed")
+
+
 def _same_claim_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
     return (
         first.st_dev,
@@ -373,6 +399,7 @@ def _unlink_verified_leaf(
     leaf_fd: int,
     expected_stat: os.stat_result,
     field_name: str,
+    secure_wipe: bool = False,
 ) -> None:
     try:
         current_stat = os.stat(leaf_name, dir_fd=directory_fd, follow_symlinks=False)
@@ -381,6 +408,15 @@ def _unlink_verified_leaf(
     fd_stat = os.fstat(leaf_fd)
     if not _same_claim_snapshot(current_stat, expected_stat) or not _same_claim_snapshot(fd_stat, expected_stat):
         raise OSError(f"{field_name} changed before cleanup")
+    if type(secure_wipe) is not bool:
+        raise TypeError(f"{field_name} secure wipe flag is invalid")
+    if secure_wipe:
+        secure_wipe_regular_file_at(
+            directory_fd,
+            leaf_name,
+            fd_stat,
+            field_name=field_name,
+        )
     expected_link_count = getattr(fd_stat, "st_nlink", 1) - 1
     os.unlink(leaf_name, dir_fd=directory_fd)
     _fsync_fd(directory_fd)
@@ -640,13 +676,20 @@ def open_file_without_following_symlinks(
 def open_directory_without_following_symlinks(path: Path, *, field_name: str = "path") -> int:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
+    nofollow_flag = _resolve_no_follow_flag(field_name=field_name)
     directory_flag = getattr(os, "O_DIRECTORY", None)
     if directory_flag is None:
         raise OSError(f"secure directory open is not supported for {field_name}")
     if str(path) in {"", "."}:
-        return os.open(".", os.O_RDONLY | directory_flag | getattr(os, "O_CLOEXEC", 0))
+        return os.open(
+            ".",
+            os.O_RDONLY | directory_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+        )
     if path.parent == path:
-        return os.open(str(path), os.O_RDONLY | directory_flag | getattr(os, "O_CLOEXEC", 0))
+        return os.open(
+            str(path),
+            os.O_RDONLY | directory_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+        )
     return open_file_without_following_symlinks(path, os.O_RDONLY | directory_flag, field_name=field_name)
 
 
@@ -691,9 +734,15 @@ def ensure_directory_without_following_symlinks(path: Path, *, field_name: str =
     if directory_flag is None:
         raise OSError(f"secure directory creation is not supported for {field_name}")
     if str(path) in {"", "."}:
-        return os.open(".", os.O_RDONLY | directory_flag | getattr(os, "O_CLOEXEC", 0))
+        return os.open(
+            ".",
+            os.O_RDONLY | directory_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+        )
     if path.parent == path:
-        return os.open(str(path), os.O_RDONLY | directory_flag | getattr(os, "O_CLOEXEC", 0))
+        return os.open(
+            str(path),
+            os.O_RDONLY | directory_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+        )
 
     parts = _safe_path_parts(path, field_name=field_name)
     start_path = path.anchor if path.is_absolute() else "."
@@ -764,8 +813,8 @@ def read_text_without_following_symlinks(
         fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
     except (MemoryError, RecursionError) as exc:
         raise OSError(f"{field_name} could not be opened") from exc
-    except OSError as exc:
-        raise OSError(str(exc)) from exc
+    except OSError:
+        raise OSError(f"{field_name} could not be opened") from None
     try:
         try:
             assert_fd_is_regular_private_file(
@@ -1580,6 +1629,7 @@ def _conditional_namespace_operation(
     *,
     replacement_data: bytes | None,
     field_name: str,
+    secure_wipe: bool = False,
 ) -> bool | None:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
@@ -1587,6 +1637,8 @@ def _conditional_namespace_operation(
         raise TypeError("expected_target must be ExpectedTarget")
     if replacement_data is not None and type(replacement_data) is not bytes:
         raise TypeError("replacement data must be bytes")
+    if type(secure_wipe) is not bool:
+        raise TypeError("secure_wipe must be a boolean")
     if expected_target.kind is ExpectedTargetKind.UNKNOWN:
         raise OSError(f"{field_name} expected target is unknown")
     assert_safe_path_components(path, field_name=field_name)
@@ -1625,6 +1677,43 @@ def _conditional_namespace_operation(
         if replacement_data is not None:
             staged_expected = _stage_private_bytes(transaction_fd, replacement_data, field_name=field_name)
             staged_present = True
+
+        def remove_activated_target_for_rollback() -> None:
+            if staged_expected is None:
+                raise OSError(f"{field_name} staged target evidence is unavailable")
+            activated_target_fd: int | None = None
+            try:
+                activated_target_fd = os.open(
+                    path.name,
+                    os.O_RDONLY
+                    | getattr(os, "O_NONBLOCK", 0)
+                    | _resolve_no_follow_flag(field_name=field_name)
+                    | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=parent_fd,
+                )
+                activated_target_stat = os.fstat(activated_target_fd)
+                if not _verify_expected_target_with_retry(
+                    activated_target_fd,
+                    staged_expected,
+                    field_name=f"{field_name} rollback activation",
+                ):
+                    raise OSError(f"{field_name} rollback target does not match activation")
+                _unlink_verified_leaf(
+                    path.name,
+                    directory_fd=parent_fd,
+                    leaf_fd=activated_target_fd,
+                    expected_stat=activated_target_stat,
+                    field_name=f"{field_name} rollback activation",
+                )
+            except FileNotFoundError:
+                return
+            finally:
+                if activated_target_fd is not None:
+                    _close_fd_preserving_primary(
+                        activated_target_fd,
+                        primary_error=primary_error,
+                        committed=False,
+                    )
 
         if expected_target.kind is ExpectedTargetKind.MISSING:
             try:
@@ -1758,6 +1847,7 @@ def _conditional_namespace_operation(
                 leaf_fd=claimed_fd,
                 expected_stat=claimed_stat,
                 field_name=f"{field_name} cleanup",
+                secure_wipe=secure_wipe,
             )
             claim_present = False
             _fsync_fd(transaction_fd)
@@ -1834,6 +1924,12 @@ def _conditional_namespace_operation(
     except BaseException as exc:
         primary_error = exc
         if claim_present and transaction_fd is not None and not committed and claim_verified:
+            if not staged_present and staged_expected is not None:
+                try:
+                    # claim_present is set only after helper definition above.
+                    remove_activated_target_for_rollback()  # pylint: disable=used-before-assignment
+                except BaseException as remove_error:
+                    _note_cleanup_failure(primary_error, remove_error)
             try:
                 _restore_conditional_claim(
                     transaction_fd,
@@ -1956,11 +2052,13 @@ def unlink_file_if_identity(
     expected_target: ExpectedTarget,
     *,
     field_name: str = "path",
+    secure_wipe: bool = False,
 ) -> bool:
     result = _conditional_namespace_operation(
         path,
         expected_target,
         replacement_data=None,
         field_name=field_name,
+        secure_wipe=secure_wipe,
     )
     return bool(result)
