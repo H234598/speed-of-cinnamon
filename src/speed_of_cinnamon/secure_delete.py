@@ -8,6 +8,7 @@ SECURE_DELETE_CHUNK_BYTES = 1024 * 1024
 _OS_CLOSE = os.close
 _OS_FSYNC = os.fsync
 _OS_FSTAT = os.fstat
+_OS_FTRUNCATE = os.ftruncate
 _OS_LSEEK = os.lseek
 _OS_OPEN = os.open
 _OS_PWRITE = getattr(os, "pwrite", None)
@@ -76,6 +77,9 @@ def secure_wipe_regular_file_at(
             if not isinstance(written, int) or written <= 0:
                 raise RuntimeError(f"{field_name} secure deletion made no progress")
             offset += written
+        # Remove bytes appended after the initial size snapshot before syncing.
+        # This keeps concurrent writers from leaving unwiped tail data behind.
+        _OS_FTRUNCATE(secure_fd, size)
         _OS_FSYNC(secure_fd)
     except BaseException as exc:
         primary_error = exc

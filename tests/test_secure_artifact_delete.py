@@ -81,6 +81,35 @@ class SecureArtifactDeleteTest(unittest.TestCase):
             self.assertTrue(lseek.called)
             self.assertTrue(write.called)
 
+    def test_secure_wipe_removes_concurrent_append_before_sync(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = Path(tmp) / "recording.flac"
+            secret = b"secret audio"
+            artifact.write_bytes(secret)
+            writer_fd = os.open(artifact, os.O_WRONLY)
+            parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            real_pwrite = os.pwrite
+
+            def wipe_then_append(fd: int, payload: bytes, offset: int) -> int:
+                written = real_pwrite(fd, payload, offset)
+                os.lseek(writer_fd, 0, os.SEEK_END)
+                os.write(writer_fd, b"late secret")
+                return written
+
+            try:
+                with mock.patch.object(secure_delete, "_OS_PWRITE", side_effect=wipe_then_append):
+                    secure_delete.secure_wipe_regular_file_at(
+                        parent_fd,
+                        artifact.name,
+                        artifact.stat(),
+                        field_name="recording",
+                    )
+            finally:
+                os.close(writer_fd)
+                os.close(parent_fd)
+
+            self.assertEqual(artifact.read_bytes(), b"\x00" * len(secret))
+
     def test_delete_artifact_wipes_claimed_content_before_unlink(self):
         with tempfile.TemporaryDirectory() as tmp:
             artifact = Path(tmp) / "recording.wav"
