@@ -403,12 +403,6 @@ if ! "${safe_fs_cmd[@]}" copy-file build-snap "${repo_dir}/README.md" "${snap_wo
   printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
   exit 1
 fi
-if ! "${safe_fs_cmd[@]}" remove build-snap "${snap_workspace_dist}" --kind dir --expected-identity missing; then
-  printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
-  exit 1
-fi
-"${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace_dist}"
-
 python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}" <<'PYCODE'
 import os
 import pathlib
@@ -496,10 +490,21 @@ finally:
     os.close(fd)
 PY
 
-if ! ( cd "${snap_workspace}" && umask 022 && snapcraft pack --destructive-mode ); then
+if ! (
+  cd "${snap_workspace}"
+  umask 022
+  snapcraft prime --destructive-mode
+  snapcraft pack --destructive-mode prime
+); then
   printf 'snapcraft build failed.\n' >&2
   exit 1
 fi
+
+if ! "${safe_fs_cmd[@]}" remove build-snap "${snap_workspace_dist}" --kind dir --expected-identity missing; then
+  printf 'failed to prepare temporary snap output directory: %s\n' "${snap_workspace_dist}" >&2
+  exit 1
+fi
+"${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace_dist}"
 
 dist_parent="${repo_dir}/dist"
 if [[ -L "${dist_parent}" ]]; then

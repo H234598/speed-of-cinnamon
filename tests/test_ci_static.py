@@ -826,7 +826,14 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('snapcraft_rendered_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snapcraft_file_rendered}" --kind file)"', build_snap)
         self.assertIn('os.fchmod(fd, int(mode_text, 8))', build_snap)
         self.assertNotIn('chmod "${snapcraft_mode}" "${snapcraft_file_rendered}"', build_snap)
-        self.assertIn('( cd "${snap_workspace}" && umask 022 && snapcraft pack --destructive-mode )', build_snap)
+        self.assertIn(
+            'snapcraft prime --destructive-mode\n  snapcraft pack --destructive-mode prime',
+            build_snap,
+        )
+        self.assertLess(
+            build_snap.index('snapcraft pack --destructive-mode prime'),
+            build_snap.index('"${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace_dist}"'),
+        )
         self.assertIn('copy-file build-snap "${snap_files[0]}" "${snap_stage_path}" 0644 --dst-must-not-exist', build_snap)
         self.assertIn('snap_stage_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snap_stage_path}" --kind file)"', build_snap)
         self.assertIn('activate_snap_output "${dist_parent}/.build-snap.finalize.lock" "${snap_stage_path}" "${output_path}"', build_snap)
