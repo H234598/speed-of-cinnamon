@@ -830,11 +830,11 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('snapcraft pack --destructive-mode prime', build_snap)
         self.assertIn('snap_stage_usr="${snap_workspace}/stage/usr"', build_snap)
         self.assertIn(
-            'install-tree build-snap "${snap_stage_usr}" "${snap_prime_usr}" "snap runtime tree"',
+            'cp -dR --no-preserve=links --preserve=mode,timestamps --',
             build_snap,
         )
         self.assertLess(
-            build_snap.index('install-tree build-snap "${snap_stage_usr}"'),
+            build_snap.index('cp -dR --no-preserve=links --preserve=mode,timestamps --'),
             build_snap.index('snapcraft pack --destructive-mode prime'),
         )
         self.assertLess(
@@ -1310,7 +1310,7 @@ class CiStaticTest(unittest.TestCase):
         snap_launcher = (REPO_ROOT / "snap" / "local" / "bin" / "speed-of-cinnamon").read_text(encoding="utf-8")
         verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(encoding="utf-8")
         self.assertIn('snap_dir="${repo_dir}/snap"', build_snap)
-        self.assertIn('for tool in python3 snapcraft mktemp mkdir find realpath stat chmod grep sort basename; do', build_snap)
+        self.assertIn('for tool in python3 snapcraft cp mktemp mkdir find realpath stat chmod grep sort basename; do', build_snap)
         self.assertIn('if [[ -L "${snap_dir}" ]]; then', build_snap)
         self.assertIn('snap directory must not be a symlink', build_snap)
         self.assertIn('dist_parent="${repo_dir}/dist"', build_snap)

@@ -248,7 +248,7 @@ finally:
 PY
 }
 
-for tool in python3 snapcraft mktemp mkdir find realpath stat chmod grep sort basename; do
+for tool in python3 snapcraft cp mktemp mkdir find realpath stat chmod grep sort basename; do
   require_cmd "${tool}"
 done
 snap_dir="${repo_dir}/snap"
@@ -500,7 +500,23 @@ if ! (
     printf 'snapcraft stage is missing a safe runtime tree: %s\n' "${snap_stage_usr}" >&2
     exit 1
   fi
-  if ! "${safe_fs_cmd[@]}" install-tree build-snap "${snap_stage_usr}" "${snap_prime_usr}" "snap runtime tree"; then
+  if [[ -e "${snap_prime_usr}" || -L "${snap_prime_usr}" ]]; then
+    if ! prime_usr_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snap_prime_usr}" --kind dir)"; then
+      printf 'failed to capture existing Snap runtime tree identity: %s\n' "${snap_prime_usr}" >&2
+      exit 1
+    fi
+    if ! "${safe_fs_cmd[@]}" remove build-snap "${snap_prime_usr}" --kind dir \
+      --expected-identity "${prime_usr_identity}"; then
+      printf 'failed to replace existing Snap runtime tree safely: %s\n' "${snap_prime_usr}" >&2
+      exit 1
+    fi
+  fi
+  if ! "${safe_fs_cmd[@]}" mkdirs build-snap "${snap_prime_usr}"; then
+    printf 'failed to create Snap runtime tree target: %s\n' "${snap_prime_usr}" >&2
+    exit 1
+  fi
+  if ! cp -dR --no-preserve=links --preserve=mode,timestamps -- \
+    "${snap_stage_usr}/." "${snap_prime_usr}/"; then
     printf 'failed to promote Snap runtime tree into prime payload.\n' >&2
     exit 1
   fi
