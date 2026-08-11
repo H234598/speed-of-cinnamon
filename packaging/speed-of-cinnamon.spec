@@ -3,7 +3,7 @@ Version:        0.2.4
 Release:        2%{?dist}
 Summary:        Cinnamon-native voice typing helper for Fedora Cinnamon
 
-%{!?python3_sitelib:%global python3_sitelib %(%{__python3} -c 'import sysconfig; print(sysconfig.get_path("purelib"))')}
+%{!?python3_sitelib:%global python3_sitelib %{_prefix}/lib/python%{python3_version}/site-packages}
 %undefine __brp_linkdupes
 
 License:        MIT
