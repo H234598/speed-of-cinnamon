@@ -776,6 +776,44 @@ class OutputTest(unittest.TestCase):
         mocked_group_scan.assert_not_called()
         mocked_killpg.assert_not_called()
 
+    def test_unknown_identity_private_group_is_terminated(self) -> None:
+        class UnknownPopen:
+            __module__ = "subprocess"
+
+            def __init__(self) -> None:
+                self.pid = 1234
+                self.returncode = None
+                self._soc_process_identity = ""
+                self._soc_private_process_group = True
+
+        process = UnknownPopen()
+        with (
+            mock.patch.object(output_module.os, "getpgid", return_value=1234),
+            mock.patch.object(output_module.os, "killpg") as mocked_killpg,
+            mock.patch.object(output_module, "_wait_for_output_process_group_stop", return_value=True),
+        ):
+            self.assertTrue(output_module._terminate_output_process_group(process))
+
+        mocked_killpg.assert_called_once_with(1234, output_module.signal.SIGKILL)
+
+    def test_unknown_identity_private_group_reaps_real_process(self) -> None:
+        process = subprocess.Popen(
+            ["python3", "-c", "import time; time.sleep(60)"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        process._soc_process_identity = ""
+        process._soc_private_process_group = True
+        try:
+            self.assertTrue(output_module._terminate_output_process_group(process))
+            process.wait(timeout=1)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=1)
+            process.communicate()
+
     def test_process_cleanup_does_not_kill_reused_pid_after_group_failure(self) -> None:
         process = mock.Mock()
         process.pid = 1234

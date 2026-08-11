@@ -1813,6 +1813,7 @@ def _run_with_input(
                 start_new_session=True,
             )
             process_spawned = True
+            setattr(proc, "_soc_private_process_group", True)
             setattr(proc, "_soc_process_identity", _clipboard_lock_identity_for_pid(proc.pid) or "")
             setattr(
                 proc,
@@ -2294,10 +2295,39 @@ def _wait_for_output_process_group_stop(process_group_id: int, timeout_seconds: 
         time.sleep(0.01)
 
 
+def _terminate_unidentified_private_process_group(process: subprocess.Popen[bytes]) -> bool:
+    if type(process).__module__ != "subprocess":
+        return False
+    if vars(process).get("_soc_private_process_group") is not True:
+        return False
+    if vars(process).get("_soc_process_identity"):
+        return False
+    pid = getattr(process, "pid", None)
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+    if getattr(process, "returncode", None) is not None:
+        return False
+    try:
+        process_group_id = os.getpgid(pid)
+    except (OSError, ValueError):
+        return False
+    if process_group_id != pid:
+        return False
+    try:
+        os.killpg(pid, signal.SIGKILL)
+    except ProcessLookupError:
+        return True
+    except (OSError, ValueError):
+        return False
+    return _wait_for_output_process_group_stop(pid)
+
+
 def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     if not process or not isinstance(process.pid, int) or process.pid <= 0:
         return False
     if not _output_process_identity_is_current(process):
+        if _terminate_unidentified_private_process_group(process):
+            return True
         return False
     pipe_holders: dict[int, str] = {}
     try:
@@ -2448,6 +2478,7 @@ def _run_bounded_stdout_command(
                 env=_filtered_environment(),
                 start_new_session=True,
             )
+            setattr(proc, "_soc_private_process_group", True)
             setattr(proc, "_soc_process_identity", _clipboard_lock_identity_for_pid(proc.pid) or "")
             setattr(
                 proc,
