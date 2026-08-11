@@ -4611,7 +4611,6 @@ class CliTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             stdout = io.StringIO()
             mocked_validate.return_value = audio
-            transcript_root = Path(tmp) / "speed-of-cinnamon" / "transcripts"
             with (
                 mock.patch.dict(
                     os.environ,
@@ -23944,7 +23943,6 @@ class CliTest(unittest.TestCase):
                         else cli.command_cancel(args)
                     )
                 final_state = store.read()
-                audio_exists = audio.exists()
 
             self.assertIn(result["status"], {"done", "idle"})
             self.assertIsNone(final_state.pid)
@@ -24444,7 +24442,6 @@ class CliTest(unittest.TestCase):
                     else:
                         result = cli.command_toggle(args)
                 final_state = store.read()
-                after = state_file.read_bytes()
                 audio_exists = audio.exists()
 
             self.assertEqual(result["status"], "recording")
@@ -24520,7 +24517,6 @@ class CliTest(unittest.TestCase):
                     else:
                         result = cli.command_toggle(args)
                 final_state = store.read()
-                after = state_file.read_bytes()
                 audio_exists = audio.exists()
 
             self.assertEqual(result["status"], "recording")
@@ -24772,7 +24768,6 @@ class CliTest(unittest.TestCase):
                         for patcher in patches:
                             stack.enter_context(patcher)
                         result = cli.command_status(args)
-                    final_state = store.read()
                     after = state_file.read_bytes()
 
                 self.assertEqual(result["status"], "error")
