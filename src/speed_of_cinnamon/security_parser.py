@@ -41,9 +41,6 @@ def _flock_retry(fd: int, operation: int) -> None:
             continue
 
 
-_BLACKLIST_ADD_RE = re.compile(
-    r"(?im)^\s*(?:blacklisteintrag|blacklist\s*eintrag)\b[\s:,-]*(.+?)\s*$",
-)
 _BLACKLIST_SHOW_RE = re.compile(
     r"(?im)^\s*(?:(?:bitte\s+)?(?:mir\s+)?(?:die\s+)?"
     r"(?:blacklist|blackliste|sperrliste)\s+(?:anzeigen|anzeige|öffnen|offnen|open|show|zeigen|zeige)"
@@ -55,6 +52,32 @@ _BLACKLIST_SHOW_RE = re.compile(
 def _normalized_directive_line(value: str) -> str:
     normalized, _ = _normalize_for_matching(value)
     return normalized
+
+
+def _extract_blacklist_entry(line: str) -> str | None:
+    candidate = line.lstrip()
+    prefix_end: int
+    if candidate[: len("blacklisteintrag")].casefold() == "blacklisteintrag":
+        prefix_end = len("blacklisteintrag")
+    elif candidate[: len("blacklist")].casefold() == "blacklist":
+        prefix_end = len("blacklist")
+        while prefix_end < len(candidate) and candidate[prefix_end].isspace():
+            prefix_end += 1
+        if candidate[prefix_end : prefix_end + len("eintrag")].casefold() != "eintrag":
+            return None
+        prefix_end += len("eintrag")
+    else:
+        return None
+
+    if prefix_end < len(candidate) and (candidate[prefix_end].isalnum() or candidate[prefix_end] == "_"):
+        return None
+    separator_end = prefix_end
+    while separator_end < len(candidate) and (
+        candidate[separator_end].isspace() or candidate[separator_end] in ":,-"
+    ):
+        separator_end += 1
+    entry = candidate[separator_end:].strip()
+    return entry or None
 
 _EMAIL_RE = re.compile(
     r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b"
@@ -864,9 +887,10 @@ def parse_security_directives(text: str) -> SecurityParserResult:
 
     for line in lines:
         directive_line = _normalized_directive_line(line)
-        match_add = _BLACKLIST_ADD_RE.match(line) or _BLACKLIST_ADD_RE.match(directive_line)
-        if match_add:
-            entry = _normalize_blacklist_entry(match_add.group(1))
+        raw_entry = _extract_blacklist_entry(line)
+        normalized_entry = _extract_blacklist_entry(directive_line) if raw_entry is None else None
+        if raw_entry is not None or normalized_entry is not None:
+            entry = _normalize_blacklist_entry(raw_entry if raw_entry is not None else normalized_entry or "")
             entry_key = entry.casefold()
             if entry and entry_key not in added_keys:
                 if len(added) >= _MAX_BLACKLIST_ENTRIES:

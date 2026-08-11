@@ -45,6 +45,12 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(sanitized, "[redacted error details]")
         self.assertNotIn("secret-after-limit", sanitized)
 
+    def test_sanitize_error_message_does_not_use_backtracking_prefix_match(self) -> None:
+        with mock.patch.object(app_logging.re, "match", side_effect=AssertionError("unsafe regex path")):
+            sanitized = app_logging.sanitize_error_message("ffmpeg failed: safe detail")
+
+        self.assertEqual(sanitized, "ffmpeg failed: safe detail")
+
     def test_sanitize_error_message_bounds_scan_with_large_max_chars(self) -> None:
         value = "x" * 200_000
         observed_lengths: list[int] = []

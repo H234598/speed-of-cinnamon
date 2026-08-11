@@ -71,6 +71,12 @@ class SecurityParserTest(unittest.TestCase):
         self.assertTrue(directives.show_blacklist)
         self.assertEqual(directives.text, "")
 
+    def test_parse_security_directives_does_not_use_blacklist_backtracking_regex(self) -> None:
+        directives = parse_security_directives("blacklisteintrag" + " " * 4096 + ": geheim")
+
+        self.assertEqual(directives.added_blacklist, ["geheim"])
+        self.assertEqual(directives.text, "")
+
     def test_parse_security_directives_ignores_zero_width_command_bypass(self) -> None:
         text = "blacklistein\u200btrag: geheim\nBitte Black\u200blist anzeigen"
         directives = parse_security_directives(text)

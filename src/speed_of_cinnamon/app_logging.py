@@ -873,6 +873,25 @@ def _contains_control_chars(value: str) -> bool:
     return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
 
 
+def _split_failed_error_message(value: str) -> tuple[str, str, str] | None:
+    markers = ("failed", "error")
+    for index in range(len(value)):
+        if index == 0 or not value[index - 1].isspace():
+            continue
+        for marker in markers:
+            marker_end = index + len(marker)
+            if value[index:marker_end].casefold() != marker:
+                continue
+            remainder = value[marker_end:].lstrip()
+            if not remainder.startswith(":"):
+                continue
+            details = remainder[1:].strip()
+            command = value[:index].strip()
+            if command and details:
+                return command, value[index:marker_end], details
+    return None
+
+
 def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CHARS) -> str:
     if isinstance(error, bool) or not isinstance(error, str):
         return "[invalid]"
@@ -880,13 +899,10 @@ def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CH
     input_was_truncated = len(error) > effective_max_chars
     scan_limit = min(max(_ERROR_SCAN_MAX_CHARS, effective_max_chars), _MAX_ERROR_INPUT_CHARS)
     scan_error = error[:scan_limit]
-    failed_match = re.match(
-        r"(?is)^(?P<command>.+?)\s+(?P<marker>failed|error)\s*:\s*(?P<details>.+)$",
-        scan_error,
-    )
-    if failed_match:
-        details = failed_match.group("details").strip()
-        details_for_scan = failed_match.group("details").strip()[:_ERROR_SCAN_MAX_CHARS]
+    failed_parts = _split_failed_error_message(scan_error)
+    if failed_parts:
+        command_text, marker_text, details = failed_parts
+        details_for_scan = details[:_ERROR_SCAN_MAX_CHARS]
         if (
             _ERROR_DETAIL_RE.search(details_for_scan) is not None
             or _BARE_CREDENTIAL_RE.search(details_for_scan) is not None
@@ -901,8 +917,8 @@ def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CH
             or len(details) > 120
         ):
             return "[redacted error details]"
-        command = sanitize_text(failed_match.group("command").strip(), max_chars=80)
-        prefix = f"{command} {failed_match.group('marker')}: "
+        command = sanitize_text(command_text, max_chars=80)
+        prefix = f"{command} {marker_text}: "
         details_max_chars = max(8, effective_max_chars - len(prefix))
         details = sanitize_text(details, max_chars=details_max_chars)
         if _ERROR_SECRET_WORD_RE.search(details):
