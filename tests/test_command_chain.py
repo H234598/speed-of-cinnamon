@@ -548,6 +548,39 @@ class CommandChainTest(unittest.TestCase):
 
         mocked_cleanup.assert_called_once_with(proc)
 
+    def test_run_process_bounded_output_terminates_real_process_when_identity_is_missing(self) -> None:
+        started: list[subprocess.Popen[bytes]] = []
+        real_popen = subprocess.Popen
+
+        def capture_popen(*args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+            process = real_popen(*args, **kwargs)
+            started.append(process)
+            return process
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen", side_effect=capture_popen),
+            mock.patch("speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid", return_value=None),
+        ):
+            with self.assertRaisesRegex(CommandChainError, "process identity could not be verified"):
+                run_process_bounded_output(
+                    [sys.executable, "-c", "import time; time.sleep(60)"],
+                    timeout_seconds=1,
+                    max_output_bytes=128,
+                    env={},
+                    label="post-process",
+                )
+
+        self.assertEqual(len(started), 1)
+        process = started[0]
+        try:
+            self.assertIsNotNone(process.poll())
+            self.assertTrue(process.stdout is None or process.stdout.closed)
+            self.assertTrue(process.stderr is None or process.stderr.closed)
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=1)
+
     def test_run_process_bounded_output_cleans_up_when_selector_fails(self) -> None:
         proc = mock.Mock()
         proc.pid = 1234

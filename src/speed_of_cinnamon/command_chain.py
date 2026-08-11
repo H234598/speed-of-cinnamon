@@ -189,6 +189,75 @@ def _terminate_bounded_process(
     return process_wait_confirmed and tree_cleanup_confirmed
 
 
+def _terminate_unidentified_bounded_process(proc: subprocess.Popen[bytes]) -> bool:
+    """Stop a freshly spawned process when its /proc identity cannot be read."""
+    if type(proc).__module__ != "subprocess":
+        return _terminate_bounded_process(proc)
+    pid = getattr(proc, "pid", None)
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return False
+
+    group_cleanup_confirmed = False
+    try:
+        process_group_id = os.getpgid(pid)
+    except (OSError, ValueError):
+        process_group_id = None
+    if process_group_id == pid:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            group_cleanup_confirmed = True
+        except OSError:
+            pass
+        else:
+            group_cleanup_confirmed = True
+
+    root_cleanup_confirmed = group_cleanup_confirmed
+    pidfd: int | None = None
+    try:
+        if not root_cleanup_confirmed:
+            pidfd_open = getattr(os, "pidfd_open", None)
+            pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+            if callable(pidfd_open) and callable(pidfd_send_signal):
+                try:
+                    candidate_pidfd = pidfd_open(pid, 0)
+                except (AttributeError, NotImplementedError, TypeError, OSError):
+                    candidate_pidfd = None
+                if isinstance(candidate_pidfd, int) and not isinstance(candidate_pidfd, bool) and candidate_pidfd >= 0:
+                    pidfd = candidate_pidfd
+                    try:
+                        pidfd_send_signal(pidfd, signal.SIGKILL, None, 0)
+                    except ProcessLookupError:
+                        pass
+                    except (AttributeError, NotImplementedError, TypeError, OSError):
+                        pass
+                    else:
+                        root_cleanup_confirmed = True
+    finally:
+        if pidfd is not None:
+            try:
+                os.close(pidfd)
+            except OSError:
+                pass
+
+    if not root_cleanup_confirmed:
+        return False
+    try:
+        proc.wait(timeout=1)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    finally:
+        for stream in (getattr(proc, "stdout", None), getattr(proc, "stderr", None)):
+            close = getattr(stream, "close", None)
+            if not callable(close):
+                continue
+            try:
+                close()
+            except BaseException:
+                pass
+    return True
+
+
 def _output_process_is_reaped(proc: subprocess.Popen[bytes]) -> bool:
     pid = getattr(proc, "pid", None)
     returncode = getattr(proc, "returncode", None)
@@ -318,7 +387,7 @@ def run_process_bounded_output(
             )
             process_identity = _clipboard_lock_identity_for_pid(proc.pid)
             if not process_identity:
-                cleanup_confirmed = _terminate_bounded_process(proc)
+                cleanup_confirmed = _terminate_unidentified_bounded_process(proc)
                 cleanup_suffix = "" if cleanup_confirmed else "; process cleanup was not confirmed"
                 raise CommandChainError(
                     f"{label} command process identity could not be verified{cleanup_suffix}"
