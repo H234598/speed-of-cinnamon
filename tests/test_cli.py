@@ -5437,7 +5437,10 @@ class CliTest(unittest.TestCase):
         self.assertTrue(opened)
         self.assertEqual(mode, 0o600)
         mocked_popen.assert_called_once()
-        opener_env = mocked_popen.call_args.kwargs["env"]
+        opener_kwargs = mocked_popen.call_args.kwargs
+        self.assertIs(opener_kwargs["stdin"], subprocess.DEVNULL)
+        self.assertTrue(opener_kwargs["start_new_session"])
+        opener_env = opener_kwargs["env"]
         self.assertNotIn("LD_PRELOAD", opener_env)
         self.assertNotIn("PYTHONPATH", opener_env)
 

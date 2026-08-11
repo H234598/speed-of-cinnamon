@@ -1690,9 +1690,11 @@ def _open_blacklist_document() -> bool:
         try:
             process = subprocess.Popen(  # nosec B603
                 [xdg_open, str(path)],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=_filtered_environment(),
+                start_new_session=True,
             )
             _reap_background_process(process)
             return True
@@ -1703,9 +1705,11 @@ def _open_blacklist_document() -> bool:
         try:
             process = subprocess.Popen(  # nosec B603
                 [gio_open, "open", str(path)],
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 env=_filtered_environment(),
+                start_new_session=True,
             )
             _reap_background_process(process)
             return True
