@@ -281,23 +281,6 @@ class AlarmTest(unittest.TestCase):
         })
         self.assertEqual(normalized["last_triggered_at"], "2026-06-01T09:00")
 
-    def test_repeat_day_parser_rejects_non_exact_weekday_tokens(self) -> None:
-        with self.assertRaisesRegex(ValueError, "unknown repeat day: monday"):
-            parse_repeat_days("monday")
-
-    def test_normalize_alarm_rejects_non_exact_weekday_tokens(self) -> None:
-        with self.assertRaisesRegex(ValueError, "unknown alarm day: monday"):
-            normalize_alarm({"name": "Morning", "hour": 9, "minute": 0, "days": ["monday"]})
-
-    def test_normalize_alarm_canonicalizes_last_triggered_at_to_minute(self) -> None:
-        normalized = normalize_alarm({
-            "name": "Morning",
-            "hour": 9,
-            "minute": 0,
-            "last_triggered_at": "2026-06-01T09:00:30",
-        })
-        self.assertEqual(normalized["last_triggered_at"], "2026-06-01T09:00")
-
     def test_alarm_days_defaults_to_daily_only_when_days_are_missing(self) -> None:
         self.assertEqual(alarm_module.alarm_days({}), list(alarm_module.DAY_CODES))
         self.assertEqual(alarm_module.alarm_days({"days": []}), [])

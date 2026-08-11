@@ -736,11 +736,11 @@ class PathSafetyTest(unittest.TestCase):
 
             def replace_quarantine(source, destination, *args, **kwargs):
                 nonlocal raced
-                result = real_rename(source, destination, *args, **kwargs)
+                real_rename(source, destination, *args, **kwargs)
                 if not raced and source == target.name and str(destination).endswith(".cleanup"):
                     foreign.replace(root / str(destination))
                     raced = True
-                return result
+                return None
 
             with mock.patch.object(path_safety, "_rename_without_replacing", side_effect=replace_quarantine):
                 with self.assertRaisesRegex(OSError, "changed before cleanup"):
@@ -1176,9 +1176,9 @@ class PathSafetyTest(unittest.TestCase):
 
                     def mark_cleanup_complete(*args, **kwargs):
                         nonlocal cleanup_completed
-                        result = real_unlink_leaf(*args, **kwargs)
+                        real_unlink_leaf(*args, **kwargs)
                         cleanup_completed = True
-                        return result
+                        return None
 
                     def fail_after_commit_fsync(fd):
                         if primary_present and cleanup_completed:
@@ -1368,7 +1368,7 @@ class PathSafetyTest(unittest.TestCase):
 
             def mutate_after_claim(source, destination, *args, **kwargs):
                 nonlocal raced
-                result = real_rename(source, destination, *args, **kwargs)
+                real_rename(source, destination, *args, **kwargs)
                 target_directory_fd = kwargs.get("target_directory_fd")
                 if not raced and source == target.name and target_directory_fd is not None:
                     fd = os.open(destination, os.O_WRONLY | os.O_TRUNC, dir_fd=target_directory_fd)
@@ -1377,7 +1377,7 @@ class PathSafetyTest(unittest.TestCase):
                     finally:
                         os.close(fd)
                     raced = True
-                return result
+                return None
 
             with mock.patch.object(path_safety, "_rename_without_replacing", side_effect=mutate_after_claim):
                 with self.assertRaisesRegex(OSError, "does not match expected target"):
@@ -2162,7 +2162,7 @@ class PathSafetyTest(unittest.TestCase):
                 real_rename = path_safety._rename_without_replacing
 
                 def replace_after_activation(source, destination, *args, **kwargs):
-                    result = real_rename(source, destination, *args, **kwargs)
+                    real_rename(source, destination, *args, **kwargs)
                     if source == "staged" and destination == target.name:
                         target.unlink()
                         if race_kind == "foreign":
@@ -2171,7 +2171,7 @@ class PathSafetyTest(unittest.TestCase):
                             target.symlink_to(foreign)
                         else:
                             os.link(foreign, target)
-                    return result
+                    return None
 
                 with mock.patch.object(
                     path_safety,
@@ -2313,7 +2313,7 @@ class PathSafetyTest(unittest.TestCase):
 
             def mutate_claim_and_fill_target(source, destination, *args, **kwargs):
                 nonlocal raced
-                result = real_rename(source, destination, *args, **kwargs)
+                real_rename(source, destination, *args, **kwargs)
                 target_directory_fd = kwargs.get("target_directory_fd")
                 if source == target.name and target_directory_fd is not None:
                     fd = os.open(destination, os.O_WRONLY | os.O_TRUNC, dir_fd=target_directory_fd)
@@ -2323,7 +2323,7 @@ class PathSafetyTest(unittest.TestCase):
                         os.close(fd)
                     racer.replace(target)
                     raced = True
-                return result
+                return None
 
             with mock.patch.object(
                 path_safety,

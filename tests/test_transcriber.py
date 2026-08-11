@@ -5530,7 +5530,7 @@ class TranscriberTest(unittest.TestCase):
             old_stat = text.stat()
             replacement = root / "replacement.txt"
 
-            def replace_before_return(*_args: object, **_kwargs: object) -> _TrustedTranscriptText:
+            def replace_before_return(*_args: object, **_kwargs: object):
                 replacement.write_text("foreign transcript\n", encoding="utf-8")
                 replacement.replace(text)
                 return transcriber_module._TrustedTranscriptText("hello cinnamon", text, old_stat)
@@ -5552,7 +5552,7 @@ class TranscriberTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             text = root / "sample.txt"
 
-            def delete_before_return(*_args: object, **_kwargs: object) -> _TrustedTranscriptText:
+            def delete_before_return(*_args: object, **_kwargs: object):
                 text.write_text("hello cinnamon\n", encoding="utf-8")
                 trusted = transcriber_module._TrustedTranscriptText("hello cinnamon", text, text.stat())
                 text.unlink()

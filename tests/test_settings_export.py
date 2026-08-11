@@ -1070,11 +1070,11 @@ class SettingsExportTest(unittest.TestCase):
 
             def mark_backup_cleanup(source: object, target: object, *args: object, **kwargs: object) -> None:
                 nonlocal cleanup_started
-                result = real_rename(source, target, *args, **kwargs)
+                real_rename(source, target, *args, **kwargs)
                 if str(source).endswith(".bak") and str(target).endswith(".cleanup"):
                     cleanup_started = True
                     backup_cleanup_names.add(str(target))
-                return result
+                return None
 
             def fail_backup_scrub_sync(fd: int) -> None:
                 if cleanup_started:

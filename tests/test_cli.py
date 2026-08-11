@@ -4137,11 +4137,11 @@ class CliTest(unittest.TestCase):
                     message=cli.TRANSIENT_TRANSCRIPT_PROCESSING_ERROR,
                 )
 
-        self.assertIsNone(caught.exception.__cause__)
-        self.assertIsNone(caught.exception.__context__)
-        self.assertFalse(getattr(caught.exception, "__notes__", ()))
-        rendered = "".join(traceback.format_exception(caught.exception))
-        self.assertNotIn("/srv/private/transcript.owner", rendered)
+            self.assertIsNone(caught.exception.__cause__)
+            self.assertIsNone(caught.exception.__context__)
+            self.assertFalse(getattr(caught.exception, "__notes__", ()))
+            rendered = "".join(traceback.format_exception(caught.exception))
+            self.assertNotIn("/srv/private/transcript.owner", rendered)
 
     def test_transcribe_file_sanitizes_custom_transcription_exception_without_stringifying(self) -> None:
         class SecretBaseException(BaseException):
