@@ -1686,10 +1686,6 @@ def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             raise ValueError("invalid secret-tool process pid")
         if not identity_known:
-            if is_real_subprocess:
-                # A real child without an identity cannot be distinguished
-                # from a reused PID; never signal its group by PID alone.
-                return
             getpgid = getattr(os, "getpgid", None)
             try:
                 process_group_id = getpgid(pid) if callable(getpgid) else None

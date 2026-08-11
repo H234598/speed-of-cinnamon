@@ -2571,7 +2571,7 @@ class ArtifactCryptoTest(unittest.TestCase):
         tree.assert_not_called()
         killpg.assert_not_called()
 
-    def test_secret_tool_unknown_real_process_never_kills_confirmed_group(self) -> None:
+    def test_secret_tool_unknown_real_process_kills_its_private_group(self) -> None:
         class UnknownPopen:
             __module__ = "subprocess"
 
@@ -2597,7 +2597,24 @@ class ArtifactCryptoTest(unittest.TestCase):
             artifact_crypto._stop_secret_tool_process(process)
 
         self.assertFalse(process.killed)
-        killpg.assert_not_called()
+        killpg.assert_called_once_with(1234, artifact_crypto.signal.SIGKILL)
+
+    def test_secret_tool_unknown_real_process_is_reaped(self) -> None:
+        process = subprocess.Popen(
+            ["python3", "-c", "import time; time.sleep(60)"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+        process._soc_process_identity = ""
+        try:
+            artifact_crypto._stop_secret_tool_process(process)
+            self.assertIsNotNone(process.poll())
+        finally:
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=1)
+            process.communicate()
 
     def test_passphrase_temp_creation_requests_cloexec(self) -> None:
         with (
