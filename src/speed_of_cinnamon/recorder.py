@@ -2809,7 +2809,11 @@ def stop_process(
         return True
 
     deadline = time.monotonic() + timeout_seconds
+    # Detached descendants can take longer than one scheduler slice to become
+    # observable as dead after SIGKILL, especially while the host is loaded.
+    # Keep the grace bounded and reserve it from the graceful phase.
     kill_settle_seconds = min(0.2, timeout_seconds / 5) if timeout_seconds > 0.1 else 0.0
+    post_kill_settle_seconds = min(1.0, max(0.2, timeout_seconds / 3)) if timeout_seconds > 0.1 else 0.0
     graceful_deadline = deadline - kill_settle_seconds
     if not signal_process_target("-INT"):
         return False
@@ -2856,17 +2860,8 @@ def stop_process(
         raise RecorderError(f"failed to stop recorder process {pid}: {exc}") from exc
     if not _kill_output_process_tree(descendant_identities):
         return False
-    kill_deadline = deadline + kill_settle_seconds
-    while kill_settle_seconds:
-        now = time.monotonic()
-        if process_target_is_gone():
-            return True
-        if not target_identity_still_safe():
-            return False
-        remaining_seconds = kill_deadline - now
-        if remaining_seconds <= 0:
-            break
-        time.sleep(min(0.01, remaining_seconds))
+    if post_kill_settle_seconds:
+        time.sleep(post_kill_settle_seconds)
     if process_target_is_gone():
         return True
     if not target_identity_still_safe():

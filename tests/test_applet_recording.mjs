@@ -320,6 +320,51 @@ test("direct typing aborts when target changes during focus restore", () => {
   assert.equal(typedCalls, 0);
 });
 
+test("clipboard-paste falls back to clipboard when menu close fails", () => {
+  const clock = { value: 0 };
+  const copyAndMaybePaste = loadAppletMethod(
+    "_copyAndMaybePasteTranscriptText",
+    "_confirmClipboardOverwriteForPaste",
+    clock
+  );
+  const clipboardWrites = [];
+  const statuses = [];
+  const completions = [];
+  const applet = {
+    _lifecycleAllowsWork: () => true,
+    _closeMenuForKeyboardInsert: () => false,
+    _setClipboardText(text) {
+      clipboardWrites.push(text);
+      return true;
+    },
+    _setStatus(status, message, transcript) {
+      statuses.push({ status, message, transcript });
+    },
+  };
+
+  assert.equal(
+    copyAndMaybePaste.call(
+      applet,
+      "hello",
+      "hello",
+      "clipboard-paste",
+      true,
+      false,
+      (result) => completions.push(result),
+      () => true
+    ),
+    false
+  );
+
+  assert.deepEqual(clipboardWrites, ["hello"]);
+  assert.deepEqual(completions, [false]);
+  assert.deepEqual(statuses, [{
+    status: "error",
+    message: "Copied to clipboard; paste failed: applet menu could not be closed",
+    transcript: "hello",
+  }]);
+});
+
 const backgroundCleanupGroups = [
   "status",
   "history-refresh",

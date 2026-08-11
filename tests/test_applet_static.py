@@ -8443,7 +8443,13 @@ class AppletStaticTest(unittest.TestCase):
         failure = block.index('if (!this._closeMenuForKeyboardInsert())')
         failure_end = block.index("return false;", failure)
 
-        self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', block[failure:failure_end])
+        failure_block = block[failure:failure_end]
+        self.assertIn("if (this._setClipboardText(text)) {", failure_block)
+        self.assertIn(
+            'this._setStatus("error", _("Copied to clipboard; paste failed: applet menu could not be closed"), transcript);',
+            failure_block,
+        )
+        self.assertIn('this._setStatus("error", _("Could not copy to clipboard"), transcript);', failure_block)
         self.assertIn("completeOnce(false);", block[failure:failure_end])
         self.assertIn("let completionFinished = false;", block)
         self.assertIn("if (completionFinished)", block)
@@ -9035,7 +9041,12 @@ class AppletStaticTest(unittest.TestCase):
             final_snapshot_index,
         )
         guarded_write_call = copy_body.index("writeClipboardAndPaste(restored);", final_match_index)
-        self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', copy_body)
+        self.assertIn("if (this._setClipboardText(text)) {", copy_body)
+        self.assertIn(
+            'this._setStatus("error", _("Copied to clipboard; paste failed: applet menu could not be closed"), transcript);',
+            copy_body,
+        )
+        self.assertIn('this._setStatus("error", _("Could not copy to clipboard"), transcript);', copy_body)
         self.assertIn(
             'this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);',
             copy_body,
