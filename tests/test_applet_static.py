@@ -129,11 +129,13 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn('this.openAiFlexProcessingItem = new PopupMenu.PopupMenuItem("")', source)
         self.assertIn('let textCommandConfigured = String(this.postProcessCommand || "").trim() !== "";', source)
         self.assertIn('let customLabel = _("Custom command") + (textCommandConfigured ? "" : _(" - configure in settings"));', source)
-        self.assertIn('let custom = this._selectionMenuItem((backend === "command" || backend === "custom" ? "[x] " : "[ ] ") + customLabel);', source)
+        self.assertIn('let custom = this._selectionMenuItem("");', source)
+        self.assertIn('this._setMenuItemLabelSafely(pool.custom, (backend === "command" || backend === "custom" ? "[x] " : "[ ] ") + customLabel);', source)
         self.assertIn('this._setStatusPreservingRecording("ready", _("Configure custom text command in applet settings"), this.lastTranscript);', source)
         self.assertNotIn('this._setStatus("ready", _("Configure custom text command in applet settings"), this.lastTranscript);', source)
         self.assertIn('this._connectSafe(openaiCompatible, "activate", () => this._openExternalApiEnvEditor("text"));', source)
-        self.assertIn('let presetMenu = new PopupMenu.PopupSubMenuMenuItem(_("Polishing preset: ") + this._textPolishingPresetLabel(this.postProcessPreset));', source)
+        self.assertIn('let presetMenu = new PopupMenu.PopupSubMenuMenuItem("");', source)
+        self.assertIn('this._setMenuItemLabelSafely(pool.presetMenu, _("Polishing preset: ") + this._textPolishingPresetLabel(currentPreset));', source)
         self.assertIn("_populateTextPolishingPresetMenu: function(parentMenu)", source)
         self.assertIn("_selectTextPolishingPreset: function(preset)", source)
         self.assertIn("const TEXT_POLISHING_PRESETS = [", source)
@@ -209,13 +211,16 @@ class AppletStaticTest(unittest.TestCase):
         self.assertNotIn("GLib.unsetenv", source)
         self.assertNotIn('snapshot["openai-compatible-api-key"]', source)
         self.assertIn('let externalMenu = new PopupMenu.PopupSubMenuMenuItem(_("External API"));', source)
-        self.assertIn("this._populateExternalApiVoiceMenu(externalMenu.menu);", source)
+        self.assertIn('let externalUse = new PopupMenu.PopupIconMenuItem("", "network-server-symbolic"', source)
+        self.assertIn('this._setMenuItemLabelSafely(pool.externalUse, (externalActive ? "[x] " : "[ ] ") + _("Use OpenAI-compatible API"));', source)
         self.assertIn("_populateExternalApiVoiceMenu: function(parentMenu)", source)
-        self.assertIn('let whisperCommand = this._selectionMenuItem((whisperCommandActive ? "[x] " : "[ ] ") + _("OpenAI Whisper command"));', source)
+        self.assertIn('let whisperCommand = this._selectionMenuItem("");', source)
+        self.assertIn('this._setMenuItemLabelSafely(pool.whisperCommand, (whisperCommandActive ? "[x] " : "[ ] ") + _("OpenAI Whisper command"));', source)
         self.assertIn('this._connectSafe(whisperCommand, "activate", () => this._selectStaticVoiceBackend("whisper", _("Voice model: OpenAI Whisper command")));', source)
         self.assertIn('let customCommandConfigured = String(this.transcriberCommand || "").trim() !== "";', source)
         self.assertIn('let customCommandLabel = _("Custom command") + (customCommandConfigured ? "" : _(" - configure in settings"));', source)
-        self.assertIn('let customCommand = this._selectionMenuItem((customCommandActive ? "[x] " : "[ ] ") + customCommandLabel);', source)
+        self.assertIn('let customCommand = this._selectionMenuItem("");', source)
+        self.assertIn('this._setMenuItemLabelSafely(pool.customCommand, (customCommandActive ? "[x] " : "[ ] ") + customCommandLabel);', source)
         self.assertIn('this._openAppletSettings();', source)
         self.assertIn('this._setStatusPreservingRecording("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);', source)
         self.assertIn("_selectStaticVoiceBackend: function(transcriber, message)", source)
@@ -1928,19 +1933,44 @@ class AppletStaticTest(unittest.TestCase):
     def test_menu_payload_arrays_and_entries_are_shape_safe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        for method, next_method, variable in [
-            ("_populateAlarmMenu: function(alarms, summary, message)", "\n  _addAlarmMenuEntry:", "alarms"),
-            ("_populateInputSourceMenu: function(sources, message)", "\n  _selectInputSource:", "sources"),
-            ("_populateModelMenu: function(models, message)", "\n  _populateExternalApiVoiceMenu:", "models"),
-            ("_populateTextModelMenu: function(models, message, provider)", "\n  _canMutateMenu:", "models"),
-            ("_populateHistoryMenu: function(transcripts)", "\n  _copyHistoryTranscript:", "transcripts"),
+        for method, next_method, variable, entry_guard in [
+            (
+                "_populateAlarmMenu: function(alarms, summary, message)",
+                "\n  _addAlarmMenuEntry:",
+                "alarms",
+                'alarm && typeof alarm === "object" && typeof alarm.id === "string"',
+            ),
+            (
+                "_populateInputSourceMenu: function(sources, message)",
+                "\n  _selectInputSource:",
+                "sources",
+                'source && typeof source === "object" && typeof source.name === "string"',
+            ),
+            (
+                "_populateModelMenu: function(models, message)",
+                "\n  _populateExternalApiVoiceMenu:",
+                "models",
+                'model && typeof model === "object" && typeof model.name === "string"',
+            ),
+            (
+                "_populateTextModelMenu: function(models, message, provider)",
+                "\n  _canMutateMenu:",
+                "models",
+                'model && typeof model === "object" && typeof model.name === "string"',
+            ),
+            (
+                "_populateHistoryMenu: function(transcripts)",
+                "\n  _copyHistoryTranscript:",
+                "transcripts",
+                'if (!transcript || typeof transcript !== "object")',
+            ),
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn(f"{variable} = Array.isArray({variable}) ? {variable} : [];", block)
             self.assertIn(f"{variable} = {variable}.filter(", block)
-            self.assertIn(f"if (!{variable[:-1] if variable.endswith('s') else variable} || typeof {variable[:-1] if variable.endswith('s') else variable} !== \"object\")", block)
+            self.assertIn(entry_guard, block)
 
         for method, next_method in [
             ("_populateInputSourceMenu: function(sources, message)", "\n  _selectInputSource:"),
@@ -1951,7 +1981,7 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn('let messageText = typeof message === "string" ? message.trim() : "";', block)
-            self.assertIn('if (messageText !== "")', block)
+            self.assertIn('messageText !== ""', block)
 
         for method, next_method, parameter in [
             ("_addAlarmMenuEntry: function(alarm)", "\n  _copyAlarmCommands:", "alarm"),
@@ -2307,8 +2337,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof message === "string"', block)
         self.assertIn('typeof summary === "string"', block)
         self.assertIn("let summaryLabel = messageText || summaryText", block)
-        self.assertIn('if (messageText !== "")', block)
-        self.assertIn("new PopupMenu.PopupMenuItem(summaryLabel)", block)
+        self.assertIn('let visibleAlarms = messageText === "" ? alarms : [];', block)
+        self.assertIn("this._setMenuItemLabelSafely(pool.summary, summaryLabel);", block)
 
     def test_alarm_entry_payload_text_fields_are_string_checked(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2421,9 +2451,10 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(marker, block)
         self.assertLess(
             block.index("if (this._inputSourceMenuFingerprint === nextFingerprint)"),
-            block.index("this._clearMenuItems(this.inputSourceItem.menu)"),
+            block.index("this._ensureInputSourceMenuPool()"),
         )
-        self.assertEqual(block.count("this._inputSourceMenuFingerprint = nextFingerprint;"), 3)
+        self.assertNotIn("this._clearMenuItems(this.inputSourceItem.menu)", block)
+        self.assertEqual(block.count("this._inputSourceMenuFingerprint = nextFingerprint;"), 1)
 
     def test_optional_model_metadata_is_string_checked_before_display(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2450,6 +2481,9 @@ class AppletStaticTest(unittest.TestCase):
     def test_redacted_history_entries_disable_plaintext_actions(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
+        hydrate_start = source.index("_hydrateHistoryMenuPoolRow: function(row)")
+        hydrate_end = source.index("\n  _populateHistoryMenu:", hydrate_start)
+        hydrate_block = source[hydrate_start:hydrate_end]
         start = source.index("_populateHistoryMenu: function(transcripts)")
         end = source.index("\n  _copyHistoryTranscript:", start)
         block = source[start:end]
@@ -2457,9 +2491,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('typeof transcript.name === "string"', block)
         self.assertIn('typeof transcript.text === "string"', block)
         self.assertIn("let hasTranscriptText = transcriptText !== \"\" && !this._isEmptyTranscriptText(transcriptText);", block)
-        self.assertIn("insertItem.setSensitive(hasTranscriptText);", block)
-        self.assertIn("copyItem.setSensitive(hasTranscriptText);", block)
-        self.assertIn("Transcript content hidden; use List all Transcripts", block)
+        self.assertIn("row._socData = { text: transcriptText, hasTranscriptText: hasTranscriptText };", block)
+        self.assertIn("row._socInsert.setSensitive(data.hasTranscriptText);", hydrate_block)
+        self.assertIn("row._socCopy.setSensitive(data.hasTranscriptText);", hydrate_block)
+        self.assertIn("Transcript content hidden; use List all Transcripts", hydrate_block)
+        self.assertIn("this._setPooledMenuItemVisible(row._socHiddenInfo, !data.hasTranscriptText);", hydrate_block)
 
     def test_history_menu_fanout_is_bounded(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2470,7 +2506,8 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let historyWasTruncated = transcripts.length > MAX_HISTORY_MENU_ENTRIES;", block)
         self.assertIn("transcripts = transcripts.slice(0, MAX_HISTORY_MENU_ENTRIES);", block)
-        self.assertIn('_("Transcript list truncated for safety")', block)
+        self.assertIn("this._setPooledMenuItemVisible(pool.truncated, historyWasTruncated);", block)
+        self.assertIn('_("Transcript list truncated for safety")', source)
 
     def test_identical_history_payload_skips_actor_rebuild(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2486,9 +2523,10 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this._historyMenuFingerprint === nextFingerprint)", block)
         self.assertLess(
             block.index("if (this._historyMenuFingerprint === nextFingerprint)"),
-            block.index("this._clearMenuItems(this.historyItem.menu)"),
+            block.index("this._ensureHistoryMenuPool()"),
         )
-        self.assertEqual(block.count("this._historyMenuFingerprint = nextFingerprint;"), 2)
+        self.assertNotIn("this._clearMenuItems(this.historyItem.menu)", block)
+        self.assertEqual(block.count("this._historyMenuFingerprint = nextFingerprint;"), 1)
 
     def test_invalid_ollama_model_input_cannot_stick_command_running_state(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6337,7 +6375,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("models = models.slice(0, MAX_MODEL_MENU_ENTRIES);", menu_block)
         self.assertIn("selectedOllamaModel", menu_block)
         self.assertIn('description: _("selected")', menu_block)
-        self.assertIn('_("Model list truncated for safety")', menu_block)
+        self.assertIn('this._setPooledMenuItemVisible(pool.truncated, messageText === "" && modelListWasTruncated);', menu_block)
+        self.assertIn('_("Model list truncated for safety")', source)
 
         choice_start = source.index("_ollamaModelChoiceArgs: function(models)")
         choice_end = source.index("\n  _chooseOllamaTextModel:", choice_start)
@@ -6359,7 +6398,8 @@ class AppletStaticTest(unittest.TestCase):
         menu_block = source[menu_start:menu_end]
         self.assertIn("let alarmsWereTruncated = alarms.length > MAX_ALARM_MENU_ENTRIES;", menu_block)
         self.assertIn("alarms = alarms.slice(0, MAX_ALARM_MENU_ENTRIES);", menu_block)
-        self.assertIn('_("Alarm list truncated for safety")', menu_block)
+        self.assertIn("this._setPooledMenuItemVisible(pool.truncated, messageText === \"\" && alarmsWereTruncated);", menu_block)
+        self.assertIn('_("Alarm list truncated for safety")', source)
 
         check_start = source.index("_checkAlarms: function(manual)")
         check_end = source.index("\n  _refreshInputSourceMenu:", check_start)
@@ -6398,9 +6438,10 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(marker, block)
         self.assertLess(
             block.index("if (this._alarmMenuFingerprint === nextFingerprint)"),
-            block.index("this._clearMenuItems(this.alarmItem.menu)"),
+            block.index("this._ensureAlarmMenuPool()"),
         )
-        self.assertEqual(block.count("this._alarmMenuFingerprint = nextFingerprint;"), 3)
+        self.assertNotIn("this._clearMenuItems(this.alarmItem.menu)", block)
+        self.assertEqual(block.count("this._alarmMenuFingerprint = nextFingerprint;"), 1)
 
     def test_input_source_menu_fanout_is_bounded(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6411,7 +6452,8 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let sourcesWereTruncated = sources.length > MAX_INPUT_SOURCE_MENU_ENTRIES;", block)
         self.assertIn("sources = sources.slice(0, MAX_INPUT_SOURCE_MENU_ENTRIES);", block)
-        self.assertIn('_("Input source list truncated for safety")', block)
+        self.assertIn("this._setPooledMenuItemVisible(pool.truncated, messageText === \"\" && sourcesWereTruncated);", block)
+        self.assertIn('_("Input source list truncated for safety")', source)
 
     def test_voice_model_menu_fanout_is_bounded(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6422,7 +6464,8 @@ class AppletStaticTest(unittest.TestCase):
         block = source[start:end]
         self.assertIn("let voiceModelsWereTruncated = models.length > MAX_VOICE_MODEL_MENU_ENTRIES;", block)
         self.assertIn("models = models.slice(0, MAX_VOICE_MODEL_MENU_ENTRIES);", block)
-        self.assertIn('_("Voice model list truncated for safety")', block)
+        self.assertIn("this._setPooledMenuItemVisible(pool.truncated, catalogVisible && voiceModelsWereTruncated);", block)
+        self.assertIn('_("Voice model list truncated for safety")', source)
 
     def test_identical_voice_model_payload_skips_actor_rebuild(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6450,9 +6493,10 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(marker, block)
         self.assertLess(
             block.index("if (this._modelMenuFingerprint === nextFingerprint)"),
-            block.index("this._clearMenuItems(this.modelItem.menu)"),
+            block.index("this._ensureModelMenuPool()"),
         )
-        self.assertEqual(block.count("this._modelMenuFingerprint = nextFingerprint;"), 3)
+        self.assertNotIn("this._clearMenuItems(this.modelItem.menu)", block)
+        self.assertEqual(block.count("this._modelMenuFingerprint = nextFingerprint;"), 1)
 
     def test_identical_text_model_payload_skips_actor_rebuild(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -6488,10 +6532,11 @@ class AppletStaticTest(unittest.TestCase):
             self.assertIn(marker, block)
         self.assertLess(
             block.index("if (this._textModelMenuFingerprint === nextFingerprint)"),
-            block.index("this._clearMenuItems(this.textModelItem.menu)"),
+            block.index("this._ensureTextModelMenuPool()"),
         )
-        self.assertEqual(block.count("this._textModelMenuFingerprint = nextFingerprint;"), 4)
-        self.assertEqual(block.count("this._textModelMenuProvider = activeProvider;"), 4)
+        self.assertNotIn("this._clearMenuItems(this.textModelItem.menu)", block)
+        self.assertEqual(block.count("this._textModelMenuFingerprint = nextFingerprint;"), 1)
+        self.assertEqual(block.count("this._textModelMenuProvider = activeProvider;"), 1)
 
     def test_settings_derived_model_labels_are_bounded_before_cinnamon_display(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -7730,9 +7775,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("click menu mirrors presets and safety switches", schema["post-process-prompt"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["input-device"]["tooltip"])
         self.assertIn('let currentWasListed = current === "";', source)
-        self.assertIn("let addCurrentCustomInput = () => {", source)
-        self.assertIn('let label = _("Current custom input source: ") + this._shortMenuText(current, 96);', source)
-        self.assertIn("addCurrentCustomInput();", source)
+        self.assertIn('let customLabel = _("Current custom input source: ") + this._shortMenuText(current, 96);', source)
+        self.assertIn("pool.custom._socData = { name: current, label: customLabel };", source)
+        self.assertIn("this._setPooledMenuItemVisible(pool.custom, customVisible);", source)
         self.assertIn("Max 4096 chars", schema["whisper-model"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["ollama-model"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["openai-compatible-model"]["tooltip"])
@@ -9292,15 +9337,17 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._setStatus("processing", _("Exporting transcripts..."), this.lastTranscript)', source)
         self.assertIn('this._notify(_("Speed of Cinnamon transcript export"), message, false);', source)
         self.assertNotIn('this._openFile(path, _("Opened transcript document: ") + String(payload.transcripts || 0));', source)
-        self.assertIn("let entry = new PopupMenu.PopupSubMenuMenuItem(label)", source)
+        self.assertIn('let row = new PopupMenu.PopupSubMenuMenuItem("")', source)
         self.assertIn('let transcriptText = typeof transcript.text === "string" ? transcript.text : "";', source)
         self.assertIn('let label = this._shortMenuText(preview || name || _("Transcript"), 80);', source)
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Insert transcript"), "edit-paste-symbolic"', source)
-        self.assertIn("insertItem.setSensitive(hasTranscriptText);", source)
-        self.assertIn("this._connectSafe(insertItem, \"activate\", () => this._insertHistoryTranscript(transcriptText))", source)
+        self.assertIn("row._socInsert.setSensitive(data.hasTranscriptText);", source)
+        self.assertIn('this._connectSafe(row._socInsert, "activate", () => {', source)
+        self.assertIn("this._insertHistoryTranscript(data.text);", source)
         self.assertIn('new PopupMenu.PopupIconMenuItem(_("Copy transcript"), "edit-copy-symbolic"', source)
-        self.assertIn("copyItem.setSensitive(hasTranscriptText);", source)
-        self.assertIn("this._connectSafe(copyItem, \"activate\", () => this._copyHistoryTranscript(transcriptText))", source)
+        self.assertIn("row._socCopy.setSensitive(data.hasTranscriptText);", source)
+        self.assertIn('this._connectSafe(row._socCopy, "activate", () => {', source)
+        self.assertIn("this._copyHistoryTranscript(data.text);", source)
         self.assertIn("_insertHistoryTranscript: function(text)", source)
         insert_history_start = source.index("_insertHistoryTranscript: function(text)")
         insert_history_end = source.index("\n  _setStatusPreservingRecording:", insert_history_start)
@@ -10007,15 +10054,16 @@ class AppletStaticTest(unittest.TestCase):
     def test_all_dynamic_menu_populators_guard_menu_actor_before_mutation(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         for method, next_method, item in [
-            ("_populateAlarmMenu: function(alarms, summary, message)", "\n  _setAlarm", "alarmItem"),
-            ("_populateInputSourceMenu: function(sources, message)", "\n  _setStatus", "inputSourceItem"),
-            ("_populateHistoryMenu: function(transcripts)", "\n  _copyHistoryTranscript", "historyItem"),
+            ("_populateAlarmMenu: function(alarms, summary, message)", "\n  _addAlarmMenuEntry:", "alarmItem"),
+            ("_populateInputSourceMenu: function(sources, message)", "\n  _selectInputSource:", "inputSourceItem"),
+            ("_populateHistoryMenu: function(transcripts)", "\n  _copyHistoryTranscript:", "historyItem"),
         ]:
             start = source.index(method)
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn("if (!this._canMutateMenu(this." + item + "))", block)
-            self.assertLess(block.index("_canMutateMenu"), block.index("_clearMenuItems"))
+            self.assertLess(block.index("_canMutateMenu"), block.index("_ensure"))
+            self.assertNotIn("_clearMenuItems", block)
 
     def test_all_static_menu_populators_guard_menu_actor_before_mutation(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
