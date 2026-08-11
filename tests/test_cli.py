@@ -31,6 +31,19 @@ from speed_of_cinnamon.state import RecordingState, StateStore
 
 
 class CliTest(unittest.TestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        real_kill = cli.os.kill
+
+        def fake_pid_kill(pid: int, signal_number: int) -> None:
+            if pid == 1234:
+                raise ProcessLookupError(pid)
+            real_kill(pid, signal_number)
+
+        self._fake_pid_kill_patch = mock.patch.object(cli.os, "kill", side_effect=fake_pid_kill)
+        self._fake_pid_kill_patch.start()
+        self.addCleanup(self._fake_pid_kill_patch.stop)
+
     def test_print_result_rejects_nonfinite_json_values(self) -> None:
         for value in (float("nan"), float("inf"), float("-inf")):
             with self.subTest(value=value), redirect_stdout(io.StringIO()):

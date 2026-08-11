@@ -2458,6 +2458,12 @@ def transcribe_with_openai_whisper(
                 )
                 if final_stat is None or not _same_regular_file_identity(output_stat, final_stat):
                     raise TranscriptionError("transcript output changed before return")
+                final_target = _capture_expected_target(
+                    text_path,
+                    field_name="transcript output",
+                )
+                if not _same_expected_target_evidence(output_target, final_target):
+                    raise TranscriptionError("transcript output changed before return")
                 return _trusted_transcript_text(text, text_path, final_stat)
             primary_error: BaseException | None = None
             output_target = generated_target

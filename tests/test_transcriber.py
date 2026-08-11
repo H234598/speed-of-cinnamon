@@ -2877,11 +2877,13 @@ class TranscriberTest(unittest.TestCase):
         def replace_before_final_stat(path: Path, *, field_name: str) -> os.stat_result | None:
             nonlocal replaced
             if path == text and field_name == "transcript output" and not replaced:
+                original_stat = real_regular_file_stat(path, field_name=field_name)
                 replaced = True
                 foreign = path.with_name("foreign.txt")
                 path.unlink()
                 foreign.write_text("foreign output\n", encoding="utf-8")
                 foreign.replace(path)
+                return original_stat
             return real_regular_file_stat(path, field_name=field_name)
 
         with tempfile.TemporaryDirectory() as tmp:
