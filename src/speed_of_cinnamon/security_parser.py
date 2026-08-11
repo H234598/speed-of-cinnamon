@@ -401,6 +401,19 @@ def _sub_with_normalized_projection(
     pattern: re.Pattern[str],
     replacement: str | Callable[[re.Match[str]], str | None],
 ) -> tuple[str, int]:
+    if text.isascii():
+        redactions = 0
+
+        def _replace_ascii(match: re.Match[str]) -> str:
+            nonlocal redactions
+            replacement_value = replacement(match) if callable(replacement) else replacement
+            if replacement_value is None:
+                return match.group(0)
+            redactions += 1
+            return replacement_value
+
+        return pattern.sub(_replace_ascii, text), redactions
+
     normalized_text, index_map = _normalize_for_matching(text)
     if not normalized_text:
         return text, 0

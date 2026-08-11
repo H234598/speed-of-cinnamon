@@ -84,7 +84,7 @@ class CommandChainTest(unittest.TestCase):
             split_command_chain("printf hello\x00world")
 
     def test_split_command_chain_rejects_escaped_null(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "invalid command command: contains invalid null byte"):
+        with self.assertRaisesRegex(CommandChainError, "invalid command command: contains control characters"):
             split_command_chain("printf hello\\\\x00world")
 
     def test_split_command_chain_rejects_control_characters(self) -> None:
@@ -1202,16 +1202,28 @@ class CommandChainTest(unittest.TestCase):
         with self.assertRaisesRegex(CommandChainError, "invalid null byte"):
             run_command_chain([("cmd",)], "hello\x00", label="post-process")
 
-    def test_run_command_chain_rejects_escaped_null_in_input(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "invalid null byte"):
-            run_command_chain([("cmd",)], "hello\\\\x00", label="post-process")
+    def test_run_command_chain_preserves_literal_null_escape_in_input(self) -> None:
+        value = r"hello \x00"
+        self.assertEqual(run_command_chain([("cat",)], value, label="post-process"), value)
+
+    def test_run_command_chain_preserves_literal_null_escapes_in_personalization_environment(self) -> None:
+        for value in (r"literal \x00 text", r"literal \u0000 text"):
+            with self.subTest(value=value):
+                result = run_command_chain(
+                    [("sh", "-c", 'printf "%s" "$SPEED_OF_CINNAMON_CONTEXT"')],
+                    "",
+                    label="post-process",
+                    personal_context=value,
+                    include_personalization_env=True,
+                )
+                self.assertEqual(result, value)
 
     def test_run_command_chain_rejects_null_bytes_in_command_segment(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command contains invalid null byte"):
             run_command_chain([("cmd\x00",)], "", label="post-process")
 
     def test_run_command_chain_rejects_escaped_null_in_command_segment(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "command contains invalid null byte"):
+        with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
             run_command_chain([("cmd\\\\x00",)], "", label="post-process")
 
     def test_run_command_chain_rejects_control_chars_in_command_segment(self) -> None:
@@ -1276,11 +1288,10 @@ class CommandChainTest(unittest.TestCase):
         with self.assertRaisesRegex(CommandChainError, "file must be a binary file handle"):
             _filesize(object())  # type: ignore[arg-type]
 
-    def test_read_file_head_rejects_escaped_null(self) -> None:
+    def test_read_file_head_preserves_literal_null_escape(self) -> None:
         with tempfile.TemporaryFile() as handle:
             handle.write("ok\\x00end".encode("utf-8"))
-            with self.assertRaisesRegex(CommandChainError, "contains invalid null byte"):
-                _read_file_head(handle, 10)
+            self.assertEqual(_read_file_head(handle, 10), r"ok\x00end")
 
 
 if __name__ == "__main__":

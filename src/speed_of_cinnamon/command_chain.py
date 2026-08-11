@@ -110,7 +110,7 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
                 raise CommandChainError("environment base must be a mapping")
             if _contains_escaped_null(key) or _contains_http_header_control_chars(key):
                 raise CommandChainError("environment key contains invalid control character")
-            if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
+            if _contains_environment_control_chars(value):
                 raise CommandChainError("environment value contains invalid control character")
             if _is_unsafe_env_var(key):
                 raise CommandChainError(f"environment key is not allowed: {key}")
@@ -605,8 +605,7 @@ def _command_path(command: str) -> str:
 def _contains_escaped_null(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise CommandChainError("value must be text")
-    lowered = (value or "").lower()
-    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+    return "\x00" in value
 
 
 def _contains_http_header_control_chars(value: str) -> bool:
@@ -620,6 +619,15 @@ def _contains_http_header_control_chars(value: str) -> bool:
         if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
+
+
+def _contains_environment_control_chars(value: str) -> bool:
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise CommandChainError("value must be text")
+    return any(
+        (codepoint := ord(char)) < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F
+        for char in value
+    )
 
 
 def _contains_command_control_chars(value: str) -> bool:
