@@ -1432,6 +1432,8 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('unsquashfs -cat "${snap_snapshot}" meta/snap.yaml > "${snap_yaml}"', verify_snap)
         self.assertIn('unsquashfs -cat "${snap_snapshot}" bin/speed-of-cinnamon > "${snap_backend}"', verify_snap)
         self.assertIn("src/speed_of_cinnamon/cli.py", verify_snap)
+        self.assertIn("speed_of_cinnamon[.]cli", verify_snap)
+        self.assertIn("snap launcher does not target speed_of_cinnamon.cli", verify_snap)
         self.assertIn("snap file must not be hardlinked", verify_snap)
         self.assertIn("contains_control_chars() {", verify_snap)
         self.assertIn("0x80 <= ord(char) <= 0x9F for char in value", verify_snap)

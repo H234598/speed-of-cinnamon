@@ -431,6 +431,11 @@ if fields.get("name") != "speed-of-cinnamon":
 if fields.get("version") != expected_version:
     raise SystemExit("snap metadata version does not match snap filename")
 PY
-grep -Fq 'src/speed_of_cinnamon/cli.py' "${snap_backend}"
+if ! grep -Fq 'src/speed_of_cinnamon/cli.py' "${snap_backend}" \
+  && ! grep -Eq 'exec[[:space:]].*-m[[:space:]]+speed_of_cinnamon[.]cli([[:space:]]|$)' "${snap_backend}"; then
+  printf '%s\n' 'snap launcher does not target speed_of_cinnamon.cli' >&2
+  cat "${snap_backend}" >&2
+  exit 1
+fi
 
 printf 'Verified snap package: %s (%s bytes)\n' "${absolute}" "${size}"
