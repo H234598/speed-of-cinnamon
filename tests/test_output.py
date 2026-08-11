@@ -3422,7 +3422,7 @@ class OutputTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
-            mock.patch("speed_of_cinnamon.output._read_text_clipboard", return_value=None),
+            mock.patch("speed_of_cinnamon.output._read_text_clipboard_snapshot", return_value=(True, "previous")),
             mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=True),
             mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
             mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,

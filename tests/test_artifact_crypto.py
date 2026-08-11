@@ -2703,19 +2703,19 @@ class ArtifactCryptoTest(unittest.TestCase):
     def test_v2_downgrade_and_nonce_tamper_are_rejected(self) -> None:
         with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):
             encrypted, _mode = artifact_crypto.encrypt_bytes(b"payload", "passphrase", kind="transcript")
-        envelope = json.loads(encrypted.decode("utf-8"))
+            envelope = json.loads(encrypted.decode("utf-8"))
 
-        downgraded = dict(envelope)
-        downgraded["version"] = 1
-        payload = (json.dumps(downgraded, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "authentication failed"):
-            artifact_crypto.decrypt_bytes(payload, kind="transcript")
+            downgraded = dict(envelope)
+            downgraded["version"] = 1
+            payload = (json.dumps(downgraded, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "authentication failed"):
+                artifact_crypto.decrypt_bytes(payload, kind="transcript")
 
-        tampered = dict(envelope)
-        tampered["nonce"] = artifact_crypto._b64encode(b"x" * artifact_crypto.NONCE_SIZE_BYTES)
-        payload = (json.dumps(tampered, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "authentication failed"):
-            artifact_crypto.decrypt_bytes(payload, kind="transcript")
+            tampered = dict(envelope)
+            tampered["nonce"] = artifact_crypto._b64encode(b"x" * artifact_crypto.NONCE_SIZE_BYTES)
+            payload = (json.dumps(tampered, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "authentication failed"):
+                artifact_crypto.decrypt_bytes(payload, kind="transcript")
 
     def test_unknown_numeric_envelope_version_is_rejected(self) -> None:
         with mock.patch.dict(os.environ, {artifact_crypto.PASSPHRASE_ENV: STRONG_PASSPHRASE}, clear=False):

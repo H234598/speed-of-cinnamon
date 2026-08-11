@@ -2876,7 +2876,7 @@ class TranscriberTest(unittest.TestCase):
 
         def replace_before_final_stat(path: Path, *, field_name: str) -> os.stat_result | None:
             nonlocal replaced
-            if path == text and not replaced:
+            if path == text and field_name == "transcript output" and not replaced:
                 replaced = True
                 foreign = path.with_name("foreign.txt")
                 path.unlink()
@@ -7169,6 +7169,7 @@ class TranscriberTest(unittest.TestCase):
                     return_value=str(default_model),
                 ),
                 mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+                mock.patch("speed_of_cinnamon.transcriber._require_faster_whisper_available"),
             ):
                 result = transcribe(
                     audio,
@@ -7723,6 +7724,8 @@ class TranscriberTest(unittest.TestCase):
                             return_value=str(default_model),
                         ),
                         mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+                        mock.patch("speed_of_cinnamon.transcriber._require_faster_whisper_available"),
+                        mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value="whisper-cli"),
                         mock.patch(f"speed_of_cinnamon.transcriber.{helper}", return_value="ok") as mocked_helper,
                     ):
                         self.assertEqual(
