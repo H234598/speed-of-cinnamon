@@ -139,7 +139,14 @@ def _terminate_bounded_process(
     process_tree: dict[int, str] | None = None,
 ) -> bool:
     pid = getattr(proc, "pid", None)
-    if not _output_process_identity_is_current(proc):
+    root_identity_current = _output_process_identity_is_current(proc)
+    root_identity_changed_after_exit = (
+        not root_identity_current
+        and process_tree is not None
+        and isinstance(getattr(proc, "returncode", None), int)
+        and not isinstance(getattr(proc, "returncode", None), bool)
+    )
+    if not root_identity_current and not root_identity_changed_after_exit:
         return False
     tree_cleanup_confirmed = True
     process_wait_confirmed = False
@@ -147,9 +154,10 @@ def _terminate_bounded_process(
         process_tree = _process_tree_descendant_identities(pid)
     if process_tree is not None:
         tree_cleanup_confirmed = _kill_output_process_tree(process_tree)
-    if not _output_process_identity_is_current(proc):
+    if not root_identity_changed_after_exit and not _output_process_identity_is_current(proc):
         return False
-    root_reaped = _output_process_is_reaped(proc)
+    # Root identity changed after reaping: never signal the reused PID/group.
+    root_reaped = root_identity_changed_after_exit or _output_process_is_reaped(proc)
     try:
         if root_reaped or _output_process_is_reaped(proc):
             if process_tree is None:
@@ -161,8 +169,12 @@ def _terminate_bounded_process(
     except ProcessLookupError:
         pass
     except OSError:
-        with suppress(OSError):
+        try:
+            if not _output_process_identity_is_current(proc):
+                return False
             proc.kill()
+        except BaseException:
+            return False
     try:
         proc.wait(timeout=1)
     except (OSError, subprocess.TimeoutExpired):

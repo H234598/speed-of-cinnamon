@@ -2541,12 +2541,25 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertEqual(victim.read_text(encoding="utf-8"), "victim secret")
             self.assertEqual(path.read_text(encoding="utf-8"), "short\n")
 
-    def test_secret_tool_stop_kills_owned_live_process_when_identity_is_unknown(self) -> None:
-        process = mock.Mock()
-        process.pid = 1234
-        process.returncode = None
-        process.poll.return_value = None
-        process._soc_process_identity = ""
+    def test_secret_tool_stop_fails_closed_when_identity_and_group_are_unknown(self) -> None:
+        class UnknownPopen:
+            __module__ = "subprocess"
+
+            def __init__(self) -> None:
+                self.pid = 1234
+                self.returncode = None
+                self.killed = False
+
+            def poll(self) -> None:
+                return None
+
+            def kill(self) -> None:
+                self.killed = True
+
+            def wait(self, timeout: int | None = None) -> None:
+                return None
+
+        process = UnknownPopen()
         with (
             mock.patch("speed_of_cinnamon.artifact_crypto._process_tree_descendant_identities") as tree,
             mock.patch.object(artifact_crypto.os, "getpgid", side_effect=ProcessLookupError),
@@ -2554,9 +2567,36 @@ class ArtifactCryptoTest(unittest.TestCase):
         ):
             artifact_crypto._stop_secret_tool_process(process)
 
-        process.kill.assert_called_once_with()
-        process.wait.assert_called_once()
+        self.assertFalse(process.killed)
         tree.assert_not_called()
+        killpg.assert_not_called()
+
+    def test_secret_tool_unknown_real_process_never_kills_confirmed_group(self) -> None:
+        class UnknownPopen:
+            __module__ = "subprocess"
+
+            def __init__(self) -> None:
+                self.pid = 1234
+                self.returncode = None
+                self.killed = False
+
+            def poll(self) -> None:
+                return None
+
+            def kill(self) -> None:
+                self.killed = True
+
+            def wait(self, timeout: int | None = None) -> None:
+                return None
+
+        process = UnknownPopen()
+        with (
+            mock.patch.object(artifact_crypto.os, "getpgid", return_value=1234),
+            mock.patch.object(artifact_crypto.os, "killpg") as killpg,
+        ):
+            artifact_crypto._stop_secret_tool_process(process)
+
+        self.assertFalse(process.killed)
         killpg.assert_not_called()
 
     def test_passphrase_temp_creation_requests_cloexec(self) -> None:
@@ -2741,20 +2781,71 @@ class ArtifactCryptoTest(unittest.TestCase):
         process.kill.assert_not_called()
         process.wait.assert_called_once()
 
-    def test_secret_tool_unknown_identity_falls_back_to_leader_when_group_unconfirmed(self) -> None:
-        process = mock.Mock()
-        process.pid = 1234
-        process.returncode = None
-        process.poll.return_value = None
-        process._soc_process_identity = ""
+    def test_secret_tool_unknown_identity_fails_closed_when_group_unconfirmed(self) -> None:
+        class UnknownPopen:
+            __module__ = "subprocess"
+
+            def __init__(self) -> None:
+                self.pid = 1234
+                self.returncode = None
+                self.killed = False
+
+            def poll(self) -> None:
+                return None
+
+            def kill(self) -> None:
+                self.killed = True
+
+            def wait(self, timeout: int | None = None) -> None:
+                return None
+
+        process = UnknownPopen()
         with (
             mock.patch.object(artifact_crypto.os, "getpgid", side_effect=OSError("permission denied")),
             mock.patch.object(artifact_crypto.os, "killpg") as killpg,
         ):
             artifact_crypto._stop_secret_tool_process(process)
         killpg.assert_not_called()
-        process.kill.assert_called_once_with()
-        process.wait.assert_called_once()
+        self.assertFalse(process.killed)
+
+    def test_secret_tool_stop_does_not_kill_reused_pid_after_group_failure(self) -> None:
+        class OwnedPopen:
+            __module__ = "subprocess"
+
+            def __init__(self) -> None:
+                self.pid = 1234
+                self.returncode = None
+                self._soc_process_identity = "owned-process"
+                self.killed = False
+
+            def poll(self) -> None:
+                return None
+
+            def kill(self) -> None:
+                self.killed = True
+
+            def wait(self, timeout: int | None = None) -> None:
+                return None
+
+        process = OwnedPopen()
+        with (
+            mock.patch(
+                "speed_of_cinnamon.artifact_crypto._output_process_identity_is_current",
+                side_effect=[True, True, True, False],
+            ),
+            mock.patch(
+                "speed_of_cinnamon.artifact_crypto._process_tree_descendant_identities",
+                return_value={},
+            ),
+            mock.patch(
+                "speed_of_cinnamon.artifact_crypto._secret_tool_same_session_process_group_ids",
+                return_value=set(),
+            ),
+            mock.patch.object(artifact_crypto.os, "killpg", side_effect=OSError("permission denied")),
+        ):
+            artifact_crypto._stop_secret_tool_process(process)
+
+        self.assertFalse(process.killed)
 
     def test_history_error_boundary_is_chain_free(self) -> None:
         secret = "/srv/private/passphrase-secret"

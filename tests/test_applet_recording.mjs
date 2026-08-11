@@ -365,6 +365,48 @@ test("clipboard-paste falls back to clipboard when menu close fails", () => {
   }]);
 });
 
+test("synchronous text insertion failure releases fingerprint reservation", () => {
+  const clock = { value: 0 };
+  const finishAppletTextInsert = loadAppletMethod(
+    "_finishAppletTextInsert",
+    "_ensureAutoRelistenPendingForDonePayload",
+    clock
+  );
+  const forgottenFingerprints = [];
+  const applet = {
+    textInsertToken: null,
+    autoInsertPendingFingerprint: "",
+    autoRelistenPending: true,
+    autoRelistenPendingToken: "relisten",
+    autoRelistenPendingLanguage: "en",
+    autoRelistenManualStopRequested: false,
+    autoInsertConflictToken: null,
+    lastTranscript: "",
+    _isEmptyTranscriptText: () => false,
+    _autoInsertFingerprint: () => "fingerprint",
+    _ensureAutoRelistenPendingForDonePayload() {},
+    _reserveAutoInsertFingerprint: () => true,
+    _forgetAutoInsertFingerprint(fingerprint) {
+      forgottenFingerprints.push(fingerprint);
+      return true;
+    },
+    _insertTranscriptText: () => false,
+    _setStatus() {},
+    _setStatusPreservingRecording() {},
+    _finishPendingRelisten: () => false,
+    _payloadMessage: (_payload, fallback) => fallback,
+  };
+
+  finishAppletTextInsert.call(applet, { status: "done", transcript: "hello" });
+
+  assert.deepEqual(forgottenFingerprints, ["fingerprint"]);
+  assert.equal(applet.autoInsertPendingFingerprint, "");
+  assert.equal(applet.autoRelistenPending, false);
+  assert.equal(applet.autoRelistenPendingToken, "");
+  assert.equal(applet.autoRelistenPendingLanguage, "");
+  assert.equal(applet.autoRelistenManualStopRequested, true);
+});
+
 const backgroundCleanupGroups = [
   "status",
   "history-refresh",

@@ -291,6 +291,7 @@ SILENCE_DETECT_NOISE = "-62dB"
 SILENCE_DETECT_DURATION_SECONDS = 0.02
 SILENCE_TRIM_NOISE = SILENCE_DETECT_NOISE
 SILENCE_TRIM_DURATION_SECONDS = SILENCE_DETECT_DURATION_SECONDS
+SILENCE_TRIM_PADDING_SECONDS = 0.05
 MAX_SILENCE_TRIM_NOISE_CHARS = 32
 SILENCE_DETECT_TIMEOUT_SECONDS = 60
 SILENCE_SKIP_RATIO = 0.999
@@ -460,9 +461,14 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
         pass
     except (OSError, ValueError):
         try:
-            process.kill()
-        except (OSError, ValueError):
-            return False
+            identity_current = _recording_process_identity_is_current(process)
+        except BaseException:
+            identity_current = False
+        if identity_current:
+            try:
+                process.kill()
+            except (OSError, ValueError):
+                return False
         return False
     if session_group_ids is not None:
         for process_group_id in sorted(session_group_ids):
@@ -504,7 +510,9 @@ def _reap_unidentified_recorder_process(process: subprocess.Popen[bytes]) -> Non
             except ProcessLookupError:
                 pass
             except (OSError, ValueError):
-                process.kill()
+                # Identity is unavailable here: never fall back to a raw PID
+                # kill, which could target a reused process ID.
+                raise RecorderError("ffmpeg process cleanup failed")
         process.communicate(timeout=1)
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         raise RecorderError("ffmpeg process cleanup failed") from exc
@@ -1366,8 +1374,9 @@ def trim_recording_silence(
         "-af",
         (
             f"silenceremove=start_periods=1:start_duration={duration_seconds}:"
-            f"start_threshold={noise}:stop_periods=1:stop_duration={duration_seconds}:"
-            f"stop_threshold={noise}"
+            f"start_threshold={noise}:start_silence={SILENCE_TRIM_PADDING_SECONDS}:"
+            f"stop_periods=1:stop_duration={duration_seconds}:stop_threshold={noise}:"
+            f"stop_silence={SILENCE_TRIM_PADDING_SECONDS}"
         ),
         "-c:a",
         "flac",

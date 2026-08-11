@@ -184,6 +184,25 @@ class RecorderTest(unittest.TestCase):
         mocked_group_scan.assert_not_called()
         mocked_killpg.assert_not_called()
 
+    def test_recorder_process_cleanup_does_not_kill_reused_pid_after_group_failure(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = None
+        process._soc_process_identity = "owned-process"
+        with (
+            mock.patch(
+                "speed_of_cinnamon.recorder._recording_process_identity_is_current",
+                side_effect=[True, True, False],
+            ),
+            mock.patch("speed_of_cinnamon.recorder.process_group_has_live_processes", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder._same_session_process_group_ids", return_value=set()),
+            mock.patch("speed_of_cinnamon.recorder._process_tree_descendant_identities", return_value={}),
+            mock.patch("speed_of_cinnamon.recorder.os.killpg", side_effect=OSError("permission denied")),
+        ):
+            self.assertFalse(recorder_module._terminate_recorder_process_group(process))
+
+        process.kill.assert_not_called()
+
     def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:
         process = subprocess.Popen(
             ["/bin/sh", "-c", "sleep 30 & child=$!; echo $child; exit 0"],
@@ -265,7 +284,7 @@ class RecorderTest(unittest.TestCase):
                 " time.sleep(30)\n"
                 "else:\n"
                 " print(child, flush=True)\n"
-                " time.sleep(0.1)\n",
+                " time.sleep(2)\n",
             ],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -425,6 +444,39 @@ class RecorderTest(unittest.TestCase):
 
         self.assertIsNotNone(process_holder.get("process"))
         mocked_killpg.assert_called_once_with(12345, recorder_module.signal.SIGKILL)
+
+    def test_run_ffmpeg_identity_cleanup_does_not_kill_reused_pid_after_group_failure(self) -> None:
+        process_holder: dict[str, object] = {}
+
+        class FakePopen:
+            __module__ = "subprocess"
+
+            def __init__(self, command: list[str], **_kwargs: object) -> None:
+                self.pid = 12345
+                self.returncode: int | None = None
+                self.stdout = None
+                self.stderr = None
+                process_holder["process"] = self
+
+            def poll(self) -> int | None:
+                return self.returncode
+
+            def communicate(self, timeout: int | None = None) -> tuple[bytes, bytes]:
+                self.returncode = -9
+                return b"", b""
+
+            def kill(self) -> None:
+                raise AssertionError("raw PID kill must not be used without identity")
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", side_effect=FakePopen),
+            mock.patch.object(recorder_module, "_recording_process_identity_for_pid", return_value=None),
+            mock.patch.object(recorder_module.os, "killpg", side_effect=OSError("permission denied")),
+        ):
+            with self.assertRaisesRegex(RecorderError, "process identity is unavailable"):
+                recorder_module._run_ffmpeg_bounded(["/usr/bin/ffmpeg"], timeout=1, pass_fds=())
+
+        self.assertIsNotNone(process_holder.get("process"))
 
     def test_run_ffmpeg_cleans_descendant_when_leader_exits_with_pipe_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -913,8 +965,9 @@ class RecorderTest(unittest.TestCase):
         self.assertIn("flac", argv)
         expected = (
             f"silenceremove=start_periods=1:start_duration={SILENCE_DETECT_DURATION_SECONDS}:"
-            f"start_threshold={SILENCE_DETECT_NOISE}:stop_periods=1:"
-            f"stop_duration={SILENCE_DETECT_DURATION_SECONDS}:stop_threshold={SILENCE_DETECT_NOISE}"
+            f"start_threshold={SILENCE_DETECT_NOISE}:start_silence={recorder_module.SILENCE_TRIM_PADDING_SECONDS}:"
+            f"stop_periods=1:stop_duration={SILENCE_DETECT_DURATION_SECONDS}:"
+            f"stop_threshold={SILENCE_DETECT_NOISE}:stop_silence={recorder_module.SILENCE_TRIM_PADDING_SECONDS}"
         )
         self.assertIn(
             expected,

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import fcntl
+import errno
 import json
 import math
 import signal
@@ -2117,7 +2118,7 @@ def _process_pipe_holder_identities(process: subprocess.Popen[bytes]) -> dict[in
 def _output_process_identity_is_current(process: subprocess.Popen[bytes]) -> bool:
     expected_identity = vars(process).get("_soc_process_identity")
     if expected_identity is None:
-        return True
+        return type(process).__module__ != "subprocess"
     if not isinstance(expected_identity, str) or not expected_identity:
         return False
     current_identity = _clipboard_lock_identity_for_pid(process.pid)
@@ -2154,6 +2155,46 @@ def _process_tree_has_live_processes(process_identities: dict[int, str]) -> bool
     return False
 
 
+def _kill_output_process_with_pidfd(process_id: int, expected_start_time: str) -> bool | None:
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+    if not callable(pidfd_open) or not callable(pidfd_send_signal):
+        return None
+    try:
+        pidfd = pidfd_open(process_id, 0)
+    except OSError as exc:
+        if exc.errno in {errno.EINVAL, errno.ENOSYS, errno.ENOTSUP, errno.EOPNOTSUPP, errno.EPERM}:
+            return None
+        return False
+    except (AttributeError, NotImplementedError, TypeError):
+        return None
+    if not isinstance(pidfd, int) or isinstance(pidfd, bool) or pidfd < 0:
+        return False
+    try:
+        try:
+            raw = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii").strip()
+            close = raw.rindex(")")
+            current_start_time = raw[close + 2 :].split()[19]
+        except FileNotFoundError:
+            return True
+        except (OSError, UnicodeDecodeError, IndexError):
+            return False
+        if current_start_time != expected_start_time:
+            return True
+        try:
+            pidfd_send_signal(pidfd, signal.SIGKILL, None, 0)
+        except ProcessLookupError:
+            return True
+        except (AttributeError, NotImplementedError, TypeError, OSError):
+            return False
+        return True
+    finally:
+        try:
+            os.close(pidfd)
+        except OSError:
+            pass
+
+
 def _kill_output_process_tree(process_identities: dict[int, str]) -> bool:
     cleanup_incomplete = False
     for process_id, expected_start_time in sorted(process_identities.items()):
@@ -2173,6 +2214,12 @@ def _kill_output_process_tree(process_identities: dict[int, str]) -> bool:
             cleanup_incomplete = True
             continue
         if start_time != expected_start_time or process_state in {"Z", "X", "x"}:
+            continue
+        pidfd_result = _kill_output_process_with_pidfd(process_id, expected_start_time)
+        if pidfd_result is True:
+            continue
+        if pidfd_result is False:
+            cleanup_incomplete = True
             continue
         try:
             os.kill(process_id, signal.SIGKILL)
@@ -2295,9 +2342,14 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
         pass
     except (OSError, ValueError):
         try:
-            process.kill()
-        except (OSError, ValueError):
-            return False
+            identity_current = _output_process_identity_is_current(process)
+        except BaseException:
+            identity_current = False
+        if identity_current:
+            try:
+                process.kill()
+            except (OSError, ValueError):
+                return False
         return False
     for process_group_id in sorted(session_group_ids):
         if process_group_id == process.pid:

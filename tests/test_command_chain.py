@@ -584,7 +584,7 @@ class CommandChainTest(unittest.TestCase):
             "import os, time\n"
             "child = os.fork()\n"
             "if child == 0:\n"
-            "    time.sleep(1.5)\n"
+            "    time.sleep(3)\n"
             "else:\n"
             "    os._exit(0)\n"
         )
@@ -600,7 +600,7 @@ class CommandChainTest(unittest.TestCase):
         self.assertEqual(returncode, 0)
         self.assertEqual(stdout, b"")
         self.assertEqual(stderr, b"")
-        self.assertLess(time.monotonic() - started, 1.0)
+        self.assertLess(time.monotonic() - started, 2.0)
 
     def test_run_process_bounded_output_cleans_pipe_holder_after_root_exit_race(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -796,6 +796,95 @@ class CommandChainTest(unittest.TestCase):
             self.assertFalse(command_chain_module._terminate_bounded_process(proc))
 
         mocked_killpg.assert_not_called()
+        proc.kill.assert_not_called()
+
+    def test_terminate_bounded_process_fails_closed_when_real_identity_is_missing(self) -> None:
+        class UnknownPopen:
+            __module__ = "subprocess"
+
+            def __init__(self) -> None:
+                self.pid = 1234
+                self.returncode = None
+
+            def wait(self, timeout: int | None = None) -> None:
+                raise AssertionError("unverified process must not be waited after cleanup abort")
+
+            def kill(self) -> None:
+                raise AssertionError("unverified process must not be killed")
+
+        proc = UnknownPopen()
+        with mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg:
+            self.assertFalse(command_chain_module._terminate_bounded_process(proc))
+
+        mocked_killpg.assert_not_called()
+
+    def test_terminate_bounded_process_cleans_captured_tree_after_root_exit_identity_change(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 1234
+        proc.returncode = 0
+
+        with (
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_identity_is_current",
+                return_value=False,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._kill_output_process_tree",
+                return_value=True,
+            ) as mocked_tree_kill,
+            mock.patch(
+                "speed_of_cinnamon.command_chain._wait_for_output_process_tree_stop",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_is_reaped",
+                return_value=False,
+            ),
+            mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg,
+        ):
+            self.assertTrue(
+                command_chain_module._terminate_bounded_process(
+                    proc,
+                    process_tree={5678: "child-identity"},
+                )
+            )
+
+        mocked_tree_kill.assert_called_once_with({5678: "child-identity"})
+        mocked_killpg.assert_not_called()
+        proc.kill.assert_not_called()
+        proc.wait.assert_called_once_with(timeout=1)
+
+    def test_terminate_bounded_process_does_not_kill_reused_pid_after_group_failure(self) -> None:
+        proc = mock.Mock()
+        proc.pid = 1234
+        proc.returncode = None
+        proc._soc_process_identity = "owned-process"
+        with (
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_identity_is_current",
+                side_effect=[True, True, False],
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_is_reaped",
+                return_value=False,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._kill_output_process_tree",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._wait_for_output_process_tree_stop",
+                return_value=True,
+            ),
+            mock.patch("speed_of_cinnamon.command_chain.os.killpg", side_effect=OSError("permission denied")),
+        ):
+            self.assertFalse(
+                command_chain_module._terminate_bounded_process(
+                    proc,
+                    process_tree={5678: "child-identity"},
+                )
+            )
+
         proc.kill.assert_not_called()
 
     def test_terminate_bounded_process_confirms_root_without_process_tree(self) -> None:

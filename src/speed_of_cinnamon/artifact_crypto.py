@@ -1662,6 +1662,7 @@ def _wait_for_secret_tool_process_groups_stop(process_group_id: int, timeout_sec
 def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
     process_identity = getattr(proc, "_soc_process_identity", None)
     identity_known = isinstance(process_identity, str) and bool(process_identity)
+    is_real_subprocess = type(proc).__module__ == "subprocess"
     if identity_known and not _output_process_identity_is_current(proc):
         return
     poll = getattr(proc, "poll", None)
@@ -1685,6 +1686,10 @@ def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             raise ValueError("invalid secret-tool process pid")
         if not identity_known:
+            if is_real_subprocess:
+                # A real child without an identity cannot be distinguished
+                # from a reused PID; never signal its group by PID alone.
+                return
             getpgid = getattr(os, "getpgid", None)
             try:
                 process_group_id = getpgid(pid) if callable(getpgid) else None
@@ -1696,13 +1701,18 @@ def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
                 except ProcessLookupError:
                     pass
                 except OSError:
+                    # Identity is unavailable: never fall back to a raw PID
+                    # kill, which could target a reused process ID.
+                    if is_real_subprocess:
+                        return
                     with suppress(BaseException):
                         proc.kill()
             else:
-                try:
+                # Unknown identity makes direct PID cleanup unsafe.
+                if is_real_subprocess:
+                    return
+                with suppress(BaseException):
                     proc.kill()
-                except ProcessLookupError:
-                    pass
             with suppress(BaseException):
                 proc.wait(timeout=1)
             return
@@ -1730,7 +1740,10 @@ def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
                     continue
     except BaseException:
         with suppress(BaseException):
-            proc.kill()
+            if (identity_known and _output_process_identity_is_current(proc)) or (
+                not identity_known and not is_real_subprocess
+            ):
+                proc.kill()
     with suppress(BaseException):
         if process_tree is not None:
             _wait_for_output_process_tree_stop(process_tree)

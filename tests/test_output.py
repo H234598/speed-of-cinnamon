@@ -776,6 +776,55 @@ class OutputTest(unittest.TestCase):
         mocked_group_scan.assert_not_called()
         mocked_killpg.assert_not_called()
 
+    def test_process_cleanup_does_not_kill_reused_pid_after_group_failure(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.returncode = None
+        process._soc_process_identity = "owned-process"
+        with (
+            mock.patch(
+                "speed_of_cinnamon.output._output_process_identity_is_current",
+                side_effect=[True, True, False],
+            ),
+            mock.patch("speed_of_cinnamon.output._process_group_has_live_descendants", return_value=True),
+            mock.patch("speed_of_cinnamon.output._same_session_process_group_ids", return_value=set()),
+            mock.patch("speed_of_cinnamon.output._process_tree_descendant_identities", return_value={}),
+            mock.patch("speed_of_cinnamon.output.os.killpg", side_effect=OSError("permission denied")),
+        ):
+            self.assertFalse(output_module._terminate_output_process_group(process))
+
+        process.kill.assert_not_called()
+
+    def test_real_process_without_identity_fails_closed(self) -> None:
+        class UnknownPopen:
+            __module__ = "subprocess"
+
+            def __init__(self) -> None:
+                self.pid = 1234
+
+        process = UnknownPopen()
+        with mock.patch("speed_of_cinnamon.output._clipboard_lock_identity_for_pid", return_value=None) as mocked_identity:
+            self.assertFalse(output_module._output_process_identity_is_current(process))
+
+        mocked_identity.assert_not_called()
+
+    def test_process_tree_uses_pidfd_after_identity_check(self) -> None:
+        stat_fields = " ".join(["S", *(["0"] * 18), "owned-start"])
+        with (
+            mock.patch("speed_of_cinnamon.output.Path") as path_factory,
+            mock.patch("speed_of_cinnamon.output.os.pidfd_open", return_value=42) as mocked_open,
+            mock.patch("speed_of_cinnamon.output.signal.pidfd_send_signal") as mocked_send,
+            mock.patch("speed_of_cinnamon.output.os.close") as mocked_close,
+            mock.patch("speed_of_cinnamon.output.os.kill") as mocked_kill,
+        ):
+            path_factory.return_value.read_text.return_value = f"123 (worker) {stat_fields}"
+            self.assertTrue(output_module._kill_output_process_tree({123: "owned-start"}))
+
+        mocked_open.assert_called_once_with(123, 0)
+        mocked_send.assert_called_once_with(42, output_module.signal.SIGKILL, None, 0)
+        mocked_close.assert_called_once_with(42)
+        mocked_kill.assert_not_called()
+
     def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:
         process = subprocess.Popen(
             ["/bin/sh", "-c", "sleep 30 & child=$!; echo $child; exit 0"],
@@ -784,6 +833,8 @@ class OutputTest(unittest.TestCase):
             start_new_session=True,
         )
         child_pid = int(process.stdout.readline())
+        process._soc_process_identity = output_module._clipboard_lock_identity_for_pid(process.pid)
+        self.assertIsNotNone(process._soc_process_identity)
         process.wait()
 
         def child_is_live() -> bool:
@@ -825,6 +876,8 @@ class OutputTest(unittest.TestCase):
             start_new_session=True,
         )
         child_pid = int(process.stdout.readline())
+        process._soc_process_identity = output_module._clipboard_lock_identity_for_pid(process.pid)
+        self.assertIsNotNone(process._soc_process_identity)
         process.wait()
 
         def child_is_live() -> bool:
@@ -858,6 +911,8 @@ class OutputTest(unittest.TestCase):
             start_new_session=True,
         )
         child_pid = int(process.stdout.readline())
+        process._soc_process_identity = output_module._clipboard_lock_identity_for_pid(process.pid)
+        self.assertIsNotNone(process._soc_process_identity)
 
         def child_is_live() -> bool:
             try:
@@ -900,6 +955,8 @@ class OutputTest(unittest.TestCase):
             start_new_session=True,
         )
         child_pid = int(process.stdout.readline())
+        process._soc_process_identity = output_module._clipboard_lock_identity_for_pid(process.pid)
+        self.assertIsNotNone(process._soc_process_identity)
 
         def child_is_live() -> bool:
             try:
