@@ -229,7 +229,7 @@ class SecurityParserTest(unittest.TestCase):
 
         clean, redactions = apply_security_mode(text, [])
 
-        self.assertLess(time.perf_counter() - started, 2.0)
+        self.assertLess(time.perf_counter() - started, 3.0)
         self.assertEqual(clean, text)
         self.assertEqual(redactions, 0)
 

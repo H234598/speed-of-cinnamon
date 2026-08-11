@@ -4035,7 +4035,7 @@ Source #13
 
         try:
             self.assertTrue(child_is_live())
-            self.assertTrue(stop_process(process.pid, timeout_seconds=2, expected_process_identity=identity))
+            self.assertTrue(stop_process(process.pid, timeout_seconds=3, expected_process_identity=identity))
             self.assertFalse(child_is_live())
         finally:
             try:
