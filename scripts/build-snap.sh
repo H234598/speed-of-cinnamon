@@ -494,6 +494,16 @@ if ! (
   cd "${snap_workspace}"
   umask 022
   snapcraft prime --destructive-mode
+  snap_stage_usr="${snap_workspace}/stage/usr"
+  snap_prime_usr="${snap_workspace}/prime/usr"
+  if [[ ! -d "${snap_stage_usr}" || -L "${snap_stage_usr}" ]]; then
+    printf 'snapcraft stage is missing a safe runtime tree: %s\n' "${snap_stage_usr}" >&2
+    exit 1
+  fi
+  if ! "${safe_fs_cmd[@]}" install-tree build-snap "${snap_stage_usr}" "${snap_prime_usr}" "snap runtime tree"; then
+    printf 'failed to promote Snap runtime tree into prime payload.\n' >&2
+    exit 1
+  fi
   snapcraft pack --destructive-mode prime
 ); then
   printf 'snapcraft build failed.\n' >&2
