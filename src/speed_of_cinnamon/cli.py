@@ -1187,6 +1187,7 @@ def _openai_compatible_transcribe_kwargs(args: argparse.Namespace, backend: str)
         "openai_compatible_url": getattr(args, "openai_compatible_url", DEFAULT_OPENAI_COMPATIBLE_URL),
         "openai_compatible_api_key": _openai_compatible_api_key_from_args(args),
         "openai_compatible_flex_processing": getattr(args, "openai_compatible_flex_processing", True),
+        "openai_compatible_service_tier_fallback": True,
     }
 
 
@@ -1946,6 +1947,7 @@ def _process_transcript(
         args.openai_compatible_url,
         openai_compatible_api_key,
         getattr(args, "openai_compatible_flex_processing", True),
+        openai_compatible_service_tier_fallback=True,
     )
     if text.strip() and _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity"):
         text = soften_profanity_text(text)

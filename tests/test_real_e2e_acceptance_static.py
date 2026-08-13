@@ -13,6 +13,7 @@ class RealE2EAcceptanceStaticTest(unittest.TestCase):
         self.assertIn('i.autoRelisten=false', script)
         self.assertIn('run_case true', script)
         self.assertIn('run_case false', script)
+        self.assertIn('i&&i.status===\\"recording\\"', script)
         self.assertIn('i.status===\\"done\\"&&i.lastTranscript', script)
         self.assertNotIn('_recordingState', script)
 

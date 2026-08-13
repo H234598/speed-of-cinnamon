@@ -83,7 +83,16 @@ run_case() {
   local flex="$1"
   local state=""
   eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i.openaiCompatibleFlexProcessing=${flex}; i._toggleRecording(\"start\"); \"started\";" >/dev/null
-  sleep 1
+  for _ in $(seq 1 30); do
+    state="$(eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i&&i.status===\"recording\" ? \"recording\" : (i&&i.status||\"unknown\");")"
+    [[ "${state}" == *recording* ]] && break
+    [[ "${state}" == *error* ]] && break
+    sleep 1
+  done
+  if [[ "${state}" != *recording* ]]; then
+    printf 'real-e2e: recorder did not become ready for flex=%s (state: %s)\n' "${flex}" "${state}" >&2
+    return 1
+  fi
   pw-play --target "${sink_name}" "${tmp_root}/speech.wav"
   sleep 1
   eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i._toggleRecording(\"stop\"); \"stopped\";" >/dev/null

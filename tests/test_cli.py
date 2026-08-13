@@ -2968,6 +2968,7 @@ class CliTest(unittest.TestCase):
             openai_compatible_url=cli.DEFAULT_OPENAI_COMPATIBLE_URL,
             openai_compatible_api_key="",
             openai_compatible_flex_processing=True,
+            openai_compatible_service_tier_fallback=True,
         )
 
     @mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="polished")
@@ -3007,6 +3008,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcript"], "polished")
         self.assertEqual(mocked_transcribe.call_args.kwargs["openai_compatible_model"], "gpt-4o-transcribe")
         self.assertIs(mocked_transcribe.call_args.kwargs["openai_compatible_flex_processing"], True)
+        self.assertIs(mocked_transcribe.call_args.kwargs["openai_compatible_service_tier_fallback"], True)
         self.assertEqual(mocked_post_process.call_args.args[9], "gpt-4o-mini")
         self.assertEqual(mocked_post_process.call_args.args[11], "secret")
         self.assertIs(mocked_post_process.call_args.args[12], True)
@@ -3048,6 +3050,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(payload["transcript"], "polished")
         self.assertIs(mocked_transcribe.call_args.kwargs["openai_compatible_flex_processing"], False)
+        self.assertIs(mocked_transcribe.call_args.kwargs["openai_compatible_service_tier_fallback"], True)
         self.assertIs(mocked_post_process.call_args.args[12], False)
 
     @mock.patch("speed_of_cinnamon.cli.post_process_text", return_value="polished")
