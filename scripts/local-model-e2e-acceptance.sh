@@ -57,6 +57,7 @@ ffmpeg -nostdin -loglevel error -y -i "${tmp_root}/source-en.wav" -ac 1 -ar 1600
 "${backend}" models --json >"${models_json}"
 PYTHONPATH="${repo_dir}/src" python3 - "${models_json}" >"${cases_file}" <<'PY'
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -70,6 +71,10 @@ if payload.get("status") != "done" or not isinstance(models, list):
 
 catalog = {model.name: model for model in CATALOG}
 seen_backends = set()
+limit_per_backend = int(os.environ.get("SOC_LOCAL_MODEL_E2E_LIMIT_PER_BACKEND", "0"))
+if limit_per_backend < 0:
+    raise SystemExit("local-model-e2e: model limit must not be negative")
+selected_per_backend = {}
 for entry in models:
     if not isinstance(entry, dict) or entry.get("downloaded") is not True:
         continue
@@ -78,6 +83,8 @@ for entry in models:
     name = entry.get("name")
     languages = entry.get("languages")
     if backend not in {"whisper-cpp", "faster-whisper"}:
+        continue
+    if limit_per_backend and selected_per_backend.get(backend, 0) >= limit_per_backend:
         continue
     if (backend == "whisper-cpp") != (model_format == "ggml"):
         raise SystemExit("local-model-e2e: model backend and format disagree")
@@ -105,6 +112,7 @@ for entry in models:
     for language in sorted(normalized_languages or {"de", "en"}):
         print(f"{backend}\t{name}\t{path}\t{language}")
         seen_backends.add(backend)
+    selected_per_backend[backend] = selected_per_backend.get(backend, 0) + 1
 
 missing = {"whisper-cpp", "faster-whisper"} - seen_backends
 if missing:

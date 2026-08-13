@@ -1922,7 +1922,7 @@ class CiStaticTest(unittest.TestCase):
             makefile,
         )
         self.assertIn(
-            "release: release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check",
+            "release: release-validate-flags release-require-snap verify-real-e2e-attestation dist-check rpm rpm-check",
             makefile,
         )
         self.assertIn("release-validate-flags", makefile)
