@@ -1446,7 +1446,7 @@ def read_export(path: Path) -> dict[str, Any]:
         raise SettingsExportError("settings export is for a different app")
     version = payload.get("version")
     if isinstance(version, bool) or not isinstance(version, int) or version < 1 or version > EXPORT_VERSION:
-        raise SettingsExportError(f"unsupported settings export version: {version}")
+        raise SettingsExportError("unsupported settings export version")
     if version == EXPORT_VERSION and "alarms" not in payload:
         raise SettingsExportError("settings export alarms must be an object")
     raw_settings = payload.get("settings")

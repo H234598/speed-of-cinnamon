@@ -15,6 +15,10 @@ class BuildDistStaticTest(unittest.TestCase):
 
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', source)
         self.assertIn('python3 "${safe_fs}" install-tree build-dist "${source_path}" "${target_path}"', source)
+        self.assertIn("distribution_tree_excludes=", source)
+        self.assertIn("for tool in python3 tar sha256sum mktemp find grep git stat realpath;", source)
+        self.assertIn('--exclude-name __pycache__', source)
+        self.assertIn('"${distribution_tree_excludes[@]}"', source)
         self.assertIn('python3 "${safe_fs}" copy-file build-dist "${source_path}" "${target_path}" 0644', source)
         self.assertNotIn('cp -a "${repo_dir}/${path}" "${work_dir}/${package}/"', source)
 

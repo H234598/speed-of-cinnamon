@@ -71,12 +71,6 @@ TRANSCRIBER_OUTPUT_LOCK_NAME = ".speed-of-cinnamon-transcriber.lock"
 STAGED_AUDIO_PREFIX = ".sc-audio-"
 STAGED_AUDIO_CLEANUP_MIN_AGE_SECONDS = TRANSCRIBE_COMMAND_TIMEOUT_SECONDS * 2
 PLACEHOLDER_TRANSCRIPTS = {"[speaking in foreign language]"}
-OPENAI_TRANSCRIPTION_MODELS = {
-    "gpt-4o-transcribe",
-    "gpt-4o-mini-transcribe",
-    "gpt-4o-transcribe-diarize",
-    "whisper-1",
-}
 _SUPPORTED_TRANSCRIBER_BACKENDS = frozenset(
     {"auto", "command", "whisper", "whisper-cpp", "faster-whisper", "openai-compatible"}
 )
@@ -2933,7 +2927,11 @@ def _validate_openai_compatible_transcribe_options(
     if not isinstance(api_key, str) or isinstance(api_key, bool):
         raise TranscriptionError("OpenAI-compatible API key must be text")
     if not api_key.strip():
-        api_key = _coerce_environment_value("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY") or ""
+        api_key = (
+            _coerce_environment_value("OPENAI_COMPATIBLE_API_KEY")
+            or _coerce_environment_value("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY")
+            or ""
+        )
     if not isinstance(flex_processing, bool):
         raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
     if not isinstance(service_tier_fallback, bool):
@@ -2959,13 +2957,6 @@ def _validate_openai_compatible_transcribe_options(
         field_name="OpenAI-compatible API key",
         max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
     ).strip()
-    endpoint = _openai_compatible_endpoint(url, "/audio/transcriptions")
-    if _is_openai_api_endpoint(endpoint) and model not in OPENAI_TRANSCRIPTION_MODELS:
-        raise TranscriptionError(
-            "OpenAI transcription endpoint requires a speech-to-text model such as "
-            "gpt-4o-transcribe, gpt-4o-mini-transcribe, or whisper-1; configured model is "
-            f"{model}"
-        )
     return model, url, api_key, flex_processing, service_tier_fallback
 
 
@@ -3004,6 +2995,22 @@ def _openai_compatible_error_detail(raw: str) -> str:
             return " - ".join(parts) if parts else str(error)
         return str(error)
     return raw
+
+
+def _openai_compatible_error_category(raw: str) -> str:
+    """Return an allowlisted category from an API error without exposing its body."""
+    try:
+        payload = json.loads(raw or "", parse_constant=_reject_non_finite_json_number)
+    except (json.JSONDecodeError, RecursionError, ValueError, MemoryError):
+        return ""
+    if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
+        return ""
+    error = payload["error"]
+    error_type = str(error.get("type") or "").strip()
+    code = str(error.get("code") or "").strip()
+    if error_type == "insufficient_quota" or code == "organization_spend_limit_exceeded":
+        return "quota-exhausted"
+    return ""
 
 
 def _sanitize_local_command_error(message: str) -> str:
@@ -3267,12 +3274,6 @@ def transcribe_with_openai_compatible_api(
     )
     endpoint = _openai_compatible_endpoint(url, "/audio/transcriptions")
     is_openai_api = _is_openai_api_endpoint(endpoint)
-    if is_openai_api and model not in OPENAI_TRANSCRIPTION_MODELS:
-        raise TranscriptionError(
-            "OpenAI transcription endpoint requires a speech-to-text model such as "
-            "gpt-4o-transcribe, gpt-4o-mini-transcribe, or whisper-1; configured model is "
-            f"{model}"
-        )
     fields = {
         "model": model,
         "language": language,
@@ -3356,6 +3357,7 @@ def transcribe_with_openai_compatible_api(
                     _release_owned_closer(fallback_exc.close, response_close_errors)
                     if response_close_errors:
                         _safe_add_note(fallback_exc, "HTTP response cleanup failed")
+                fallback_category = _openai_compatible_error_category(raw_error)
                 fallback_detail = _sanitize_remote_error_detail(
                     _openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc)
                 )
@@ -3364,8 +3366,9 @@ def transcribe_with_openai_compatible_api(
                     if isinstance(fallback_exc.code, int) and not isinstance(fallback_exc.code, bool)
                     else "unknown"
                 )
+                fallback_marker = f"; {fallback_category}" if fallback_category else ""
                 pending_remote_error = TranscriptionError(
-                    f"OpenAI-compatible speech API failed ({fallback_code}): {fallback_detail}"
+                    f"OpenAI-compatible speech API failed ({fallback_code}{fallback_marker}): {fallback_detail}"
                 )
             except OSError as fallback_exc:
                 detail = _sanitize_remote_error_detail(fallback_exc)
@@ -3373,10 +3376,12 @@ def transcribe_with_openai_compatible_api(
                     f"OpenAI-compatible speech API is not reachable: {detail}"
                 )
         else:
+            category = _openai_compatible_error_category(raw_error)
             detail = _sanitize_remote_error_detail(raw_detail)
             status_code = exc.code if isinstance(exc.code, int) and not isinstance(exc.code, bool) else "unknown"
+            marker = f"; {category}" if category else ""
             pending_remote_error = TranscriptionError(
-                f"OpenAI-compatible speech API failed ({status_code}): {detail}"
+                f"OpenAI-compatible speech API failed ({status_code}{marker}): {detail}"
             )
     except OSError as exc:
         detail = _sanitize_remote_error_detail(exc)

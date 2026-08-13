@@ -84,6 +84,10 @@ class PersonalizationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "vocabulary is too large"):
             vocabulary_terms("x" * (MAX_VOCABULARY_CHARS + 1))
 
+    def test_vocabulary_rejects_too_many_terms(self) -> None:
+        with self.assertRaisesRegex(ValueError, "vocabulary has too many terms"):
+            vocabulary_terms(("x\n" * 4097).rstrip())
+
     def test_vocabulary_rejects_oversized_raw_input_before_normalization(self) -> None:
         with mock.patch("speed_of_cinnamon.personalization.MAX_RAW_PERSONALIZATION_INPUT_CHARS", 4):
             with self.assertRaisesRegex(ValueError, "vocabulary input is too large"):

@@ -129,6 +129,7 @@
         "artifact-encryption-help-keyring",
         "artifact-encryption-help-passphrase",
         "artifact-encryption-help-off",
+        "clipboard-backend",
         "auto-paste-window-title"
       ]
     },
@@ -226,7 +227,7 @@
   "show-panel-label": {
     "type": "switch",
     "description": "Show status text in the panel",
-    "default": true
+    "default": false
   },
   "show-transcript-text": {
     "type": "switch",
@@ -261,7 +262,7 @@
       "Turkish": "tr",
       "Ukrainian": "uk"
     },
-    "default": "en"
+    "default": "de"
   },
   "secondary-language": {
     "type": "combobox",
@@ -290,7 +291,7 @@
       "Turkish": "tr",
       "Ukrainian": "uk"
     },
-    "default": "de"
+    "default": "en"
   },
   "max-seconds": {
     "type": "spinbutton",
@@ -299,13 +300,13 @@
     "max": 3600,
     "step": 5,
     "units": "s",
-    "default": 30
+    "default": 60
   },
   "auto-transcribe-timeout": {
     "type": "switch",
     "description": "Transcribe automatically at the time limit",
     "tooltip": "When a live applet recording reaches the maximum length, start transcription without requiring another shortcut press.",
-    "default": true
+    "default": false
   },
   "auto-relisten": {
     "type": "switch",
@@ -328,7 +329,7 @@
       "PulseAudio parecord": "parecord",
       "ALSA arecord": "arecord"
     },
-    "default": "auto"
+    "default": "arecord"
   },
   "input-device": {
     "type": "entry",
@@ -372,7 +373,7 @@
   "notify-complete": {
     "type": "switch",
     "description": "Notify when dictation is ready",
-    "default": false
+    "default": true
   },
   "notify-error": {
     "type": "switch",
@@ -405,7 +406,7 @@
     "type": "switch",
     "description": "Replace profanity with harmless words",
     "tooltip": "When enabled, common German and English profanity is replaced locally with harmless equivalents before transcripts are saved, copied, pasted, or auto-submitted. Disabled by default to avoid changing dictated code, commands, or exact quotes.",
-    "default": false
+    "default": true
   },
   "show-profanity-filter-list": {
     "type": "button",
@@ -431,11 +432,22 @@
     "step": 1,
     "default": 500
   },
+  "clipboard-backend": {
+    "type": "combobox",
+    "description": "Clipboard backend",
+    "tooltip": "GTK is the secure default. The xclip modes use only the signed Fedora system package /usr/bin/xclip, install it through PackageKit when missing, and never trust ~/.local/bin/xclip. Fallback keeps GTK first. Prefer xclip uses xclip first and falls back to GTK when xclip is unavailable or fails.",
+    "options": {
+      "GTK (default)": "gtk",
+      "Install xclip and use it as fallback": "xclip-fallback",
+      "Install xclip and prefer it": "xclip-preferred"
+    },
+    "default": "gtk"
+  },
   "auto-paste-window-title": {
     "type": "entry",
     "description": "Auto-Submit target markers",
     "tooltip": "Built-in marker names match the full window title or known window classes/app IDs; custom strings match the full window title case-insensitively. Matching targets receive Enter only after Clipboard and paste, not after Clipboard only. Empty disables Auto-Submit. Max 4096 chars.",
-    "default": "codex"
+    "default": "codex, Terminal, Telegram, Ghostty, Kitty"
   },
   "cli-path": {
     "type": "entry",
@@ -455,7 +467,7 @@
       "OpenAI-compatible external API": "openai-compatible",
       "Custom command": "command"
     },
-    "default": "auto"
+    "default": "openai-compatible"
   },
   "voice-model-help": {
     "type": "label",
@@ -484,7 +496,7 @@
       "Ollama local model": "ollama",
       "OpenAI-compatible API": "openai-compatible"
     },
-    "default": "none"
+    "default": "openai-compatible"
   },
   "text-polishing-help": {
     "type": "label",
@@ -594,13 +606,13 @@
     "type": "entry",
     "description": "OpenAI-compatible speech model",
     "tooltip": "Model name for External API speech recognition. Text polishing can use a separate model. Max 4096 chars.",
-    "default": "gpt-4o-transcribe"
+    "default": "gpt-transcribe"
   },
   "openai-compatible-text-model": {
     "type": "entry",
     "description": "OpenAI-compatible text model",
-    "tooltip": "Model name for OpenAI-compatible text polishing. Defaults to gpt-4o-mini. Max 4096 chars.",
-    "default": "gpt-4o-mini"
+    "tooltip": "Model name for OpenAI-compatible text polishing. Defaults to gpt-5.6-luna. Max 4096 chars.",
+    "default": "gpt-5.6-luna"
   },
   "openai-compatible-flex-processing": {
     "type": "switch",

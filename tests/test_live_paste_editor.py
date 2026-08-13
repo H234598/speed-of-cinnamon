@@ -190,25 +190,20 @@ def _trigger_applet_clipboard_paste(
     if simulate_menu_click:
         target_setup = """
   let menuActivated = false;
-  const originalToggleRecording = applet._toggleRecording;
+  applet._socLivePasteOriginalToggle = applet._toggleRecording;
+  applet._socLivePasteMenuActivated = false;
   applet._toggleRecording = function() {
-    menuActivated = true;
+    applet._socLivePasteMenuActivated = true;
   };
-  try {
-    applet.on_applet_clicked();
-    if (!applet.toggleItem || typeof applet.toggleItem.activate !== "function") {
-      return {ok: false, reason: "toggleItem.activate unavailable"};
-    }
-    applet.toggleItem.activate(null);
-  } finally {
-    applet._toggleRecording = originalToggleRecording;
+  applet.on_applet_clicked();
+  if (!applet.toggleItem || typeof applet.toggleItem.activate !== "function") {
+    return {ok: false, reason: "toggleItem.activate unavailable"};
   }
+  applet.toggleItem.activate(null);
 """
-        remembered_expression = "applet._hasRememberedTargetWindow()"
     else:
-        target_setup = "  let menuActivated = false;\n  const remembered = applet._rememberFocusedWindow();"
-        remembered_expression = "remembered === true"
-    return _cinnamon_eval(
+        target_setup = "  applet._rememberFocusedWindow();"
+    captured = _cinnamon_eval(
         f"""
 (() => {{
   const A = imports.ui.appletManager;
@@ -220,6 +215,35 @@ def _trigger_applet_clipboard_paste(
     return {{ok: false, reason: "applet unavailable"}};
   }}
 {target_setup}
+  return {{ok: true}};
+}})()
+"""
+    )
+    if not isinstance(captured, dict) or captured.get("ok") is not True:
+        return captured
+
+    deadline = time.monotonic() + EVAL_TIMEOUT_SECONDS
+    remembered = False
+    while time.monotonic() < deadline:
+        remembered = _cinnamon_eval(
+            f"""
+(() => {{
+  const applet = imports.ui.appletManager.getRunningInstancesForUuid({json.dumps(APPLET_UUID)})[0];
+  return !!applet && applet._hasRememberedTargetWindow() && !applet._isTargetWindowXLookupPending();
+}})()
+"""
+        ) is True
+        if remembered:
+            break
+        time.sleep(0.05)
+
+    return _cinnamon_eval(
+        f"""
+(() => {{
+  const applet = imports.ui.appletManager.getRunningInstancesForUuid({json.dumps(APPLET_UUID)})[0];
+  if (!applet) {{
+    return {{ok: false, reason: "applet unavailable"}};
+  }}
   const oldInsertMethod = applet.insertMethod;
   const oldAppendSpace = applet.appendSpace;
   const oldAutoPasteWindowTitle = applet.autoPasteWindowTitle;
@@ -237,11 +261,15 @@ def _trigger_applet_clipboard_paste(
     applet.insertMethod = oldInsertMethod;
     applet.appendSpace = oldAppendSpace;
     applet.autoPasteWindowTitle = oldAutoPasteWindowTitle;
+    if (applet._socLivePasteOriginalToggle) {{
+      applet._toggleRecording = applet._socLivePasteOriginalToggle;
+      delete applet._socLivePasteOriginalToggle;
+    }}
   }}
   return {{
-    ok: inserted === true,
-    remembered: {remembered_expression},
-    menuActivated: menuActivated,
+    ok: inserted === true || inserted === null,
+    remembered: {json.dumps(remembered)},
+    menuActivated: applet._socLivePasteMenuActivated === true,
     autoPasteEnter: autoPasteEnter,
     terminalTarget: terminalTarget,
     lastMessage: String(applet.lastMessage || ""),

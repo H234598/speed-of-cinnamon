@@ -88,11 +88,14 @@ jobs:
           version="1.7.12"
           archive="actionlint_${version}_linux_amd64.tar.gz"
           archive_sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
-          curl -fsSL -o "/tmp/${archive}" \
+          actionlint_tmp_dir="$(mktemp -d)"
+          trap 'rm -rf -- "${actionlint_tmp_dir}"' EXIT
+          archive_path="${actionlint_tmp_dir}/${archive}"
+          curl -fsSL -o "${archive_path}" \
             "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
-          printf '%s  %s\n' "${archive_sha256}" "/tmp/${archive}" | sha256sum -c -
-          tar -xzf "/tmp/${archive}" -C /tmp actionlint
-          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+          printf '%s  %s\n' "${archive_sha256}" "${archive_path}" | sha256sum -c -
+          tar -xzf "${archive_path}" -C "${actionlint_tmp_dir}" actionlint
+          sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint
       - name: Lint GitHub workflows
         run: |
           if [[ "${WORKFLOWS_CHANGED}" != "true" ]]; then
@@ -131,7 +134,6 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       SNAP_BUILD: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_snap && '1' || '0') }}
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
-      QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
@@ -145,23 +147,28 @@ jobs:
       - name: Install shell tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y cpio rpm shellcheck squashfs-tools xclip xdotool xsel
+          sudo apt-get install -y --no-install-recommends cpio rpm shellcheck squashfs-tools xclip xdotool xsel
           version="1.7.12"
           archive="actionlint_${version}_linux_amd64.tar.gz"
           archive_sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
-          curl -fsSLo "/tmp/${archive}" \
+          actionlint_tmp_dir="$(mktemp -d)"
+          trap 'rm -rf -- "${actionlint_tmp_dir}"' EXIT
+          archive_path="${actionlint_tmp_dir}/${archive}"
+          curl -fsSLo "${archive_path}" \
             "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
-          printf '%s  %s\n' "${archive_sha256}" "/tmp/${archive}" | sha256sum -c -
-          tar -xzf "/tmp/${archive}" -C /tmp actionlint
-          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+          printf '%s  %s\n' "${archive_sha256}" "${archive_path}" | sha256sum -c -
+          tar -xzf "${archive_path}" -C "${actionlint_tmp_dir}" actionlint
+          sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint
           if [[ "${SNAP_BUILD}" == "1" ]]; then
             if [[ -d /snap/bin ]]; then
               printf '/snap/bin\n' >> "${GITHUB_PATH}"
               export PATH="/snap/bin:${PATH}"
             fi
-            if ! command -v -- snapcraft >/dev/null 2>&1; then
+            snapcraft_expected_version="8.14.5"
+            snapcraft_expected_revision="17614"
+            if ! snap list snapcraft >/dev/null 2>&1; then
               if command -v -- snap >/dev/null 2>&1; then
-                sudo snap install snapcraft --classic --channel=8.x/stable
+                sudo snap install snapcraft --classic --revision="${snapcraft_expected_revision}"
                 if [[ -d /snap/bin ]]; then
                   printf '/snap/bin\n' >> "${GITHUB_PATH}"
                   export PATH="/snap/bin:${PATH}"
@@ -169,6 +176,11 @@ jobs:
               else
                 printf 'snap is missing; cannot install snapcraft. Install snapd or set build_snap to false.\n' >&2
                 exit 1
+              fi
+            else
+              installed_snapcraft_revision="$(snap list snapcraft | awk 'NR == 2 {print $3}')"
+              if [[ "${installed_snapcraft_revision}" != "${snapcraft_expected_revision}" ]]; then
+                sudo snap refresh snapcraft --revision="${snapcraft_expected_revision}"
               fi
             fi
             if snap list snapcraft >/dev/null 2>&1; then
@@ -181,18 +193,24 @@ jobs:
               exit 1
             fi
             snapcraft_version="$(snapcraft --version | awk '{print $NF}')"
-            case "${snapcraft_version}" in
-              8.*) ;;
-              *)
-                printf 'Unsupported snapcraft version for this project: %s; expected 8.x.\n' "${snapcraft_version}" >&2
+            snapcraft_revision="$(snap list snapcraft | awk 'NR == 2 {print $3}')"
+            if [[ "${snapcraft_version}" != "${snapcraft_expected_version}" || "${snapcraft_revision}" != "${snapcraft_expected_revision}" ]]; then
+                printf 'Unsupported snapcraft installation: version %s revision %s; expected %s revision %s.\n' \
+                  "${snapcraft_version}" "${snapcraft_revision}" "${snapcraft_expected_version}" "${snapcraft_expected_revision}" >&2
                 exit 1
-                ;;
-            esac
-            snapcraft_base="core22"
-            if ! snap list "${snapcraft_base}" >/dev/null 2>&1; then
-              sudo snap install "${snapcraft_base}" --channel=latest/stable
             fi
+            snapcraft_base="core22"
+            snapcraft_base_expected_revision="2411"
             if ! snap list "${snapcraft_base}" >/dev/null 2>&1; then
+              sudo snap install "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"
+            else
+              installed_snapcraft_base_revision="$(snap list "${snapcraft_base}" | awk 'NR == 2 {print $3}')"
+              if [[ "${installed_snapcraft_base_revision}" != "${snapcraft_base_expected_revision}" ]]; then
+                sudo snap refresh "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"
+              fi
+            fi
+            snapcraft_base_revision="$(snap list "${snapcraft_base}" | awk 'NR == 2 {print $3}')"
+            if [[ "${snapcraft_base_revision}" != "${snapcraft_base_expected_revision}" ]]; then
               printf 'Could not install required snap base core22.\n' >&2
               exit 1
             fi
@@ -212,8 +230,19 @@ jobs:
         run: make check
       - name: Generate coverage report
         run: make coverage
+      - name: Check QLTY coverage secret
+        id: qlty-secret
+        if: ${{ github.event_name == 'push' }}
+        env:
+          QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}
+        run: |
+          if [[ -n "${QLTY_COVERAGE_TOKEN}" ]]; then
+            printf 'configured=true\n' >> "${GITHUB_OUTPUT}"
+          else
+            printf 'configured=false\n' >> "${GITHUB_OUTPUT}"
+          fi
       - name: Upload coverage to QLTY
-        if: ${{ github.event_name == 'push' && env.QLTY_COVERAGE_TOKEN != '' }}
+        if: ${{ github.event_name == 'push' && steps.qlty-secret.outputs.configured == 'true' }}
         uses: qltysh/qlty-action/coverage@fd52dc852530a708d68c3b7342f8d33d1df4cd55 # v2.2.1
         with:
           token: ${{ secrets.QLTY_COVERAGE_TOKEN }}

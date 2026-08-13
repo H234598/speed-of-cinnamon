@@ -9,8 +9,15 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 safe_fs_cmd=(python3 "${safe_fs}")
+distribution_tree_excludes=(
+  --exclude-name __pycache__
+  --exclude-name .pytest_cache
+  --exclude-name .mypy_cache
+  --exclude-name .ruff_cache
+  --exclude-name .coverage
+)
 
-for tool in python3 tar sha256sum mktemp find git stat realpath; do
+for tool in python3 tar sha256sum mktemp find grep git stat realpath; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -473,7 +480,7 @@ do
   source_path="${repo_dir}/${path}"
   target_path="${work_dir}/${package}/${path}"
   if [[ -d "${source_path}" ]]; then
-    if ! python3 "${safe_fs}" install-tree build-dist "${source_path}" "${target_path}" "distribution source tree"; then
+    if ! python3 "${safe_fs}" install-tree build-dist "${source_path}" "${target_path}" "distribution source tree" "${distribution_tree_excludes[@]}"; then
       printf 'failed to copy distribution source tree: %s\n' "${source_path}" >&2
       exit 1
     fi

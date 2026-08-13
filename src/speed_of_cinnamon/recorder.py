@@ -25,6 +25,7 @@ from .output import (
     _kill_output_process_tree,
     _pipe_targets_for_process,
     _process_pipe_holder_identities,
+    _same_session_process_identities,
     _process_tree_descendant_identities,
     _process_tree_has_live_processes,
     _wait_for_output_process_tree_stop,
@@ -312,15 +313,18 @@ _BOOT_ID_CACHE: str | None = None
 def _contains_escaped_null(value: str) -> bool:
     if not isinstance(value, str) or isinstance(value, bool):
         raise RecorderError("value must be text")
-    lowered = (value or "").lower()
-    return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+    # Literal escape spellings are valid data. Only an actual NUL byte is
+    # unsafe for argv, environment, paths, and decoded command output.
+    return "\x00" in value
 
 
 def _contains_http_header_control_chars(value: str) -> bool:
     if not isinstance(value, str) or isinstance(value, bool):
         raise RecorderError("value must be text")
     lowered = (value or "").lower()
-    control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    # Actual NUL is validated separately. A literal "\\x00"/"\\u0000" is
+    # ordinary text and must not be rejected as an encoded control byte.
+    control_codepoints = tuple(range(1, 0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
     if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
         return True
     if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
@@ -426,7 +430,6 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
         if not _recording_process_identity_is_current(process):
             return False
         group_live = process_group_has_live_processes(process.pid)
-        session_group_ids = _same_session_process_group_ids(process.pid)
         cleanup_incomplete = group_live is None or descendant_scan is None
         pipe_holders: dict[int, str] = {}
         if process_finished:
@@ -453,42 +456,24 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
         return False
     if not _recording_process_identity_is_current(process):
         return False
-    pipe_tree_cleanup = _kill_output_process_tree(pipe_holders)
-    descendant_tree_cleanup = _kill_output_process_tree(descendant_identities)
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    except (OSError, ValueError):
-        try:
-            identity_current = _recording_process_identity_is_current(process)
-        except BaseException:
-            identity_current = False
-        if identity_current:
-            try:
-                process.kill()
-            except (OSError, ValueError):
-                return False
+    process_tree = dict(descendant_identities)
+    process_tree.update(pipe_holders)
+    process_tree_cleanup = _kill_output_process_tree(process_tree)
+    expected_identity = vars(process).get("_soc_process_identity")
+    if not isinstance(expected_identity, str) or not expected_identity:
         return False
-    if session_group_ids is not None:
-        for process_group_id in sorted(session_group_ids):
-            if process_group_id == process.pid:
-                continue
-            try:
-                os.killpg(process_group_id, signal.SIGKILL)
-            except ProcessLookupError:
-                continue
-            except (OSError, ValueError):
-                return False
+    leader_cleanup = (
+        True
+        if process_finished
+        else _send_process_signal_with_pidfd(process.pid, expected_identity, "-KILL") is True
+    )
     session_stopped = _wait_for_recorder_session_stop(process.pid)
-    pipe_tree_stopped = _wait_for_output_process_tree_stop(pipe_holders)
-    descendant_tree_stopped = _wait_for_output_process_tree_stop(descendant_identities)
+    process_tree_stopped = _wait_for_output_process_tree_stop(process_tree)
     return (
         session_stopped
-        and pipe_tree_cleanup
-        and pipe_tree_stopped
-        and descendant_tree_cleanup
-        and descendant_tree_stopped
+        and process_tree_cleanup
+        and process_tree_stopped
+        and leader_cleanup
         and not cleanup_incomplete
     )
 
@@ -505,14 +490,9 @@ def _reap_timed_out_recorder_process(process: subprocess.Popen[bytes]) -> bool:
 def _reap_unidentified_recorder_process(process: subprocess.Popen[bytes]) -> None:
     try:
         if process.poll() is None:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except (OSError, ValueError):
-                # Identity is unavailable here: never fall back to a raw PID
-                # kill, which could target a reused process ID.
-                raise RecorderError("ffmpeg process cleanup failed")
+            # Identity is unavailable: never signal a numeric process group,
+            # which could target a reused process ID.
+            raise RecorderError("ffmpeg process cleanup failed")
         process.communicate(timeout=1)
     except (OSError, ValueError, subprocess.TimeoutExpired) as exc:
         raise RecorderError("ffmpeg process cleanup failed") from exc
@@ -820,6 +800,15 @@ def _recording_process_identity_matches(pid: int, expected_process_identity: str
         raise RecorderError("expected_process_identity must be text")
     if not expected_process_identity:
         return False
+    if expected_process_identity.startswith("pid:"):
+        fallback_parts = expected_process_identity.split(":")
+        if len(fallback_parts) != 3 or fallback_parts[0] != "pid":
+            return False
+        expected_pid, expected_start_time = fallback_parts[1:]
+        if expected_pid != str(pid) or not expected_start_time.isdigit():
+            return False
+        stat_fields = _recording_process_stat_fields(pid)
+        return stat_fields is not None and len(stat_fields) >= 20 and stat_fields[19] == expected_start_time
     current_identity = _recording_process_identity_for_pid(pid)
     if current_identity is None:
         return False
@@ -867,6 +856,29 @@ def _send_process_signal_with_pidfd(
         return True
     finally:
         _close_fd_quietly(pidfd)
+
+
+def _send_process_signal_with_start_time(
+    pid: int,
+    expected_start_time: str,
+    signal_name: str,
+) -> bool:
+    if (
+        not isinstance(pid, int)
+        or isinstance(pid, bool)
+        or pid <= 0
+        or not isinstance(expected_start_time, str)
+        or not expected_start_time.isascii()
+        or not expected_start_time.isdigit()
+    ):
+        return False
+    current_identity = _recording_process_identity_for_pid(pid)
+    if current_identity is None:
+        return _recording_process_is_absent(pid)
+    _identity_prefix, separator, current_start_time = current_identity.rpartition(":")
+    if not separator or current_start_time != expected_start_time:
+        return False
+    return _send_process_signal_with_pidfd(pid, current_identity, signal_name) is True
 
 
 def _recording_process_identity_is_current(process: subprocess.Popen[bytes]) -> bool:
@@ -2734,6 +2746,19 @@ def stop_process(
         if descendant_scan is None:
             return False
         descendant_identities.update(descendant_scan)
+        if _recording_process_identity_matches(pid, expected_process_identity):
+            if process_session_id is None:
+                return False
+            session_scan = _same_session_process_identities(process_session_id)
+            if session_scan is None:
+                return False
+            descendant_identities.update(
+                {
+                    member_pid: start_time
+                    for member_pid, start_time in session_scan.items()
+                    if member_pid != pid
+                }
+            )
         return True
 
     def target_identity_still_safe() -> bool:
@@ -2787,41 +2812,32 @@ def stop_process(
     if not refresh_descendant_identities():
         return False
 
+    def signal_descendant_targets(signal_name: str) -> bool:
+        for descendant_pid, expected_start_time in sorted(descendant_identities.items()):
+            if _recording_process_is_absent(descendant_pid):
+                continue
+            if not _send_process_signal_with_start_time(
+                descendant_pid,
+                expected_start_time,
+                signal_name,
+                ):
+                    return False
+        return True
+
     def signal_process_target(signal_name: str) -> bool:
         if not target_identity_still_safe():
             return False
         if not process_group_target:
-            pidfd_result = _send_process_signal_with_pidfd(pid, expected_process_identity, signal_name)
-            if pidfd_result is True:
-                return True
-            if pidfd_result is False:
+            return _send_process_signal_with_pidfd(pid, expected_process_identity, signal_name) is True
+        if _recording_process_identity_matches(pid, expected_process_identity):
+            if _send_process_signal_with_pidfd(pid, expected_process_identity, signal_name) is not True:
                 return False
-        kill_timeout_seconds = min(1.0, timeout_seconds / 3)
-        _run_kill(
-            ["kill", signal_name, "--", process_target],
-            check_exit=False,
-            timeout_seconds=kill_timeout_seconds,
-        )
-        if not process_group_target:
-            return True
-        if process_group_id is None or process_session_id is None:
+            return signal_descendant_targets(signal_name)
+        if not _recording_process_is_absent(pid):
             return False
-        session_group_ids = _same_session_process_group_ids(process_session_id)
-        if session_group_ids is None:
+        if _process_tree_has_live_processes(descendant_identities) is not True:
             return False
-        kill_timeout_seconds = min(
-            1.0,
-            timeout_seconds / (3 * max(1, len(session_group_ids))),
-        )
-        for session_group_id in sorted(session_group_ids):
-            if session_group_id == process_group_id:
-                continue
-            _run_kill(
-                ["kill", signal_name, "--", f"-{session_group_id}"],
-                check_exit=False,
-                timeout_seconds=kill_timeout_seconds,
-            )
-        return True
+        return signal_descendant_targets(signal_name)
 
     deadline = time.monotonic() + timeout_seconds
     # Detached descendants can take longer than one scheduler slice to become

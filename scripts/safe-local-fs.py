@@ -629,6 +629,7 @@ def _reject_unsafe_tree(
     label: str,
     *,
     reject_symlink_ancestors: bool = False,
+    exclude_names: frozenset[str] = frozenset(),
 ) -> tuple[int, int, int]:
     if reject_symlink_ancestors:
         _reject_symlink_ancestors(tree, label)
@@ -640,6 +641,8 @@ def _reject_unsafe_tree(
         fail(f"refusing to install unsafe {label}: {tree}")
     root_identity = _stat_identity(root_stat)
     for root, dirs, files in os.walk(tree):
+        dirs[:] = [name for name in dirs if name not in exclude_names]
+        files = [name for name in files if name not in exclude_names]
         root_path = Path(root)
         for name in [*dirs, *files]:
             path = root_path / name
@@ -680,6 +683,7 @@ def _tree_signature(
     include_identity: bool = True,
     reject_symlink_ancestors: bool = False,
     expected_root_identity: tuple[int, int, int] | None = None,
+    exclude_names: frozenset[str] = frozenset(),
 ) -> dict[str, tuple[object, ...]]:
     if reject_symlink_ancestors:
         _reject_symlink_ancestors(tree, "source tree")
@@ -699,6 +703,8 @@ def _tree_signature(
     else:
         signature["."] = (0, 0, root_stat.st_mode, 0, "")
     for root, dirs, files in os.walk(tree):
+        dirs[:] = [name for name in dirs if name not in exclude_names]
+        files = [name for name in files if name not in exclude_names]
         root_path = Path(root)
         for name in [*dirs, *files]:
             path = root_path / name
@@ -737,16 +743,42 @@ def _tree_signature(
     return signature
 
 
+def _normalize_exclude_names(values: object) -> frozenset[str]:
+    if values is None:
+        return frozenset()
+    if not isinstance(values, (list, tuple)):
+        fail("tree exclusion names must be a list")
+    result: set[str] = set()
+    for value in values:
+        if (
+            not isinstance(value, str)
+            or not value
+            or value in {".", ".."}
+            or any(char in value for char in "/\\\x00")
+            or any(ord(char) < 0x20 or ord(char) == 0x7F for char in value)
+        ):
+            fail("tree exclusion name must be a plain path component")
+        result.add(value)
+    return frozenset(result)
+
+
 def cmd_install_tree(args: argparse.Namespace) -> None:
     source = _validate_absolute(args.source, "source tree")
     target = _validate_absolute(args.target, "target tree")
     label = str(args.label or "tree")
-    source_root_identity = _reject_unsafe_tree(source, f"{label} source tree", reject_symlink_ancestors=True)
+    exclude_names = _normalize_exclude_names(getattr(args, "exclude_name", ()))
+    source_root_identity = _reject_unsafe_tree(
+        source,
+        f"{label} source tree",
+        reject_symlink_ancestors=True,
+        exclude_names=exclude_names,
+    )
     source_signature = _tree_signature(
         source,
         include_identity=False,
         reject_symlink_ancestors=True,
         expected_root_identity=source_root_identity,
+        exclude_names=exclude_names,
     )
     parent_fd, leaf = _open_parent(target, action=args.action, create=True)
     if parent_fd is None:
@@ -767,19 +799,22 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
             include_identity=False,
             reject_symlink_ancestors=True,
             expected_root_identity=source_root_identity,
+            exclude_names=exclude_names,
         ) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
-        shutil.copytree(source, staged_tree, symlinks=True)
+        ignore = shutil.ignore_patterns(*sorted(exclude_names)) if exclude_names else None
+        shutil.copytree(source, staged_tree, symlinks=True, ignore=ignore)
         if _tree_signature(
             source,
             include_identity=False,
             reject_symlink_ancestors=True,
             expected_root_identity=source_root_identity,
+            exclude_names=exclude_names,
         ) != source_signature:
             fail(f"source tree changed during {args.action}: {source}")
-        if _tree_signature(staged_tree, include_identity=False) != source_signature:
+        if _tree_signature(staged_tree, include_identity=False, exclude_names=exclude_names) != source_signature:
             fail(f"staged copy changed during {args.action}: {target}")
-        _reject_unsafe_tree(staged_tree, label)
+        _reject_unsafe_tree(staged_tree, label, exclude_names=exclude_names)
         _check_leaf(parent_fd, stage_name, parent_path / stage_name, action=args.action, kind="dir", must_exist=True)
         stage_fd = os.open(stage_name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
         try:
@@ -1025,6 +1060,7 @@ def build_parser() -> argparse.ArgumentParser:
     install_tree.add_argument("source")
     install_tree.add_argument("target")
     install_tree.add_argument("label")
+    install_tree.add_argument("--exclude-name", action="append", default=[])
     install_tree.set_defaults(func=cmd_install_tree)
 
     remove = subparsers.add_parser("remove")

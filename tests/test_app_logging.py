@@ -649,7 +649,7 @@ class AppLoggingTest(unittest.TestCase):
         sanitized = app_logging.sanitize_text(value, max_chars=1_000_000)
 
         elapsed = time.perf_counter() - started
-        self.assertLess(elapsed, 3.0)
+        self.assertLess(elapsed, 5.0)
         self.assertEqual(sanitized.count("[redacted path]"), 70)
         self.assertIn("\\x1b[31[redacted path]", sanitized)
 

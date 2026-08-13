@@ -365,6 +365,7 @@ reject_unsafe_tree "${repo_dir}/src/speed_of_cinnamon" "python package source tr
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon.1" "man page source"
 reject_unsafe_file "${repo_dir}/docs/man/speed-of-cinnamon-alarms.1" "man page source"
 
+# Validate TMPDIR for helper subprocesses; keep install staging under app_data so rollback survives /tmp cleanup.
 resolve_tmp_root >/dev/null
 activated_targets=()
 activated_backups=()

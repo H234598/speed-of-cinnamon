@@ -353,7 +353,7 @@ class TranscriberTest(unittest.TestCase):
                 (
                     "environment api key",
                     {"api_key": ""},
-                    {"SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY": "env\nsecret"},
+                    {"OPENAI_COMPATIBLE_API_KEY": "env\nsecret"},
                 ),
             )
             for index, (label, overrides, environment) in enumerate(cases):
@@ -5214,15 +5214,6 @@ class TranscriberTest(unittest.TestCase):
                         "openai_compatible_service_tier_fallback": 1,
                     },
                 ),
-                (
-                    "openai unsupported model",
-                    audio,
-                    {
-                        "backend": "openai-compatible",
-                        "openai_compatible_model": "gpt-5",
-                        "openai_compatible_url": "https://api.openai.com/v1",
-                    },
-                ),
             )
             for index, (label, input_audio, options) in enumerate(cases):
                 with self.subTest(label=label):
@@ -5864,7 +5855,7 @@ class TranscriberTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=fake_open_http_request),
                 mock.patch.dict(
                     "speed_of_cinnamon.transcriber.os.environ",
-                    {"SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY": "env-secret"},
+                    {"OPENAI_COMPATIBLE_API_KEY": "env-secret"},
                 ),
             ):
                 result = transcribe(
@@ -5955,6 +5946,43 @@ class TranscriberTest(unittest.TestCase):
         data = captured["data"]
         self.assertIn(b'name="service_tier"', data)
         self.assertIn(b"flex", data)
+
+    def test_openai_compatible_api_allows_current_speech_model(self) -> None:
+        class Response:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if getattr(self, "_read", False):
+                    return b""
+                self._read = True
+                return b'{"text":"hello api"}'
+
+        captured: dict[str, object] = {}
+
+        def fake_open_http_request(request: object, *, timeout: int = 0, field_name: str = "") -> Response:
+            captured["data"] = request.data
+            return Response()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=fake_open_http_request):
+                result = transcribe(
+                    audio,
+                    "de",
+                    Path(tmp) / "sample.txt",
+                    backend="openai-compatible",
+                    openai_compatible_model="gpt-5.6-luna",
+                    openai_compatible_url="https://api.openai.com/v1",
+                    openai_compatible_api_key="secret",
+                )
+
+        self.assertEqual(result, "hello api")
+        self.assertIn(b"gpt-5.6-luna", captured["data"])
 
     def test_openai_compatible_api_can_disable_flex_for_openai_transcription(self) -> None:
         class Response:
@@ -6580,6 +6608,40 @@ class TranscriberTest(unittest.TestCase):
             self.assertNotIn("https://api.openai.com", str(raised.exception))
             self.assertNotIn("/v1/audio/transcriptions", str(raised.exception))
 
+    def test_openai_compatible_api_classifies_quota_without_leaking_error_body(self) -> None:
+        secret = "secret transcript from Alice"
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            error = urllib.error.HTTPError(
+                "https://api.openai.com/v1/audio/transcriptions",
+                429,
+                "Too Many Requests",
+                {},
+                io.BytesIO(
+                    (
+                        '{"error":{"message":"' + secret + '",'
+                        '"type":"insufficient_quota",'
+                        '"code":"organization_spend_limit_exceeded"}}'
+                    ).encode("utf-8")
+                ),
+            )
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", side_effect=error):
+                with self.assertRaisesRegex(
+                    TranscriptionError,
+                    r"OpenAI-compatible speech API failed \(429; quota-exhausted\): \[redacted remote error\]",
+                ) as raised:
+                    transcribe(
+                        audio,
+                        "en",
+                        Path(tmp) / "sample.txt",
+                        backend="openai-compatible",
+                        openai_compatible_model="gpt-4o-transcribe",
+                        openai_compatible_url="https://api.openai.com/v1",
+                    )
+
+        self.assertNotIn(secret, str(raised.exception))
+
     def test_openai_remote_error_boundaries_are_chain_free_and_redacted(self) -> None:
         secret = "/srv/private/remote-token filename=secret.wav"
         remote_url = "https://api.example.test/v1/remote-token/audio/transcriptions"
@@ -6972,22 +7034,6 @@ class TranscriberTest(unittest.TestCase):
 
             self.assertNotIn("secret", str(raised.exception))
             self.assertNotIn("sk-supersecret", str(raised.exception))
-
-    def test_openai_api_rejects_non_transcription_model_before_network(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            audio = Path(tmp) / "sample.wav"
-            audio.write_bytes(b"audio")
-            with mock.patch("speed_of_cinnamon.transcriber._open_http_request") as mocked_open_http_request:
-                with self.assertRaisesRegex(TranscriptionError, "requires a speech-to-text model.*gpt-5"):
-                    transcribe(
-                        audio,
-                        "en",
-                        Path(tmp) / "sample.txt",
-                        backend="openai-compatible",
-                        openai_compatible_model="gpt-5",
-                        openai_compatible_url="https://api.openai.com/v1",
-                    )
-        mocked_open_http_request.assert_not_called()
 
     def test_openai_compatible_api_rejects_cross_origin_redirect(self) -> None:
         _validate_same_origin_redirect(

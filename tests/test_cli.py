@@ -50,6 +50,40 @@ class CliTest(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     cli.print_result({"status": "done", "value": value}, True)
 
+    def test_print_result_redacts_success_message_paths_in_text_and_json(self) -> None:
+        payload = {"status": "done", "message": "saved /workspace/private/token.txt"}
+        for json_output in (False, True):
+            with self.subTest(json_output=json_output), redirect_stdout(io.StringIO()) as stdout:
+                cli.print_result(payload, json_output)
+            self.assertNotIn("/workspace/private/token.txt", stdout.getvalue())
+            if json_output:
+                self.assertEqual(json.loads(stdout.getvalue())["message"], "saved [redacted path]")
+
+    def test_run_redacts_nested_success_message_paths(self) -> None:
+        parser = argparse.ArgumentParser()
+        parser.parse_args = mock.Mock(
+            return_value=argparse.Namespace(
+                command="test",
+                json=True,
+                log_level="INFO",
+                handler=lambda _args: {
+                    "status": "done",
+                    "result": {"message": "saved /workspace/private/token.txt"},
+                },
+            )
+        )
+        stdout = io.StringIO()
+        with (
+            mock.patch.object(cli, "build_parser", return_value=parser),
+            mock.patch.object(cli, "configure_logging"),
+            mock.patch.object(cli, "log_event"),
+            redirect_stdout(stdout),
+        ):
+            self.assertEqual(cli.run([]), 0)
+
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["result"]["message"], "saved [redacted path]")
+
     def test_run_returns_valid_json_when_payload_contains_nonfinite_value(self) -> None:
         parser = argparse.ArgumentParser()
         parser.parse_args = mock.Mock(
@@ -3859,6 +3893,80 @@ class CliTest(unittest.TestCase):
         self.assertIsNone(caught.exception.__context__)
         self.assertEqual(getattr(caught.exception, "__notes__", []), [])
 
+    def test_finalize_transcription_error_reports_safe_actionable_reason(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            recordings_root = tmp_path / "speed-of-cinnamon" / "recordings"
+            recordings_root.mkdir(parents=True)
+            audio = recordings_root / "recording.wav"
+            log = recordings_root / "recording.log"
+            audio.write_bytes(b"audio")
+            log.write_text("recorder log", encoding="utf-8")
+            state_file = tmp_path / "state.json"
+            store = StateStore(state_file)
+            store.write(RecordingState(status="processing", audio_path=str(audio), log_path=str(log)))
+            args = self._build_finalize_args(keep_recording_artifacts=True)
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}, clear=False),
+                mock.patch("speed_of_cinnamon.cli.validate_audio_file", return_value=audio),
+                mock.patch(
+                    "speed_of_cinnamon.cli.detect_silent_recording",
+                    return_value=cli.SilenceDetectionResult(False, False, 2.0, 1.0, 1.0, 0.1, "not silent"),
+                ),
+                mock.patch("speed_of_cinnamon.cli.trim_recording_silence", side_effect=cli.RecorderError("trim failed")),
+                mock.patch(
+                    "speed_of_cinnamon.cli.transcribe",
+                    side_effect=cli.TranscriptionError("transcriber executable is not available"),
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    r"^transcribe failed \(SOC-T002\): transcription executable is unavailable\. Check Voice settings or install the selected backend\.$",
+                ):
+                    cli.finalize_recording(args, store, store.read())
+
+            final_state = store.read()
+
+        self.assertEqual(
+            final_state.error,
+            "transcribe failed (SOC-T002): transcription executable is unavailable. Check Voice settings or install the selected backend.",
+        )
+
+    def test_openai_http_error_reports_safe_actionable_reason(self) -> None:
+        result = cli._public_transcription_failure_message(
+            cli.TranscriptionError(
+                "OpenAI-compatible speech API failed (400): [redacted remote error]"
+            )
+        )
+
+        self.assertEqual(
+            result,
+            "transcribe failed (SOC-T009): external speech API rejected the transcription request (HTTP 400). Check selected model and audio format.",
+        )
+
+    def test_recorder_error_reports_actionable_audio_reason(self) -> None:
+        result = cli._public_transcription_failure_message(
+            cli.RecorderError("recording audio file is not readable")
+        )
+
+        self.assertEqual(
+            result,
+            "transcribe failed (SOC-T006): recorded audio could not be prepared. "
+            "Check microphone input and recorder settings, then retry.",
+        )
+
+    def test_openai_quota_error_reports_specific_actionable_reason(self) -> None:
+        result = cli._public_transcription_failure_message(
+            cli.TranscriptionError(
+                "OpenAI-compatible speech API failed (429; quota-exhausted): [redacted remote error]"
+            )
+        )
+
+        self.assertEqual(
+            result,
+            "transcribe failed (SOC-T012): external speech API quota is exhausted. Increase project budget or select another backend.",
+        )
+
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
     def test_transcribe_file_backend_system_exit_is_fixed_json_error(
         self,
@@ -6744,7 +6852,7 @@ class CliTest(unittest.TestCase):
     def test_cli_redacts_environment_api_key_from_backend_errors(self, mocked_list: mock.Mock) -> None:
         stdout = io.StringIO()
         with (
-            mock.patch.dict(os.environ, {"SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY": "secret-token"}),
+            mock.patch.dict(os.environ, {"OPENAI_COMPATIBLE_API_KEY": "secret-token"}),
             redirect_stdout(stdout),
         ):
             code = cli.run(
@@ -7527,6 +7635,44 @@ class CliTest(unittest.TestCase):
     @mock.patch("speed_of_cinnamon.cli.write_export")
     @mock.patch("speed_of_cinnamon.cli.load_alarm_store")
     @mock.patch("speed_of_cinnamon.cli._locked_alarm_store")
+    def test_settings_export_writes_while_alarm_store_lock_is_held(
+        self,
+        mocked_lock: mock.Mock,
+        mocked_load: mock.Mock,
+        mocked_write: mock.Mock,
+    ) -> None:
+        locked_path = Path("/tmp/locked-alarms.json")
+        lock_state = {"held": False}
+
+        class Lock:
+            def __enter__(self) -> Path:
+                lock_state["held"] = True
+                return locked_path
+
+            def __exit__(self, _exc_type: object, _exc_value: object, _traceback: object) -> None:
+                lock_state["held"] = False
+
+        mocked_lock.return_value = Lock()
+        mocked_load.return_value = {"alarms": [], "last_checked_at": ""}
+        mocked_write.side_effect = lambda *_args, **_kwargs: (
+            self.assertTrue(lock_state["held"]),
+            {"settings": {}, "alarms": {"alarms": []}},
+        )[1]
+
+        with tempfile.TemporaryDirectory() as tmp:
+            result = cli.command_settings_export(argparse.Namespace(
+                settings_json="{}",
+                settings_json_stdin=False,
+                output=str(Path(tmp) / "settings.json"),
+            ))
+
+        self.assertFalse(lock_state["held"])
+        self.assertEqual(result["status"], "done")
+        mocked_write.assert_called_once()
+
+    @mock.patch("speed_of_cinnamon.cli.write_export")
+    @mock.patch("speed_of_cinnamon.cli.load_alarm_store")
+    @mock.patch("speed_of_cinnamon.cli._locked_alarm_store")
     def test_settings_export_reports_post_commit_cleanup_warning(
         self,
         mocked_lock: mock.Mock,
@@ -7560,7 +7706,7 @@ class CliTest(unittest.TestCase):
 
     @mock.patch("speed_of_cinnamon.cli.ensure_runtime_dirs")
     @mock.patch("speed_of_cinnamon.cli.read_export")
-    @mock.patch("speed_of_cinnamon.cli.save_alarm_store")
+    @mock.patch("speed_of_cinnamon.cli._save_alarm_store_unlocked")
     @mock.patch("speed_of_cinnamon.cli._locked_alarm_store")
     def test_settings_import_locks_alarm_store_before_persisting(
         self,
@@ -7583,7 +7729,7 @@ class CliTest(unittest.TestCase):
         mocked_save.assert_called_once_with(mocked_read.return_value["alarms"], locked_path)
         self.assertEqual(result["status"], "done")
 
-    @mock.patch("speed_of_cinnamon.cli.save_alarm_store")
+    @mock.patch("speed_of_cinnamon.cli._save_alarm_store_unlocked")
     @mock.patch("speed_of_cinnamon.cli._locked_alarm_store")
     @mock.patch("speed_of_cinnamon.cli.read_export")
     def test_settings_import_preview_does_not_persist_and_returns_normalized_alarms(
@@ -7834,6 +7980,7 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["transcripts"][0]["name"], "newer.txt")
         self.assertIn("newer.txt", payload["transcripts"][0]["path"])
         self.assertEqual(payload["transcripts"][0]["preview"], "newer text with more words")
+        self.assertEqual(payload["transcripts"][0]["text"], "newer text with more words")
 
     def test_history_and_document_survive_out_of_range_mtime(self) -> None:
         path = Path("/tmp/transcript-with-invalid-mtime.txt")
@@ -8071,7 +8218,7 @@ class CliTest(unittest.TestCase):
             ):
                 code = cli.run(["transcripts-export", "--limit", "1000", "--artifact-encryption", "passphrase", "--json"])
             payload = json.loads(stdout.getvalue())
-            export_path = Path(payload["path"])
+            export_path = Path(f"{stale_export}.socenc")
             encrypted_payload = export_path.read_bytes()
             with mock.patch.dict(os.environ, env):
                 decrypted = artifact_crypto.read_decrypted_bytes_from_file(export_path, kind="transcript", field_name="test export").decode("utf-8")
@@ -8080,6 +8227,8 @@ class CliTest(unittest.TestCase):
         self.assertEqual(payload["encryption"], "passphrase")
         self.assertTrue(payload["encrypted"])
         self.assertFalse(payload["plaintext"])
+        self.assertTrue(payload["path_present"])
+        self.assertNotIn("path", payload)
         self.assertTrue(export_path.name.startswith("all-transcripts-"))
         self.assertTrue(export_path.name.endswith(".txt.socenc"))
         self.assertFalse(stale_export.exists())
@@ -8097,8 +8246,12 @@ class CliTest(unittest.TestCase):
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run(["transcripts-export", "--plaintext", "--confirm-plaintext", "--json"])
             payload = json.loads(stdout.getvalue())
-            export_text = Path(payload["path"]).read_text(encoding="utf-8")
+            export_paths = list((Path(tmp) / "speed-of-cinnamon" / "exports").glob("all-transcripts-*.txt"))
+            self.assertEqual(len(export_paths), 1)
+            export_text = export_paths[0].read_text(encoding="utf-8")
         self.assertEqual(code, 0)
+        self.assertTrue(payload["path_present"])
+        self.assertNotIn("path", payload)
         self.assertNotIn("\x1b", export_text)
         self.assertIn("\\u001b[31mALERT\\u001b[0m", export_text)
 
@@ -27081,18 +27234,56 @@ class CliTest(unittest.TestCase):
             stdout = io.StringIO()
             with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp, "XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
                 code = cli.run(["profanity-filter-document", "--json"])
-            payload = json.loads(stdout.getvalue())
-            document = Path(payload["path"])
-            text = document.read_text(encoding="utf-8")
+                payload = json.loads(stdout.getvalue())
+                document = cli.profanity_filter_file()
+                text = document.read_text(encoding="utf-8")
 
         self.assertEqual(code, 0)
         self.assertEqual(payload["entries"], len(cli.PROFANITY_REPLACEMENT_PAIRS))
         self.assertTrue(payload["editable"])
+        self.assertTrue(payload["path_present"])
+        self.assertNotIn("path", payload)
         self.assertEqual(document.name, "profanity-filter.txt")
         self.assertIn("Speed of Cinnamon profanity replacement list", text)
         self.assertIn("custom patterns are treated as literal text for safety", text)
         self.assertIn("Glitzerkram", text)
         self.assertIn("Frickelfrosch", text)
+
+    @mock.patch("speed_of_cinnamon.cli._open_path_with_desktop", return_value=True)
+    def test_profanity_filter_document_opens_without_returning_path(self, mocked_open: mock.Mock) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp, "XDG_STATE_HOME": tmp}), redirect_stdout(stdout):
+                code = cli.run(["profanity-filter-document", "--open", "--json"])
+            payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["opened"])
+        self.assertTrue(payload["path_present"])
+        self.assertNotIn("path", payload)
+        mocked_open.assert_called_once()
+
+    @mock.patch("speed_of_cinnamon.cli._open_path_with_desktop", return_value=True)
+    @mock.patch(
+        "speed_of_cinnamon.cli.write_transcripts_export",
+        return_value=(Path("/tmp/private-export.txt.socenc"), 2, "keyring"),
+    )
+    def test_transcripts_export_opens_without_returning_path(
+        self,
+        mocked_write: mock.Mock,
+        mocked_open: mock.Mock,
+    ) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["transcripts-export", "--open", "--json"])
+        payload = json.loads(stdout.getvalue())
+
+        self.assertEqual(code, 0)
+        self.assertTrue(payload["opened"])
+        self.assertTrue(payload["path_present"])
+        self.assertNotIn("path", payload)
+        mocked_write.assert_called_once()
+        mocked_open.assert_called_once_with(Path("/tmp"))
 
     def test_settings_export_rejects_private_settings_in_argv(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -27229,10 +27420,14 @@ class CliTest(unittest.TestCase):
                 with redirect_stdout(stdout):
                     code = cli.run(["transcripts-export", "--limit", "0", "--plaintext", "--confirm-plaintext", "--json"])
                 payload = json.loads(stdout.getvalue())
-                exported = Path(payload["path"]).read_text(encoding="utf-8")
+                export_paths = list(cli.state_dir().joinpath("exports").glob("all-transcripts-*.txt"))
+                self.assertEqual(len(export_paths), 1)
+                exported = export_paths[0].read_text(encoding="utf-8")
 
             self.assertEqual(code, 0)
             self.assertEqual(payload["transcripts"], 0)
+            self.assertTrue(payload["path_present"])
+            self.assertNotIn("path", payload)
             self.assertNotIn("private transcript", exported)
 
     def test_reconcile_accepts_recorder_exit_during_identity_bound_stop(self) -> None:

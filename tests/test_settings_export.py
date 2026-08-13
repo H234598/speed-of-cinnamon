@@ -301,6 +301,17 @@ class SettingsExportTest(unittest.TestCase):
                     with self.assertRaisesRegex(SettingsExportError, "settings export could not be read"):
                         read_export(path)
 
+    def test_read_export_does_not_echo_invalid_version(self) -> None:
+        for version in ("SECRET_TOKEN", {"secret": "SECRET_TOKEN"}):
+            with self.subTest(version=version), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "settings-export.json"
+                payload = build_export({"language": "en"})
+                payload["version"] = version
+                path.write_text(json.dumps(payload), encoding="utf-8")
+                with self.assertRaisesRegex(SettingsExportError, "unsupported settings export version") as raised:
+                    read_export(path)
+                self.assertNotIn("SECRET_TOKEN", str(raised.exception))
+
     def test_read_export_rejects_control_char_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

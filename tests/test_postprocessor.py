@@ -385,6 +385,69 @@ class PostProcessorTest(unittest.TestCase):
         ):
             _read_response_text(response, 100, timeout=1)
 
+    def test_ollama_request_shares_deadline_with_response_read(self) -> None:
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = None
+        with (
+            mock.patch("speed_of_cinnamon.postprocessor._open_http_request", return_value=response) as opened,
+            mock.patch(
+                "speed_of_cinnamon.postprocessor._read_response_text",
+                return_value='{"done": true, "response": "ok"}',
+            ) as read_response,
+            mock.patch("speed_of_cinnamon.postprocessor.time.monotonic", side_effect=[0.0, 10.0]),
+        ):
+            result = post_process_text(
+                "hello",
+                "en",
+                backend="ollama",
+                ollama_model="llama3.2:3b",
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual(opened.call_args.kwargs["deadline"], 180.0)
+        self.assertEqual(read_response.call_args.kwargs["timeout"], 170.0)
+
+    def test_openai_flex_fallback_reuses_request_deadline(self) -> None:
+        first_error = urllib.error.HTTPError(
+            "https://api.openai.com/v1/chat/completions",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(),
+        )
+        self.addCleanup(first_error.close)
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.__exit__.return_value = None
+        with (
+            mock.patch(
+                "speed_of_cinnamon.postprocessor._open_http_request",
+                side_effect=[first_error, response],
+            ) as opened,
+            mock.patch(
+                "speed_of_cinnamon.postprocessor._read_http_error_text",
+                return_value='{"error":{"message":"service_tier not available for this model"}}',
+            ),
+            mock.patch(
+                "speed_of_cinnamon.postprocessor._read_response_text",
+                return_value='{"choices":[{"message":{"content":"ok"}}]}',
+            ) as read_response,
+            mock.patch("speed_of_cinnamon.postprocessor.time.monotonic", side_effect=[0.0, 10.0, 20.0]),
+        ):
+            result = post_process_text(
+                "hello",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="gpt-4o-mini",
+                openai_compatible_flex_processing=True,
+                openai_compatible_service_tier_fallback=True,
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertEqual([call.kwargs["deadline"] for call in opened.call_args_list], [180.0, 180.0])
+        self.assertEqual([call.kwargs["timeout"] for call in read_response.call_args_list], [160.0])
+
     def test_post_process_with_ollama_rejects_invalid_utf8_response(self) -> None:
         with mock.patch(
             "speed_of_cinnamon.postprocessor._open_http_request",
@@ -1199,6 +1262,39 @@ class PostProcessorTest(unittest.TestCase):
         self.assertEqual(first_body["service_tier"], "flex")
         self.assertNotIn("service_tier", second_body)
 
+    def test_openai_compatible_backend_retries_without_temperature_when_model_rejects_zero(self) -> None:
+        requests = []
+
+        def fake_urlopen(request: object, timeout: int = 0, **_: object) -> FakeResponse:
+            requests.append((request, timeout))
+            if len(requests) == 1:
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    400,
+                    "Bad Request",
+                    {},
+                    io.BytesIO(
+                        b'{"error":{"message":"Unsupported value: temperature does not support 0 with this model."}}'
+                    ),
+                )
+            return FakeResponse({"choices": [{"message": {"content": "Hello Cinnamon."}}]})
+
+        with mock.patch("speed_of_cinnamon.postprocessor._open_http_request", side_effect=fake_urlopen):
+            result = post_process_text(
+                "hello cinnamon",
+                "en",
+                backend="openai-compatible",
+                openai_compatible_model="gpt-5.6-luna",
+                openai_compatible_url="https://api.openai.com/v1",
+                openai_compatible_api_key="secret",
+            )
+
+        self.assertEqual(result, "Hello Cinnamon.")
+        first_body = json.loads(requests[0][0].data.decode("utf-8"))
+        second_body = json.loads(requests[1][0].data.decode("utf-8"))
+        self.assertEqual(first_body["temperature"], 0)
+        self.assertNotIn("temperature", second_body)
+
     def test_openai_compatible_backend_falls_back_when_service_tier_hyphenated_rejected(self) -> None:
         requests = []
 
@@ -1333,7 +1429,7 @@ class PostProcessorTest(unittest.TestCase):
     def test_openai_compatible_headers_uses_environment_key_for_whitespace_argument(self) -> None:
         with mock.patch.dict(
             "speed_of_cinnamon.postprocessor.os.environ",
-            {"SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY": "environment-secret"},
+            {"OPENAI_COMPATIBLE_API_KEY": "environment-secret"},
         ):
             headers = _openai_compatible_headers("   ")
         self.assertEqual(headers["Authorization"], "Bearer environment-secret")

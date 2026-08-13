@@ -430,6 +430,34 @@ class SafeLocalFsTest(unittest.TestCase):
             self.assertIn("unsupported file type", result.stderr)
             self.assertFalse(target.exists())
 
+    def test_install_tree_excludes_named_entries_before_copying(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            base = Path(tmp)
+            source = base / "source"
+            target = base / "target"
+            source.mkdir()
+            (source / "keep.txt").write_text("keep\n", encoding="utf-8")
+            (source / "__pycache__").mkdir()
+            (source / "__pycache__" / "leak.pyc").write_bytes(b"cache")
+            (source / ".coverage").write_text("coverage\n", encoding="utf-8")
+
+            result = run_helper(
+                "install-tree",
+                "test",
+                str(source),
+                str(target),
+                "test tree",
+                "--exclude-name",
+                "__pycache__",
+                "--exclude-name",
+                ".coverage",
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((target / "keep.txt").read_text(encoding="utf-8"), "keep\n")
+            self.assertFalse((target / "__pycache__").exists())
+            self.assertFalse((target / ".coverage").exists())
+
     def test_install_tree_preserves_target_replaced_before_backup(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)

@@ -5,6 +5,7 @@ import os
 
 MAX_PERSONAL_CONTEXT_CHARS = 65_535
 MAX_VOCABULARY_CHARS = 65_535
+MAX_VOCABULARY_TERMS = 4_096
 MAX_RAW_PERSONALIZATION_INPUT_CHARS = 256 * 1024
 MAX_PERSONALIZATION_PROMPT_CHARS = 128 * 1024
 MAX_PERSONALIZATION_PROMPT_BYTES = 128 * 1024
@@ -131,6 +132,8 @@ def vocabulary_terms(value: str = "") -> list[str]:
             term = term[2:].strip()
         if term:
             terms.append(term)
+            if len(terms) > MAX_VOCABULARY_TERMS:
+                raise ValueError(f"vocabulary has too many terms (max {MAX_VOCABULARY_TERMS})")
     return terms
 
 

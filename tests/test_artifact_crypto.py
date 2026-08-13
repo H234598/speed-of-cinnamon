@@ -1197,7 +1197,7 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "helper could not be started"):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
 
-    def test_secret_tool_closed_pipe_failure_is_controlled(self) -> None:
+    def test_secret_tool_closed_pipe_fails_closed_without_identity(self) -> None:
         fake_proc_holder: dict[str, object] = {}
 
         class BrokenStream:
@@ -1232,10 +1232,10 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "output could not be captured safely"):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
 
-        self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
-        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
+        self.assertFalse(getattr(fake_proc_holder["proc"], "killed"))
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 0)
 
-    def test_secret_tool_input_failure_is_controlled(self) -> None:
+    def test_secret_tool_input_failure_fails_closed_without_identity(self) -> None:
         fake_proc_holder: dict[str, object] = {}
 
         class BrokenInput:
@@ -1274,10 +1274,10 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "input could not be sent safely"):
                 artifact_crypto._run_secret_tool(["store", "application", "test"], input_text="secret")
 
-        self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
-        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
+        self.assertFalse(getattr(fake_proc_holder["proc"], "killed"))
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 0)
 
-    def test_secret_tool_kills_process_when_pipe_capture_is_interrupted(self) -> None:
+    def test_secret_tool_pipe_capture_interrupt_fails_closed_without_identity(self) -> None:
         fake_proc_holder: dict[str, object] = {}
 
         class DummyStream:
@@ -1313,8 +1313,8 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaises(KeyboardInterrupt):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
 
-        self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
-        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
+        self.assertFalse(getattr(fake_proc_holder["proc"], "killed"))
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 0)
 
     def test_secret_tool_pipe_reader_retries_interrupted_reads(self) -> None:
         class DummyStream:
@@ -1504,10 +1504,8 @@ class ArtifactCryptoTest(unittest.TestCase):
         process = mock.Mock()
         process.pid = 1234
         process.poll.return_value = 0
-        with mock.patch("speed_of_cinnamon.artifact_crypto.os.killpg") as mocked_killpg:
-            artifact_crypto._stop_secret_tool_process(process)
+        artifact_crypto._stop_secret_tool_process(process)
 
-        mocked_killpg.assert_not_called()
         process.kill.assert_not_called()
         process.wait.assert_not_called()
 
@@ -1517,15 +1515,14 @@ class ArtifactCryptoTest(unittest.TestCase):
         process.returncode = None
         process._soc_process_identity = "owner-identity"
 
-        with (
-            mock.patch("speed_of_cinnamon.artifact_crypto._output_process_identity_is_current", return_value=False),
-            mock.patch("speed_of_cinnamon.artifact_crypto.os.killpg") as mocked_killpg,
-        ):
+        with mock.patch(
+            "speed_of_cinnamon.artifact_crypto._terminate_output_process_group",
+        ) as mocked_stop:
             artifact_crypto._stop_secret_tool_process(process)
 
-        mocked_killpg.assert_not_called()
+        mocked_stop.assert_called_once_with(process)
         process.kill.assert_not_called()
-        process.wait.assert_not_called()
+        process.wait.assert_called_once_with(timeout=1)
 
     def test_secret_tool_stop_kills_same_session_child_process_group(self) -> None:
         process = subprocess.Popen(
@@ -1710,8 +1707,8 @@ class ArtifactCryptoTest(unittest.TestCase):
         ):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "exceeded safe output limit"):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
-        self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
-        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
+        self.assertFalse(getattr(fake_proc_holder["proc"], "killed"))
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 0)
 
     def test_secret_tool_timeout_survives_kill_failure(self) -> None:
         fake_proc_holder: dict[str, object] = {}
@@ -1744,7 +1741,7 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "request timed out"):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
 
-        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 2)
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
 
     def test_secret_tool_wait_uses_remaining_request_deadline(self) -> None:
         fake_proc_holder: dict[str, object] = {}
@@ -1898,8 +1895,8 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "could not be reaped safely"):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
 
-        self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
-        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 2)
+        self.assertFalse(getattr(fake_proc_holder["proc"], "killed"))
+        self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
 
     def test_secret_tool_stream_cleanup_interrupt_does_not_mask_wait_failure(self) -> None:
         fake_proc_holder: dict[str, object] = {}
@@ -1933,7 +1930,7 @@ class ArtifactCryptoTest(unittest.TestCase):
             with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "could not be reaped safely"):
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
 
-        self.assertTrue(getattr(fake_proc_holder["proc"], "killed"))
+        self.assertFalse(getattr(fake_proc_holder["proc"], "killed"))
 
     def test_secret_tool_stream_cleanup_failure_is_controlled(self) -> None:
         class BrokenStream:
@@ -2561,17 +2558,15 @@ class ArtifactCryptoTest(unittest.TestCase):
 
         process = UnknownPopen()
         with (
-            mock.patch("speed_of_cinnamon.artifact_crypto._process_tree_descendant_identities") as tree,
-            mock.patch.object(artifact_crypto.os, "getpgid", side_effect=ProcessLookupError),
-            mock.patch("speed_of_cinnamon.artifact_crypto.os.killpg") as killpg,
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_process_start_time", return_value=None),
+            mock.patch("speed_of_cinnamon.artifact_crypto._kill_output_process_with_pidfd") as kill_pidfd,
         ):
             artifact_crypto._stop_secret_tool_process(process)
 
         self.assertFalse(process.killed)
-        tree.assert_not_called()
-        killpg.assert_not_called()
+        kill_pidfd.assert_not_called()
 
-    def test_secret_tool_unknown_real_process_kills_its_private_group(self) -> None:
+    def test_secret_tool_unknown_process_uses_pidfd_root_only(self) -> None:
         class UnknownPopen:
             __module__ = "subprocess"
 
@@ -2591,13 +2586,13 @@ class ArtifactCryptoTest(unittest.TestCase):
 
         process = UnknownPopen()
         with (
-            mock.patch.object(artifact_crypto.os, "getpgid", return_value=1234),
-            mock.patch.object(artifact_crypto.os, "killpg") as killpg,
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_process_start_time", return_value="123"),
+            mock.patch("speed_of_cinnamon.artifact_crypto._kill_output_process_with_pidfd", return_value=True) as kill_pidfd,
         ):
             artifact_crypto._stop_secret_tool_process(process)
 
         self.assertFalse(process.killed)
-        killpg.assert_called_once_with(1234, artifact_crypto.signal.SIGKILL)
+        kill_pidfd.assert_called_once_with(1234, "123")
 
     def test_secret_tool_unknown_real_process_is_reaped(self) -> None:
         process = subprocess.Popen(
@@ -2783,18 +2778,18 @@ class ArtifactCryptoTest(unittest.TestCase):
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "version is unsupported"):
             artifact_crypto.decrypt_bytes(payload, kind="transcript")
 
-    def test_secret_tool_unknown_identity_uses_confirmed_private_group(self) -> None:
+    def test_secret_tool_unknown_identity_uses_pidfd_root_only(self) -> None:
         process = mock.Mock()
         process.pid = 1234
         process.returncode = None
         process.poll.return_value = None
         process._soc_process_identity = ""
         with (
-            mock.patch.object(artifact_crypto.os, "getpgid", return_value=1234),
-            mock.patch.object(artifact_crypto.os, "killpg") as killpg,
+            mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_process_start_time", return_value="123"),
+            mock.patch("speed_of_cinnamon.artifact_crypto._kill_output_process_with_pidfd", return_value=True) as kill_pidfd,
         ):
             artifact_crypto._stop_secret_tool_process(process)
-        killpg.assert_called_once_with(1234, artifact_crypto.signal.SIGKILL)
+        kill_pidfd.assert_called_once_with(1234, "123")
         process.kill.assert_not_called()
         process.wait.assert_called_once()
 
@@ -2817,12 +2812,8 @@ class ArtifactCryptoTest(unittest.TestCase):
                 return None
 
         process = UnknownPopen()
-        with (
-            mock.patch.object(artifact_crypto.os, "getpgid", side_effect=OSError("permission denied")),
-            mock.patch.object(artifact_crypto.os, "killpg") as killpg,
-        ):
+        with mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_process_start_time", return_value=None):
             artifact_crypto._stop_secret_tool_process(process)
-        killpg.assert_not_called()
         self.assertFalse(process.killed)
 
     def test_secret_tool_stop_does_not_kill_reused_pid_after_group_failure(self) -> None:
@@ -2845,23 +2836,10 @@ class ArtifactCryptoTest(unittest.TestCase):
                 return None
 
         process = OwnedPopen()
-        with (
-            mock.patch(
-                "speed_of_cinnamon.artifact_crypto._output_process_identity_is_current",
-                side_effect=[True, True, True, False],
-            ),
-            mock.patch(
-                "speed_of_cinnamon.artifact_crypto._process_tree_descendant_identities",
-                return_value={},
-            ),
-            mock.patch(
-                "speed_of_cinnamon.artifact_crypto._secret_tool_same_session_process_group_ids",
-                return_value=set(),
-            ),
-            mock.patch.object(artifact_crypto.os, "killpg", side_effect=OSError("permission denied")),
-        ):
+        with mock.patch("speed_of_cinnamon.artifact_crypto._terminate_output_process_group") as mocked_stop:
             artifact_crypto._stop_secret_tool_process(process)
 
+        mocked_stop.assert_called_once_with(process)
         self.assertFalse(process.killed)
 
     def test_history_error_boundary_is_chain_free(self) -> None:

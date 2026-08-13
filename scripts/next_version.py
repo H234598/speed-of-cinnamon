@@ -120,12 +120,10 @@ def commits_since_tag(tag: str) -> int:
 
 
 def implicit_commits_since_tag(tag: str) -> int:
-    try:
-        if tag_exists(tag):
-            return commits_since_tag(tag)
-    except GitEnvironmentError:
+    tag_present = tag_exists(tag)
+    if not tag_present:
         return 0
-    return 0
+    return commits_since_tag(tag)
 
 def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int]:
     major, minor, patch = _assert_version_tuple(base)

@@ -50,7 +50,7 @@ class _ResponsiveLogo(SettingsWidget):
             self._drawing_area = Gtk.DrawingArea()
             self._drawing_area.set_halign(Gtk.Align.FILL)
             self._drawing_area.set_hexpand(True)
-            self._drawing_area.set_size_request(1, 1)
+            self._drawing_area.set_size_request(1, self.max_height)
             self._drawing_area.connect("draw", self._on_draw)
             box.pack_start(self._drawing_area, True, True, 0)
             box.connect("size-allocate", self._on_size_allocate)

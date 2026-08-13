@@ -548,6 +548,20 @@ class CiStaticTest(unittest.TestCase):
             self.assertIn("shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)", text)
             self.assertNotIn("SPEED_OF_CINNAMON_TRUSTED_PATH", text)
 
+    def test_dependabot_covers_project_ci_and_action_dependencies(self) -> None:
+        config = (REPO_ROOT / ".github" / "dependabot.yml").read_text(encoding="utf-8")
+
+        self.assertTrue(config.startswith("version: 2\nupdates:\n"))
+        self.assertEqual(config.count("package-ecosystem:"), 3)
+        self.assertEqual(config.count("interval: weekly"), 3)
+        self.assertEqual(config.count("open-pull-requests-limit: 5"), 3)
+        self.assertIn("package-ecosystem: pip\n    directory: /", config)
+        self.assertIn("package-ecosystem: pip\n    directory: /.github/requirements", config)
+        self.assertIn("package-ecosystem: github-actions\n    directory: /", config)
+        self.assertIn("python-project:", config)
+        self.assertIn("python-ci:", config)
+        self.assertNotIn("ubuntu-latest", config)
+
     def test_ci_uploads_release_and_rpm_artifacts(self) -> None:
         workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
         bandit_requirements = (REPO_ROOT / ".github" / "requirements" / "ci-bandit.txt").read_text(encoding="utf-8")
@@ -590,24 +604,43 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("curl -fsSL https://qlty.sh | sh", workflow)
         self.assertNotIn("https://qlty.sh", workflow)
         self.assertNotIn("sh \"${qlty_installer}\"", workflow)
-        self.assertIn("QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}", workflow)
+        check_start = workflow.index("  check:\n")
+        steps_start = workflow.index("\n    steps:", check_start)
+        self.assertNotIn(
+            "QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}",
+            workflow[check_start:steps_start],
+        )
+        self.assertIn("id: qlty-secret", workflow)
+        self.assertIn(
+            "if: ${{ github.event_name == 'push' && steps.qlty-secret.outputs.configured == 'true' }}",
+            workflow,
+        )
+        self.assertEqual(workflow.count("QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}"), 1)
         self.assertIn(
             "uses: qltysh/qlty-action/coverage@fd52dc852530a708d68c3b7342f8d33d1df4cd55 # v2.2.1",
             workflow,
         )
-        self.assertIn("if: ${{ github.event_name == 'push' && env.QLTY_COVERAGE_TOKEN != '' }}", workflow)
         self.assertIn("token: ${{ secrets.QLTY_COVERAGE_TOKEN }}", workflow)
         self.assertIn("files: reports/lcov.info", workflow)
         self.assertIn("format: lcov", workflow)
         self.assertIn("cli-version: 0.630.0", workflow)
         self.assertIn("sudo apt-get update", workflow)
-        self.assertIn("sudo apt-get install -y cpio rpm shellcheck squashfs-tools", workflow)
+        self.assertIn("sudo apt-get install -y --no-install-recommends cpio rpm shellcheck squashfs-tools", workflow)
         self.assertIn("if ! command -v -- snapcraft", workflow)
-        self.assertIn("snap install snapcraft --classic --channel=8.x/stable", workflow)
+        self.assertIn('snapcraft_expected_version="8.14.5"', workflow)
+        self.assertIn('snapcraft_expected_revision="17614"', workflow)
+        self.assertIn('snap install snapcraft --classic --revision="${snapcraft_expected_revision}"', workflow)
+        self.assertIn('snap refresh snapcraft --revision="${snapcraft_expected_revision}"', workflow)
+        self.assertIn('snapcraft_revision="$(snap list snapcraft | awk', workflow)
         self.assertIn("snapcraft_version=\"$(snapcraft --version | awk '{print $NF}')\"", workflow)
-        self.assertIn("Unsupported snapcraft version for this project", workflow)
+        self.assertIn("Unsupported snapcraft installation", workflow)
         self.assertIn('snapcraft_base="core22"', workflow)
-        self.assertIn('sudo snap install "${snapcraft_base}" --channel=latest/stable', workflow)
+        self.assertIn('snapcraft_base_expected_revision="2411"', workflow)
+        self.assertIn('snap install "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"', workflow)
+        self.assertIn('snap refresh "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"', workflow)
+        self.assertIn('snapcraft_base_revision="$(snap list "${snapcraft_base}" | awk', workflow)
+        self.assertNotIn("channel=8.x/stable", workflow)
+        self.assertNotIn("channel=latest/stable", workflow)
         self.assertIn("Could not install required snap base core22.", workflow)
         self.assertNotIn("for candidate in core24 core22", workflow)
         self.assertNotIn("Could not install a compatible snap base (tried core24, core22).", workflow)
@@ -826,8 +859,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('snapcraft_rendered_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snapcraft_file_rendered}" --kind file)"', build_snap)
         self.assertIn('os.fchmod(fd, int(mode_text, 8))', build_snap)
         self.assertNotIn('chmod "${snapcraft_mode}" "${snapcraft_file_rendered}"', build_snap)
-        self.assertIn('snapcraft prime --destructive-mode', build_snap)
-        self.assertIn('snapcraft pack --destructive-mode prime', build_snap)
+        self.assertIn('snapcraft_args=(--destructive-mode)', build_snap)
+        self.assertIn('snapcraft "${snapcraft_args[@]}" prime', build_snap)
+        self.assertIn('snapcraft "${snapcraft_args[@]}" pack prime', build_snap)
         self.assertIn('snap_stage_usr="${snap_workspace}/stage/usr"', build_snap)
         self.assertIn(
             'cp -dR --no-preserve=links --preserve=mode,timestamps --',
@@ -835,10 +869,10 @@ class CiStaticTest(unittest.TestCase):
         )
         self.assertLess(
             build_snap.index('cp -dR --no-preserve=links --preserve=mode,timestamps --'),
-            build_snap.index('snapcraft pack --destructive-mode prime'),
+            build_snap.index('snapcraft "${snapcraft_args[@]}" pack prime'),
         )
         self.assertLess(
-            build_snap.index('snapcraft pack --destructive-mode prime'),
+            build_snap.index('snapcraft "${snapcraft_args[@]}" pack prime'),
             build_snap.index('"${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace_dist}"'),
         )
         self.assertIn('copy-file build-snap "${snap_files[0]}" "${snap_stage_path}" 0644 --dst-must-not-exist', build_snap)
@@ -1612,6 +1646,11 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("sha256sum -c -", workflow)
         self.assertIn('actionlint_version="1.7.12"', workflow)
         self.assertIn("rhysd/actionlint/releases/download/v${actionlint_version}", workflow)
+        self.assertGreaterEqual(workflow.count('actionlint_tmp_dir="$(mktemp -d)"'), 2)
+        self.assertIn("trap 'rm -rf -- \"${actionlint_tmp_dir}\"' EXIT", workflow)
+        self.assertIn('sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint', workflow)
+        self.assertNotIn('"/tmp/${archive}"', workflow)
+        self.assertNotIn('"/tmp/${actionlint_archive}"', workflow)
         self.assertIn("Verify release tag provenance", workflow)
         self.assertIn('git rev-list -n 1 "${tag}^{commit}"', workflow)
         self.assertIn("security-scan:", workflow)
@@ -1646,12 +1685,21 @@ class CiStaticTest(unittest.TestCase):
             "python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt",
             workflow,
         )
-        self.assertIn("sudo apt-get install -y cpio rpm shellcheck squashfs-tools", workflow)
-        self.assertIn("snap install snapcraft --classic --channel=8.x/stable", workflow)
+        self.assertIn("sudo apt-get install -y --no-install-recommends cpio rpm shellcheck squashfs-tools", workflow)
+        self.assertIn('snapcraft_expected_version="8.14.5"', workflow)
+        self.assertIn('snapcraft_expected_revision="17614"', workflow)
+        self.assertIn('snap install snapcraft --classic --revision="${snapcraft_expected_revision}"', workflow)
+        self.assertIn('snap refresh snapcraft --revision="${snapcraft_expected_revision}"', workflow)
+        self.assertIn('snapcraft_revision="$(snap list snapcraft | awk', workflow)
         self.assertIn("snapcraft_version=\"$(snapcraft --version | awk '{print $NF}')\"", workflow)
-        self.assertIn("Unsupported snapcraft version for this project", workflow)
+        self.assertIn("Unsupported snapcraft installation", workflow)
         self.assertIn('snapcraft_base="core22"', workflow)
-        self.assertIn('sudo snap install "${snapcraft_base}" --channel=latest/stable', workflow)
+        self.assertIn('snapcraft_base_expected_revision="2411"', workflow)
+        self.assertIn('snap install "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"', workflow)
+        self.assertIn('snap refresh "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"', workflow)
+        self.assertIn('snapcraft_base_revision="$(snap list "${snapcraft_base}" | awk', workflow)
+        self.assertNotIn("channel=8.x/stable", workflow)
+        self.assertNotIn("channel=latest/stable", workflow)
         self.assertIn("Could not install required snap base core22.", workflow)
         self.assertNotIn("for candidate in core24 core22", workflow)
         self.assertNotIn("Could not install a compatible snap base (tried core24, core22).", workflow)
@@ -1860,7 +1908,14 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("archive_sha256=\"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8\"", lint_workflow)
         self.assertIn("sha256sum -c -", ci_workflow)
         self.assertIn("sha256sum -c -", lint_workflow)
-        self.assertGreaterEqual(ci_workflow.count("sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint"), 2)
+        self.assertEqual(ci_workflow.count('actionlint_tmp_dir="$(mktemp -d)"'), 2)
+        self.assertIn('actionlint_tmp_dir="$(mktemp -d)"', lint_workflow)
+        self.assertIn("trap 'rm -rf -- \"${actionlint_tmp_dir}\"' EXIT", ci_workflow)
+        self.assertIn("trap 'rm -rf -- \"${actionlint_tmp_dir}\"' EXIT", lint_workflow)
+        self.assertIn('sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint', ci_workflow)
+        self.assertIn('sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint', lint_workflow)
+        self.assertNotIn('"/tmp/${archive}"', ci_workflow)
+        self.assertNotIn('"/tmp/${archive}"', lint_workflow)
         self.assertNotIn("rhysd/actionlint:", linter)
         self.assertNotIn("latest", linter)
 
@@ -1871,7 +1926,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\\n", makefile)
         self.assertIn("--skip-generic-rpm", makefile)
         self.assertIn("release-dry-run: release-validate-flags release-require-snap dist-check rpm rpm-check", makefile)
-        self.assertIn("release: release-validate-flags release-require-snap dist-check rpm rpm-check", makefile)
+        self.assertIn(
+            "release: release-validate-flags release-require-snap verify-real-e2e-attestation dist-check rpm rpm-check",
+            makefile,
+        )
         self.assertIn("release-validate-flags", makefile)
         self.assertIn("release-validate-flags:", makefile)
         self.assertIn('SNAP_BUILD must be 0 or 1.\\n', makefile)

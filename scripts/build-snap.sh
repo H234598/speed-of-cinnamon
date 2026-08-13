@@ -12,6 +12,42 @@ if [[ ! "${snapcraft_base}" =~ ^[a-z][a-z0-9-]*$ ]]; then
   printf 'invalid SNAPCRAFT_BASE value: %s\n' "${snapcraft_base}" >&2
   exit 1
 fi
+snapcraft_mode="${SNAPCRAFT_MODE:-auto}"
+case "${snapcraft_mode}" in
+  auto|destructive|lxd) ;;
+  *)
+    printf 'invalid SNAPCRAFT_MODE value: %s (expected auto, destructive, or lxd)\n' "${snapcraft_mode}" >&2
+    exit 1
+    ;;
+esac
+
+host_id=""
+if [[ -r /etc/os-release ]]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+  host_id="${ID:-}"
+fi
+if [[ "${snapcraft_mode}" == "auto" ]]; then
+  if [[ "${host_id}" == "ubuntu" ]]; then
+    snapcraft_mode="destructive"
+  elif command -v -- lxc >/dev/null 2>&1 && lxc info >/dev/null 2>&1; then
+    snapcraft_mode="lxd"
+  else
+    printf 'Snap build needs Ubuntu destructive mode or LXD on non-Ubuntu hosts; install LXD or set up an Ubuntu builder.\n' >&2
+    exit 1
+  fi
+fi
+if [[ "${snapcraft_mode}" == "destructive" && "${host_id}" != "ubuntu" ]]; then
+  printf 'SNAPCRAFT_MODE=destructive is supported only on Ubuntu; use SNAPCRAFT_MODE=lxd on this host.\n' >&2
+  exit 1
+fi
+if [[ "${snapcraft_mode}" == "lxd" ]]; then
+  require_lxc="true"
+  snapcraft_args=(--use-lxd)
+else
+  require_lxc="false"
+  snapcraft_args=(--destructive-mode)
+fi
 
 require_cmd() {
   local tool=$1
@@ -251,6 +287,9 @@ PY
 for tool in python3 snapcraft cp mktemp mkdir find realpath stat chmod grep sort basename; do
   require_cmd "${tool}"
 done
+if [[ "${require_lxc}" == "true" ]]; then
+  require_cmd lxc
+fi
 snap_dir="${repo_dir}/snap"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 safe_fs_cmd=(python3 "${safe_fs}")
@@ -493,7 +532,7 @@ PY
 if ! (
   cd "${snap_workspace}"
   umask 022
-  snapcraft prime --destructive-mode
+  snapcraft "${snapcraft_args[@]}" prime
   snap_stage_usr="${snap_workspace}/stage/usr"
   snap_prime_usr="${snap_workspace}/prime/usr"
   if [[ ! -d "${snap_stage_usr}" || -L "${snap_stage_usr}" ]]; then
@@ -520,7 +559,7 @@ if ! (
     printf 'failed to promote Snap runtime tree into prime payload.\n' >&2
     exit 1
   fi
-  snapcraft pack --destructive-mode prime
+  snapcraft "${snapcraft_args[@]}" pack prime
 ); then
   printf 'snapcraft build failed.\n' >&2
   exit 1

@@ -215,10 +215,12 @@ class NextVersionTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(stderr, "")
 
-    def test_implicit_base_commit_count_falls_back_to_zero_without_git(self) -> None:
-        result = _run_version("--base", "0.1.99", "--breaking", expect_ok=True, path="/nonexistent")
-        self.assertEqual(result.stdout.strip(), "1.0.0")
-        self.assertEqual(result.stderr, "")
+    def test_implicit_base_commit_count_fails_without_git(self) -> None:
+        code, stderr = run_version_fail_stdout_stderr(
+            "--base", "0.1.99", "--breaking", path="/nonexistent"
+        )
+        self.assertEqual(code, 3)
+        self.assertIn("git command not available", stderr)
 
     def test_large_add_commits_rolls_many_levels(self) -> None:
         self.assertEqual(
@@ -761,6 +763,34 @@ class NextVersionTest(unittest.TestCase):
             tag_exists.assert_called_once_with("v3.4.5")
             self.assertFalse(commits_since_tag.called)
             add_patches.assert_called_once_with((3, 4, 5), 0)
+
+    def test_implicit_commits_since_tag_propagates_tag_lookup_error(self) -> None:
+        with mock.patch.object(
+            next_version,
+            "tag_exists",
+            side_effect=next_version.GitEnvironmentError("git unavailable"),
+        ):
+            with self.assertRaises(next_version.GitEnvironmentError):
+                next_version.implicit_commits_since_tag("v3.4.5")
+
+    def test_implicit_commits_since_tag_propagates_missing_git(self) -> None:
+        error = next_version.GitEnvironmentError("git command not available")
+        error.__cause__ = FileNotFoundError("git")
+        with mock.patch.object(next_version, "tag_exists", side_effect=error):
+            with self.assertRaises(next_version.GitEnvironmentError):
+                next_version.implicit_commits_since_tag("v3.4.5")
+
+    def test_implicit_commits_since_tag_propagates_commit_count_error(self) -> None:
+        with (
+            mock.patch.object(next_version, "tag_exists", return_value=True),
+            mock.patch.object(
+                next_version,
+                "commits_since_tag",
+                side_effect=next_version.GitEnvironmentError("repository unreadable"),
+            ),
+        ):
+            with self.assertRaises(next_version.GitEnvironmentError):
+                next_version.implicit_commits_since_tag("v3.4.5")
 
     def test_main_add_patches_failure_propagates(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args, \

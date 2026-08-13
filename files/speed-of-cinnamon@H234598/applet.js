@@ -7,6 +7,8 @@ const Clutter = imports.gi.Clutter;
 const St = imports.gi.St;
 const GLib = imports.gi.GLib;
 const Gio = imports.gi.Gio;
+const Gdk = imports.gi.Gdk;
+const Gtk = imports.gi.Gtk;
 const Pango = imports.gi.Pango;
 const ByteArray = imports.byteArray;
 const Mainloop = imports.mainloop;
@@ -31,8 +33,8 @@ const SYSTEM_CLI = "/usr/bin/speed-of-cinnamon";
 const RUNBOOK_URL = "https://gist.github.com/H234598/b95129e13ac0b09c9777edd41aeedfa0";
 const DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434";
 const DEFAULT_OPENAI_COMPATIBLE_URL = "https://api.openai.com/v1";
-const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-4o-transcribe";
-const DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL = "gpt-4o-mini";
+const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-transcribe";
+const DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL = "gpt-5.6-luna";
 const LEGACY_OPENAI_COMPATIBLE_URL = "http://127.0.0.1:8000/v1";
 const PASTE_FOCUS_DELAY_MS = 120;
 const PASTE_SUBMIT_DELAY_MS = 300;
@@ -85,7 +87,7 @@ const NON_ASCII_RE = /[^\u0000-\u007E]/g;
 const COMBINING_MARKS_RE = /[\u0300-\u036f]/g;
 const ASCII_ONLY_RE = /^[\u0000-\u007E]*$/;
 const SENSITIVE_ERROR_RE = /(?:\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s*[:=]\s*[^,\s;]+|\b(?:bearer|token|api[_ -]?key|apikey|password|passwd|passphrase|secret)\b\s+(?!(?:is|are|was|were|contains?|must|too|missing|invalid|required|not|empty)\b)[^,\s;]+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@)/i;
-const LOCAL_PATH_ERROR_RE = /(?:^|[\s"'`=:(])\/(?:home|root|run|tmp|var|etc|usr|opt|mnt|media|dev|proc|sys)\/[^\s,;)]*/i;
+const LOCAL_PATH_ERROR_RE = /(?:^|[\s"'`=:(])(?:\/(?:[^\/\s,;)\]}]+\/)+[^\/\s,;)\]}]+|file:\/\/\/[^\s,;)]*)/i;
 const EMPTY_TRANSCRIPT_MARKERS = [
   "leere aufnahme",
   "leerer text",
@@ -137,7 +139,7 @@ const SUBPROCESS_READ_CHUNK_BYTES = 4096;
 const MAX_EXTERNAL_API_ENV_BYTES = 65536;
 const MIN_RECORDING_SECONDS = 0;
 const MAX_RECORDING_SECONDS = 3600;
-const DEFAULT_RECORDING_SECONDS = 30;
+const DEFAULT_RECORDING_SECONDS = 60;
 const MIN_TYPING_DELAY_MS = 0;
 const MAX_TYPING_DELAY_MS = 10000;
 const DEFAULT_TYPING_DELAY_MS = 8;
@@ -155,7 +157,7 @@ function utf8ByteLength(value) {
 
 const MIN_TRANSCRIPT_FILES = 1;
 const MAX_TRANSCRIPT_FILES = 1000;
-const DEFAULT_AUTO_PASTE_TITLE = "codex";
+const DEFAULT_AUTO_PASTE_TITLE = "codex, Terminal, Telegram, Ghostty, Kitty";
 const AUTO_PASTE_TITLE_PRESETS = [
   "codex",
   "Terminal",
@@ -371,7 +373,7 @@ const BOOLEAN_IMPORT_SETTINGS = {
   "notify-error": true,
   "append-space": true,
   "sanitize-special-chars": true,
-  "soften-profanity": false,
+  "soften-profanity": true,
   "post-process-preserve-code": true,
   "post-process-never-add-content": true,
   "post-process-mask-sensitive-data": false,
@@ -527,19 +529,10 @@ MyApplet.prototype = {
         return;
       }
       if (!this._hasActiveRecordingState() && !this.isCommandRunning) {
-        let callbackDelivered = false;
-        let startRecording = (remembered) => {
-          callbackDelivered = true;
-          if (remembered) {
-            this._toggleRecording();
-          }
-        };
-        if (!this._rememberFocusedWindow(false, startRecording)) {
+        if (!this._rememberFocusedWindow(false)) {
           return;
         }
-        if (!callbackDelivered) {
-          return;
-        }
+        this._toggleRecording();
         return;
       }
       this._toggleRecording();
@@ -601,7 +594,7 @@ MyApplet.prototype = {
     try {
       return this._sanitizeErrorMessage(raw) || "unknown error";
     } catch (ignored) {
-      return raw.slice(0, MAX_SETTING_TEXT_CHARS);
+      return "unknown error";
     }
   },
 
@@ -615,7 +608,7 @@ MyApplet.prototype = {
 
   _safeLogError: function(error) {
     try {
-      global.logError(error);
+      global.logError(this._lifecycleErrorText(error));
     } catch (ignored) {
       // Best-effort diagnostics must never escape a recovery path.
     }
@@ -3179,80 +3172,6 @@ MyApplet.prototype = {
     }
   },
 
-  _processSessionGroupIds: function(identity) {
-    try {
-      if (!identity || !/^[1-9][0-9]*$/.test(String(identity.pid || "")) ||
-          !/^[0-9]+$/.test(String(identity.startTime || ""))) {
-        return null;
-      }
-      let groupPid = String(identity.pid);
-      let groups = {};
-      let procDirectory = Gio.File.new_for_path("/proc");
-      let enumerator = procDirectory.enumerate_children(
-        "standard::name",
-        Gio.FileQueryInfoFlags.NONE,
-        null
-      );
-      try {
-        while (true) {
-          let info = enumerator.next_file(null);
-          if (!info) {
-            break;
-          }
-          let memberPid = String(info.get_name() || "");
-          if (!/^[1-9][0-9]*$/.test(memberPid)) {
-            continue;
-          }
-          let memberStatPath = "/proc/" + memberPid + "/stat";
-          let contents = null;
-          try {
-            contents = GLib.file_get_contents(memberStatPath);
-          } catch (error) {
-            contents = null;
-          }
-          if (!contents || contents[0] !== true) {
-            let memberStillExists = false;
-            try {
-              memberStillExists = GLib.file_test(memberStatPath, GLib.FileTest.EXISTS);
-            } catch (error) {
-              return null;
-            }
-            if (!memberStillExists) {
-              continue;
-            }
-            return null;
-          }
-          let stat = ByteArray.toString(contents[1] || "");
-          let commandEnd = stat.lastIndexOf(") ");
-          if (commandEnd < 0) {
-            return null;
-          }
-          let fields = stat.slice(commandEnd + 2).trim().split(/\s+/);
-          if (fields.length <= 19) {
-            return null;
-          }
-          if (fields[3] !== groupPid) {
-            continue;
-          }
-          if (!/^[1-9][0-9]*$/.test(fields[2])) {
-            return null;
-          }
-          if (memberPid === groupPid) {
-            if (fields[2] !== groupPid || fields[19] !== String(identity.startTime)) {
-              return null;
-            }
-          }
-          groups[fields[2]] = true;
-        }
-      } finally {
-        enumerator.close(null);
-      }
-      return Object.keys(groups);
-    } catch (error) {
-      return null;
-    }
-  },
-
   _killProcessGroup: function(process, identity) {
     try {
       let groupState = this._processGroupState(identity);
@@ -3262,20 +3181,17 @@ MyApplet.prototype = {
       if (groupState !== "live") {
         return false;
       }
-      let kill = this._findTrustedProgramInPath("kill");
-      if (!kill) {
+      if (!process || typeof process.force_exit !== "function") {
         return false;
       }
-      let sessionGroupIds = this._processSessionGroupIds(identity);
-      if (!sessionGroupIds) {
+      let currentProcessGroupIdentity = this._readProcessGroupIdentity(process);
+      if (!currentProcessGroupIdentity ||
+          currentProcessGroupIdentity.pid !== String(identity.pid) ||
+          currentProcessGroupIdentity.startTime !== String(identity.startTime)) {
         return false;
       }
-      for (let processGroupId of sessionGroupIds) {
-        let result = GLib.spawn_sync(null, [kill, "-KILL", "--", "-" + processGroupId], null, 0, null);
-        if (!result || result[0] !== true || result[3] !== 0) {
-          return false;
-        }
-      }
+      // Numeric PGID kills are unsafe after PID/PGID reuse. Bind termination to Gio handle.
+      process.force_exit();
       let finalGroupState = this._processGroupState(identity);
       return finalGroupState === "stopped";
     } catch (error) {
@@ -3948,31 +3864,32 @@ MyApplet.prototype = {
     this.primaryLanguageKeybinding = "";
     this.secondaryLanguageKeybinding = "";
     this.cancelKeybinding = "";
-    this.showPanelLabel = true;
+    this.showPanelLabel = false;
     this.showTranscriptText = true;
-    this.language = "en";
-    this.secondaryLanguage = "de";
+    this.language = "de";
+    this.secondaryLanguage = "en";
     this.activeLanguage = "";
     this.activeLanguageExplicit = false;
     this.maxSeconds = DEFAULT_RECORDING_SECONDS;
-    this.autoTranscribeTimeout = true;
+    this.autoTranscribeTimeout = false;
     this.autoRelisten = false;
     this.keepRecordingArtifacts = false;
-    this.recorder = "auto";
+    this.recorder = "arecord";
     this.inputDevice = "";
     this.insertMethod = "clipboard-paste";
     this.appendSpace = true;
     this.typingDelayMs = DEFAULT_TYPING_DELAY_MS;
     this.sanitizeSpecialChars = false;
-    this.softenProfanity = false;
+    this.softenProfanity = true;
     this.maxTranscriptFiles = DEFAULT_MAX_TRANSCRIPT_FILES;
     this.artifactEncryption = DEFAULT_ARTIFACT_ENCRYPTION;
+    this.clipboardBackend = "gtk";
     this.autoPasteWindowTitle = DEFAULT_AUTO_PASTE_TITLE;
     this.cliPath = "";
-    this.transcriber = "auto";
+    this.transcriber = "openai-compatible";
     this.whisperModel = "";
     this.transcriberCommand = "";
-    this.postProcessBackend = "none";
+    this.postProcessBackend = "openai-compatible";
     this.postProcessCommand = "";
     this.ollamaUrl = DEFAULT_OLLAMA_URL;
     this.ollamaModel = "";
@@ -3990,7 +3907,7 @@ MyApplet.prototype = {
     this.personalContext = "";
     this.vocabulary = "";
     this.notifyRecording = false;
-    this.notifyComplete = false;
+    this.notifyComplete = true;
     this.notifyError = true;
     this.status = "idle";
     this.recordingArtifactsPresent = false;
@@ -4114,6 +4031,7 @@ MyApplet.prototype = {
     this._bindSetting(Settings.BindingDirection.IN, "soften-profanity", "softenProfanity", this._onTextOutputSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "max-transcript-files", "maxTranscriptFiles", this._onTranscriptRetentionSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "artifact-encryption", "artifactEncryption", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "clipboard-backend", "clipboardBackend", this._onClipboardBackendSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
     this._bindSetting(Settings.BindingDirection.IN, "transcriber", "transcriber", this._onVoiceBackendSettingsChanged, null);
@@ -5681,8 +5599,10 @@ MyApplet.prototype = {
     if (this.autoRelisten) {
       args.push("--skip-silent-auto-relisten");
     }
-    if (!Boolean(this.openaiCompatibleFlexProcessing) &&
-      !this._appendCliFlagWithinBudget(args, "--no-openai-compatible-flex-processing")) {
+    let flexProcessingFlag = Boolean(this.openaiCompatibleFlexProcessing)
+      ? "--openai-compatible-flex-processing"
+      : "--no-openai-compatible-flex-processing";
+    if (!this._appendCliFlagWithinBudget(args, flexProcessingFlag)) {
       throw new Error("OpenAI-compatible Flex setting exceeds command limit");
     }
     let transcriberCommandIncluded = safeTranscriberCommand.trim() === "";
@@ -5690,9 +5610,9 @@ MyApplet.prototype = {
     let ollamaModelIncluded = safeOllamaModel.trim() === "";
     let whisperModelIncluded = safeWhisperModel.trim() === "";
     let ollamaUrlIncluded = safeOllamaUrl.trim() === "" || safeOllamaUrl.trim() === DEFAULT_OLLAMA_URL;
-    let openAiCompatibleUrlIncluded = safeOpenAiCompatibleUrl.trim() === "" || safeOpenAiCompatibleUrl.trim() === DEFAULT_OPENAI_COMPATIBLE_URL;
-    let openAiCompatibleModelIncluded = safeOpenAiCompatibleModel.trim() === "" || safeOpenAiCompatibleModel.trim() === DEFAULT_OPENAI_COMPATIBLE_MODEL;
-    let openAiCompatibleTextModelIncluded = safeOpenAiCompatibleTextModel.trim() === "" || safeOpenAiCompatibleTextModel.trim() === DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL;
+    let openAiCompatibleUrlIncluded = safeOpenAiCompatibleUrl.trim() === "";
+    let openAiCompatibleModelIncluded = safeOpenAiCompatibleModel.trim() === "";
+    let openAiCompatibleTextModelIncluded = safeOpenAiCompatibleTextModel.trim() === "";
     if (safeInputDevice.trim() !== "") {
       if (!this._appendCliOptionWithinBudget(args, "--input-device", safeInputDevice)) {
         throw new Error("Input device setting exceeds command limit");
@@ -5710,22 +5630,14 @@ MyApplet.prototype = {
     if (safeOllamaModel.trim() !== "") {
       ollamaModelIncluded = this._appendCliOptionWithinBudget(args, "--ollama-model", safeOllamaModel);
     }
-    if (safeOpenAiCompatibleUrl.trim() !== "" && safeOpenAiCompatibleUrl.trim() !== DEFAULT_OPENAI_COMPATIBLE_URL) {
+    if (safeOpenAiCompatibleUrl.trim() !== "") {
       openAiCompatibleUrlIncluded = this._appendCliOptionWithinBudget(args, "--openai-compatible-url", safeOpenAiCompatibleUrl);
     }
     if (safeOpenAiCompatibleModel.trim() !== "") {
-      if (safeOpenAiCompatibleModel.trim() === DEFAULT_OPENAI_COMPATIBLE_MODEL) {
-        openAiCompatibleModelIncluded = true;
-      } else {
-        openAiCompatibleModelIncluded = this._appendCliOptionWithinBudget(args, "--openai-compatible-model", safeOpenAiCompatibleModel);
-      }
+      openAiCompatibleModelIncluded = this._appendCliOptionWithinBudget(args, "--openai-compatible-model", safeOpenAiCompatibleModel);
     }
     if (safeOpenAiCompatibleTextModel.trim() !== "") {
-      if (safeOpenAiCompatibleTextModel.trim() === DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL) {
-        openAiCompatibleTextModelIncluded = true;
-      } else {
-        openAiCompatibleTextModelIncluded = this._appendCliOptionWithinBudget(args, "--openai-compatible-text-model", safeOpenAiCompatibleTextModel);
-      }
+      openAiCompatibleTextModelIncluded = this._appendCliOptionWithinBudget(args, "--openai-compatible-text-model", safeOpenAiCompatibleTextModel);
     }
     if (safePostProcessPrompt.trim() !== "") {
       if (!this._appendCliOptionWithinBudget(args, "--post-process-prompt", safePostProcessPrompt)) {
@@ -5833,7 +5745,7 @@ MyApplet.prototype = {
   },
 
   _profanityFilterDocumentArgs: function() {
-    return [this._cliCommand(), "profanity-filter-document", "--json"];
+    return [this._cliCommand(), "profanity-filter-document", "--open", "--json"];
   },
 
   _benchmarkArgs: function(audioPath) {
@@ -5888,7 +5800,7 @@ MyApplet.prototype = {
     if (mode === "off") {
       mode = "keyring";
     }
-    return [this._cliCommand(), "transcripts-export", "--limit", "1000", "--artifact-encryption", mode, "--json"];
+    return [this._cliCommand(), "transcripts-export", "--limit", "1000", "--artifact-encryption", mode, "--open", "--json"];
   },
 
   _cleanupArgs: function() {
@@ -7873,14 +7785,13 @@ MyApplet.prototype = {
           this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
           return;
         }
-        let path = typeof payload.path === "string" ? payload.path.trim() : "";
-        if (path === "") {
+        if (payload.opened !== true) {
           this.setupDiagnosticsToken = null;
-          this._setStatus("error", _("Profanity replacement list was not generated"), this.lastTranscript);
+          this._setStatus("error", _("Profanity replacement list could not be opened"), this.lastTranscript);
           return;
         }
         this.setupDiagnosticsToken = null;
-        this._openFile(path, _("Opened profanity replacement list: ") + String(this._safePayloadCount(payload.entries)), false);
+        this._setStatus("ready", _("Opened profanity replacement list: ") + String(this._safePayloadCount(payload.entries)), this.lastTranscript);
       } catch (error) {
         this._failSetupDiagnosticsAction(actionToken, error, _("Could not open profanity replacement list"));
       }
@@ -10165,7 +10076,7 @@ MyApplet.prototype = {
     let current = Gio.File.new_for_path(GLib.path_get_dirname(path));
     let isConfigDirectory = true;
     while (current) {
-      let info = current.query_info("standard::type", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
+      let info = current.query_info("standard::type,unix::mode", Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null);
       if (!info || info.get_file_type() === Gio.FileType.SYMBOLIC_LINK) {
         throw new Error("External API config directory must not use symlinks");
       }
@@ -10292,7 +10203,7 @@ MyApplet.prototype = {
       this._writeExternalApiEnvFileContents(path, this._externalApiEnvContent());
     } catch (err) {
       this._safeLogError(err);
-      this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("External API config file could not be written") + ": " + this._lifecycleErrorText(err), this.lastTranscript);
       return false;
     }
     return true;
@@ -10372,7 +10283,7 @@ MyApplet.prototype = {
       }
     } catch (err) {
       this._safeLogError(err);
-      this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);
+      this._setStatusPreservingRecording("error", _("External API config file could not be written") + ": " + this._lifecycleErrorText(err), this.lastTranscript);
       return null;
     }
     return path;
@@ -10470,7 +10381,7 @@ MyApplet.prototype = {
         this._writeExternalApiEnvFileContents(path, migrated);
       } catch (err) {
         this._safeLogError(err);
-        this._setStatusPreservingRecording("error", _("External API config file could not be written"), this.lastTranscript);
+        this._setStatusPreservingRecording("error", _("External API config file could not be written") + ": " + this._lifecycleErrorText(err), this.lastTranscript);
       }
     }
   },
@@ -12333,9 +12244,8 @@ MyApplet.prototype = {
           this._maybeWarnRejectedArtifactPassphrase(payload.error);
           return;
         }
-        let path = typeof payload.path === "string" ? payload.path.trim() : "";
-        if (path === "") {
-          this._setStatus("error", _("Transcript export path is empty"), this.lastTranscript);
+        if (payload.opened !== true) {
+          this._setStatus("error", _("Transcript export folder could not be opened"), this.lastTranscript);
           return;
         }
         let encryptionMode = typeof payload.encryption === "string" ? payload.encryption.trim() : "";
@@ -12349,7 +12259,7 @@ MyApplet.prototype = {
         let message = _("Exported encrypted transcript bundle");
         this._setStatus("done", message, this.lastTranscript);
         this._notify(_("Speed of Cinnamon transcript export"), message, false);
-        this._openFolder(GLib.path_get_dirname(path), _("Opened transcript export folder"));
+        this._setStatus("ready", _("Opened transcript export folder"), this.lastTranscript);
       } catch (error) {
         if (this._cleanupCommandToken === cleanupToken) {
           this._cleanupCommandToken = null;
@@ -13291,6 +13201,69 @@ MyApplet.prototype = {
     return null;
   },
 
+  _normalizeClipboardBackend: function(value) {
+    let backend = String(value || "").trim();
+    return ["gtk", "xclip-fallback", "xclip-preferred"].indexOf(backend) >= 0 ? backend : "gtk";
+  },
+
+  _onClipboardBackendSettingsChanged: function() {
+    this.clipboardBackend = this._normalizeClipboardBackend(this.clipboardBackend);
+    if (this.clipboardBackend === "gtk" || this._findTrustedProgramInPath("xclip")) {
+      this._onTextOutputSettingsChanged();
+      return;
+    }
+    this._installSystemXclip((installed) => {
+      if (installed !== true) {
+        this._commitSettingValue(
+          "clipboardBackend",
+          "clipboard-backend",
+          "gtk",
+          "clipboard-backend",
+          _("Could not restore GTK clipboard backend")
+        );
+      }
+      this._onTextOutputSettingsChanged();
+    });
+  },
+
+  _installSystemXclip: function(completionCallback) {
+    let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    try {
+      let parameters = new GLib.Variant("(sas)", ["", ["xclip"], "show-confirm-search,show-finished"]);
+      Gio.DBus.system.call(
+        "org.freedesktop.PackageKit",
+        "/org/freedesktop/PackageKit",
+        "org.freedesktop.PackageKit.Modify",
+        "InstallPackageNames",
+        parameters,
+        null,
+        Gio.DBusCallFlags.NONE,
+        30000,
+        null,
+        (_connection, result) => {
+          try {
+            Gio.DBus.system.call_finish(result);
+            if (!this._findTrustedProgramInPath("xclip")) {
+              throw new Error("System xclip is unavailable after installation");
+            }
+            this._setStatusPreservingRecording("done", _("System xclip installed"), this.lastTranscript);
+            complete(true);
+          } catch (error) {
+            this._recordLifecycleError("system-xclip-install", error);
+            this._setStatusPreservingRecording("error", _("Could not request system xclip installation"), this.lastTranscript);
+            complete(false);
+          }
+        }
+      );
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("system-xclip-install", error);
+      this._setStatusPreservingRecording("error", _("Could not request system xclip installation"), this.lastTranscript);
+      complete(false);
+      return false;
+    }
+  },
+
   _resolveAllowedCliCommand: function(command) {
     let value = String(command || "").trim();
     if (value === "") {
@@ -13351,7 +13324,7 @@ MyApplet.prototype = {
       return fn(null);
     }
     return fn({
-      "SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY": apiKey,
+      "OPENAI_COMPATIBLE_API_KEY": apiKey,
     });
   },
 
@@ -14764,8 +14737,32 @@ MyApplet.prototype = {
     }
     let window = global.display ? global.display.focus_window : null;
     if (this._isUsableTargetWindow(window)) {
+      if (this._windowLooksLikeSpeedOfCinnamon(window)) {
+        this.targetWindow = null;
+        this._clearTargetWindowXid();
+        this._notifySelfProtectionBlocked(
+          this._windowProbeValue(window, "get_title"),
+          this._windowProbeValue(window, "get_wm_class") ||
+            this._windowProbeValue(window, "get_wm_class_instance") ||
+            this._windowProbeValue(window, "get_gtk_application_id")
+        );
+        deliver(false, false);
+        return false;
+      }
       this.targetWindow = window;
-      this._clearTargetWindowXid();
+      let xid = this._windowProbeValue(window, "get_xwindow").trim();
+      if (/^[0-9]+$/.test(xid)) {
+        this.targetWindowXid = xid;
+        this.targetWindowXTitle = this._windowProbeValue(window, "get_title");
+        this.targetWindowXClass = this._shortMenuText(
+          this._windowProbeValue(window, "get_wm_class") ||
+            this._windowProbeValue(window, "get_wm_class_instance") ||
+            this._windowProbeValue(window, "get_gtk_application_id"),
+          160
+        );
+      } else {
+        this._clearTargetWindowXid();
+      }
       deliver(true);
       return true;
     }
@@ -14936,10 +14933,11 @@ MyApplet.prototype = {
   },
 
   _xWindowLooksLikeSpeedOfCinnamon: function(title, windowClass) {
-    let value = (String(title || "") + "\n" + String(windowClass || "")).toLowerCase();
-    return value.indexOf("speed of cinnamon") >= 0 ||
-      value.indexOf("speed-of-cinnamon") >= 0 ||
-      value.indexOf(UUID.toLowerCase()) >= 0;
+    let normalizedTitle = String(title || "").trim().toLowerCase();
+    let normalizedClass = String(windowClass || "").trim().toLowerCase();
+    return this._titleLooksLikeSpeedOfCinnamon(normalizedTitle) ||
+      normalizedTitle === UUID.toLowerCase() ||
+      normalizedClass === UUID.toLowerCase();
   },
 
   _rememberActiveXWindow: function(completionCallback, expectedGeneration) {
@@ -15200,26 +15198,22 @@ MyApplet.prototype = {
       this._windowProbeValue(window, "get_wm_class_instance"),
       this._windowProbeValue(window, "get_gtk_application_id")
     ];
-    let values = [
-      this._windowProbeValue(window, "get_title"),
-      identityValues[0],
-      identityValues[1],
-      identityValues[2]
-    ];
-    let markers = [
-      "speed of cinnamon",
-      "speed-of-cinnamon",
-      UUID.toLowerCase()
-    ];
-    for (let i = 0; i < values.length; i++) {
-      let value = values[i];
-      for (let j = 0; j < markers.length; j++) {
-        if (value.indexOf(markers[j]) >= 0) {
-          return true;
-        }
+    if (this._titleLooksLikeSpeedOfCinnamon(this._windowProbeValue(window, "get_title"))) {
+      return true;
+    }
+    for (let i = 0; i < identityValues.length; i++) {
+      if (identityValues[i] === UUID.toLowerCase()) {
+        return true;
       }
     }
     return false;
+  },
+
+  _titleLooksLikeSpeedOfCinnamon: function(title) {
+    let normalizedTitle = String(title || "").trim().toLowerCase();
+    return normalizedTitle === "speed of cinnamon" ||
+      normalizedTitle.indexOf("speed of cinnamon - ") === 0 ||
+      normalizedTitle.indexOf("speed of cinnamon: ") === 0;
   },
 
   _notifySelfProtectionBlocked: function(title, windowClass) {
@@ -15249,7 +15243,7 @@ MyApplet.prototype = {
     }
     this.selfProtectionNoticeKey = key;
     this.selfProtectionNoticeAtMs = now;
-    let message = _("Auto-Submit self-protection blocked a protected target");
+    let message = _("Auto-Submit skipped to protect Speed of Cinnamon. Focus the target application before starting dictation.");
     this.lastMessage = message;
     this._updatePanel();
     this._notify(_("Speed of Cinnamon"), message, true);
@@ -15343,16 +15337,10 @@ MyApplet.prototype = {
 
   _clipboardProgramSpecs: function() {
     let specs = [];
-    if (this._findTrustedProgramInPath("xclip")) {
+    if (this._normalizeClipboardBackend(this.clipboardBackend) !== "gtk" && this._findTrustedProgramInPath("xclip")) {
       specs.push({
         program: "xclip",
         targetArgs: ["-selection", "clipboard", "-t", "TARGETS", "-out"],
-      });
-    }
-    if (this._findTrustedProgramInPath("xsel")) {
-      specs.push({
-        program: "xsel",
-        targetArgs: ["--clipboard", "--output", "--target", "TARGETS"],
       });
     }
     if (this._findTrustedProgramInPath("wl-paste")) {
@@ -15376,9 +15364,6 @@ MyApplet.prototype = {
     if (spec.program === "xclip") {
       return ["-selection", "clipboard", "-t", String(targetName || ""), "-out"];
     }
-    if (spec.program === "xsel") {
-      return ["--clipboard", "--output", "--target", String(targetName || "")];
-    }
     return ["--type", String(targetName || "")];
   },
 
@@ -15392,13 +15377,6 @@ MyApplet.prototype = {
     args = Array.isArray(args) ? args : [];
     if (program === "xclip") {
       let targetIndex = args.indexOf("-t");
-      if (targetIndex < 0 || typeof args[targetIndex + 1] !== "string") {
-        return null;
-      }
-      targetName = args[targetIndex + 1];
-      targetList = targetName === "TARGETS";
-    } else if (program === "xsel") {
-      let targetIndex = args.indexOf("--target");
       if (targetIndex < 0 || typeof args[targetIndex + 1] !== "string") {
         return null;
       }
@@ -15612,6 +15590,47 @@ MyApplet.prototype = {
     return this._clipboardUnknownPayloadSnapshot();
   },
 
+  _clipboardNativeTargetSnapshotAsync: function(completionCallback) {
+    let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    try {
+      let display = Gdk.Display.get_default();
+      let selection = Gdk.Atom.intern("CLIPBOARD", false);
+      let clipboard = display && Gtk.Clipboard && typeof Gtk.Clipboard.get_for_display === "function"
+        ? Gtk.Clipboard.get_for_display(display, selection)
+        : null;
+      if (!clipboard || typeof clipboard.request_targets !== "function") {
+        return false;
+      }
+      clipboard.request_targets((_clipboard, targets) => {
+        try {
+          if (!Array.isArray(targets) || targets.length > CLIPBOARD_MAX_TARGETS) {
+            complete(null);
+            return;
+          }
+          let targetText = targets.map((target) => String(target || "").trim()).filter((target) => target !== "").join("\n");
+          let nonTextTargets = this._clipboardNonTextPayloadTargets(targetText);
+          if (nonTextTargets.length > 0) {
+            complete(null);
+            return;
+          }
+          complete({
+            signature: "gtk-targets:" + targetText,
+            hasNonTextPayload: false,
+            payloadFingerprint: "no-nontext",
+            description: _("clipboard text"),
+          });
+        } catch (error) {
+          this._recordLifecycleError("clipboard-query", error);
+          complete(null);
+        }
+      });
+      return true;
+    } catch (error) {
+      this._recordLifecycleError("clipboard-query", error);
+      return false;
+    }
+  },
+
   _clipboardPayloadSnapshotAsync: function(completionCallback) {
     let guardedComplete = this._guardStateCallback("clipboard-query", completionCallback, this._clipboardUnknownPayloadSnapshot()) || function() {};
     let completed = false;
@@ -15623,24 +15642,41 @@ MyApplet.prototype = {
       guardedComplete(snapshot);
     };
     let unknown = () => complete(this._clipboardUnknownPayloadSnapshot());
-    let spec;
-    try {
-      spec = this._clipboardProgramSpec();
-    } catch (error) {
-      this._recordLifecycleError("clipboard-query", error);
+    let queryNativeTargets = () => {
+      if (this._clipboardNativeTargetSnapshotAsync((nativeSnapshot) => {
+        complete(nativeSnapshot || this._clipboardUnknownPayloadSnapshot());
+      })) {
+        return true;
+      }
       unknown();
       return false;
-    }
-    if (!spec) {
-      unknown();
-      return false;
-    }
-    let targetDeadlineMs = Date.now() + CLIPBOARD_COMMAND_TIMEOUT_MS;
-    try {
-      this._clipboardTargetList(spec.program, spec.targetArgs, (targets, resolvedProgram) => {
+    };
+    let queryExternalTargets = (fallbackToGtk) => {
+      let unresolved = () => {
+        if (fallbackToGtk === true) {
+          queryNativeTargets();
+          return;
+        }
+        unknown();
+      };
+      let spec;
+      try {
+        spec = this._clipboardProgramSpec();
+      } catch (error) {
+        this._recordLifecycleError("clipboard-query", error);
+        unresolved();
+        return false;
+      }
+      if (!spec) {
+        unresolved();
+        return false;
+      }
+      let targetDeadlineMs = Date.now() + CLIPBOARD_COMMAND_TIMEOUT_MS;
+      try {
+        this._clipboardTargetList(spec.program, spec.targetArgs, (targets, resolvedProgram) => {
         try {
           if (targets === null || targets === undefined) {
-            unknown();
+            unresolved();
             return;
           }
           let resolvedSpec = spec;
@@ -15656,12 +15692,12 @@ MyApplet.prototype = {
           let targetText = String(targets || "");
           let targetLines = targetText.split("\n").filter((line) => String(line || "").trim() !== "");
           if (targetLines.length > CLIPBOARD_MAX_TARGETS) {
-            unknown();
+            unresolved();
             return;
           }
           let nonTextTargets = this._clipboardNonTextPayloadTargets(targetText);
           if (nonTextTargets.length > CLIPBOARD_MAX_TARGETS) {
-            unknown();
+            unresolved();
             return;
           }
           let fingerprintBudgetMs = Math.min(
@@ -15672,7 +15708,7 @@ MyApplet.prototype = {
           this._clipboardPayloadFingerprintFromTargetsAsync(resolvedSpec, nonTextTargets, (payloadFingerprint) => {
             try {
               if (payloadFingerprint === "unknown") {
-                unknown();
+                unresolved();
                 return;
               }
               complete({
@@ -15683,20 +15719,34 @@ MyApplet.prototype = {
               });
             } catch (error) {
               this._recordLifecycleError("clipboard-query", error);
-              unknown();
+              unresolved();
             }
           }, fingerprintDeadlineMs);
         } catch (error) {
           this._recordLifecycleError("clipboard-query", error);
-          unknown();
+          unresolved();
         }
-      }, Math.max(1, targetDeadlineMs - Date.now()));
-    } catch (error) {
-      this._recordLifecycleError("clipboard-query", error);
-      unknown();
-      return false;
+        }, Math.max(1, targetDeadlineMs - Date.now()));
+      } catch (error) {
+        this._recordLifecycleError("clipboard-query", error);
+        unresolved();
+        return false;
+      }
+      return true;
+    };
+    if (this._normalizeClipboardBackend(this.clipboardBackend) === "xclip-preferred") {
+      return queryExternalTargets(true);
     }
-    return true;
+    if (this._clipboardNativeTargetSnapshotAsync((nativeSnapshot) => {
+      if (nativeSnapshot) {
+        complete(nativeSnapshot);
+        return;
+      }
+      queryExternalTargets(false);
+    })) {
+      return true;
+    }
+    return queryExternalTargets(false);
   },
 
   _clipboardPayloadFingerprintFromTargetsAsync: function(spec, nonTextTargets, completionCallback, deadlineMs) {

@@ -164,6 +164,28 @@ class CommandChainTest(unittest.TestCase):
         self.assertEqual(calls[1][0][0], "second")
         self.assertEqual(calls[1][1], "segment-1")
 
+    def test_run_command_chain_uses_one_total_deadline(self) -> None:
+        calls: list[list[str]] = []
+
+        def fake_run(argv: list[str], *_args: object, **_kwargs: object) -> tuple[int, bytes, bytes]:
+            calls.append(argv)
+            return 0, b"next\n", b""
+
+        with (
+            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+            mock.patch("speed_of_cinnamon.command_chain.time.monotonic", side_effect=[100.0, 100.0, 101.1]),
+        ):
+            with self.assertRaisesRegex(CommandChainError, "timed out after 1s"):
+                run_command_chain(
+                    [("cmd",), ("cmd",)],
+                    "seed",
+                    label="post-process",
+                    timeout_seconds=1,
+                )
+
+        self.assertEqual(calls, [["cmd"]])
+
     def test_run_command_chain_strips_dangerous_environment_variables(self) -> None:
         captured_env: dict[str, str] = {}
 
@@ -593,10 +615,10 @@ class CommandChainTest(unittest.TestCase):
 
         with (
             mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen", return_value=proc),
-            mock.patch("speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid", return_value="current"),
+            mock.patch("speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid", return_value="boot:123"),
             mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
             mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value=None),
-            mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg,
+            mock.patch("speed_of_cinnamon.command_chain._kill_output_process_with_pidfd", return_value=True) as mocked_pidfd,
             mock.patch("speed_of_cinnamon.command_chain.selectors.DefaultSelector", return_value=selector),
         ):
             with self.assertRaisesRegex(OSError, "selector failed") as caught:
@@ -608,7 +630,7 @@ class CommandChainTest(unittest.TestCase):
                     label="post-process",
                 )
 
-        mocked_killpg.assert_called_once_with(1234, command_chain_module.signal.SIGKILL)
+        mocked_pidfd.assert_called_once_with(1234, "123")
         proc.wait.assert_called_once_with(timeout=1)
         self.assertNotIn("cleanup", " ".join(getattr(caught.exception, "__notes__", ())))
 
@@ -804,14 +826,20 @@ class CommandChainTest(unittest.TestCase):
             else:
                 self.fail("session-escaped descendant survived successful command")
 
-    def test_terminate_bounded_process_kills_process_group(self) -> None:
+    def test_terminate_bounded_process_kills_process_with_pidfd(self) -> None:
         proc = mock.Mock()
         proc.pid = 1234
+        proc.returncode = None
+        proc._soc_process_identity = "boot:123"
 
-        with mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg:
-            command_chain_module._terminate_bounded_process(proc)
+        with (
+            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
+            mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value={}),
+            mock.patch("speed_of_cinnamon.command_chain._kill_output_process_with_pidfd", return_value=True) as mocked_pidfd,
+        ):
+            self.assertTrue(command_chain_module._terminate_bounded_process(proc))
 
-        mocked_killpg.assert_called_once_with(1234, command_chain_module.signal.SIGKILL)
+        mocked_pidfd.assert_called_once_with(1234, "123")
         proc.kill.assert_not_called()
 
     def test_terminate_bounded_process_rejects_reused_process_identity(self) -> None:
@@ -920,15 +948,18 @@ class CommandChainTest(unittest.TestCase):
 
         proc.kill.assert_not_called()
 
-    def test_terminate_bounded_process_confirms_root_without_process_tree(self) -> None:
+    def test_terminate_bounded_process_fails_closed_without_identity(self) -> None:
         proc = mock.Mock()
         proc.pid = 1234
         with (
             mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value=None),
-            mock.patch("speed_of_cinnamon.command_chain.os.killpg"),
+            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
+            mock.patch("speed_of_cinnamon.command_chain._kill_output_process_with_pidfd") as mocked_pidfd,
         ):
-            self.assertTrue(command_chain_module._terminate_bounded_process(proc))
+            self.assertFalse(command_chain_module._terminate_bounded_process(proc))
 
+        mocked_pidfd.assert_not_called()
+        proc.kill.assert_not_called()
     def test_terminate_bounded_process_does_not_signal_reaped_root_group(self) -> None:
         proc = mock.Mock()
         proc.pid = 1234

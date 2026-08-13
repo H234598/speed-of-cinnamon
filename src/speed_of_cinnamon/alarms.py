@@ -440,6 +440,7 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
         raw_last_checked_at = _sanitize_text_field(
             raw.get("last_checked_at"), field_name="alarm store last_checked_at", max_chars=MAX_ALARM_TRIGGER_CHARS
         )
+        raw_last_checked_at = _normalize_stored_datetime(raw_last_checked_at, field_name="alarm store last_checked_at")
     except ValueError as exc:
         if "too large" in str(exc):
             raise RuntimeError(f"alarm store last_checked_at is too large (max {MAX_ALARM_TRIGGER_CHARS} characters)") from exc
@@ -461,17 +462,18 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
     }
 
 
-def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
-    store_path = path or alarms_file()
+def _save_alarm_store_unlocked(store: dict[str, Any], store_path: Path) -> None:
     _assert_clean_path(store_path, field_name="alarm store path")
+    last_checked_at = _sanitize_text_field(
+        store.get("last_checked_at"),
+        field_name="alarm store last_checked_at",
+        max_chars=MAX_ALARM_TRIGGER_CHARS,
+    )
+    last_checked_at = _normalize_stored_datetime(last_checked_at, field_name="alarm store last_checked_at")
     payload = {
         "version": STORE_VERSION,
         "alarms": _normalize_alarm_list(store.get("alarms", []), strict=True),
-        "last_checked_at": _sanitize_text_field(
-            store.get("last_checked_at"),
-            field_name="alarm store last_checked_at",
-            max_chars=MAX_ALARM_TRIGGER_CHARS,
-        ),
+        "last_checked_at": last_checked_at,
     }
     try:
         rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
@@ -491,6 +493,12 @@ def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
         )
     except OSError as exc:
         raise RuntimeError("failed to persist alarm store") from exc
+
+
+def save_alarm_store(store: dict[str, Any], path: Path | None = None) -> None:
+    store_path = path or alarms_file()
+    with _locked_alarm_store(store_path) as locked_path:
+        _save_alarm_store_unlocked(store, locked_path)
 
 
 def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
@@ -630,7 +638,7 @@ def add_alarm(
                 str(item.get("id", "")),
             ),
         )
-        save_alarm_store(store, store_path)
+        _save_alarm_store_unlocked(store, store_path)
     return alarm_public_payload(alarm)
 
 
@@ -646,7 +654,7 @@ def remove_alarm(alarm_id: str, path: Path | None = None) -> dict[str, Any]:
         store["alarms"] = [alarm for alarm in store["alarms"] if str(alarm.get("id")) != normalized_alarm_id]
         removed = len(store["alarms"]) != before
         if removed:
-            save_alarm_store(store, store_path)
+            _save_alarm_store_unlocked(store, store_path)
     return {
         "status": "done",
         "removed": removed,
@@ -675,7 +683,7 @@ def set_alarm_enabled(alarm_id: str, enabled: bool, path: Path | None = None) ->
                     changed = True
                 break
         if changed:
-            save_alarm_store(store, store_path)
+            _save_alarm_store_unlocked(store, store_path)
     return {
         "status": "done",
         "changed": changed,
@@ -700,6 +708,20 @@ def parse_local_datetime(value: str) -> datetime | None:
         except (OverflowError, OSError, ValueError):
             return None
     return parsed
+
+
+def _normalize_stored_datetime(value: str, *, field_name: str) -> str:
+    if not value:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} is invalid") from exc
+    try:
+        normalized = _normalize_local_datetime(parsed, field_name=field_name)
+    except ValueError:
+        return value
+    return normalized.isoformat(timespec="minutes")
 
 
 def iter_dates(start: date, end: date) -> list[date]:
@@ -821,7 +843,7 @@ def _check_due_alarms_locked(
 
     if mark:
         store["last_checked_at"] = current.isoformat(timespec="minutes")
-        save_alarm_store(store, path)
+        _save_alarm_store_unlocked(store, path or alarms_file())
 
     return {
         "status": "done",

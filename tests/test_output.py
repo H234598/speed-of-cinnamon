@@ -53,6 +53,20 @@ class _FakePopen:
         return self.returncode
 
 
+class ClipboardTargetCandidatesTest(unittest.TestCase):
+    def test_target_enumeration_excludes_xsel(self) -> None:
+        with mock.patch("speed_of_cinnamon.output._which", side_effect=lambda command: f"/usr/bin/{command}"):
+            candidates = output_module._clipboard_read_candidates(targets=True)
+
+        self.assertEqual(
+            candidates,
+            (
+                (["xclip", "-selection", "clipboard", "-t", "TARGETS", "-out"], "/usr/bin/xclip"),
+                (["wl-paste", "--list-types"], "/usr/bin/wl-paste"),
+            ),
+        )
+
+
 class _TimeoutPopen(_FakePopen):
     def __init__(self) -> None:
         super().__init__(subprocess.CompletedProcess(["cmd"], 0))
@@ -718,16 +732,16 @@ class OutputTest(unittest.TestCase):
         mocked_killpg.assert_not_called()
         process.communicate.assert_called_once_with(timeout=1)
 
-    def test_reap_kills_unreaped_process_group_before_waiting(self) -> None:
+    def test_reap_fails_closed_without_verified_process_identity(self) -> None:
         process = mock.Mock()
         process.pid = 1234
         process.returncode = None
         process.poll.side_effect = AssertionError("must not reap leader before group kill")
         process.communicate.return_value = (b"", b"")
         with mock.patch("speed_of_cinnamon.output.os.killpg") as mocked_killpg:
-            self.assertTrue(output_module._reap_timed_out_output_process(process))
+            self.assertFalse(output_module._reap_timed_out_output_process(process))
 
-        mocked_killpg.assert_called_once_with(1234, output_module.signal.SIGKILL)
+        mocked_killpg.assert_not_called()
         process.communicate.assert_called_once_with(timeout=1)
 
     def test_live_process_cleanup_fails_closed_when_group_scan_is_incomplete(self) -> None:
@@ -776,7 +790,7 @@ class OutputTest(unittest.TestCase):
         mocked_group_scan.assert_not_called()
         mocked_killpg.assert_not_called()
 
-    def test_unknown_identity_private_group_is_terminated(self) -> None:
+    def test_unknown_identity_private_group_fails_closed(self) -> None:
         class UnknownPopen:
             __module__ = "subprocess"
 
@@ -790,13 +804,12 @@ class OutputTest(unittest.TestCase):
         with (
             mock.patch.object(output_module.os, "getpgid", return_value=1234),
             mock.patch.object(output_module.os, "killpg") as mocked_killpg,
-            mock.patch.object(output_module, "_wait_for_output_process_group_stop", return_value=True),
         ):
-            self.assertTrue(output_module._terminate_output_process_group(process))
+            self.assertFalse(output_module._terminate_output_process_group(process))
 
-        mocked_killpg.assert_called_once_with(1234, output_module.signal.SIGKILL)
+        mocked_killpg.assert_not_called()
 
-    def test_unknown_identity_private_group_reaps_real_process(self) -> None:
+    def test_unknown_identity_private_group_does_not_reap_real_process(self) -> None:
         process = subprocess.Popen(
             ["python3", "-c", "import time; time.sleep(60)"],
             stdout=subprocess.PIPE,
@@ -806,8 +819,8 @@ class OutputTest(unittest.TestCase):
         process._soc_process_identity = ""
         process._soc_private_process_group = True
         try:
-            self.assertTrue(output_module._terminate_output_process_group(process))
-            process.wait(timeout=1)
+            self.assertFalse(output_module._terminate_output_process_group(process))
+            self.assertIsNone(process.poll())
         finally:
             if process.poll() is None:
                 process.kill()
@@ -825,7 +838,7 @@ class OutputTest(unittest.TestCase):
                 side_effect=[True, True, False],
             ),
             mock.patch("speed_of_cinnamon.output._process_group_has_live_descendants", return_value=True),
-            mock.patch("speed_of_cinnamon.output._same_session_process_group_ids", return_value=set()),
+            mock.patch("speed_of_cinnamon.output._same_session_process_identities", return_value={}),
             mock.patch("speed_of_cinnamon.output._process_tree_descendant_identities", return_value={}),
             mock.patch("speed_of_cinnamon.output.os.killpg", side_effect=OSError("permission denied")),
         ):
@@ -862,6 +875,40 @@ class OutputTest(unittest.TestCase):
         mocked_send.assert_called_once_with(42, output_module.signal.SIGKILL, None, 0)
         mocked_close.assert_called_once_with(42)
         mocked_kill.assert_not_called()
+
+    def test_process_tree_fails_closed_without_pidfd(self) -> None:
+        stat_fields = " ".join(["S", *(["0"] * 18), "owned-start"])
+        with (
+            mock.patch("speed_of_cinnamon.output.Path") as path_factory,
+            mock.patch("speed_of_cinnamon.output.os.pidfd_open", new=None),
+            mock.patch("speed_of_cinnamon.output.os.kill") as mocked_kill,
+        ):
+            path_factory.return_value.read_text.return_value = f"123 (worker) {stat_fields}"
+            self.assertFalse(output_module._kill_output_process_tree({123: "owned-start"}))
+
+        mocked_kill.assert_not_called()
+
+    def test_process_group_cleanup_uses_pidfds_not_killpg(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.returncode = None
+        process._soc_process_identity = "boot-id:12345"
+        with (
+            mock.patch("speed_of_cinnamon.output._process_group_has_live_descendants", return_value=False),
+            mock.patch("speed_of_cinnamon.output._same_session_process_identities", return_value={1234: "12345"}),
+            mock.patch("speed_of_cinnamon.output._process_tree_descendant_identities", return_value={}),
+            mock.patch("speed_of_cinnamon.output._process_pipe_holder_identities", return_value={}),
+            mock.patch("speed_of_cinnamon.output._output_process_identity_is_current", return_value=True),
+            mock.patch("speed_of_cinnamon.output._kill_output_process_tree", return_value=True),
+            mock.patch("speed_of_cinnamon.output._kill_output_process_with_pidfd", return_value=True) as mocked_pidfd,
+            mock.patch("speed_of_cinnamon.output._wait_for_output_process_tree_stop", return_value=True),
+            mock.patch("speed_of_cinnamon.output._wait_for_output_process_group_stop", return_value=True),
+            mock.patch("speed_of_cinnamon.output.os.killpg") as mocked_killpg,
+        ):
+            self.assertTrue(output_module._terminate_output_process_group(process))
+
+        mocked_pidfd.assert_called_once_with(1234, "12345")
+        mocked_killpg.assert_not_called()
 
     def test_reaped_process_group_cleanup_kills_live_descendants(self) -> None:
         process = subprocess.Popen(
@@ -3590,7 +3637,7 @@ class OutputTest(unittest.TestCase):
         ):
             self.assertTrue(output_module._clipboard_has_non_text_payload())
 
-        self.assertEqual(calls, [["xsel", "--clipboard", "--output", "--target", "TARGETS"]])
+        self.assertEqual(calls, [])
 
     def test_clipboard_non_text_detection_falls_back_after_xclip_failure(self) -> None:
         calls: list[list[str]] = []
@@ -3606,9 +3653,9 @@ class OutputTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.output._which", side_effect=fake_which),
             mock.patch("speed_of_cinnamon.output._run_stdout_raw", side_effect=fake_run),
         ):
-            self.assertFalse(output_module._clipboard_has_non_text_payload())
+            self.assertTrue(output_module._clipboard_has_non_text_payload())
 
-        self.assertEqual([call[0] for call in calls], ["xclip", "xsel"])
+        self.assertEqual([call[0] for call in calls], ["xclip"])
 
     def test_clipboard_non_text_detection_fails_closed_on_empty_targets(self) -> None:
         with (
@@ -5055,6 +5102,22 @@ class OutputTest(unittest.TestCase):
             ["wiederholung", "wiederholung"],
         )
         self.assertEqual(mocked_paste.call_count, 2)
+
+    def test_paste_from_clipboard_rechecks_text_before_keypress(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.output._which", return_value="/usr/bin/xdotool"),
+            mock.patch("speed_of_cinnamon.output._active_x_window_matches_snapshot", return_value=True),
+            mock.patch("speed_of_cinnamon.output._paste_key_for_window_snapshot", return_value="ctrl+v"),
+            mock.patch("speed_of_cinnamon.output._clipboard_still_contains_inserted_text", return_value=False),
+            mock.patch("speed_of_cinnamon.output._run_with_input") as mocked_run,
+        ):
+            with self.assertRaisesRegex(PasteNotAttemptedError, "clipboard changed before automatic paste"):
+                output_module.paste_from_clipboard(
+                    expected_window_snapshot=("123", "Editor", "xed"),
+                    expected_text="secret",
+                )
+
+        mocked_run.assert_not_called()
 
     def test_insert_text_fallback_uses_paste_dedupe_key(self) -> None:
         with (

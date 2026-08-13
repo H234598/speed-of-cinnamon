@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 import http.client
-import threading
+import time
 from unittest import mock
 
 from speed_of_cinnamon import http_safety
@@ -11,22 +11,24 @@ from speed_of_cinnamon.http_safety import UnsafeUrlError, resolve_url_host
 
 class HttpSafetyTest(unittest.TestCase):
     def test_dns_resolution_timeout_releases_worker(self) -> None:
-        started = threading.Event()
-        release = threading.Event()
-
         def blocked_resolution(*_: object, **__: object) -> list[tuple[object, ...]]:
-            started.set()
-            release.wait(1.0)
+            time.sleep(1.0)
             return []
 
         with mock.patch(
             "speed_of_cinnamon.http_safety.socket.getaddrinfo",
             side_effect=blocked_resolution,
         ):
-            with self.assertRaisesRegex(TimeoutError, "deadline expired"):
-                http_safety._getaddrinfo_with_timeout("example.test", 443, timeout_seconds=0.01)
-        release.set()
-        self.assertTrue(started.wait(0.5))
+            for _ in range(http_safety._DNS_RESOLUTION_MAX_IN_FLIGHT):
+                with self.assertRaisesRegex(TimeoutError, "deadline expired"):
+                    http_safety._getaddrinfo_with_timeout("example.test", 443, timeout_seconds=0.01)
+
+        resolved = [(0, 0, 0, "", ("93.184.216.34", 443))]
+        with mock.patch("speed_of_cinnamon.http_safety.socket.getaddrinfo", return_value=resolved):
+            self.assertEqual(
+                http_safety._getaddrinfo_with_timeout("example.test", 443, timeout_seconds=1.0),
+                resolved,
+            )
 
     def test_dns_resolution_propagates_resolver_error(self) -> None:
         with mock.patch(

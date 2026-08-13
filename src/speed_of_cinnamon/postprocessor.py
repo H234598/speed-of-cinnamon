@@ -54,6 +54,7 @@ MAX_POSTPROCESS_TEXT_CHARS = 1_000_000
 MAX_POSTPROCESS_PROMPT_CHARS = 4_096
 MAX_POSTPROCESS_JSON_BYTES = 1_500_000
 MAX_POSTPROCESS_URL_CHARS = 2_048
+POSTPROCESS_REQUEST_TIMEOUT_SECONDS = 180
 MAX_OPENAI_COMPATIBLE_API_KEY_CHARS = 4_096
 MAX_OPENAI_COMPATIBLE_MODEL_CHARS = 240
 MAX_OLLAMA_MODEL_CHARS = 240
@@ -212,9 +213,23 @@ class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _open_http_request(request: urllib.request.Request, *, timeout: int, field_name: str) -> object:
+def _request_deadline(timeout: int | float) -> float:
+    return time.monotonic() + timeout
+
+
+def _remaining_request_timeout(deadline: float) -> float:
+    return max(deadline - time.monotonic(), 0.001)
+
+
+def _open_http_request(
+    request: urllib.request.Request,
+    *,
+    timeout: int,
+    field_name: str,
+    deadline: float | None = None,
+) -> object:
     _validate_http_request(request, field_name=field_name)
-    request_deadline = time.monotonic() + timeout
+    request_deadline = _request_deadline(timeout) if deadline is None else deadline
     try:
         remaining_timeout = request_deadline - time.monotonic()
         if remaining_timeout <= 0:
@@ -518,6 +533,16 @@ def _is_flex_service_tier_rejected(detail: object) -> bool:
         "unsupported",
     )
     return any(term in normalized for term in rejected_terms)
+
+
+def _is_temperature_zero_rejected(detail: object) -> bool:
+    if not isinstance(detail, str):
+        return False
+    normalized = detail.lower()
+    return (
+        "temperature" in normalized
+        and ("does not support 0" in normalized or "only the default" in normalized)
+    )
 
 
 def _validate_openai_compatible_http_url(url: str) -> str:
@@ -886,11 +911,25 @@ def post_process_with_ollama(
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    request_deadline = _request_deadline(POSTPROCESS_REQUEST_TIMEOUT_SECONDS)
     try:
-        with _open_http_request(request, timeout=180, field_name="ollama post-process request") as response:
-            raw = _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES, timeout=180)
+        with _open_http_request(
+            request,
+            timeout=POSTPROCESS_REQUEST_TIMEOUT_SECONDS,
+            deadline=request_deadline,
+            field_name="ollama post-process request",
+        ) as response:
+            raw = _read_response_text(
+                response,
+                MAX_POSTPROCESS_JSON_BYTES,
+                timeout=_remaining_request_timeout(request_deadline),
+            )
     except urllib.error.HTTPError as exc:
-        detail = _sanitize_remote_error_detail(_read_http_error_text(exc, timeout=180) or exc.reason or str(exc))
+        detail = _sanitize_remote_error_detail(
+            _read_http_error_text(exc, timeout=_remaining_request_timeout(request_deadline))
+            or exc.reason
+            or str(exc)
+        )
         raise PostProcessError(f"Ollama request failed ({exc.code}): {detail}") from exc
     except (OSError, ValueError, http.client.HTTPException) as exc:
         raise PostProcessError(f"Ollama request failed: {_sanitize_remote_error_detail(exc)}") from exc
@@ -918,7 +957,10 @@ def _openai_compatible_headers(api_key: str = "", *, request_endpoint: str | Non
     headers = {"Content-Type": "application/json"}
     allow_environment_key = request_endpoint is None or _is_openai_api_endpoint(request_endpoint)
     if not api_key and allow_environment_key:
-        api_key = _coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY")
+        api_key = (
+            _coerce_environment_text("OPENAI_COMPATIBLE_API_KEY")
+            or _coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY")
+        )
     if not isinstance(api_key, str) or isinstance(api_key, bool):
         raise PostProcessError("openai-compatible API key must be text")
     if _contains_escaped_null(api_key):
@@ -927,7 +969,10 @@ def _openai_compatible_headers(api_key: str = "", *, request_endpoint: str | Non
         raise PostProcessError("openai-compatible API key contains invalid control character")
     api_key = api_key.strip()
     if not api_key and allow_environment_key:
-        api_key = _coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY").strip()
+        api_key = (
+            _coerce_environment_text("OPENAI_COMPATIBLE_API_KEY")
+            or _coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY")
+        ).strip()
     api_key = _assert_openai_compatible_text(api_key, field_name="openai-compatible API key", max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS)
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
@@ -1083,6 +1128,7 @@ def post_process_with_openai_compatible(
     if use_flex_processing:
         payload["service_tier"] = "flex"
     allow_service_tier_fallback = use_flex_processing and openai_compatible_service_tier_fallback
+    request_deadline = _request_deadline(POSTPROCESS_REQUEST_TIMEOUT_SECONDS)
 
     def _request_chat_completion(request_payload: dict[str, object]) -> str:
         try:
@@ -1095,22 +1141,39 @@ def post_process_with_openai_compatible(
             headers=_openai_compatible_headers(api_key, request_endpoint=endpoint),
             method="POST",
         )
-        with _open_http_request(request, timeout=180, field_name="openai-compatible post-process request") as response:
-            return _read_response_text(response, MAX_POSTPROCESS_JSON_BYTES, timeout=180)
+        with _open_http_request(
+            request,
+            timeout=POSTPROCESS_REQUEST_TIMEOUT_SECONDS,
+            deadline=request_deadline,
+            field_name="openai-compatible post-process request",
+        ) as response:
+            return _read_response_text(
+                response,
+                MAX_POSTPROCESS_JSON_BYTES,
+                timeout=_remaining_request_timeout(request_deadline),
+            )
 
     try:
         raw = _request_chat_completion(payload)
     except urllib.error.HTTPError as exc:
-        raw_error = _read_http_error_text(exc, timeout=180)
+        raw_error = _read_http_error_text(exc, timeout=_remaining_request_timeout(request_deadline))
         raw_detail = _openai_compatible_error_detail(raw_error) or exc.reason or str(exc)
         detail = _sanitize_remote_error_detail(raw_detail)
+        fallback_payload: dict[str, object] | None = None
         if allow_service_tier_fallback and _is_flex_service_tier_rejected(raw_detail):
             fallback_payload = dict(payload)
             fallback_payload.pop("service_tier", None)
+        elif _is_temperature_zero_rejected(raw_detail):
+            fallback_payload = dict(payload)
+            fallback_payload.pop("temperature", None)
+        if fallback_payload is not None:
             try:
                 raw = _request_chat_completion(fallback_payload)
             except urllib.error.HTTPError as fallback_exc:
-                raw_error = _read_http_error_text(fallback_exc, timeout=180)
+                raw_error = _read_http_error_text(
+                    fallback_exc,
+                    timeout=_remaining_request_timeout(request_deadline),
+                )
                 fallback_detail = _sanitize_remote_error_detail(_openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc))
                 raise PostProcessError(
                     f"OpenAI-compatible request failed ({fallback_exc.code}) at {_safe_url_display(endpoint, field_name='openai-compatible url')}: {fallback_detail}"

@@ -475,6 +475,13 @@ class AlarmTest(unittest.TestCase):
                 check_due_alarms(path=path, now=datetime(2026, 6, 1, 9, 10), mark=False)
             mocked_lock.assert_called_once_with(path)
 
+    def test_save_alarm_store_locks_store(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            with mock.patch.object(alarm_module, "_locked_alarm_store", wraps=alarm_module._locked_alarm_store) as mocked_lock:
+                save_alarm_store({"alarms": [], "last_checked_at": ""}, path)
+            mocked_lock.assert_called_once_with(path)
+
     def test_add_alarm_rejects_full_store_without_dropping_existing_alarms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
@@ -1146,6 +1153,20 @@ class AlarmTest(unittest.TestCase):
             path.chmod(0o600)
             with self.assertRaisesRegex(RuntimeError, "alarm store last_checked_at is too large"):
                 load_alarm_store(path)
+
+    def test_load_alarm_store_rejects_invalid_last_checked_at(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text('{"version":1,"alarms":[],"last_checked_at":"not-a-date"}', encoding="utf-8")
+            path.chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError, "alarm store last_checked_at is invalid"):
+                load_alarm_store(path)
+
+    def test_save_alarm_store_rejects_invalid_last_checked_at(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            with self.assertRaisesRegex(ValueError, "alarm store last_checked_at is invalid"):
+                save_alarm_store({"alarms": [], "last_checked_at": "not-a-date"}, path)
 
     def test_load_alarm_store_rejects_invalid_alarm_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

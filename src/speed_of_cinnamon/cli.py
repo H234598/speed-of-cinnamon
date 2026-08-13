@@ -27,6 +27,7 @@ from . import __version__
 from . import doctor
 from .alarms import (
     _locked_alarm_store,
+    _save_alarm_store_unlocked,
     add_alarm,
     check_due_alarms,
     list_alarm_payload,
@@ -147,6 +148,7 @@ from .transcriber import (
     MAX_AUDIO_FILE_BYTES,
     MAX_AUDIO_PATH_CHARS,
     MAX_LANGUAGE_CODE_CHARS,
+    TranscriptionError,
     TranscriptionCleanupError,
     normalize_backend,
     validate_audio_file,
@@ -1206,7 +1208,10 @@ def _openai_compatible_api_key_from_args(args: argparse.Namespace) -> str:
                 f"openai-compatible API key is too large (max {MAX_OPENAI_COMPATIBLE_API_KEY_CHARS} characters)"
             )
     elif not raw:
-        raw = os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "")
+        raw = (
+            os.environ.get("OPENAI_COMPATIBLE_API_KEY", "")
+            or os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "")
+        )
     key = _assert_clean_text(
         raw,
         field_name="openai-compatible API key",
@@ -1432,16 +1437,24 @@ def timestamp() -> str:
 
 
 def print_result(payload: dict[str, object], json_output: bool) -> None:
+    safe_payload = payload
+    message = payload.get("message")
+    if isinstance(message, str):
+        safe_payload = dict(payload)
+        safe_payload["message"] = _redact_error_for_user(message)
     if json_output:
-        print(json.dumps(payload, indent=2, sort_keys=True, allow_nan=False))
+        print(json.dumps(safe_payload, indent=2, sort_keys=True, allow_nan=False))
     else:
-        status = payload.get("status", "ok")
-        message = payload.get("message") or payload.get("error") or status
+        status = safe_payload.get("status", "ok")
+        message = safe_payload.get("message") or safe_payload.get("error") or status
         print(f"{APP_NAME}: {message}")
 
 
 def _known_cli_secret_values(args: argparse.Namespace | None = None) -> tuple[str, ...]:
-    values = [os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "")]
+    values = [
+        os.environ.get("OPENAI_COMPATIBLE_API_KEY", ""),
+        os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", ""),
+    ]
     if args is not None:
         values.extend(
             getattr(args, attribute, "")
@@ -1524,13 +1537,122 @@ def _raise_backend_sanitized_exception(error: BaseException, *, message: str) ->
     )
 
 
+def _public_transcription_failure_message(error: BaseException) -> str:
+    """Return actionable detail only for known, non-sensitive transcriber failures."""
+    if isinstance(error, RecorderError):
+        return (
+            "transcribe failed (SOC-T006): recorded audio could not be prepared. "
+            "Check microphone input and recorder settings, then retry."
+        )
+    if not isinstance(error, TranscriptionError):
+        return TRANSIENT_TRANSCRIPT_PROCESSING_ERROR
+    detail = str(error)
+    if detail.startswith("no transcriber available"):
+        return (
+            "transcribe failed (SOC-T001): no transcription backend is available. "
+            "Install or select a backend in Voice settings."
+        )
+    if detail in {
+        "transcriber executable is not available",
+        "custom transcriber executable is not available",
+        "OpenAI whisper command is not installed",
+        "whisper.cpp command is not installed",
+    }:
+        return (
+            "transcribe failed (SOC-T002): transcription executable is unavailable. "
+            "Check Voice settings or install the selected backend."
+        )
+    if detail in {
+        "faster-whisper is not available",
+        "faster-whisper is not installed",
+        "faster-whisper could not be loaded",
+        "configured CTranslate2 model requires faster-whisper",
+        "configured model requires whisper.cpp",
+        "configured whisper model requires whisper.cpp",
+        "configured whisper model path is missing",
+    }:
+        return (
+            "transcribe failed (SOC-T003): selected transcription model is unavailable. "
+            "Install the model/backend or choose another model in Voice settings."
+        )
+    if detail.endswith("timed out"):
+        return (
+            "transcribe failed (SOC-T004): transcription timed out. "
+            "Try a shorter recording or check the selected backend."
+        )
+    if detail in {
+        "transcriber completed without transcript",
+        "transcriber completed but did not update the transcript file",
+        "whisper completed but did not produce a transcript",
+        "whisper.cpp completed but did not produce a transcript",
+        "OpenAI-compatible speech API returned no transcript",
+    }:
+        return (
+            "transcribe failed (SOC-T005): backend returned no usable transcript. "
+            "Check microphone input and selected model."
+        )
+    remote_http_error = re.fullmatch(
+        r"OpenAI-compatible speech API failed \(([1-5][0-9]{2})(?:; ([a-z-]+))?\): .*",
+        detail,
+    )
+    if remote_http_error:
+        status_code = int(remote_http_error.group(1))
+        category = remote_http_error.group(2) or ""
+        if status_code in {401, 403}:
+            return (
+                "transcribe failed (SOC-T006): external speech API rejected authentication "
+                f"(HTTP {status_code}). Check API key and project access."
+            )
+        if status_code == 404:
+            return (
+                "transcribe failed (SOC-T007): external speech API endpoint or model was not found "
+                "(HTTP 404). Check API URL and selected model."
+            )
+        if status_code == 429 or status_code >= 500:
+            if category == "quota-exhausted":
+                return (
+                    "transcribe failed (SOC-T012): external speech API quota is exhausted. "
+                    "Increase project budget or select another backend."
+                )
+            return (
+                "transcribe failed (SOC-T008): external speech API is temporarily unavailable "
+                f"(HTTP {status_code}). Retry shortly."
+            )
+        return (
+            "transcribe failed (SOC-T009): external speech API rejected the transcription request "
+            f"(HTTP {status_code}). Check selected model and audio format."
+        )
+    if detail.startswith("OpenAI-compatible speech API is not reachable"):
+        return (
+            "transcribe failed (SOC-T010): external speech API is unreachable. "
+            "Check network access and API URL."
+        )
+    if detail in {
+        "OpenAI-compatible speech API returned invalid JSON",
+        "OpenAI-compatible speech API response must be a JSON object",
+    }:
+        return (
+            "transcribe failed (SOC-T011): external speech API returned an invalid response. "
+            "Retry shortly or check API compatibility."
+        )
+    if detail.startswith("OpenAI-compatible speech API failed:"):
+        return (
+            "transcribe failed (SOC-T009): external speech API rejected the transcription request. "
+            "Check selected model and audio format."
+        )
+    return (
+        "transcribe failed (SOC-T099): transcription backend could not process the recording. "
+        "Check Voice settings and Diagnostics."
+    )
+
+
 def _redact_error_payload(value: object, *, secret_values: tuple[str, ...] = ()) -> object:
     if isinstance(value, str):
         return _redact_known_cli_secrets(value, secret_values)
     if isinstance(value, dict):
         clean: dict[object, object] = {}
         for key, child in value.items():
-            if isinstance(key, str) and key in {"detail", "error", "error_message"} and child is not None:
+            if isinstance(key, str) and key in {"detail", "error", "error_message", "message"} and child is not None:
                 clean[key] = _redact_error_for_user(child, secret_values=secret_values)
             else:
                 clean[key] = _redact_error_payload(child, secret_values=secret_values)
@@ -1677,6 +1799,33 @@ def _reap_background_process(process: subprocess.Popen[bytes]) -> None:
     threading.Thread(target=reap, daemon=True).start()
 
 
+def _open_path_with_desktop(path: Path) -> bool:
+    if not isinstance(path, Path):
+        return False
+    try:
+        assert_no_symlink_ancestors(path, field_name="open path")
+    except RuntimeError:
+        return False
+    for command in ((_which("xdg-open"),), (_which("gio"), "open")):
+        executable = command[0]
+        if not executable:
+            continue
+        try:
+            process = subprocess.Popen(  # nosec B603
+                [executable, *command[1:], str(path)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                env=_filtered_environment(),
+                start_new_session=True,
+            )
+            _reap_background_process(process)
+            return True
+        except (OSError, ValueError):
+            continue
+    return False
+
+
 def _open_blacklist_document() -> bool:
     path = blacklist_file()
     try:
@@ -1685,37 +1834,7 @@ def _open_blacklist_document() -> bool:
         return False
     ensure_runtime_dirs()
     _ensure_private_text_file(path)
-    xdg_open = _which("xdg-open")
-    if xdg_open:
-        try:
-            process = subprocess.Popen(  # nosec B603
-                [xdg_open, str(path)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=_filtered_environment(),
-                start_new_session=True,
-            )
-            _reap_background_process(process)
-            return True
-        except (OSError, ValueError):
-            pass
-    gio_open = _which("gio")
-    if gio_open:
-        try:
-            process = subprocess.Popen(  # nosec B603
-                [gio_open, "open", str(path)],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                env=_filtered_environment(),
-                start_new_session=True,
-            )
-            _reap_background_process(process)
-            return True
-        except (OSError, ValueError):
-            pass
-    return False
+    return _open_path_with_desktop(path)
 
 
 def _apply_security_post_processing(text: str) -> tuple[str, dict[str, object]]:
@@ -3069,7 +3188,11 @@ def _transcript_read_failure(path: Path, exc: BaseException, *, reveal_metadata:
     return RuntimeError(f"failed to read transcript {name}: {_redact_error_for_user(str(exc))}")
 
 
-def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]], int]:
+def _collect_transcript_history(
+    limit: int = 10,
+    *,
+    include_text: bool = False,
+) -> tuple[list[dict[str, object]], int]:
     if limit <= 0:
         return [], 0
     directory = transcript_dir()
@@ -3106,14 +3229,15 @@ def _collect_transcript_history(limit: int = 10) -> tuple[list[dict[str, object]
         if not text:
             continue
         modified_at = _transcript_modified_at(mtime)
-        entries.append(
-            {
-                "path": str(path),
-                "name": _transcript_display_name(path),
-                "modified_at": modified_at,
-                "preview": transcript_preview(text),
-            }
-        )
+        entry: dict[str, object] = {
+            "path": str(path),
+            "name": _transcript_display_name(path),
+            "modified_at": modified_at,
+            "preview": transcript_preview(text),
+        }
+        if include_text:
+            entry["text"] = text
+        entries.append(entry)
         if len(entries) >= limit:
             break
     return entries, unreadable_count
@@ -7122,13 +7246,14 @@ def finalize_recording(
             finalize_error_message = TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
             raise _transcription_cleanup_exception(transcription_error, cleanup_error, stable_public_error=True) from None
         if transcription_error is not None:
+            finalize_error_message = (
+                TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
+                if isinstance(transcription_error, TranscriptionCleanupError)
+                else _public_transcription_failure_message(transcription_error)
+            )
             _raise_backend_sanitized_exception(
                 transcription_error,
-                message=(
-                    TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
-                    if isinstance(transcription_error, TranscriptionCleanupError)
-                    else TRANSIENT_TRANSCRIPT_PROCESSING_ERROR
-                ),
+                message=finalize_error_message,
             )
 
         try:
@@ -9673,7 +9798,7 @@ def command_history(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
     confirm_plaintext = _coerce_bool(getattr(args, "confirm_plaintext", False), field_name="confirm_plaintext")
-    transcripts, unreadable_count = _collect_transcript_history(limit)
+    transcripts, unreadable_count = _collect_transcript_history(limit, include_text=confirm_plaintext)
     if not confirm_plaintext:
         transcripts = _redact_history_previews(transcripts)
     return {"status": "done", "transcripts": transcripts, "unreadable_count": unreadable_count}
@@ -9717,9 +9842,13 @@ def command_transcripts_export(args: argparse.Namespace) -> dict[str, object]:
         plaintext=plaintext,
         confirm_plaintext=confirm_plaintext,
     )
+    opened = False
+    if _coerce_bool(getattr(args, "open", False), field_name="open"):
+        opened = _open_path_with_desktop(output_path.parent)
     return {
         "status": "done",
-        "path": str(output_path),
+        "path_present": bool(output_path),
+        "opened": opened,
         "transcripts": count,
         "encryption": encryption,
         "plaintext": plaintext,
@@ -10124,7 +10253,7 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
     )
     with _locked_alarm_store() as store_path:
         alarm_store = load_alarm_store(store_path)
-    payload = write_export(path, settings, alarm_store)
+        payload = write_export(path, settings, alarm_store)
     result: dict[str, object] = {
         "status": "done",
         "message": "settings exported",
@@ -10170,7 +10299,7 @@ def command_settings_import(args: argparse.Namespace) -> dict[str, object]:
     )
     if not preview:
         with _locked_alarm_store() as store_path:
-            save_alarm_store(payload["alarms"], store_path)
+            _save_alarm_store_unlocked(payload["alarms"], store_path)
     result: dict[str, object] = {
         "status": "done",
         "message": "settings imported",
@@ -10197,9 +10326,13 @@ def write_profanity_filter_document() -> tuple[Path, int]:
 
 def command_profanity_filter_document(args: argparse.Namespace) -> dict[str, object]:
     path, entries = write_profanity_filter_document()
+    opened = False
+    if _coerce_bool(getattr(args, "open", False), field_name="open"):
+        opened = _open_path_with_desktop(path)
     return {
         "status": "done",
-        "path": str(path),
+        "path_present": bool(path),
+        "opened": opened,
         "entries": entries,
         "editable": True,
     }
@@ -10384,7 +10517,7 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--openai-compatible-api-key-stdin",
         action="store_true",
-        help="read OpenAI-compatible API key from stdin; otherwise use SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY",
+        help="read OpenAI-compatible API key from stdin; otherwise use OPENAI_COMPATIBLE_API_KEY",
     )
     parser.add_argument(
         "--openai-compatible-flex-processing",
@@ -10507,7 +10640,7 @@ def build_parser() -> argparse.ArgumentParser:
     text_models.add_argument(
         "--openai-compatible-api-key-stdin",
         action="store_true",
-        help="read OpenAI-compatible API key from stdin; otherwise use SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY",
+        help="read OpenAI-compatible API key from stdin; otherwise use OPENAI_COMPATIBLE_API_KEY",
     )
     text_models.set_defaults(handler=command_text_models)
 
@@ -10579,6 +10712,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--confirm-plaintext",
         action="store_true",
         help="confirm that plaintext transcript export is intentional",
+    )
+    transcripts_export.add_argument(
+        "--open",
+        action="store_true",
+        help="open the encrypted export folder without returning its path",
     )
     transcripts_export.set_defaults(handler=command_transcripts_export)
 
@@ -10676,6 +10814,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     profanity_filter_document = subparsers.add_parser("profanity-filter-document")
     add_common_options(profanity_filter_document)
+    profanity_filter_document.add_argument(
+        "--open",
+        action="store_true",
+        help="open the editable list without returning its path",
+    )
     profanity_filter_document.set_defaults(handler=command_profanity_filter_document)
 
     insert = subparsers.add_parser("insert-text")
@@ -10705,7 +10848,7 @@ def build_parser() -> argparse.ArgumentParser:
     transcribe_file.add_argument(
         "--openai-compatible-api-key-stdin",
         action="store_true",
-        help="read OpenAI-compatible API key from stdin; otherwise use SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY",
+        help="read OpenAI-compatible API key from stdin; otherwise use OPENAI_COMPATIBLE_API_KEY",
     )
     transcribe_file.add_argument(
         "--openai-compatible-flex-processing",

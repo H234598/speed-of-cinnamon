@@ -1,4 +1,4 @@
-.PHONY: check test coverage lint lint-workflows lint-workflows-check python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend applet-safety-check applet-crash-safety release-dry-run release-dry-run-no-snap release release-require-snap dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean version-next
+.PHONY: check test coverage lint lint-workflows lint-workflows-check python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend real-e2e-acceptance verify-real-e2e-attestation applet-safety-check applet-crash-safety release-dry-run release-dry-run-no-snap release release-require-snap dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean version-next
 SHELL := /usr/bin/env bash
 
 PYTHON := $(shell command -v python3 2>/dev/null | awk 'NR==1 {print}')
@@ -63,6 +63,12 @@ smoke-doctor:
 smoke-backend:
 	./scripts/smoke-backend.sh ./scripts/dev-backend.sh
 
+real-e2e-acceptance:
+	SOC_REAL_E2E=1 ./scripts/real-e2e-acceptance.sh
+
+verify-real-e2e-attestation:
+	./scripts/verify-real-e2e-attestation.sh
+
 applet-safety-check:
 	node --check files/speed-of-cinnamon@H234598/applet.js
 	PYTHONPATH=src $(PYTHON) -m unittest tests.test_applet_static
@@ -100,7 +106,7 @@ release-dry-run-no-snap: release-validate-flags dist-check rpm rpm-check
 		$(if $(filter 0,$(BUILD_GENERIC_RPM)),--skip-generic-rpm) \
 		"v$(PROJECT_VERSION)"
 
-release: release-validate-flags release-require-snap dist-check rpm rpm-check
+release: release-validate-flags release-require-snap verify-real-e2e-attestation dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
 	  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
 	else \

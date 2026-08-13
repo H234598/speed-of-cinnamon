@@ -3,21 +3,43 @@ from __future__ import annotations
 import http.client
 import ipaddress
 import math
-import queue
+import multiprocessing
 import socket
 import threading
 import time
 import urllib.parse
 import urllib.request
+from multiprocessing.connection import Connection
 
 MAX_LOOPBACK_HOSTNAME_CHARS = 255
 DNS_RESOLUTION_TIMEOUT_SECONDS = 5.0
 _DNS_RESOLUTION_MAX_IN_FLIGHT = 4
 _DNS_RESOLUTION_SLOTS = threading.BoundedSemaphore(_DNS_RESOLUTION_MAX_IN_FLIGHT)
+try:
+    _DNS_RESOLUTION_CONTEXT = multiprocessing.get_context("fork")
+except ValueError:
+    _DNS_RESOLUTION_CONTEXT = multiprocessing.get_context()
 
 
 class UnsafeUrlError(ValueError):
     pass
+
+
+def _resolve_dns_in_process(hostname: str, port: int, result_connection: Connection) -> None:
+    try:
+        result = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except BaseException as exc:
+        try:
+            result_connection.send(("error", (isinstance(exc, OSError), str(exc))))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    else:
+        try:
+            result_connection.send(("result", result))
+        except (BrokenPipeError, EOFError, OSError):
+            pass
+    finally:
+        result_connection.close()
 
 
 def _getaddrinfo_with_timeout(hostname: str, port: int, *, timeout_seconds: float) -> list[tuple[object, ...]]:
@@ -25,25 +47,37 @@ def _getaddrinfo_with_timeout(hostname: str, port: int, *, timeout_seconds: floa
         raise TimeoutError("DNS resolution deadline expired")
     if not _DNS_RESOLUTION_SLOTS.acquire(timeout=timeout_seconds):
         raise TimeoutError("DNS resolver is busy")
-    result_queue: queue.Queue[tuple[str, object]] = queue.Queue(maxsize=1)
-
-    def resolve() -> None:
-        try:
-            result_queue.put(("result", socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)))
-        except Exception as exc:
-            result_queue.put(("error", exc))
-        finally:
-            _DNS_RESOLUTION_SLOTS.release()
-
-    worker = threading.Thread(target=resolve, name="speed-of-cinnamon-dns", daemon=True)
-    worker.start()
-    worker.join(timeout_seconds)
-    if worker.is_alive():
-        raise TimeoutError("DNS resolution deadline expired")
-    kind, value = result_queue.get_nowait()
-    if kind == "error":
-        raise value  # type: ignore[misc]
-    return value  # type: ignore[return-value]
+    result_connection, child_connection = _DNS_RESOLUTION_CONTEXT.Pipe(duplex=False)
+    worker = _DNS_RESOLUTION_CONTEXT.Process(
+        target=_resolve_dns_in_process,
+        args=(hostname, port, child_connection),
+        name="speed-of-cinnamon-dns",
+    )
+    worker.daemon = True
+    try:
+        worker.start()
+        child_connection.close()
+        worker.join(timeout_seconds)
+        if worker.is_alive():
+            worker.terminate()
+            worker.join(0.5)
+            if worker.is_alive():
+                worker.kill()
+                worker.join(0.5)
+            raise TimeoutError("DNS resolution deadline expired")
+        if not result_connection.poll(0.1):
+            raise OSError("DNS resolver exited without result")
+        kind, value = result_connection.recv()
+        if kind == "error":
+            _is_os_error, message = value
+            if _is_os_error:
+                raise OSError(message)
+            raise RuntimeError(message)
+        return value
+    finally:
+        child_connection.close()
+        result_connection.close()
+        _DNS_RESOLUTION_SLOTS.release()
 
 
 def has_unsafe_url_characters(value: str) -> bool:

@@ -5,7 +5,6 @@ import errno
 import fcntl
 import json
 import os
-import signal
 import secrets
 import shutil
 import stat
@@ -19,10 +18,8 @@ from typing import Any
 
 from .output import (
     _clipboard_lock_identity_for_pid,
-    _kill_output_process_tree,
-    _output_process_identity_is_current,
-    _process_tree_descendant_identities,
-    _wait_for_output_process_tree_stop,
+    _kill_output_process_with_pidfd,
+    _terminate_output_process_group,
 )
 from .paths import APP_ID, APP_NAME, config_dir
 from .path_safety import (
@@ -1650,103 +1647,42 @@ def _secret_tool_leader_is_gone_or_zombie(process_id: int) -> bool:
     return process_state in {"Z", "X", "x"}
 
 
-def _wait_for_secret_tool_process_groups_stop(process_group_id: int, timeout_seconds: float = 1.0) -> None:
-    deadline = time.monotonic() + timeout_seconds
-    while True:
-        descendants = _secret_tool_process_group_has_live_descendants(process_group_id)
-        if descendants is False or time.monotonic() >= deadline:
-            return
-        time.sleep(0.01)
+def _secret_tool_process_start_time(pid: object) -> str | None:
+    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
+        return None
+    try:
+        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii").strip()
+        close = raw.rindex(")")
+        start_time = raw[close + 2 :].split()[19]
+    except (FileNotFoundError, OSError, UnicodeDecodeError, IndexError, ValueError):
+        return None
+    if not start_time.isascii() or not start_time.isdigit():
+        return None
+    return start_time
 
 
 def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
     process_identity = getattr(proc, "_soc_process_identity", None)
-    identity_known = isinstance(process_identity, str) and bool(process_identity)
-    is_real_subprocess = type(proc).__module__ == "subprocess"
-    if identity_known and not _output_process_identity_is_current(proc):
-        return
-    poll = getattr(proc, "poll", None)
-    if callable(poll):
+    if isinstance(process_identity, str) and process_identity:
         try:
-            process_finished = poll() is not None
+            _terminate_output_process_group(proc)
         except BaseException:
             return
-        if process_finished:
-            if not identity_known:
-                return
-            try:
-                descendants = _secret_tool_process_group_has_live_descendants(proc.pid)
-            except BaseException:
-                return
-            if descendants is not True or not _secret_tool_leader_is_gone_or_zombie(proc.pid):
-                return
-    process_tree: dict[int, str] | None = None
-    try:
-        pid = proc.pid
-        if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-            raise ValueError("invalid secret-tool process pid")
-        if not identity_known:
-            getpgid = getattr(os, "getpgid", None)
-            try:
-                process_group_id = getpgid(pid) if callable(getpgid) else None
-            except (OSError, ValueError):
-                process_group_id = None
-            if process_group_id == pid:
-                try:
-                    os.killpg(process_group_id, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                except OSError:
-                    # Identity is unavailable: never fall back to a raw PID
-                    # kill, which could target a reused process ID.
-                    if is_real_subprocess:
-                        return
-                    with suppress(BaseException):
-                        proc.kill()
-            else:
-                # Unknown identity makes direct PID cleanup unsafe.
-                if is_real_subprocess:
-                    return
-                with suppress(BaseException):
-                    proc.kill()
-            with suppress(BaseException):
-                proc.wait(timeout=1)
-            return
-        process_tree = _process_tree_descendant_identities(pid)
-        if process_tree is not None:
-            if not _output_process_identity_is_current(proc):
-                return
-            _kill_output_process_tree(process_tree)
-        if not _output_process_identity_is_current(proc):
-            return
-        session_group_ids = _secret_tool_same_session_process_group_ids(pid)
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
-        if session_group_ids is not None:
-            for process_group_id in sorted(session_group_ids):
-                if process_group_id == pid:
-                    continue
-                if not _output_process_identity_is_current(proc):
-                    return
-                try:
-                    os.killpg(process_group_id, signal.SIGKILL)
-                except ProcessLookupError:
-                    continue
-    except BaseException:
         with suppress(BaseException):
-            if (identity_known and _output_process_identity_is_current(proc)) or (
-                not identity_known and not is_real_subprocess
-            ):
-                proc.kill()
-    with suppress(BaseException):
-        if process_tree is not None:
-            _wait_for_output_process_tree_stop(process_tree)
-    with suppress(BaseException):
-        _wait_for_secret_tool_process_groups_stop(proc.pid)
-    with suppress(BaseException):
-        proc.wait(timeout=1)
+            proc.wait(timeout=1)
+        return
+
+    # Without boot-id identity, only signal the exact process through PIDFD.
+    # Never infer a process group from a bare, reusable PID.
+    pid = getattr(proc, "pid", None)
+    start_time = _secret_tool_process_start_time(pid)
+    if start_time is None or not isinstance(pid, int) or isinstance(pid, bool):
+        return
+    try:
+        if _kill_output_process_with_pidfd(pid, start_time) is True:
+            proc.wait(timeout=1)
+    except BaseException:
+        return
 
 
 def _read_secret_tool_pipes_bounded(

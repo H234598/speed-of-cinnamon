@@ -432,7 +432,9 @@ for path in \
   files/speed-of-cinnamon@H234598/metadata.json \
   files/speed-of-cinnamon@H234598/settings-schema.json \
   scripts/install-local.sh \
+  scripts/real-e2e-acceptance.sh \
   scripts/safe-local-fs.py \
+  scripts/verify-real-e2e-attestation.sh \
   scripts/publish-github-release.sh \
   scripts/verify-authorship.sh \
   scripts/verify-rpm.sh \

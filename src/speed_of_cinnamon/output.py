@@ -1974,14 +1974,14 @@ def _bounded_command_output_bytes(
     return completed_output
 
 
-def _same_session_process_group_ids(session_id: int) -> set[int] | None:
+def _same_session_process_identities(session_id: int) -> dict[int, str] | None:
     if not isinstance(session_id, int) or isinstance(session_id, bool) or session_id <= 0:
         return None
     try:
         proc_entries = tuple(Path("/proc").iterdir())
     except OSError:
         return None
-    process_group_ids: set[int] = set()
+    process_identities: dict[int, str] = {}
     scan_incomplete = False
     for proc_entry in proc_entries:
         if not proc_entry.name.isdecimal():
@@ -1996,20 +1996,20 @@ def _same_session_process_group_ids(session_id: int) -> set[int] | None:
         try:
             close = raw.rindex(")")
             fields = raw[close + 2 :].split()
-            process_group = int(fields[2])
             member_session_id = int(fields[3])
+            start_time = fields[19]
         except (IndexError, ValueError):
             scan_incomplete = True
             continue
         if member_session_id != session_id:
             continue
-        if process_group <= 0:
+        if not start_time or not start_time.isascii() or not start_time.isdigit():
             scan_incomplete = True
             continue
-        process_group_ids.add(process_group)
+        process_identities[int(proc_entry.name)] = start_time
     if scan_incomplete:
         return None
-    return process_group_ids
+    return process_identities
 
 
 def _process_tree_descendant_identities(process_id: int) -> dict[int, str] | None:
@@ -2222,12 +2222,9 @@ def _kill_output_process_tree(process_identities: dict[int, str]) -> bool:
         if pidfd_result is False:
             cleanup_incomplete = True
             continue
-        try:
-            os.kill(process_id, signal.SIGKILL)
-        except ProcessLookupError:
-            continue
-        except (OSError, ValueError):
-            cleanup_incomplete = True
+        # A stat-then-kill fallback is vulnerable to PID reuse. Cleanup must
+        # fail closed when pidfd cannot provide an identity-bound signal.
+        cleanup_incomplete = True
     return not cleanup_incomplete
 
 
@@ -2295,39 +2292,10 @@ def _wait_for_output_process_group_stop(process_group_id: int, timeout_seconds: 
         time.sleep(0.01)
 
 
-def _terminate_unidentified_private_process_group(process: subprocess.Popen[bytes]) -> bool:
-    if type(process).__module__ != "subprocess":
-        return False
-    if vars(process).get("_soc_private_process_group") is not True:
-        return False
-    if vars(process).get("_soc_process_identity"):
-        return False
-    pid = getattr(process, "pid", None)
-    if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
-        return False
-    if getattr(process, "returncode", None) is not None:
-        return False
-    try:
-        process_group_id = os.getpgid(pid)
-    except (OSError, ValueError):
-        return False
-    if process_group_id != pid:
-        return False
-    try:
-        os.killpg(pid, signal.SIGKILL)
-    except ProcessLookupError:
-        return True
-    except (OSError, ValueError):
-        return False
-    return _wait_for_output_process_group_stop(pid)
-
-
 def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
     if not process or not isinstance(process.pid, int) or process.pid <= 0:
         return False
     if not _output_process_identity_is_current(process):
-        if _terminate_unidentified_private_process_group(process):
-            return True
         return False
     pipe_holders: dict[int, str] = {}
     try:
@@ -2353,49 +2321,46 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
                 return False
     except (OSError, ValueError):
         return False
-    session_group_ids = _same_session_process_group_ids(process.pid)
-    if session_group_ids is None:
-        return False
+    if process.returncode is None:
+        session_processes = _same_session_process_identities(process.pid)
+        if session_processes is None:
+            return False
+    else:
+        # A reaped PID can already be reused with a numerically identical
+        # session ID. Parent/pipe identities remain safe; session enumeration
+        # would reintroduce PID-reuse risk.
+        session_processes = {}
     process_tree = _process_tree_descendant_identities(process.pid)
     process_tree_scan_incomplete = process_tree is None
     if process_tree is None:
         process_tree = {}
     process_tree.update(pipe_holders)
+    leader_identity = vars(process).get("_soc_process_identity")
+    if not isinstance(leader_identity, str) or not leader_identity:
+        return False
+    _identity_prefix, separator, leader_start_time = leader_identity.rpartition(":")
+    if not separator or not leader_start_time.isascii() or not leader_start_time.isdigit():
+        return False
+    session_processes.pop(process.pid, None)
+    process_tree.update(session_processes)
+    process_tree.pop(process.pid, None)
     if not _output_process_identity_is_current(process):
         return False
     process_tree_cleanup = _kill_output_process_tree(process_tree)
     if not _output_process_identity_is_current(process):
         return False
-    try:
-        os.killpg(process.pid, signal.SIGKILL)
-    except ProcessLookupError:
-        pass
-    except (OSError, ValueError):
-        try:
-            identity_current = _output_process_identity_is_current(process)
-        except BaseException:
-            identity_current = False
-        if identity_current:
-            try:
-                process.kill()
-            except (OSError, ValueError):
-                return False
+    leader_cleanup = (
+        True
+        if process.returncode is not None
+        else _kill_output_process_with_pidfd(process.pid, leader_start_time)
+    )
+    if leader_cleanup is not True:
         return False
-    for process_group_id in sorted(session_group_ids):
-        if process_group_id == process.pid:
-            continue
-        if not _output_process_identity_is_current(process):
-            return False
-        try:
-            os.killpg(process_group_id, signal.SIGKILL)
-        except ProcessLookupError:
-            continue
-        except (OSError, ValueError):
-            return False
     process_tree_stopped = _wait_for_output_process_tree_stop(process_tree)
     process_group_stopped = _wait_for_output_process_group_stop(process.pid)
     return (
         process_tree_cleanup
+        and leader_cleanup
         and not process_tree_scan_incomplete
         and process_tree_stopped
         and process_group_stopped
@@ -2763,7 +2728,6 @@ def _clipboard_read_candidates(*, targets: bool = False) -> tuple[tuple[list[str
     if targets:
         candidates = (
             ("xclip", ["xclip", "-selection", "clipboard", "-t", "TARGETS", "-out"]),
-            ("xsel", ["xsel", "--clipboard", "--output", "--target", "TARGETS"]),
             ("wl-paste", ["wl-paste", "--list-types"]),
         )
     else:
@@ -2891,7 +2855,11 @@ def _restore_clipboard_snapshot_after_failed_paste(
         raise
 
 
-def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None = None) -> None:
+def paste_from_clipboard(
+    expected_window_snapshot: tuple[str, str, str] | None = None,
+    *,
+    expected_text: str | None = None,
+) -> None:
     if expected_window_snapshot is None:
         raise PasteNotAttemptedError("refusing automatic paste without verifiable active window")
     xdotool_error: OutputError | None = None
@@ -2914,6 +2882,8 @@ def paste_from_clipboard(expected_window_snapshot: tuple[str, str, str] | None =
                 xdotool_command=xdotool,
             ):
                 raise PasteNotAttemptedError("active window changed before automatic paste")
+            if expected_text is not None and not _clipboard_still_contains_inserted_text(expected_text):
+                raise PasteNotAttemptedError("clipboard changed before automatic paste")
             try:
                 _run_with_input(
                     ["xdotool", "key", "--clearmodifiers", paste_key],
@@ -3335,7 +3305,10 @@ def insert_text(
                 raise PasteNotAttemptedError("clipboard changed before automatic paste")
             paste_attempt_uncertain = True
             try:
-                paste_from_clipboard(expected_window_snapshot=target_window_snapshot)
+                paste_from_clipboard(
+                    expected_window_snapshot=target_window_snapshot,
+                    expected_text=text,
+                )
             except PasteNotAttemptedError:
                 paste_not_attempted = True
                 paste_attempt_uncertain = False

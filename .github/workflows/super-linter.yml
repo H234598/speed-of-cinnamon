@@ -30,11 +30,14 @@ jobs:
           version="1.7.12"
           archive="actionlint_${version}_linux_amd64.tar.gz"
           archive_sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"
-          curl -fsSL -o "/tmp/${archive}" \
+          actionlint_tmp_dir="$(mktemp -d)"
+          trap 'rm -rf -- "${actionlint_tmp_dir}"' EXIT
+          archive_path="${actionlint_tmp_dir}/${archive}"
+          curl -fsSL -o "${archive_path}" \
             "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
-          printf '%s  %s\n' "${archive_sha256}" "/tmp/${archive}" | sha256sum -c -
-          tar -xzf "/tmp/${archive}" -C /tmp actionlint
-          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+          printf '%s  %s\n' "${archive_sha256}" "${archive_path}" | sha256sum -c -
+          tar -xzf "${archive_path}" -C "${actionlint_tmp_dir}" actionlint
+          sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint
 
       - name: Lint Python and applet metadata
         run: make lint

@@ -34,6 +34,22 @@ class BuildSnapStaticTest(unittest.TestCase):
             source,
         )
 
+    def test_build_snap_rejects_unsupported_destructive_hosts(self) -> None:
+        source = BUILD_SNAP.read_text(encoding="utf-8")
+
+        self.assertIn('snapcraft_mode="${SNAPCRAFT_MODE:-auto}"', source)
+        self.assertIn('snapcraft_mode="destructive"', source)
+        self.assertIn('snapcraft_mode="lxd"', source)
+        self.assertIn('command -v -- lxc >/dev/null 2>&1 && lxc info >/dev/null 2>&1', source)
+        self.assertIn('snapcraft_args=(--use-lxd)', source)
+        self.assertIn('snapcraft_args=(--destructive-mode)', source)
+        self.assertIn(
+            'SNAPCRAFT_MODE=destructive is supported only on Ubuntu',
+            source,
+        )
+        self.assertNotIn('snapcraft prime --destructive-mode', source)
+        self.assertNotIn('snapcraft pack --destructive-mode prime', source)
+
     def test_snap_activation_requires_original_stage_and_empty_destination(self) -> None:
         source = BUILD_SNAP.read_text(encoding="utf-8")
 

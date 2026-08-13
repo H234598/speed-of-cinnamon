@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from contextlib import suppress
 import codecs
+import math
 import os
 import re
 import selectors
@@ -18,6 +19,7 @@ from pathlib import Path
 from .personalization import command_environment
 from .output import (
     _clipboard_lock_identity_for_pid,
+    _kill_output_process_with_pidfd,
     _kill_output_process_tree,
     _output_process_identity_is_current,
     _process_pipe_holder_identities,
@@ -133,6 +135,15 @@ def _command_timeout_detail(label: str, timeout_seconds: int) -> str:
     return f"{label} command timed out after {timeout_seconds} seconds"
 
 
+def _process_start_time_from_identity(identity: object) -> str | None:
+    if not isinstance(identity, str) or isinstance(identity, bool):
+        return None
+    boot_id, separator, start_time = identity.rpartition(":")
+    if not separator or not boot_id or not start_time.isdecimal():
+        return None
+    return start_time
+
+
 def _terminate_bounded_process(
     proc: subprocess.Popen[bytes],
     *,
@@ -158,23 +169,19 @@ def _terminate_bounded_process(
         return False
     # Root identity changed after reaping: never signal the reused PID/group.
     root_reaped = root_identity_changed_after_exit or _output_process_is_reaped(proc)
-    try:
-        if root_reaped or _output_process_is_reaped(proc):
-            if process_tree is None:
-                tree_cleanup_confirmed = False
-        elif isinstance(pid, int) and pid > 0:
-            os.killpg(pid, signal.SIGKILL)
-        else:
-            proc.kill()
-    except ProcessLookupError:
-        pass
-    except OSError:
-        try:
-            if not _output_process_identity_is_current(proc):
-                return False
-            proc.kill()
-        except BaseException:
+    if root_reaped or _output_process_is_reaped(proc):
+        if process_tree is None:
+            tree_cleanup_confirmed = False
+    elif isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+        expected_start_time = _process_start_time_from_identity(
+            vars(proc).get("_soc_process_identity")
+        )
+        if expected_start_time is None:
             return False
+        if _kill_output_process_with_pidfd(pid, expected_start_time) is not True:
+            return False
+    else:
+        return False
     try:
         proc.wait(timeout=1)
     except (OSError, subprocess.TimeoutExpired):
@@ -197,22 +204,7 @@ def _terminate_unidentified_bounded_process(proc: subprocess.Popen[bytes]) -> bo
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
 
-    group_cleanup_confirmed = False
-    try:
-        process_group_id = os.getpgid(pid)
-    except (OSError, ValueError):
-        process_group_id = None
-    if process_group_id == pid:
-        try:
-            os.killpg(pid, signal.SIGKILL)
-        except ProcessLookupError:
-            group_cleanup_confirmed = True
-        except OSError:
-            pass
-        else:
-            group_cleanup_confirmed = True
-
-    root_cleanup_confirmed = group_cleanup_confirmed
+    root_cleanup_confirmed = False
     pidfd: int | None = None
     try:
         if not root_cleanup_confirmed:
@@ -347,6 +339,7 @@ def run_process_bounded_output(
     max_output_bytes: int,
     env: dict[str, str],
     label: str,
+    deadline: float | None = None,
 ) -> tuple[int, bytes, bytes]:
     if not isinstance(argv, (list, tuple)) or not argv:
         raise CommandChainError("argv must be a non-empty sequence")
@@ -360,6 +353,11 @@ def run_process_bounded_output(
         )
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
         raise CommandChainError("timeout_seconds must be positive")
+    if (
+        deadline is not None
+        and (isinstance(deadline, bool) or not isinstance(deadline, (int, float)) or not math.isfinite(deadline))
+    ):
+        raise CommandChainError("deadline must be finite")
     if not isinstance(max_output_bytes, int) or isinstance(max_output_bytes, bool) or max_output_bytes <= 0:
         raise CommandChainError("max_output_bytes must be positive")
     if max_output_bytes > MAX_BOUNDED_PROCESS_OUTPUT_BYTES:
@@ -437,7 +435,7 @@ def run_process_bounded_output(
                 selector.register(proc.stdout, selectors.EVENT_READ, "stdout")
             if proc.stderr is not None:
                 selector.register(proc.stderr, selectors.EVENT_READ, "stderr")
-            deadline = time.monotonic() + timeout_seconds
+            process_deadline = time.monotonic() + timeout_seconds if deadline is None else deadline
             while selector.get_map():
                 now = time.monotonic()
                 if now >= next_process_tree_snapshot:
@@ -460,10 +458,10 @@ def run_process_bounded_output(
                     if root_exited_before_poll or _output_process_is_reaped(proc):
                         capture_process_tree_at_exit()
                     if process_exit_deadline is None:
-                        process_exit_deadline = min(deadline, now + _PIPE_DRAIN_GRACE_SECONDS)
+                        process_exit_deadline = min(process_deadline, now + _PIPE_DRAIN_GRACE_SECONDS)
                     active_deadline = process_exit_deadline
                 else:
-                    active_deadline = deadline
+                    active_deadline = process_deadline
                 remaining = active_deadline - now
                 if remaining <= 0:
                     if process_exit_deadline is not None:
@@ -508,7 +506,7 @@ def run_process_bounded_output(
                     capture_process_tree_at_exit()
                 returncode = proc.poll()
                 if returncode is None:
-                    returncode = proc.wait(timeout=max(0.0, deadline - time.monotonic()))
+                    returncode = proc.wait(timeout=max(0.0, process_deadline - time.monotonic()))
                 if returncode is not None:
                     capture_process_tree_at_exit()
             except subprocess.TimeoutExpired:
@@ -842,8 +840,11 @@ def run_command_chain(
     except ValueError as exc:
         raise CommandChainError(str(exc)) from exc
     output = input_text
+    chain_deadline = time.monotonic() + timeout_seconds
 
     for segment in segments:
+        if time.monotonic() >= chain_deadline:
+            raise CommandChainError(f"{label} command timed out after {timeout_seconds}s")
         if len(output) > max_input_chars:
             raise CommandChainError(f"{label} command input exceeded {max_input_chars} characters")
 
@@ -880,6 +881,7 @@ def run_command_chain(
                 max_output_bytes=max_output_bytes,
                 env=env,
                 label=label,
+                deadline=chain_deadline,
             )
             if returncode != 0:
                 detail = _command_failure_detail(returncode, len(stdout_data), len(stderr_data))
