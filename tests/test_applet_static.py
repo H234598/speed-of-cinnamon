@@ -244,6 +244,27 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("normalizeTranscriberMethod(this.transcriber)", source)
         self.assertIn("normalizeTranscriberMethod(value)", source)
 
+    def test_status_recovery_is_explicit_and_never_reinserts_text(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+
+        self.assertIn('return [this._cliCommand(), "status", "--confirm-plaintext-output", "--json"];', source)
+        self.assertIn('if (payload.transcript_recovered === true)', source)
+        self.assertIn('_("Recovered saved transcript; use Copy last transcript to copy it")', source)
+        self.assertIn('_("Saved transcript could not be restored; open Transcripts or Diagnostics")', source)
+
+    def test_x11_target_identity_ignores_mutable_title_when_class_matches(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        start = source.index("_targetXWindowMatchesSnapshot: function(snapshot, completionCallback)")
+        end = source.index("\n  _targetXWindowMatchesSnapshotTitle:", start)
+        block = source[start:end]
+
+        class_check = 'if (String(classOutput || "").trim().toLowerCase() !== expectedClass) {'
+        self.assertIn(class_check, block)
+        self.assertIn("complete(true);", block)
+        self.assertLess(block.index(class_check), block.index("complete(true);"))
+        class_verified_block = block[block.index(class_check):]
+        self.assertNotIn("this._targetXWindowMatchesSnapshotTitle(snapshot, xid, complete, deadlineMs);", class_verified_block)
+
     def test_artifact_encryption_is_settings_only(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))

@@ -186,6 +186,9 @@ def _trigger_applet_clipboard_paste(
     *,
     simulate_menu_click: bool = False,
     auto_paste_window_title: str = "",
+    retitle_window_id: str = "",
+    retitle_window_name: str = "",
+    clear_target_window_id: str = "",
 ) -> object:
     if simulate_menu_click:
         target_setup = """
@@ -237,6 +240,17 @@ def _trigger_applet_clipboard_paste(
         ) is True
         if remembered:
             break
+        time.sleep(0.05)
+
+    if retitle_window_id and retitle_window_name:
+        _run(
+            [_require_tool("xdotool"), "set_window", "--name", retitle_window_name, retitle_window_id],
+            timeout=EVAL_TIMEOUT_SECONDS,
+        )
+        time.sleep(0.1)
+    if clear_target_window_id:
+        _activate_window(clear_target_window_id)
+        _run([_require_tool("xdotool"), "key", "--clearmodifiers", "ctrl+u"], timeout=EVAL_TIMEOUT_SECONDS)
         time.sleep(0.05)
 
     return _cinnamon_eval(
@@ -308,7 +322,10 @@ class LivePasteEditorTest(unittest.TestCase):
     def test_cinnamon_applet_menu_click_path_pastes_and_submits_into_focused_gnome_terminal(self) -> None:
         self._assert_live_paste_into_gnome_terminal(simulate_menu_click=True)
 
-    def _assert_live_paste_into_gnome_terminal(self, *, simulate_menu_click: bool) -> None:
+    def test_cinnamon_applet_pastes_when_terminal_title_changes_after_target_capture(self) -> None:
+        self._assert_live_paste_into_gnome_terminal(simulate_menu_click=False, change_title_after_capture=True)
+
+    def _assert_live_paste_into_gnome_terminal(self, *, simulate_menu_click: bool, change_title_after_capture: bool = False) -> None:
         _require_display()
         terminal = _require_tool("gnome-terminal")
         xdotool = _require_tool("xdotool")
@@ -318,10 +335,13 @@ class LivePasteEditorTest(unittest.TestCase):
         paste_text = f"soc-terminal-paste-{uuid.uuid4().hex}"
         with tempfile.TemporaryDirectory(prefix="soc-live-terminal-paste-") as tmpdir:
             capture_path = Path(tmpdir, "captured.txt")
+            ready_path = Path(tmpdir, "ready")
             title = f"SoC shell paste {uuid.uuid4().hex}"
+            changed_title = f"SoC shell paste changed {uuid.uuid4().hex}"
             known_terminal_windows = set(_window_ids_for([xdotool, "search", "--onlyvisible", "--class", "Gnome-terminal"]))
             env = dict(os.environ)
             env["SOC_TERMINAL_CAPTURE_PATH"] = str(capture_path)
+            env["SOC_TERMINAL_READY_PATH"] = str(ready_path)
             terminal_proc = subprocess.Popen(
                 [
                     terminal,
@@ -331,7 +351,7 @@ class LivePasteEditorTest(unittest.TestCase):
                     "--",
                     "bash",
                     "-lc",
-                    'IFS= read -r line; printf "%s\\n" "$line" > "$SOC_TERMINAL_CAPTURE_PATH"; sleep 0.3',
+                    'printf ready > "$SOC_TERMINAL_READY_PATH"; IFS= read -r line; printf "%s\\n" "$line" > "$SOC_TERMINAL_CAPTURE_PATH"; sleep 0.3',
                 ],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
@@ -342,10 +362,17 @@ class LivePasteEditorTest(unittest.TestCase):
             try:
                 window_id = _wait_for_terminal_window(title, terminal_proc.pid, known_terminal_windows)
                 _activate_window(window_id)
+                ready_deadline = time.monotonic() + EVAL_TIMEOUT_SECONDS
+                while not ready_path.exists() and time.monotonic() < ready_deadline:
+                    time.sleep(0.05)
+                self.assertTrue(ready_path.exists(), "terminal shell did not become ready")
                 result = _trigger_applet_clipboard_paste(
                     paste_text,
                     simulate_menu_click=simulate_menu_click,
                     auto_paste_window_title="Terminal",
+                    retitle_window_id=window_id if change_title_after_capture else "",
+                    retitle_window_name=changed_title if change_title_after_capture else "",
+                    clear_target_window_id=window_id,
                 )
                 self.assertIsInstance(result, dict)
                 self.assertTrue(result.get("ok"), result)
@@ -369,7 +396,11 @@ class LivePasteEditorTest(unittest.TestCase):
                 )
             finally:
                 if window_id:
-                    _close_owned_test_window(window_id, expected_title=title, expected_class="Gnome-terminal")
+                    _close_owned_test_window(
+                        window_id,
+                        expected_title=changed_title if change_title_after_capture else title,
+                        expected_class="Gnome-terminal",
+                    )
                 terminal_proc.terminate()
                 try:
                     terminal_proc.wait(timeout=3)

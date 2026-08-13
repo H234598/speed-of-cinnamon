@@ -975,6 +975,7 @@ test("target validation stops before class probe at expired deadline", () => {
 test("target validation stops before title probe at expired deadline", () => {
   const clock = { value: 1000 };
   const state = makeTargetApplet(clock);
+  state.snapshot.windowClass = "";
 
   state.invoke();
   state.calls[0].callback("1");
@@ -987,9 +988,10 @@ test("target validation stops before title probe at expired deadline", () => {
   assert.deepEqual(state.completions, [false]);
 });
 
-test("target validation passes exact remaining budget to every probe", () => {
+test("target title fallback passes exact remaining budget to every probe", () => {
   const clock = { value: 1000 };
   const state = makeTargetApplet(clock);
+  state.snapshot.windowClass = "";
 
   state.invoke();
   assert.equal(state.calls[0].timeoutMs, 100);
@@ -999,10 +1001,21 @@ test("target validation passes exact remaining budget to every probe", () => {
   assert.equal(state.calls[1].timeoutMs, 75);
 
   clock.value = 1050;
-  state.calls[1].callback("terminal");
-  assert.equal(state.calls[2].timeoutMs, 50);
-  state.calls[2].callback("shell");
+  state.calls[1].callback("shell");
 
+  assert.deepEqual(state.completions, [true]);
+});
+
+test("target validation accepts stable XID and class after title changes", () => {
+  const clock = { value: 1000 };
+  const state = makeTargetApplet(clock);
+
+  state.snapshot.windowTitle = "codex: waiting";
+  state.invoke();
+  state.calls[0].callback("1");
+  state.calls[1].callback("terminal");
+
+  assert.equal(state.calls.length, 2);
   assert.deepEqual(state.completions, [true]);
 });
 
@@ -1024,14 +1037,12 @@ test("target title validation rejects expired direct deadline without spawn", ()
 test("target title validation rejects matching callback after deadline", () => {
   const clock = { value: 1000 };
   const state = makeTargetApplet(clock);
+  state.snapshot.windowClass = "";
 
   state.invoke();
   state.calls[0].callback("1");
-  state.calls[1].callback("terminal");
-  assert.equal(state.calls.length, 3);
-
   clock.value = 1100;
-  state.calls[2].callback("shell");
+  state.calls[1].callback("shell");
 
   assert.deepEqual(state.completions, [false]);
 });
@@ -1039,14 +1050,14 @@ test("target title validation rejects matching callback after deadline", () => {
 test("target validation rejects long titles differing only in middle", () => {
   const clock = { value: 1000 };
   const state = makeTargetApplet(clock);
+  state.snapshot.windowClass = "";
   const prefix = "a".repeat(100);
   const suffix = "z".repeat(100);
   state.snapshot.windowTitle = `${prefix}expected-middle${suffix}`;
 
   state.invoke();
   state.calls[0].callback("1");
-  state.calls[1].callback("terminal");
-  state.calls[2].callback(`${prefix}changed-middle${suffix}`);
+  state.calls[1].callback(`${prefix}changed-middle${suffix}`);
 
   assert.deepEqual(state.completions, [false]);
 });

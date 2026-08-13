@@ -12923,6 +12923,29 @@ class CliTest(unittest.TestCase):
         self.assertNotIn("private-process-identity", encoded)
         self.assertNotIn("secret dictated words", encoded)
 
+    def test_status_recovers_saved_transcript_only_with_explicit_confirmation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_file = Path(tmp) / "state.json"
+            transcript_path = Path(tmp) / "transcripts" / "saved.txt.socenc"
+            transcript_path.parent.mkdir()
+            StateStore(state_file).write(
+                RecordingState(status="done", transcript_path=str(transcript_path))
+            )
+            with mock.patch("speed_of_cinnamon.cli._read_stored_transcript_text", return_value="recovered text") as read_transcript:
+                redacted = cli.command_status(argparse.Namespace(state_file=str(state_file)))
+                confirmed = cli.command_status(
+                    argparse.Namespace(
+                        state_file=str(state_file),
+                        confirm_plaintext_output=True,
+                    )
+                )
+
+        self.assertNotIn("transcript", redacted)
+        self.assertEqual(confirmed["transcript"], "recovered text")
+        self.assertFalse(confirmed["transcript_output_redacted"])
+        self.assertTrue(confirmed["transcript_recovered"])
+        read_transcript.assert_called_once_with(transcript_path)
+
     def test_diagnostics_reports_missing_state_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_file = Path(tmp) / "missing-state.json"

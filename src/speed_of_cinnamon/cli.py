@@ -9252,6 +9252,22 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
         microphone_level = _recording_level_payload(state, state_path=store.path)
         if microphone_level is not None:
             payload["microphone_level"] = microphone_level
+    if payload.get("status") == "done" and _confirm_plaintext_transcript_output(args):
+        transcript = state.transcript
+        if not transcript:
+            transcript_path = _normalized_state_artifact_path(
+                state.transcript_path,
+                state_path=store.path,
+            )
+            if transcript_path is not None:
+                try:
+                    transcript = _read_stored_transcript_text(transcript_path)
+                except (OSError, RuntimeError):
+                    payload["transcript_recovery_failed"] = True
+        if transcript:
+            payload["transcript"] = transcript
+            payload["transcript_output_redacted"] = False
+            payload["transcript_recovered"] = True
     return payload
 
 
@@ -10593,6 +10609,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     status = subparsers.add_parser("status")
     add_common_options(status)
+    status.add_argument(
+        "--confirm-plaintext-output",
+        action="store_true",
+        help="allow confirmed transcript recovery for the local applet",
+    )
     status.set_defaults(handler=command_status)
 
     doctor = subparsers.add_parser("doctor")

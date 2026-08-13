@@ -5757,7 +5757,7 @@ MyApplet.prototype = {
   },
 
   _statusArgs: function() {
-    return [this._cliCommand(), "status", "--json"];
+    return [this._cliCommand(), "status", "--confirm-plaintext-output", "--json"];
   },
 
   _doctorArgs: function() {
@@ -14101,7 +14101,19 @@ MyApplet.prototype = {
       return;
     }
     if (status === "done" && hasTranscript) {
+      if (payload.transcript_recovered === true) {
+        this.autoRelistenPending = false;
+        this.autoRelistenPendingToken = "";
+        this.autoRelistenPendingLanguage = "";
+        this.autoRelistenManualStopRequested = true;
+        this._setStatus("done", _("Recovered saved transcript; use Copy last transcript to copy it"), payload.transcript);
+        return;
+      }
       this._finishAppletTextInsert(payload);
+      return;
+    }
+    if (status === "done" && payload.transcript_recovery_failed === true) {
+      this._setStatus("error", _("Saved transcript could not be restored; open Transcripts or Diagnostics"), this.lastTranscript);
       return;
     }
     if (status === "done" && !this.autoRelistenPending) {
@@ -15136,7 +15148,10 @@ MyApplet.prototype = {
           complete(false);
           return;
         }
-        this._targetXWindowMatchesSnapshotTitle(snapshot, xid, complete, deadlineMs);
+        // X11 window titles are mutable application state. XID plus WM_CLASS is
+        // the stable identity; comparing a title here rejects safe Codex/terminal
+        // targets whenever their tab, prompt, or activity label changes.
+        complete(true);
       }, classRemainingMs);
     }, activeRemainingMs);
     return true;
