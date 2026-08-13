@@ -79,7 +79,7 @@ class NextVersionTest(unittest.TestCase):
 
     def test_breaking_increase_resets_minor_and_patch(self) -> None:
         self.assertEqual(
-            run_version("--base", "0.1.99", "--breaking"),
+            run_version("--base", "0.1.99", "--add-commits", "0", "--breaking"),
             "1.0.0",
         )
 
