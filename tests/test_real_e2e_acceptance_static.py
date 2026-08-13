@@ -23,3 +23,15 @@ class RealE2EAcceptanceStaticTest(unittest.TestCase):
         self.assertIn('release: release-validate-flags release-require-snap verify-real-e2e-attestation', makefile)
         self.assertIn('git_head', verifier)
         self.assertIn('timedelta(hours=24)', verifier)
+
+    def test_local_model_e2e_requires_all_installed_local_backends_and_safe_output(self) -> None:
+        script_path = ROOT / "scripts" / "local-model-e2e-acceptance.sh"
+        self.assertTrue(script_path.is_file())
+        script = script_path.read_text(encoding="utf-8")
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        self.assertIn('"faster-whisper"', script)
+        self.assertIn('"whisper-cpp"', script)
+        self.assertIn('--transcriber', script)
+        self.assertIn('transcribe-file', script)
+        self.assertNotIn('--insert-method', script)
+        self.assertIn('verify-local-model-e2e-attestation', makefile)

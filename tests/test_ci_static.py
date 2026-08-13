@@ -1925,9 +1925,12 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("if [ \"$(BUILD_GENERIC_RPM)\" = \"0\" ]; then", makefile)
         self.assertIn("Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\\n", makefile)
         self.assertIn("--skip-generic-rpm", makefile)
-        self.assertIn("release-dry-run: release-validate-flags release-require-snap dist-check rpm rpm-check", makefile)
         self.assertIn(
-            "release: release-validate-flags release-require-snap verify-real-e2e-attestation dist-check rpm rpm-check",
+            "release-dry-run: release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check",
+            makefile,
+        )
+        self.assertIn(
+            "release: release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check",
             makefile,
         )
         self.assertIn("release-validate-flags", makefile)
