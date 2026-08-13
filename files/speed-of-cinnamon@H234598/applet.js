@@ -161,6 +161,8 @@ const DEFAULT_AUTO_PASTE_TITLE = "codex, Terminal, Telegram, Ghostty, Kitty";
 const AUTO_PASTE_TITLE_PRESETS = [
   "codex",
   "Terminal",
+  "Ghostty",
+  "Kitty",
   "PDF",
   "Excel",
   "Telegram",
@@ -198,6 +200,7 @@ const TERMINAL_WINDOW_MARKERS = [
   "alacritty",
   "blackbox",
   "com.mitchellh.ghostty",
+  "ghostty",
   "com.system76.cosmic-term",
   "console",
   "cool-retro-term",
@@ -233,6 +236,8 @@ const TERMINAL_WINDOW_MARKERS = [
 const AUTO_PASTE_IDENTITY_MARKERS = {
   "codex": TERMINAL_WINDOW_MARKERS,
   "terminal": TERMINAL_WINDOW_MARKERS,
+  "ghostty": TERMINAL_WINDOW_MARKERS,
+  "kitty": TERMINAL_WINDOW_MARKERS,
   "pdf": [
     "acroread",
     "adobe",
@@ -4150,8 +4155,17 @@ MyApplet.prototype = {
     this.recordingMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Recording"));
     this.menu.addMenuItem(this.recordingMenuItem);
 
-    this.textOutputMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Text and output"));
-    this.menu.addMenuItem(this.textOutputMenuItem);
+    this.audioInputMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Audio input"));
+    this.menu.addMenuItem(this.audioInputMenuItem);
+
+    this.voiceMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Voice"));
+    this.menu.addMenuItem(this.voiceMenuItem);
+
+    this.textPolishingMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Text polishing"));
+    this.menu.addMenuItem(this.textPolishingMenuItem);
+
+    this.outputMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Output"));
+    this.menu.addMenuItem(this.outputMenuItem);
 
     this.transcriptsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Transcripts"));
     this.menu.addMenuItem(this.transcriptsMenuItem);
@@ -4160,7 +4174,7 @@ MyApplet.prototype = {
     this.menu.addMenuItem(this.toolsMenuItem);
 
     this.recorderItem = new PopupMenu.PopupSubMenuMenuItem(_("Recorder: Automatic"));
-    this.recordingMenuItem.menu.addMenuItem(this.recorderItem);
+    this.audioInputMenuItem.menu.addMenuItem(this.recorderItem);
     this._populateRecorderMenu();
 
     this.recordingLimitItem = new PopupMenu.PopupSubMenuMenuItem(_("Duration: 30s"));
@@ -4196,19 +4210,15 @@ MyApplet.prototype = {
     this._populateShortcutMenu();
 
     this.outputMethodItem = new PopupMenu.PopupSubMenuMenuItem(_("Output: Clipboard and paste"));
-    this.textOutputMenuItem.menu.addMenuItem(this.outputMethodItem);
+    this.outputMenuItem.menu.addMenuItem(this.outputMethodItem);
     this._populateOutputMethodMenu();
 
-    this.artifactEncryptionItem = new PopupMenu.PopupSubMenuMenuItem(_("Encryption: Secret Service keyring"));
-    this.textOutputMenuItem.menu.addMenuItem(this.artifactEncryptionItem);
-    this._populateArtifactEncryptionMenu();
-
     this.textOptionsItem = new PopupMenu.PopupSubMenuMenuItem(_("Text options"));
-    this.textOutputMenuItem.menu.addMenuItem(this.textOptionsItem);
+    this.outputMenuItem.menu.addMenuItem(this.textOptionsItem);
     this._populateTextOptionsMenu();
 
     this.autoPasteItem = new PopupMenu.PopupSubMenuMenuItem(_("Auto-Submit: codex"));
-    this.textOutputMenuItem.menu.addMenuItem(this.autoPasteItem);
+    this.outputMenuItem.menu.addMenuItem(this.autoPasteItem);
     this._populateAutoPasteMenu();
 
     this.transcriptItem = this._styleMenuItemLabel(new PopupMenu.PopupMenuItem(_("No transcript yet")), { maxWidthEm: MENU_LABEL_WIDTH_EM });
@@ -4238,18 +4248,6 @@ MyApplet.prototype = {
     this.transcriptsMenuItem.menu.addMenuItem(this.historyItem);
     this._populateHistoryMenu([]);
 
-    let statusNow = new PopupMenu.PopupIconMenuItem(_("Refresh status"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(statusNow, "activate", () => this._refreshStatus());
-    this.toolsMenuItem.menu.addMenuItem(statusNow);
-
-    let restartApplet = new PopupMenu.PopupIconMenuItem(_("Restart applet"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(restartApplet, "activate", () => this._restartApplet());
-    this.toolsMenuItem.menu.addMenuItem(restartApplet);
-
-    let doctor = new PopupMenu.PopupIconMenuItem(_("Run doctor"), "dialog-information-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(doctor, "activate", () => this._runDoctor());
-    this.toolsMenuItem.menu.addMenuItem(doctor);
-
     let openSettings = new PopupMenu.PopupIconMenuItem(_("Open applet settings"), "preferences-system-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(openSettings, "activate", () => this._openAppletSettings());
     this.toolsMenuItem.menu.addMenuItem(openSettings);
@@ -4277,9 +4275,25 @@ MyApplet.prototype = {
     this._connectSafe(installOllamaModel, "activate", () => this._chooseOllamaTextModel());
     this.installMenuItem.menu.addMenuItem(installOllamaModel);
 
+    let downloadStarterModel = new PopupMenu.PopupIconMenuItem(_("Download starter voice model"), "folder-download-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(downloadStarterModel, "activate", () => this._downloadStarterModel());
+    this.installMenuItem.menu.addMenuItem(downloadStarterModel);
+
     this.diagnosticsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Diagnostics"));
     this.toolsMenuItem.menu.addMenuItem(this.diagnosticsMenuItem);
     this.diagnosticsMenuItem.menu.addMenuItem(this.doctorSummaryItem);
+
+    let statusNow = new PopupMenu.PopupIconMenuItem(_("Refresh status"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(statusNow, "activate", () => this._refreshStatus());
+    this.diagnosticsMenuItem.menu.addMenuItem(statusNow);
+
+    let restartApplet = new PopupMenu.PopupIconMenuItem(_("Restart applet"), "view-refresh-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(restartApplet, "activate", () => this._restartApplet());
+    this.diagnosticsMenuItem.menu.addMenuItem(restartApplet);
+
+    let doctor = new PopupMenu.PopupIconMenuItem(_("Run doctor"), "dialog-information-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(doctor, "activate", () => this._runDoctor());
+    this.diagnosticsMenuItem.menu.addMenuItem(doctor);
 
     let setupPlan = new PopupMenu.PopupIconMenuItem(_("Copy setup plan"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(setupPlan, "activate", () => this._copySetupPlan());
@@ -4313,7 +4327,7 @@ MyApplet.prototype = {
       }
       this._refreshInputSourceMenu();
     });
-    this.recordingMenuItem.menu.addMenuItem(this.inputSourceItem);
+    this.audioInputMenuItem.menu.addMenuItem(this.inputSourceItem);
     this._populateInputSourceMenu([], _("Open menu to load input sources"));
 
     this.modelItem = new PopupMenu.PopupSubMenuMenuItem(_("Voice model"));
@@ -4328,7 +4342,7 @@ MyApplet.prototype = {
       }
       this._refreshModelMenu();
     });
-    this.recordingMenuItem.menu.addMenuItem(this.modelItem);
+    this.voiceMenuItem.menu.addMenuItem(this.modelItem);
     this._populateModelMenu([], _("Open menu to load voice models"));
 
     this.textModelItem = new PopupMenu.PopupSubMenuMenuItem(_("Text model"));
@@ -4340,11 +4354,23 @@ MyApplet.prototype = {
         this._terminateProcessesByGroup("text-model-refresh");
       }
     });
-    this.textOutputMenuItem.menu.addMenuItem(this.textModelItem);
+    this.textPolishingMenuItem.menu.addMenuItem(this.textModelItem);
     this._populateTextModelMenu([], _("Open menu to load local text models"));
 
     this.maintenanceMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Files and settings"));
     this.toolsMenuItem.menu.addMenuItem(this.maintenanceMenuItem);
+
+    let openGgmlModels = new PopupMenu.PopupIconMenuItem(_("Open GGML model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(openGgmlModels, "activate", () => {
+      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"]), _("Opened model folder"));
+    });
+    this.maintenanceMenuItem.menu.addMenuItem(openGgmlModels);
+
+    let openCt2Models = new PopupMenu.PopupIconMenuItem(_("Open CTranslate2 model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(openCt2Models, "activate", () => {
+      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "ctranslate2"]), _("Opened model folder"));
+    });
+    this.maintenanceMenuItem.menu.addMenuItem(openCt2Models);
 
     let transcripts = new PopupMenu.PopupIconMenuItem(_("Open transcripts"), "folder-documents-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(transcripts, "activate", () => {
@@ -4368,13 +4394,16 @@ MyApplet.prototype = {
     this._connectSafe(cleanup, "activate", () => this._cleanupOldFiles());
     this.maintenanceMenuItem.menu.addMenuItem(cleanup);
 
+    this.backupRestoreMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Backup and restore"));
+    this.maintenanceMenuItem.menu.addMenuItem(this.backupRestoreMenuItem);
+
     let exportSettings = new PopupMenu.PopupIconMenuItem(_("Export settings"), "document-save-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(exportSettings, "activate", () => this._exportSettings());
-    this.maintenanceMenuItem.menu.addMenuItem(exportSettings);
+    this.backupRestoreMenuItem.menu.addMenuItem(exportSettings);
 
     let importSettings = new PopupMenu.PopupIconMenuItem(_("Import settings"), "document-open-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(importSettings, "activate", () => this._importSettings());
-    this.maintenanceMenuItem.menu.addMenuItem(importSettings);
+    this.backupRestoreMenuItem.menu.addMenuItem(importSettings);
 
     this._styleWideMenus();
   },
@@ -4384,17 +4413,20 @@ MyApplet.prototype = {
       this.menu.box.set_style("min-width: " + String(MENU_MIN_WIDTH_EM) + "em;");
     }
     this._styleSelectionSubmenu(this.recordingMenuItem);
-    this._styleSelectionSubmenu(this.textOutputMenuItem);
+    this._styleSelectionSubmenu(this.audioInputMenuItem);
+    this._styleSelectionSubmenu(this.voiceMenuItem);
+    this._styleSelectionSubmenu(this.textPolishingMenuItem);
+    this._styleSelectionSubmenu(this.outputMenuItem);
     this._styleSelectionSubmenu(this.transcriptsMenuItem);
     this._styleSelectionSubmenu(this.toolsMenuItem);
     this._styleSelectionSubmenu(this.installMenuItem);
     this._styleSelectionSubmenu(this.diagnosticsMenuItem);
     this._styleSelectionSubmenu(this.maintenanceMenuItem);
+    this._styleSelectionSubmenu(this.backupRestoreMenuItem);
     this._styleSelectionSubmenu(this.inputSourceItem);
     this._styleSelectionSubmenu(this.modelItem);
     this._styleSelectionSubmenu(this.textModelItem);
     this._styleSelectionSubmenu(this.autoPasteItem);
-    this._styleSelectionSubmenu(this.artifactEncryptionItem);
   },
 
   _styleSelectionSubmenu: function(menuItem) {
@@ -9266,33 +9298,8 @@ MyApplet.prototype = {
     let whisperCommand = this._selectionMenuItem("");
     this._connectSafe(whisperCommand, "activate", () => this._selectStaticVoiceBackend("whisper", _("Voice model: OpenAI Whisper command")));
     menu.addMenuItem(whisperCommand);
-    let customCommand = this._selectionMenuItem("");
-    this._connectSafe(customCommand, "activate", () => {
-      if (String(this.transcriberCommand || "").trim() !== "") {
-        this._selectStaticVoiceBackend("command", _("Voice model: custom command"));
-        return;
-      }
-      this._openAppletSettings();
-      this._setStatusPreservingRecording("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);
-    });
-    menu.addMenuItem(customCommand);
     let active = this._selectionInfoItem("");
     menu.addMenuItem(active);
-    let download = this._styleMenuItemLabel(
-      new PopupMenu.PopupIconMenuItem("", "folder-download-symbolic", St.IconType.SYMBOLIC)
-    );
-    this._connectSafe(download, "activate", () => this._downloadStarterModel());
-    menu.addMenuItem(download);
-    let openFolder = new PopupMenu.PopupIconMenuItem(_("Open GGML model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(openFolder, "activate", () => {
-      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "whisper.cpp"]), _("Opened model folder"));
-    });
-    menu.addMenuItem(openFolder);
-    let openCt2Folder = new PopupMenu.PopupIconMenuItem(_("Open CTranslate2 model folder"), "folder-symbolic", St.IconType.SYMBOLIC);
-    this._connectSafe(openCt2Folder, "activate", () => {
-      this._openFolder(GLib.build_filenamev([GLib.get_user_data_dir(), "speed-of-cinnamon", "models", "ctranslate2"]), _("Opened model folder"));
-    });
-    menu.addMenuItem(openCt2Folder);
     menu.addMenuItem(new PopupMenu.PopupSeparatorMenuItem());
     let message = this._selectionInfoItem("");
     menu.addMenuItem(message);
@@ -9324,9 +9331,7 @@ MyApplet.prototype = {
     this._modelMenuPool = {
       automatic: automatic,
       whisperCommand: whisperCommand,
-      customCommand: customCommand,
       active: active,
-      download: download,
       message: message,
       empty: empty,
       ct2Menu: ct2Menu,
@@ -9420,14 +9425,9 @@ MyApplet.prototype = {
     let pool = this._ensureModelMenuPool();
     let autoActive = String(this.transcriber || "auto") === "auto" && String(this.whisperModel || "") === "";
     let whisperCommandActive = String(this.transcriber || "") === "whisper" && String(this.whisperModel || "") === "";
-    let customCommandActive = String(this.transcriber || "") === "command" && String(this.whisperModel || "") === "";
-    let customCommandConfigured = String(this.transcriberCommand || "").trim() !== "";
-    let customCommandLabel = _("Custom command") + (customCommandConfigured ? "" : _(" - configure in settings"));
     this._setMenuItemLabelSafely(pool.automatic, (autoActive ? "[x] " : "[ ] ") + _("Automatic voice model"));
     this._setMenuItemLabelSafely(pool.whisperCommand, (whisperCommandActive ? "[x] " : "[ ] ") + _("OpenAI Whisper command"));
-    this._setMenuItemLabelSafely(pool.customCommand, (customCommandActive ? "[x] " : "[ ] ") + customCommandLabel);
     this._setMenuItemLabelSafely(pool.active, _("Active: ") + this._activeVoiceModelSummary());
-    this._setMenuItemLabelSafely(pool.download, _("Download starter model") + ": " + this._starterVoiceModelName());
     this._setMenuItemLabelSafely(pool.message, messageText);
     let externalActive = String(this.transcriber || "") === "openai-compatible";
     let externalModel = this._shortMenuText(String(this.openaiCompatibleModel || "").trim(), 96);
@@ -10905,10 +10905,6 @@ MyApplet.prototype = {
     }
     models = Array.isArray(models) ? models : [];
     models = models.filter((model) => model && typeof model === "object" && typeof model.name === "string" && model.name.trim() !== "");
-    let modelListWasTruncated = models.length > MAX_MODEL_MENU_ENTRIES;
-    if (modelListWasTruncated) {
-      models = models.slice(0, MAX_MODEL_MENU_ENTRIES);
-    }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
     let backend = String(this.postProcessBackend || "none");
@@ -10916,6 +10912,17 @@ MyApplet.prototype = {
       ? provider
       : (backend === "openai-compatible" ? "openai-compatible" : "ollama");
     let selectedOllamaModel = String(this.ollamaModel || "").trim();
+    if (activeProvider === "openai-compatible") {
+      let selectedExternalModel = String(this.openaiCompatibleTextModel || "").trim().toLowerCase();
+      models = models.filter((model) => {
+        let name = String(model.name || "").trim().toLowerCase();
+        return name === selectedExternalModel || /^(gpt-|o[1-9])/.test(name);
+      });
+    }
+    let modelListWasTruncated = models.length > MAX_MODEL_MENU_ENTRIES;
+    if (modelListWasTruncated) {
+      models = models.slice(0, MAX_MODEL_MENU_ENTRIES);
+    }
 
     if (modelListWasTruncated && activeProvider === "ollama" && backend === "ollama" && selectedOllamaModel !== "") {
       let selectedModelListed = false;

@@ -170,15 +170,15 @@ class AppletStaticTest(unittest.TestCase):
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
 
         self.assertEqual(schema["transcriber"]["options"]["OpenAI-compatible external API"], "openai-compatible")
-        self.assertEqual(schema["layout"]["backend-section"]["title"], "Voice model (menu: Recording > Voice model)")
+        self.assertEqual(schema["layout"]["backend-section"]["title"], "Voice model (menu: Voice)")
         self.assertIn("voice-model-help", schema["layout"]["backend-section"]["keys"])
         self.assertIn("transcriber", schema["layout"]["backend-section"]["keys"])
-        self.assertIn("whisper-model", schema["layout"]["backend-section"]["keys"])
-        self.assertIn("transcriber-command", schema["layout"]["backend-section"]["keys"])
+        self.assertNotIn("whisper-model", schema["layout"]["backend-section"]["keys"])
+        self.assertNotIn("transcriber-command", schema["layout"]["backend-section"]["keys"])
         self.assertIn("cli-path", schema["layout"]["backend-section"]["keys"])
         self.assertNotIn("openai-compatible-api-key", schema["layout"]["backend-section"]["keys"])
-        self.assertIn("Recording > Voice model", schema["voice-model-help"]["description"])
-        self.assertIn("No option was removed", schema["voice-model-help"]["tooltip"])
+        self.assertIn("Voice", schema["voice-model-help"]["description"])
+        self.assertIn("persistent backend settings", schema["voice-model-help"]["tooltip"])
         self.assertIn('this.openaiCompatibleApiKey = "";', source)
         self.assertIn('this.externalApiEnvApiKey = "";', source)
         self.assertIn('"openai-compatible-api-key": "openai-compatible API key"', source)
@@ -220,12 +220,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let whisperCommand = this._selectionMenuItem("");', source)
         self.assertIn('this._setMenuItemLabelSafely(pool.whisperCommand, (whisperCommandActive ? "[x] " : "[ ] ") + _("OpenAI Whisper command"));', source)
         self.assertIn('this._connectSafe(whisperCommand, "activate", () => this._selectStaticVoiceBackend("whisper", _("Voice model: OpenAI Whisper command")));', source)
-        self.assertIn('let customCommandConfigured = String(this.transcriberCommand || "").trim() !== "";', source)
-        self.assertIn('let customCommandLabel = _("Custom command") + (customCommandConfigured ? "" : _(" - configure in settings"));', source)
-        self.assertIn('let customCommand = this._selectionMenuItem("");', source)
-        self.assertIn('this._setMenuItemLabelSafely(pool.customCommand, (customCommandActive ? "[x] " : "[ ] ") + customCommandLabel);', source)
-        self.assertIn('this._openAppletSettings();', source)
-        self.assertIn('this._setStatusPreservingRecording("ready", _("Configure custom voice command in applet settings"), this.lastTranscript);', source)
+        self.assertNotIn('let customCommand = this._selectionMenuItem("");', source)
+        self.assertNotIn("Configure custom voice command in applet settings", source)
         self.assertIn("_selectStaticVoiceBackend: function(transcriber, message)", source)
         self.assertIn("_commitVoiceBackendSettings: function(transcriber, whisperModel, group, errorMessage, preserveRecording, result)", source)
         self.assertIn('"voice-static"', source)
@@ -248,7 +244,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("normalizeTranscriberMethod(this.transcriber)", source)
         self.assertIn("normalizeTranscriberMethod(value)", source)
 
-    def test_applet_exposes_artifact_encryption_submenu(self) -> None:
+    def test_artifact_encryption_is_settings_only(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
 
@@ -257,8 +253,8 @@ class AppletStaticTest(unittest.TestCase):
             {"keyring", "passphrase", "off"},
         )
         self.assertIn("const ARTIFACT_ENCRYPTION_MODES = [", source)
-        self.assertIn('this.artifactEncryptionItem = new PopupMenu.PopupSubMenuMenuItem(_("Encryption: Secret Service keyring"))', source)
-        self.assertIn("this.textOutputMenuItem.menu.addMenuItem(this.artifactEncryptionItem);", source)
+        self.assertNotIn('this.artifactEncryptionItem = new PopupMenu.PopupSubMenuMenuItem(', source)
+        self.assertNotIn("this.outputMenuItem.menu.addMenuItem(this.artifactEncryptionItem);", source)
         self.assertIn("_populateArtifactEncryptionMenu: function()", source)
         self.assertIn("_artifactEncryptionLabel: function(method)", source)
         self.assertIn("_selectArtifactEncryptionMode: function(mode)", source)
@@ -1263,9 +1259,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("not after Clipboard only", schema["auto-paste-window-title"]["tooltip"])
         self.assertIn("Empty disables Auto-Submit", schema["auto-paste-window-title"]["tooltip"])
         self.assertIn('const DEFAULT_AUTO_PASTE_TITLE = "codex, Terminal, Telegram, Ghostty, Kitty";', source)
-        self.assertIn('const AUTO_PASTE_TITLE_PRESETS = [\n  "codex",\n  "Terminal",\n  "PDF",\n  "Excel",\n  "Telegram",\n  "Teams",\n  "Obsidian"\n];', source)
+        self.assertIn('const AUTO_PASTE_TITLE_PRESETS = [\n  "codex",\n  "Terminal",\n  "Ghostty",\n  "Kitty",\n  "PDF",\n  "Excel",\n  "Telegram",\n  "Teams",\n  "Obsidian"\n];', source)
         self.assertIn("const AUTO_PASTE_IDENTITY_MARKERS = {", source)
         self.assertIn('"Terminal"', source)
+        self.assertIn('"ghostty": TERMINAL_WINDOW_MARKERS', source)
+        self.assertIn('"kitty": TERMINAL_WINDOW_MARKERS', source)
         self.assertIn('"PDF"', source)
         self.assertIn('"pdf": [', source)
         self.assertIn('"org.kde.okular"', source)
@@ -2916,7 +2914,7 @@ class AppletStaticTest(unittest.TestCase):
     def test_text_model_menu_close_cancels_inflight_refresh(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         item_start = source.index('this.textModelItem = new PopupMenu.PopupSubMenuMenuItem(_("Text model"));')
-        item_end = source.index("this.textOutputMenuItem.menu.addMenuItem(this.textModelItem);", item_start)
+        item_end = source.index("this.textPolishingMenuItem.menu.addMenuItem(this.textModelItem);", item_start)
         block = source[item_start:item_end]
         self.assertIn("} else {", block)
         token = block.index("this.textModelMenuRefreshToken = null;")
@@ -6002,19 +6000,22 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
         self.assertIn('this.recordingMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Recording"))', source)
-        self.assertIn('this.textOutputMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Text and output"))', source)
+        self.assertIn('this.audioInputMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Audio input"))', source)
+        self.assertIn('this.voiceMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Voice"))', source)
+        self.assertIn('this.textPolishingMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Text polishing"))', source)
+        self.assertIn('this.outputMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Output"))', source)
         self.assertIn('this.transcriptsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Transcripts"))', source)
         self.assertIn('this.toolsMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Tools"))', source)
-        self.assertIn("this.recordingMenuItem.menu.addMenuItem(this.recorderItem);", source)
-        self.assertIn("this.recordingMenuItem.menu.addMenuItem(this.inputSourceItem);", source)
-        self.assertIn("this.recordingMenuItem.menu.addMenuItem(this.modelItem);", source)
-        self.assertIn("this.textOutputMenuItem.menu.addMenuItem(this.outputMethodItem);", source)
-        self.assertIn("this.textOutputMenuItem.menu.addMenuItem(this.textModelItem);", source)
+        self.assertIn("this.audioInputMenuItem.menu.addMenuItem(this.recorderItem);", source)
+        self.assertIn("this.audioInputMenuItem.menu.addMenuItem(this.inputSourceItem);", source)
+        self.assertIn("this.voiceMenuItem.menu.addMenuItem(this.modelItem);", source)
+        self.assertIn("this.outputMenuItem.menu.addMenuItem(this.outputMethodItem);", source)
+        self.assertIn("this.textPolishingMenuItem.menu.addMenuItem(this.textModelItem);", source)
         self.assertIn("this.transcriptsMenuItem.menu.addMenuItem(this.historyItem);", source)
         self.assertIn("this.toolsMenuItem.menu.addMenuItem(this.alarmItem);", source)
         self.assertIn('this.installMenuItem = new PopupMenu.PopupSubMenuMenuItem(_("Install"))', source)
         self.assertIn("this.toolsMenuItem.menu.addMenuItem(this.installMenuItem);", source)
-        self.assertIn("this.maintenanceMenuItem.menu.addMenuItem(exportSettings);", source)
+        self.assertIn("this.backupRestoreMenuItem.menu.addMenuItem(exportSettings);", source)
 
     def test_large_selection_menus_get_more_width_and_trim_long_rows(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -7772,10 +7773,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("main-menu-map-section", schema["layout"]["main-page"]["sections"])
         self.assertEqual(schema["layout"]["main-menu-map-section"]["title"], "Main menu settings")
         self.assertIn("main-menu-settings-map", schema)
-        self.assertIn("All persistent settings from the applet menu are available here", schema["main-menu-settings-map"]["description"])
-        self.assertIn("Voice model settings mirror Recording > Voice model", schema["main-menu-settings-map"]["description"])
-        self.assertIn("Text backend and model selection mirror Text and output > Text model", schema["main-menu-settings-map"]["description"])
-        self.assertIn("polishing presets, custom instructions, and safety switches are configured here only", schema["main-menu-settings-map"]["description"])
+        self.assertIn("Audio Input contains recorder and microphone selection", schema["main-menu-settings-map"]["description"])
+        self.assertIn("Voice selects speech recognition", schema["main-menu-settings-map"]["description"])
+        self.assertIn("Text polishing configures backend, model, presets, custom instructions, and safety switches", schema["main-menu-settings-map"]["description"])
         self.assertIn("menu: Recording", schema["layout"]["recording-section"]["title"])
         self.assertIn("input-device-default", schema["layout"]["recording-section"]["keys"])
         self.assertIn("input-device", schema["layout"]["recording-section"]["keys"])
@@ -7786,9 +7786,9 @@ class AppletStaticTest(unittest.TestCase):
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
         self.assertIn("_selectDefaultInputSource: function()", source)
         self.assertIn('this._selectInputSource("", _("system default"));', source)
-        self.assertEqual(schema["layout"]["text-polishing-section"]["title"], "Text model and text polishing (menu: Text and output > Text model)")
-        self.assertIn("menu: Text and output", schema["layout"]["output-section"]["title"])
-        self.assertEqual(schema["layout"]["backend-section"]["title"], "Voice model (menu: Recording > Voice model)")
+        self.assertEqual(schema["layout"]["text-polishing-section"]["title"], "Text model and text polishing (menu: Text polishing)")
+        self.assertIn("menu: Output", schema["layout"]["output-section"]["title"])
+        self.assertEqual(schema["layout"]["backend-section"]["title"], "Voice model (menu: Voice)")
         self.assertIn("Max 4096 chars", schema["transcriber-command"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["post-process-command"]["tooltip"])
         self.assertIn("Max 4096 chars", schema["post-process-prompt"]["tooltip"])
@@ -10209,7 +10209,6 @@ class AppletStaticTest(unittest.TestCase):
             "this._populateRecordingOptionsMenu();",
             "this._populateNotificationOptionsMenu();",
             "this._populateShortcutMenu();",
-            "this._populateArtifactEncryptionMenu();",
             "this._populateTextOptionsMenu();",
             "this._populateAutoPasteMenu();",
         ):

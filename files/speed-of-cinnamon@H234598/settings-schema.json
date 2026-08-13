@@ -63,7 +63,7 @@
     },
     "recording-section": {
       "type": "section",
-      "title": "Recording (menu: Recording)",
+      "title": "Recording and audio input (menu: Recording, Audio input)",
       "keys": [
         "language",
         "secondary-language",
@@ -78,7 +78,7 @@
     },
     "personalization-section": {
       "type": "section",
-      "title": "Personalization (menu: Text and output)",
+      "title": "Personalization (menu: Text polishing)",
       "keys": [
         "personalization-help",
         "blacklist-help",
@@ -115,7 +115,7 @@
     },
     "output-section": {
       "type": "section",
-      "title": "Text output (menu: Text and output)",
+      "title": "Output (menu: Output)",
       "keys": [
         "insert-method",
         "append-space",
@@ -135,7 +135,7 @@
     },
     "text-polishing-section": {
       "type": "section",
-      "title": "Text model and text polishing (menu: Text and output > Text model)",
+      "title": "Text model and text polishing (menu: Text polishing)",
       "keys": [
         "text-polishing-help",
         "post-process-backend",
@@ -159,12 +159,10 @@
     },
     "backend-section": {
       "type": "section",
-      "title": "Voice model (menu: Recording > Voice model)",
+      "title": "Voice model (menu: Voice)",
       "keys": [
         "voice-model-help",
         "transcriber",
-        "whisper-model",
-        "transcriber-command",
         "openai-compatible-url",
         "openai-compatible-model",
         "openai-compatible-flex-processing",
@@ -185,7 +183,7 @@
   },
   "main-menu-settings-map": {
     "type": "label",
-    "description": "All persistent settings from the applet menu are available here. Recording options mirror the Recording menu. Voice model settings mirror Recording > Voice model. Text backend and model selection mirror Text and output > Text model; polishing presets, custom instructions, and safety switches are configured here only. Output and Auto-Submit are in Text output, personal context and vocabulary are in Personalization. Dynamic actions such as downloading or removing models, opening transcript folders, listing or exporting transcript documents, diagnostics, cleanup, and alarm commands remain in the applet panel menu."
+    "description": "Persistent settings mirror the applet menu. Audio Input contains recorder and microphone selection; Voice selects speech recognition. Text polishing configures backend, model, presets, custom instructions, and safety switches. Output controls clipboard, paste, Auto-Submit, and formatting. Encryption is configured here only. Dynamic actions such as model download, folders, transcript operations, diagnostics, cleanup, backup, and alarms remain in the applet panel menu."
   },
   "settings-logo-header": {
     "type": "custom",
@@ -458,21 +456,20 @@
   "transcriber": {
     "type": "combobox",
     "description": "Voice model mode",
-    "tooltip": "Mirrors the Recording > Voice model menu. Automatic uses the selected voice model to choose the local engine. External API uses the OpenAI-compatible speech settings below. Leave this on Automatic unless you need a specific backend or a custom command.",
+    "tooltip": "Mirrors the Voice menu. Automatic uses the selected voice model to choose the local engine. External API uses the OpenAI-compatible speech settings below. Leave this on Automatic unless you need a specific backend.",
     "options": {
       "Automatic": "auto",
       "OpenAI Whisper command": "whisper",
       "Local model directory": "faster-whisper",
       "Local model file": "whisper-cpp",
-      "OpenAI-compatible external API": "openai-compatible",
-      "Custom command": "command"
+      "OpenAI-compatible external API": "openai-compatible"
     },
     "default": "openai-compatible"
   },
   "voice-model-help": {
     "type": "label",
-    "description": "These settings mirror the persistent choices from Recording > Voice model: Automatic voice model, local model file or directory, External API speech recognition, and custom command mode. Menu-only actions such as downloading models, removing models, and opening model folders remain in the applet click menu.",
-    "tooltip": "No option was removed from the applet menu. This settings page stores the persistent values; the click menu still handles dynamic actions that need live model discovery or file operations."
+    "description": "These settings mirror persistent Voice choices: Automatic voice model, local model file or directory, and External API speech recognition. Menu-only actions such as downloading models, removing models, and opening model folders remain in the applet click menu.",
+    "tooltip": "This page stores persistent backend settings. The click menu handles dynamic actions that need live model discovery or file operations."
   },
   "whisper-model": {
     "type": "filechooser",
