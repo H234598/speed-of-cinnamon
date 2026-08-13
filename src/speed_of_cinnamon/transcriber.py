@@ -3398,7 +3398,7 @@ def transcribe_with_openai_compatible_api(
     if json_error:
         raise TranscriptionError("OpenAI-compatible speech API returned invalid JSON")
     if not isinstance(payload, dict):
-        raise TranscriptionError("OpenAI-compatible speech API response must be a JSON object")
+        raise TranscriptionError("OpenAI-compatible speech API returned invalid JSON")
     if payload.get("error"):
         error = payload["error"]
         detail = _sanitize_remote_error_detail(str(error.get("message") or error) if isinstance(error, dict) else str(error))

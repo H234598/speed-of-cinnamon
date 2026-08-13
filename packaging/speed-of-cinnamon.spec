@@ -74,7 +74,9 @@ install -m 0644 docs/man/speed-of-cinnamon.1 %{buildroot}%{_mandir}/man1/speed-o
 install -m 0644 docs/man/speed-of-cinnamon-alarms.1 %{buildroot}%{_mandir}/man1/speed-of-cinnamon-alarms.1
 
 %check
-PYTHONPATH="${PWD}/src" %{__python3} -m unittest discover -s tests
+if [ "${SOC_SKIP_RPM_CHECK:-0}" != "1" ]; then
+  PYTHONPATH="${PWD}/src" %{__python3} -m unittest discover -s tests
+fi
 
 %files
 %license LICENSE

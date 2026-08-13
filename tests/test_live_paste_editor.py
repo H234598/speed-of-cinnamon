@@ -190,6 +190,7 @@ def _trigger_applet_clipboard_paste(
     if simulate_menu_click:
         target_setup = """
   let menuActivated = false;
+  applet._rememberFocusedWindow();
   applet._socLivePasteOriginalToggle = applet._toggleRecording;
   applet._socLivePasteMenuActivated = false;
   applet._toggleRecording = function() {
@@ -200,6 +201,7 @@ def _trigger_applet_clipboard_paste(
     return {ok: false, reason: "toggleItem.activate unavailable"};
   }
   applet.toggleItem.activate(null);
+  applet.menu.close();
 """
     else:
         target_setup = "  applet._rememberFocusedWindow();"
@@ -247,20 +249,31 @@ def _trigger_applet_clipboard_paste(
   const oldInsertMethod = applet.insertMethod;
   const oldAppendSpace = applet.appendSpace;
   const oldAutoPasteWindowTitle = applet.autoPasteWindowTitle;
+  const oldClipboardPayloadSnapshotAsync = applet._clipboardPayloadSnapshotAsync;
   applet.insertMethod = "clipboard-paste";
   applet.appendSpace = false;
   applet.autoPasteWindowTitle = {json.dumps(auto_paste_window_title)};
+  applet._clipboardPayloadSnapshotAsync = function(callback) {{
+    callback({{hasNonTextPayload: false}});
+  }};
+  let restored = false;
+  const restoreSettings = function() {{
+    if (restored) return;
+    restored = true;
+    applet.insertMethod = oldInsertMethod;
+    applet.appendSpace = oldAppendSpace;
+    applet.autoPasteWindowTitle = oldAutoPasteWindowTitle;
+    applet._clipboardPayloadSnapshotAsync = oldClipboardPayloadSnapshotAsync;
+  }};
   let inserted = false;
   let autoPasteEnter = false;
   let terminalTarget = false;
   try {{
-    inserted = applet._insertTranscriptText({json.dumps(text)}, function() {{}});
+    inserted = applet._insertTranscriptText({json.dumps(text)}, function() {{ restoreSettings(); }});
     autoPasteEnter = applet._windowTitleMatchesAutoPaste();
     terminalTarget = applet._isTerminalTargetWindow();
   }} finally {{
-    applet.insertMethod = oldInsertMethod;
-    applet.appendSpace = oldAppendSpace;
-    applet.autoPasteWindowTitle = oldAutoPasteWindowTitle;
+    if (inserted !== null) restoreSettings();
     if (applet._socLivePasteOriginalToggle) {{
       applet._toggleRecording = applet._socLivePasteOriginalToggle;
       delete applet._socLivePasteOriginalToggle;
