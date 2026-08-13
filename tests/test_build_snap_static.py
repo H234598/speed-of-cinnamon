@@ -49,6 +49,8 @@ class BuildSnapStaticTest(unittest.TestCase):
         )
         self.assertNotIn('snapcraft prime --destructive-mode', source)
         self.assertNotIn('snapcraft pack --destructive-mode prime', source)
+        self.assertIn('snapcraft pack "${snapcraft_args[@]}"', source)
+        self.assertNotIn('snapcraft "${snapcraft_args[@]}" pack', source)
 
     def test_snap_activation_requires_original_stage_and_empty_destination(self) -> None:
         source = BUILD_SNAP.read_text(encoding="utf-8")

@@ -532,34 +532,7 @@ PY
 if ! (
   cd "${snap_workspace}"
   umask 022
-  snapcraft "${snapcraft_args[@]}" prime
-  snap_stage_usr="${snap_workspace}/stage/usr"
-  snap_prime_usr="${snap_workspace}/prime/usr"
-  if [[ ! -d "${snap_stage_usr}" || -L "${snap_stage_usr}" ]]; then
-    printf 'snapcraft stage is missing a safe runtime tree: %s\n' "${snap_stage_usr}" >&2
-    exit 1
-  fi
-  if [[ -e "${snap_prime_usr}" || -L "${snap_prime_usr}" ]]; then
-    if ! prime_usr_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snap_prime_usr}" --kind dir)"; then
-      printf 'failed to capture existing Snap runtime tree identity: %s\n' "${snap_prime_usr}" >&2
-      exit 1
-    fi
-    if ! "${safe_fs_cmd[@]}" remove build-snap "${snap_prime_usr}" --kind dir \
-      --expected-identity "${prime_usr_identity}"; then
-      printf 'failed to replace existing Snap runtime tree safely: %s\n' "${snap_prime_usr}" >&2
-      exit 1
-    fi
-  fi
-  if ! "${safe_fs_cmd[@]}" mkdirs build-snap "${snap_prime_usr}"; then
-    printf 'failed to create Snap runtime tree target: %s\n' "${snap_prime_usr}" >&2
-    exit 1
-  fi
-  if ! cp -dR --no-preserve=links --preserve=mode,timestamps -- \
-    "${snap_stage_usr}/." "${snap_prime_usr}/"; then
-    printf 'failed to promote Snap runtime tree into prime payload.\n' >&2
-    exit 1
-  fi
-  snapcraft "${snapcraft_args[@]}" pack prime
+  snapcraft pack "${snapcraft_args[@]}"
 ); then
   printf 'snapcraft build failed.\n' >&2
   exit 1

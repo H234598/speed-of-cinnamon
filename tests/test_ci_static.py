@@ -860,19 +860,11 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('os.fchmod(fd, int(mode_text, 8))', build_snap)
         self.assertNotIn('chmod "${snapcraft_mode}" "${snapcraft_file_rendered}"', build_snap)
         self.assertIn('snapcraft_args=(--destructive-mode)', build_snap)
-        self.assertIn('snapcraft "${snapcraft_args[@]}" prime', build_snap)
-        self.assertIn('snapcraft "${snapcraft_args[@]}" pack prime', build_snap)
-        self.assertIn('snap_stage_usr="${snap_workspace}/stage/usr"', build_snap)
-        self.assertIn(
-            'cp -dR --no-preserve=links --preserve=mode,timestamps --',
-            build_snap,
-        )
+        self.assertIn('snapcraft pack "${snapcraft_args[@]}"', build_snap)
+        self.assertNotIn('snapcraft "${snapcraft_args[@]}" pack', build_snap)
+        self.assertNotIn('snap_stage_usr="${snap_workspace}/stage/usr"', build_snap)
         self.assertLess(
-            build_snap.index('cp -dR --no-preserve=links --preserve=mode,timestamps --'),
-            build_snap.index('snapcraft "${snapcraft_args[@]}" pack prime'),
-        )
-        self.assertLess(
-            build_snap.index('snapcraft "${snapcraft_args[@]}" pack prime'),
+            build_snap.index('snapcraft pack "${snapcraft_args[@]}"'),
             build_snap.index('"${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace_dist}"'),
         )
         self.assertIn('copy-file build-snap "${snap_files[0]}" "${snap_stage_path}" 0644 --dst-must-not-exist', build_snap)
