@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import os
 import secrets
 import shutil
@@ -11,6 +12,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Mapping, Sequence
 
+from .artifact_crypto import (
+    ARTIFACT_ENCRYPTION_OFF,
+    MAX_ENCRYPTED_ARTIFACT_BYTES,
+    ArtifactCryptoError,
+    decrypt_bytes,
+    encrypt_bytes,
+    is_encrypted_path,
+    normalize_artifact_encryption,
+    read_decrypted_bytes_from_file,
+    read_private_bytes,
+)
 from .backup_manifest import (
     BACKUP_KINDS,
     BACKUP_SELECTION_KEYS,
@@ -34,6 +46,7 @@ from .path_safety import (
     open_file_without_following_symlinks,
     write_bytes_atomically_without_following_symlinks,
 )
+from .secure_delete import secure_wipe_regular_file_at
 
 MAX_BACKUP_MEMBER_COUNT = 10_001
 HASH_CHUNK_BYTES = 1024 * 1024
@@ -114,9 +127,10 @@ def _ledger_artifacts(collected: Sequence[tuple[BackupArtifact, Path]]) -> list[
     ]
 
 
-def _archive_name(job_id: str, created_at_utc: str) -> str:
+def _archive_name(job_id: str, created_at_utc: str, *, encrypted: bool) -> str:
     timestamp = created_at_utc.replace("-", "").replace(":", "").replace("+00:00", "").replace("Z", "Z")
-    return f"soc-backup-{timestamp}-{job_id[:16]}.socbackup"
+    suffix = ".socbackup.socenc" if encrypted else ".socbackup"
+    return f"soc-backup-{timestamp}-{job_id[:16]}{suffix}"
 
 
 def _close_fd(fd: int | None) -> None:
@@ -200,6 +214,37 @@ def _create_archive_file(target_fd: int, archive_name: str) -> tuple[str, int]:
     raise BackupError("backup temporary archive could not be created")
 
 
+def _write_fd_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    offset = 0
+    while offset < len(view):
+        try:
+            written = os.write(fd, view[offset:])
+        except InterruptedError:
+            continue
+        if written <= 0:
+            raise BackupError("backup encrypted archive write made no progress")
+        offset += written
+
+
+def _secure_remove_temporary_file(target_fd: int, name: str) -> None:
+    try:
+        expected_stat = os.stat(name, dir_fd=target_fd, follow_symlinks=False)
+    except FileNotFoundError:
+        return
+    secure_wipe_regular_file_at(
+        target_fd,
+        name,
+        expected_stat,
+        field_name="backup plaintext staging",
+    )
+    try:
+        os.unlink(name, dir_fd=target_fd)
+    except FileNotFoundError:
+        return
+    os.fsync(target_fd)
+
+
 def _add_stage_file(archive: tarfile.TarFile, path: Path, archive_path: str) -> None:
     try:
         assert_backup_source_regular_file(path, field_name="backup staged file")
@@ -270,6 +315,40 @@ def _hash_tar_member(archive: tarfile.TarFile, member: tarfile.TarInfo, expected
     return digest.hexdigest()
 
 
+def _verify_tar_archive(archive: tarfile.TarFile) -> BackupManifest:
+    members = archive.getmembers()
+    if not members or len(members) > MAX_BACKUP_MEMBER_COUNT:
+        raise BackupError("backup archive member count is invalid")
+    by_name: dict[str, tarfile.TarInfo] = {}
+    for member in members:
+        if not member.isreg() or member.issym() or member.islnk() or member.isdev() or member.isfifo():
+            raise BackupError("backup archive contains an unsafe member")
+        if member.name in by_name:
+            raise BackupError("backup archive contains a duplicate member")
+        if member.name != "manifest.json":
+            try:
+                normalize_backup_archive_path(member.name, field_name="backup archive member")
+            except (RuntimeError, TypeError, ValueError) as exc:
+                raise BackupError("backup archive contains an unsafe path") from exc
+        by_name[member.name] = member
+    manifest_member = by_name.get("manifest.json")
+    if manifest_member is None or manifest_member.size > 1_000_000:
+        raise BackupError("backup archive manifest is missing or too large")
+    manifest_stream = archive.extractfile(manifest_member)
+    if manifest_stream is None:
+        raise BackupError("backup archive manifest cannot be read")
+    manifest = parse_manifest(manifest_stream.read(manifest_member.size + 1))
+    expected = {"manifest.json"} | {artifact.archive_path for artifact in manifest.artifacts}
+    if set(by_name) != expected:
+        raise BackupError("backup archive members differ from its manifest")
+    by_artifact = {artifact.archive_path: artifact for artifact in manifest.artifacts}
+    for archive_path, artifact in by_artifact.items():
+        member = by_name[archive_path]
+        if member.size != artifact.size or _hash_tar_member(archive, member, artifact.size) != artifact.sha256:
+            raise BackupError("backup archive artifact hash mismatch")
+    return manifest
+
+
 def _verify_archive(path: Path) -> BackupManifest:
     assert_backup_source_regular_file(path, field_name="backup archive")
     fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name="backup archive")
@@ -277,44 +356,22 @@ def _verify_archive(path: Path) -> BackupManifest:
         with os.fdopen(fd, "rb", closefd=True) as stream:
             fd = -1
             with tarfile.open(fileobj=stream, mode="r:") as archive:
-                members = archive.getmembers()
-                if not members or len(members) > MAX_BACKUP_MEMBER_COUNT:
-                    raise BackupError("backup archive member count is invalid")
-                by_name: dict[str, tarfile.TarInfo] = {}
-                for member in members:
-                    if not member.isreg() or member.issym() or member.islnk() or member.isdev() or member.isfifo():
-                        raise BackupError("backup archive contains an unsafe member")
-                    if member.name in by_name:
-                        raise BackupError("backup archive contains a duplicate member")
-                    if member.name != "manifest.json":
-                        try:
-                            normalize_backup_archive_path(member.name, field_name="backup archive member")
-                        except (RuntimeError, TypeError, ValueError) as exc:
-                            raise BackupError("backup archive contains an unsafe path") from exc
-                    by_name[member.name] = member
-                manifest_member = by_name.get("manifest.json")
-                if manifest_member is None or manifest_member.size > 1_000_000:
-                    raise BackupError("backup archive manifest is missing or too large")
-                manifest_stream = archive.extractfile(manifest_member)
-                if manifest_stream is None:
-                    raise BackupError("backup archive manifest cannot be read")
-                manifest = parse_manifest(manifest_stream.read(manifest_member.size + 1))
-                if manifest.encryption_mode != "off" or manifest.encryption_enabled:
-                    raise BackupError("encrypted backup requires encrypted bundle handler")
-                expected = {"manifest.json"} | {artifact.archive_path for artifact in manifest.artifacts}
-                if set(by_name) != expected:
-                    raise BackupError("backup archive members differ from its manifest")
-                by_artifact = {artifact.archive_path: artifact for artifact in manifest.artifacts}
-                for archive_path, artifact in by_artifact.items():
-                    member = by_name[archive_path]
-                    if member.size != artifact.size or _hash_tar_member(archive, member, artifact.size) != artifact.sha256:
-                        raise BackupError("backup archive artifact hash mismatch")
-                return manifest
+                return _verify_tar_archive(archive)
     except (tarfile.TarError, OSError, EOFError) as exc:
         raise BackupError("backup archive could not be verified") from exc
     finally:
         if fd != -1:
             _close_fd(fd)
+
+
+def _verify_archive_bytes(payload: bytes) -> BackupManifest:
+    if not isinstance(payload, bytes) or len(payload) > MAX_ENCRYPTED_ARTIFACT_BYTES:
+        raise BackupError("decrypted backup archive is too large")
+    try:
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+            return _verify_tar_archive(archive)
+    except (tarfile.TarError, OSError, EOFError) as exc:
+        raise BackupError("decrypted backup archive could not be verified") from exc
 
 
 def verify_backup(archive_path: Path) -> BackupManifest:
@@ -324,10 +381,24 @@ def verify_backup(archive_path: Path) -> BackupManifest:
             raise BackupError("backup archive path must be absolute")
         assert_safe_path_components(archive_path, field_name="backup archive path")
         assert_no_symlink_ancestors(archive_path, field_name="backup archive path")
-        return _verify_archive(archive_path)
+        encrypted = is_encrypted_path(archive_path)
+        if encrypted:
+            payload = read_decrypted_bytes_from_file(
+                archive_path,
+                kind="backup",
+                field_name="backup archive",
+                max_bytes=MAX_ENCRYPTED_ARTIFACT_BYTES,
+                require_encrypted=True,
+            )
+            manifest = _verify_archive_bytes(payload)
+        else:
+            manifest = _verify_archive(archive_path)
+        if encrypted != (manifest.encryption_mode != ARTIFACT_ENCRYPTION_OFF):
+            raise BackupError("backup archive encryption metadata is inconsistent")
+        return manifest
     except BackupError:
         raise
-    except (BackupManifestError, OSError, RuntimeError, ValueError) as exc:
+    except (ArtifactCryptoError, BackupManifestError, OSError, RuntimeError, ValueError) as exc:
         raise BackupError("backup archive verification failed") from exc
 
 
@@ -338,11 +409,16 @@ def create_backup(
     source_roots: Sequence[Path],
     selection: Mapping[str, bool],
     app_version: str,
+    encryption_mode: object = ARTIFACT_ENCRYPTION_OFF,
     job_id: str | None = None,
     created_at_utc: str | None = None,
     state_store: BackupStateStore | None = None,
 ) -> BackupResult:
     normalized_selection = _validate_selection(selection)
+    try:
+        effective_encryption_mode = normalize_artifact_encryption(encryption_mode)
+    except ArtifactCryptoError as exc:
+        raise BackupError("backup encryption mode is invalid") from exc
     if not isinstance(target_directory, Path) or not target_directory.is_absolute():
         raise BackupError("backup target directory must be absolute")
     if not source_roots:
@@ -356,10 +432,11 @@ def create_backup(
     ledger = state_store or BackupStateStore()
     job = job_id or secrets.token_hex(16)
     created = created_at_utc or _utc_now()
-    archive_name = _archive_name(job, created)
+    archive_name = _archive_name(job, created, encrypted=effective_encryption_mode != ARTIFACT_ENCRYPTION_OFF)
     target_fd: int | None = None
     stage: Path | None = None
     temporary_name: str | None = None
+    plain_temporary_name: str | None = None
     published = False
     ledger_started = False
     manifest: BackupManifest | None = None
@@ -410,19 +487,47 @@ def create_backup(
             job_id=job,
             created_at_utc=created,
             app_version=app_version,
-            encryption_mode="off",
+            encryption_mode=effective_encryption_mode,
             selection=effective_selection,
             artifacts=[artifact for artifact, _ in collected],
-            envelope_version=0,
+            envelope_version=2 if effective_encryption_mode != ARTIFACT_ENCRYPTION_OFF else 0,
         )
         stage = _create_stage_directory(target_fd, target_directory)
         for artifact, source_path in collected:
             _copy_source_to_stage(artifact, source_path, stage / artifact.archive_path)
         temporary_name, temporary_fd = _create_archive_file(target_fd, archive_name)
         _close_fd(temporary_fd)
+        plain_temporary_name = temporary_name
         temporary_path = target_directory / temporary_name
         _build_archive(stage, temporary_path, manifest)
         verified_manifest = _verify_archive(temporary_path)
+        if verified_manifest.encryption_mode != effective_encryption_mode:
+            raise BackupError("backup manifest encryption mode differs from requested mode")
+        if effective_encryption_mode != ARTIFACT_ENCRYPTION_OFF:
+            plain_payload = read_private_bytes(
+                temporary_path,
+                field_name="backup plaintext staging",
+                max_bytes=MAX_ENCRYPTED_ARTIFACT_BYTES,
+            )
+            encrypted_payload, _effective_mode = encrypt_bytes(
+                plain_payload,
+                effective_encryption_mode,
+                kind="backup",
+            )
+            decrypted_payload = decrypt_bytes(encrypted_payload, kind="backup", require_encrypted=True)
+            if hashlib.sha256(decrypted_payload).digest() != hashlib.sha256(plain_payload).digest():
+                raise BackupError("encrypted backup payload failed round-trip verification")
+            encrypted_temporary_name, encrypted_temporary_fd = _create_archive_file(target_fd, archive_name)
+            try:
+                _write_fd_all(encrypted_temporary_fd, encrypted_payload)
+                os.fsync(encrypted_temporary_fd)
+            finally:
+                _close_fd(encrypted_temporary_fd)
+            _secure_remove_temporary_file(target_fd, plain_temporary_name)
+            plain_temporary_name = None
+            temporary_name = encrypted_temporary_name
+            temporary_path = target_directory / temporary_name
+            del plain_payload, encrypted_payload, decrypted_payload
         temporary_stat = os.stat(temporary_path, follow_symlinks=False)
         _rename_without_replacing(
             temporary_name,
@@ -457,13 +562,21 @@ def create_backup(
             raise
         raise BackupError("backup job failed") from exc
     finally:
-        if not published and target_fd is not None and temporary_name is not None:
-            try:
-                os.unlink(temporary_name, dir_fd=target_fd)
-            except FileNotFoundError:
-                pass
-            except OSError:
-                pass
+        if not published and target_fd is not None:
+            if plain_temporary_name is not None:
+                try:
+                    _secure_remove_temporary_file(target_fd, plain_temporary_name)
+                except OSError:
+                    pass
+                if temporary_name == plain_temporary_name:
+                    temporary_name = None
+            if temporary_name is not None:
+                try:
+                    os.unlink(temporary_name, dir_fd=target_fd)
+                except FileNotFoundError:
+                    pass
+                except OSError:
+                    pass
         if stage is not None:
             shutil.rmtree(stage, ignore_errors=True)
         _close_fd(target_fd)

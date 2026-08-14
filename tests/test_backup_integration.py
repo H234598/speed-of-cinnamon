@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 from concurrent.futures import ThreadPoolExecutor
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
+from speed_of_cinnamon import artifact_crypto
 from speed_of_cinnamon.backup import (
     BackupError,
     BackupInput,
@@ -185,6 +189,78 @@ class BackupIntegrationTests(unittest.TestCase):
                 app_version="0.2.5",
                 state_store=self.ledger,
             )
+
+    def test_passphrase_encrypted_bundle_has_no_plaintext_sibling_and_verifies(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+                artifact_crypto.PASSPHRASE_FILE_ENV: "",
+            },
+            clear=False,
+        ):
+            result = create_backup(
+                self.target,
+                sources=self._inputs(),
+                source_roots=(self.source,),
+                selection=self._selection(config=False),
+                app_version="0.2.5",
+                encryption_mode="passphrase",
+                job_id="encrypted-passphrase",
+                state_store=self.ledger,
+            )
+            assert result.archive_path is not None
+            self.assertTrue(result.archive_path.name.endswith(".socbackup.socenc"))
+            self.assertFalse((self.target / result.archive_path.name.removesuffix(".socenc")).exists())
+            self.assertNotIn(b"hello", result.archive_path.read_bytes())
+            self.assertEqual(verify_backup(result.archive_path).encryption_mode, "passphrase")
+
+    def test_keyring_encrypted_bundle_uses_existing_crypto_contract(self) -> None:
+        key = bytes(range(32))
+        with (
+            mock.patch.object(artifact_crypto, "_load_keyring_key", return_value=key),
+            mock.patch.object(artifact_crypto, "_lookup_keyring_key", return_value=key),
+        ):
+            result = create_backup(
+                self.target,
+                sources=self._inputs(),
+                source_roots=(self.source,),
+                selection=self._selection(config=False),
+                app_version="0.2.5",
+                encryption_mode="keyring",
+                job_id="encrypted-keyring",
+                state_store=self.ledger,
+            )
+            assert result.archive_path is not None
+            self.assertEqual(verify_backup(result.archive_path).encryption_mode, "keyring")
+
+    def test_tampered_encrypted_bundle_fails_closed(self) -> None:
+        with mock.patch.dict(
+            os.environ,
+            {
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+                artifact_crypto.PASSPHRASE_FILE_ENV: "",
+            },
+            clear=False,
+        ):
+            result = create_backup(
+                self.target,
+                sources=self._inputs(),
+                source_roots=(self.source,),
+                selection=self._selection(config=False),
+                app_version="0.2.5",
+                encryption_mode="passphrase",
+                job_id="tampered-encrypted",
+                state_store=self.ledger,
+            )
+            assert result.archive_path is not None
+            envelope = json.loads(result.archive_path.read_text(encoding="utf-8"))
+            ciphertext = envelope["ciphertext"]
+            envelope["ciphertext"] = ("A" if ciphertext[0] != "A" else "B") + ciphertext[1:]
+            result.archive_path.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+            result.archive_path.chmod(0o600)
+            with self.assertRaises(BackupError):
+                verify_backup(result.archive_path)
 
     def test_parallel_writers_keep_ledger_valid_and_do_not_apply_retention(self) -> None:
         def run(index: int) -> Path:
