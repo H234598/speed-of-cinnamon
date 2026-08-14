@@ -40,3 +40,12 @@ class RealE2EAcceptanceStaticTest(unittest.TestCase):
         self.assertIn('transcribe-file', script)
         self.assertNotIn('--insert-method', script)
         self.assertIn('verify-local-model-e2e-attestation', makefile)
+
+    def test_local_model_e2e_is_hugging_face_offline_and_does_not_forward_tokens(self) -> None:
+        script = (ROOT / "scripts" / "local-model-e2e-acceptance.sh").read_text(encoding="utf-8")
+        self.assertIn('export HF_HUB_OFFLINE=1', script)
+        self.assertIn('export HF_DATASETS_OFFLINE=1', script)
+        self.assertIn('export TRANSFORMERS_OFFLINE=1', script)
+        self.assertIn('export HF_HUB_DISABLE_TELEMETRY=1', script)
+        self.assertIn('export HF_HUB_DISABLE_IMPLICIT_TOKEN=1', script)
+        self.assertIn('unset HF_TOKEN HUGGINGFACE_HUB_TOKEN', script)

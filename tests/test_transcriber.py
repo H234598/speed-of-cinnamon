@@ -7271,6 +7271,37 @@ class TranscriberTest(unittest.TestCase):
         self.assertNotIn("private transcript", message)
         self.assertNotIn("token=secret", message)
 
+    def test_faster_whisper_forces_local_model_loading(self) -> None:
+        captured: dict[str, object] = {}
+
+        class Segment:
+            text = "local transcript"
+
+        class WhisperModel:
+            def __init__(self, *_args: object, **kwargs: object) -> None:
+                captured.update(kwargs)
+
+            def transcribe(self, *_args: object, **_kwargs: object) -> tuple[list[Segment], object]:
+                return [Segment()], object()
+
+        fake_module = type("FakeFasterWhisper", (), {"WhisperModel": WhisperModel})
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            with (
+                mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+            ):
+                result = transcriber_module.transcribe_with_faster_whisper(
+                    audio, "en", text_path, str(model_path)
+                )
+
+        self.assertEqual(result, "local transcript")
+        self.assertIs(captured.get("local_files_only"), True)
+
     def test_faster_whisper_timeout_includes_model_initialization(self) -> None:
         class WhisperModel:
             def __init__(self, *_args: object, **_kwargs: object) -> None:

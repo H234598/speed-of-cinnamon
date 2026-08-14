@@ -2800,7 +2800,12 @@ def transcribe_with_faster_whisper(
     with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
         try:
             ensure_deadline()
-            model = WhisperModel(model_path, device="cpu", compute_type="int8")
+            model = WhisperModel(
+                model_path,
+                device="cpu",
+                compute_type="int8",
+                local_files_only=True,
+            )
             ensure_deadline()
             with _faster_whisper_deadline(deadline):
                 segments, _info = model.transcribe(

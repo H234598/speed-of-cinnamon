@@ -3,6 +3,15 @@ set -euo pipefail
 umask 077
 IFS=$'\n\t'
 
+# Local release-gate runs must not contact Hugging Face or send implicit
+# credentials. Model inventory and model loading use only verified local paths.
+export HF_HUB_OFFLINE=1
+export HF_DATASETS_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
+export HF_HUB_DISABLE_TELEMETRY=1
+export HF_HUB_DISABLE_IMPLICIT_TOKEN=1
+unset HF_TOKEN HUGGINGFACE_HUB_TOKEN
+
 # Real local-model acceptance. It generates audio only and never accesses a
 # microphone, clipboard, paste target, downloaded model, or persistent text.
 if [[ "${SOC_LOCAL_MODEL_E2E:-0}" != "1" ]]; then
