@@ -2656,16 +2656,16 @@ def _active_x_window_matches_snapshot(
     current = _active_x_window_snapshot(xdotool_command=xdotool_command)
     if current is None:
         return False
-    expected_id, expected_title, expected_class = snapshot
-    current_id, current_title, current_class = current
+    expected_id, _expected_title, expected_class = snapshot
+    current_id, _current_title, current_class = current
     if current_id != expected_id:
         return False
     if not isinstance(expected_class, str) or not expected_class:
         return False
     if not isinstance(current_class, str) or current_class != expected_class:
         return False
-    if isinstance(expected_title, str) and expected_title and current_title != expected_title:
-        return False
+    # XID plus WM_CLASS identifies the same X11 window. Titles are mutable
+    # application state, especially in terminals running Codex or other TUIs.
     return True
 
 

@@ -3677,12 +3677,12 @@ class OutputTest(unittest.TestCase):
             self.assertFalse(output_module._active_x_window_matches_snapshot(("123", "Editor", "Code")))
             self.assertTrue(output_module._active_x_window_matches_snapshot(("123", "Editor", "Terminal")))
 
-    def test_active_window_snapshot_match_rejects_title_change_when_known(self) -> None:
+    def test_active_window_snapshot_match_accepts_title_change_when_identity_is_stable(self) -> None:
         with mock.patch(
             "speed_of_cinnamon.output._active_x_window_snapshot",
             return_value=("123", "Other", "Terminal"),
         ):
-            self.assertFalse(output_module._active_x_window_matches_snapshot(("123", "Editor", "Terminal")))
+            self.assertTrue(output_module._active_x_window_matches_snapshot(("123", "Editor", "Terminal")))
 
     def test_active_window_snapshot_requires_window_class(self) -> None:
         self._use_real_active_window_snapshot()

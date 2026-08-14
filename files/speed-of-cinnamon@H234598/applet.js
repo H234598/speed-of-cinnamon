@@ -14824,6 +14824,12 @@ MyApplet.prototype = {
       complete(false);
       return false;
     }
+    // Cinnamon can report the old focus while a just-closed applet menu still
+    // owns the X11 keyboard grab. Re-activate the captured XID synchronously
+    // before sending paste keys; title changes do not affect this identity.
+    if (/^[0-9]+$/.test(String(this.targetWindowXid || "").trim())) {
+      return this._activateTargetXWindow(complete);
+    }
     if (this._isUsableTargetWindow(this.targetWindow)) {
       let completeFocusedTarget = () => {
         let callbackDelivered = false;

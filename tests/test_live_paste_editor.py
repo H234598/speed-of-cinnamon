@@ -171,8 +171,16 @@ def _wait_for_terminal_window(title: str, terminal_pid: int, known_windows: set[
 
 
 def _activate_window(window_id: str) -> None:
-    _run([_require_tool("xdotool"), "windowactivate", "--sync", window_id], timeout=5)
-    time.sleep(0.2)
+    xdotool = _require_tool("xdotool")
+    deadline = time.monotonic() + EVAL_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        _run([xdotool, "windowactivate", "--sync", window_id], timeout=5)
+        active = _run([xdotool, "getactivewindow"], timeout=EVAL_TIMEOUT_SECONDS, check=False)
+        if active.returncode == 0 and active.stdout.strip() == str(window_id):
+            time.sleep(0.2)
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"window {window_id!r} could not be focused")
 
 
 def _close_owned_test_window(window_id: str, *, expected_title: str, expected_class: str) -> None:
@@ -250,7 +258,9 @@ def _trigger_applet_clipboard_paste(
         time.sleep(0.1)
     if clear_target_window_id:
         _activate_window(clear_target_window_id)
-        _run([_require_tool("xdotool"), "key", "--clearmodifiers", "ctrl+u"], timeout=EVAL_TIMEOUT_SECONDS)
+        xdotool = _require_tool("xdotool")
+        _run([xdotool, "key", "--clearmodifiers", "ctrl+a"], timeout=EVAL_TIMEOUT_SECONDS)
+        _run([xdotool, "key", "--clearmodifiers", "BackSpace"], timeout=EVAL_TIMEOUT_SECONDS)
         time.sleep(0.05)
 
     return _cinnamon_eval(
