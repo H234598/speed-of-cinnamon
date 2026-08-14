@@ -68,6 +68,76 @@ test("built-in Auto-Submit marker matches title when class is unknown", () => {
   assert.equal(matchesTitle.call(applet), true);
 });
 
+test("output policy separates paste from auto-submit and fails closed", () => {
+  const clock = { value: 0 };
+  const resolveOutputActions = loadAppletMethod(
+    "_resolveOutputActions",
+    "_migrateInsertMethodSemantics",
+    clock
+  );
+  const methods = new Set([
+    "clipboard-paste",
+    "clipboard-paste-submit",
+    "clipboard",
+    "type",
+    "none",
+  ]);
+  const applet = {
+    _normalizeOutputMethod: (method) => methods.has(method) ? method : "none",
+  };
+
+  assert.deepEqual(
+    { ...resolveOutputActions.call(applet, "clipboard-paste-submit", true, true) },
+    { copy: true, restoreFocus: true, paste: true, submit: true }
+  );
+  assert.deepEqual(
+    { ...resolveOutputActions.call(applet, "clipboard-paste", true, true) },
+    { copy: true, restoreFocus: true, paste: true, submit: false }
+  );
+  assert.deepEqual(
+    { ...resolveOutputActions.call(applet, "clipboard-paste-submit", false, true) },
+    { copy: true, restoreFocus: false, paste: false, submit: false }
+  );
+  assert.deepEqual(
+    { ...resolveOutputActions.call(applet, "clipboard-paste-submit", true, false) },
+    { copy: true, restoreFocus: false, paste: false, submit: false }
+  );
+});
+
+test("old clipboard-paste setting migrates once and preserves auto-submit", () => {
+  const clock = { value: 0 };
+  const migrateInsertMethodSemantics = loadAppletMethod(
+    "_migrateInsertMethodSemantics",
+    "_normalizeArtifactEncryption",
+    clock,
+    { OUTPUT_METHOD_SEMANTICS_VERSION: 2 }
+  );
+  const writes = [];
+  const applet = {
+    insertMethod: "clipboard-paste",
+    insertMethodSemanticsVersion: 0,
+    lastTranscript: "",
+    _setSettingValueOrThrow(key, value) {
+      writes.push([key, value]);
+    },
+    _recordLifecycleError() {},
+    _setStatusPreservingRecording() {},
+    _populateOutputMethodMenu() {},
+    _updatePanel() {},
+  };
+
+  assert.equal(migrateInsertMethodSemantics.call(applet), true);
+  assert.equal(applet.insertMethod, "clipboard-paste-submit");
+  assert.equal(applet.insertMethodSemanticsVersion, 2);
+  assert.deepEqual(writes, [
+    ["insert-method", "clipboard-paste-submit"],
+    ["insert-method-semantics-version", 2],
+  ]);
+  writes.length = 0;
+  assert.equal(migrateInsertMethodSemantics.call(applet), false);
+  assert.deepEqual(writes, []);
+});
+
 function loadSpawnKeyboardAfterFocus(clock) {
   return loadAppletMethod(
     "_spawnKeyboardAfterFocus",

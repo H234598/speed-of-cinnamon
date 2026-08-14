@@ -326,10 +326,12 @@ const PANEL_STATUS_CLASSES = [
 ];
 const OUTPUT_METHODS = [
   "clipboard-paste",
+  "clipboard-paste-submit",
   "clipboard",
   "type",
   "none"
 ];
+const OUTPUT_METHOD_SEMANTICS_VERSION = 2;
 const RECORDER_METHODS = [
   "auto",
   "pw-record",
@@ -467,6 +469,7 @@ const EXPORTABLE_SETTINGS = [
   ["status-icon-error", "statusIconError"],
   ["status-icon-setup", "statusIconSetup"],
   ["insert-method", "insertMethod"],
+  ["insert-method-semantics-version", "insertMethodSemanticsVersion"],
   ["append-space", "appendSpace"],
   ["typing-delay-ms", "typingDelayMs"],
   ["sanitize-special-chars", "sanitizeSpecialChars"],
@@ -3966,7 +3969,8 @@ MyApplet.prototype = {
     this.keepRecordingArtifacts = false;
     this.recorder = "auto";
     this.inputDevice = "";
-    this.insertMethod = "clipboard-paste";
+    this.insertMethod = "clipboard-paste-submit";
+    this.insertMethodSemanticsVersion = 0;
     this.appendSpace = true;
     this.typingDelayMs = DEFAULT_TYPING_DELAY_MS;
     this.sanitizeSpecialChars = false;
@@ -4091,6 +4095,7 @@ MyApplet.prototype = {
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this.lifecycleState = LIFECYCLE_RUNNING;
     this._buildMenu();
+    this._migrateInsertMethodSemantics();
     this._registerHotkeys();
     this._refreshStatus();
     this._scheduleSetupCheck();
@@ -4116,6 +4121,7 @@ MyApplet.prototype = {
     this._bindSetting(Settings.BindingDirection.IN, "recorder", "recorder", this._onRecorderSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "input-device", "inputDevice", this._onInputSourceSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "insert-method", "insertMethod", this._onOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "insert-method-semantics-version", "insertMethodSemanticsVersion", null, null);
     this._bindSetting(Settings.BindingDirection.IN, "append-space", "appendSpace", this._onTextOutputSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "typing-delay-ms", "typingDelayMs", this._onTextOutputSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "sanitize-special-chars", "sanitizeSpecialChars", this._onTextOutputSettingsChanged, null);
@@ -6035,6 +6041,7 @@ MyApplet.prototype = {
 
   _outputMethodLabel: function(method) {
     if (method === "clipboard") return _("Clipboard only");
+    if (method === "clipboard-paste-submit") return _("Clipboard, paste and Auto-Submit");
     if (method === "type") return _("Direct typing");
     if (method === "none") return _("Do not insert");
     return _("Clipboard and paste");
@@ -6043,6 +6050,74 @@ MyApplet.prototype = {
   _normalizeOutputMethod: function(method) {
     let value = String(method || "").trim();
     return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "none";
+  },
+
+  _resolveOutputActions: function(method, targetMatched, keyboardBackendAvailable) {
+    let normalized = this._normalizeOutputMethod(method);
+    if (normalized === "clipboard") {
+      return { copy: true, restoreFocus: false, paste: false, submit: false };
+    }
+    if (normalized === "clipboard-paste" || normalized === "clipboard-paste-submit") {
+      let canPaste = targetMatched === true && keyboardBackendAvailable === true;
+      return {
+        copy: true,
+        restoreFocus: canPaste,
+        paste: canPaste,
+        submit: canPaste && normalized === "clipboard-paste-submit",
+      };
+    }
+    if (normalized === "type") {
+      return { copy: false, restoreFocus: true, paste: false, submit: false };
+    }
+    return { copy: false, restoreFocus: false, paste: false, submit: false };
+  },
+
+  _migrateInsertMethodSemantics: function() {
+    let version = Number(this.insertMethodSemanticsVersion);
+    if (Number.isSafeInteger(version) && version >= OUTPUT_METHOD_SEMANTICS_VERSION) {
+      return false;
+    }
+    let current = String(this.insertMethod || "").trim();
+    let migrationReady = true;
+    if (current === "clipboard-paste") {
+      try {
+        this._setSettingValueOrThrow(
+          "insert-method",
+          "clipboard-paste-submit",
+          "Output setting migration could not be saved"
+        );
+        this.insertMethod = "clipboard-paste-submit";
+      } catch (error) {
+        migrationReady = false;
+        this.insertMethod = "clipboard-paste-submit";
+        this._recordLifecycleError("settings-insert-migration", error);
+        this._setStatusPreservingRecording(
+          "error",
+          _("Output migration could not be saved; Auto-Submit is active for this session"),
+          this.lastTranscript
+        );
+      }
+    }
+    if (migrationReady) {
+      try {
+        this._setSettingValueOrThrow(
+          "insert-method-semantics-version",
+          OUTPUT_METHOD_SEMANTICS_VERSION,
+          "Output semantics version could not be saved"
+        );
+        this.insertMethodSemanticsVersion = OUTPUT_METHOD_SEMANTICS_VERSION;
+      } catch (error) {
+        this._recordLifecycleError("settings-insert-migration", error);
+        this._setStatusPreservingRecording(
+          "error",
+          _("Output semantics migration could not be saved; it will retry next start"),
+          this.lastTranscript
+        );
+      }
+    }
+    this._populateOutputMethodMenu();
+    this._updatePanel();
+    return true;
   },
 
   _normalizeArtifactEncryption: function(method) {
@@ -13249,6 +13324,11 @@ MyApplet.prototype = {
     if (key === "max-transcript-files") {
       return typeof value === "number" ? this._normalizeTranscriptLimit(value) : this._normalizeTranscriptLimit(fallback);
     }
+    if (key === "insert-method-semantics-version") {
+      return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 && value <= OUTPUT_METHOD_SEMANTICS_VERSION
+        ? value
+        : 0;
+    }
     if (key === "language" || key === "secondary-language") {
       return this._coerceImportedEnumSetting(value, LANGUAGE_CODES, fallback);
     }
@@ -17233,9 +17313,10 @@ MyApplet.prototype = {
       this._setStatus("done", _("Insertion disabled"), transcript);
       return true;
     }
-    let autoPasteTarget = method === "clipboard-paste" && this._windowTitleMatchesAutoPaste();
+    let isPasteMethod = method === "clipboard-paste" || method === "clipboard-paste-submit";
+    let autoPasteTarget = isPasteMethod && this._windowTitleMatchesAutoPaste();
     let keyboardProgram = null;
-    if (method === "clipboard-paste") {
+    if (isPasteMethod) {
       let xdotoolPath = this._findTrustedProgramInPath("xdotool");
       if (xdotoolPath) {
         keyboardProgram = { kind: "xdotool", path: xdotoolPath };
@@ -17247,8 +17328,11 @@ MyApplet.prototype = {
       }
     }
     let canPasteWithKeyboard = Boolean(keyboardProgram);
-    let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;
-    let suppressAutoPasteEnter = method !== "clipboard-paste" || !canPasteWithKeyboard || submitWithReturn;
+    let outputActions = isPasteMethod
+      ? this._resolveOutputActions(method, autoPasteTarget, canPasteWithKeyboard)
+      : { copy: false, restoreFocus: false, paste: false, submit: false };
+    let submitWithReturn = outputActions.submit;
+    let suppressAutoPasteEnter = !outputActions.submit;
     let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter, autoPasteTarget);
     let insertToken = {};
     let insertTargetGeneration = Number(this.targetWindowGeneration || 0);
@@ -17312,6 +17396,26 @@ MyApplet.prototype = {
       this._setStatus("done", _("No transcript text to insert"), "");
       release();
       return true;
+    }
+    if (isPasteMethod && !outputActions.paste) {
+      let copyMethod = autoPasteTarget && !canPasteWithKeyboard ? method : "clipboard";
+      try {
+        let result = this._copyAndMaybePasteTranscriptText(
+          transcript,
+          text,
+          copyMethod,
+          canPasteWithKeyboard,
+          false,
+          complete,
+          isCurrentInsert
+        );
+        if (result !== null) {
+          release();
+        }
+        return result;
+      } catch (error) {
+        return failPreparation(error);
+      }
     }
     if (method === "type") {
       try {
@@ -17382,7 +17486,7 @@ MyApplet.prototype = {
       release();
       return false;
     }
-    if (method !== "clipboard-paste") {
+    if (!isPasteMethod) {
       try {
         let result = this._copyAndMaybePasteTranscriptText(transcript, text, method, canPasteWithKeyboard, submitWithReturn, complete, isCurrentInsert);
         if (result !== null) {

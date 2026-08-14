@@ -383,11 +383,20 @@
     "description": "Insert method",
     "options": {
       "Clipboard and paste": "clipboard-paste",
+      "Clipboard, paste and Auto-Submit": "clipboard-paste-submit",
       "Clipboard only": "clipboard",
       "Direct typing": "type",
       "Do not insert": "none"
     },
-    "default": "clipboard-paste"
+    "default": "clipboard-paste-submit"
+  },
+  "insert-method-semantics-version": {
+    "type": "spinbutton",
+    "description": "Internal output semantics version",
+    "min": 0,
+    "max": 2,
+    "step": 1,
+    "default": 0
   },
   "append-space": {
     "type": "switch",

@@ -101,7 +101,8 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "status-icon-recorded": (str, "soc-original"),
     "status-icon-error": (str, "soc-original"),
     "status-icon-setup": (str, "soc-original"),
-    "insert-method": (str, "clipboard-paste"),
+    "insert-method": (str, "clipboard-paste-submit"),
+    "insert-method-semantics-version": (int, 0),
     "append-space": (bool, True),
     "sanitize-special-chars": (bool, False),
     "soften-profanity": (bool, False),
@@ -133,7 +134,7 @@ _ALLOWED_SETTING_TEXT_VALUES: dict[str, frozenset[str]] = {
     "status-icon-error": _STATUS_ICON_VALUES,
     "status-icon-setup": _STATUS_ICON_VALUES,
     "artifact-encryption": frozenset({"keyring", "passphrase", "off"}),
-    "insert-method": frozenset({"clipboard-paste", "clipboard", "type", "none"}),
+    "insert-method": frozenset({"clipboard-paste", "clipboard-paste-submit", "clipboard", "type", "none"}),
     "language": frozenset({
         "ar",
         "zh",

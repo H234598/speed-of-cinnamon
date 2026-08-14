@@ -1364,9 +1364,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('AUTO_PASTE_IDENTITY_MARKERS[key] || null', source)
         self.assertIn('for (let marker of markers)', source)
         self.assertIn('String(marker || "").trim().toLowerCase()', source)
-        self.assertIn('let autoPasteTarget = method === "clipboard-paste" && this._windowTitleMatchesAutoPaste();', source)
-        self.assertIn('let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;', source)
-        self.assertIn('let suppressAutoPasteEnter = method !== "clipboard-paste" || !canPasteWithKeyboard || submitWithReturn;', source)
+        self.assertIn('let isPasteMethod = method === "clipboard-paste" || method === "clipboard-paste-submit";', source)
+        self.assertIn('let autoPasteTarget = isPasteMethod && this._windowTitleMatchesAutoPaste();', source)
+        self.assertIn("let outputActions = isPasteMethod", source)
+        self.assertIn("? this._resolveOutputActions(method, autoPasteTarget, canPasteWithKeyboard)", source)
+        self.assertIn('let submitWithReturn = outputActions.submit;', source)
+        self.assertIn('let suppressAutoPasteEnter = !outputActions.submit;', source)
         self.assertIn('let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter, autoPasteTarget);', source)
         self.assertIn('_preparedTranscriptText: function(transcript, suppressAutoPasteEnter, autoPasteTargetMatch)', source)
         self.assertIn('typeof autoPasteTargetMatch === "boolean"', source)
@@ -1886,12 +1889,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("let canPasteWithKeyboard = Boolean(keyboardProgram);", resolver_block)
 
         type_start = insert_block.index('if (method === "type")')
-        type_end = insert_block.index('if (method !== "clipboard-paste")', type_start)
+        type_end = insert_block.index('if (!isPasteMethod)', type_start)
         type_block = insert_block[type_start:type_end]
         self.assertEqual(type_block.count('this._findTrustedProgramInPath("xdotool")'), 1)
         self.assertIn("isCurrentInsert, xdotoolPath, expectedTargetWindow))", type_block)
 
-        paste_start = insert_block.index('if (method !== "clipboard-paste")')
+        paste_start = insert_block.index('if (!isPasteMethod)')
         paste_block = insert_block[paste_start:]
         self.assertEqual(
             paste_block.count(
@@ -8789,15 +8792,19 @@ class AppletStaticTest(unittest.TestCase):
 
         self.assertEqual(
             set(schema["insert-method"]["options"].values()),
-            {"clipboard-paste", "clipboard", "type", "none"},
+            {"clipboard-paste", "clipboard-paste-submit", "clipboard", "type", "none"},
         )
         self.assertIn('const OUTPUT_METHODS = [', source)
         self.assertIn('this.outputMethodItem = new PopupMenu.PopupSubMenuMenuItem(_("Output: Clipboard and paste"))', source)
         self.assertIn("this._populateOutputMethodMenu();", source)
         self.assertIn('_outputMethodLabel: function(method)', source)
         self.assertIn('_normalizeOutputMethod: function(method)', source)
-        self.assertEqual(schema["insert-method"]["default"], "clipboard-paste")
-        self.assertIn('this.insertMethod = "clipboard-paste";', source)
+        self.assertEqual(schema["insert-method"]["default"], "clipboard-paste-submit")
+        self.assertEqual(schema["insert-method-semantics-version"]["default"], 0)
+        self.assertIn('this.insertMethod = "clipboard-paste-submit";', source)
+        self.assertIn('this._bindSetting(Settings.BindingDirection.IN, "insert-method-semantics-version", "insertMethodSemanticsVersion", null, null)', source)
+        self.assertIn("_resolveOutputActions: function(method, targetMatched, keyboardBackendAvailable)", source)
+        self.assertIn("_migrateInsertMethodSemantics: function()", source)
         self.assertIn('return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "none";', source)
         self.assertNotIn('return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "clipboard-paste";', source)
         self.assertIn('_selectOutputMethod: function(method)', source)
@@ -9013,14 +9020,15 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('xdotool = this._findTrustedProgramInPath("xdotool");', source)
         self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]', source)
         self.assertIn("_isTerminalTargetWindow: function()", source)
-        self.assertIn('let autoPasteTarget = method === "clipboard-paste" && this._windowTitleMatchesAutoPaste();', source)
+        self.assertIn('let isPasteMethod = method === "clipboard-paste" || method === "clipboard-paste-submit";', source)
+        self.assertIn('let autoPasteTarget = isPasteMethod && this._windowTitleMatchesAutoPaste();', source)
         self.assertIn("let keyboardProgram = null;", source)
         self.assertIn('let xdotoolPath = this._findTrustedProgramInPath("xdotool");', source)
         self.assertIn('let wtypePath = this._findTrustedProgramInPath("wtype");', source)
         self.assertIn('keyboardProgram = { kind: "xdotool", path: xdotoolPath };', source)
         self.assertIn('keyboardProgram = { kind: "wtype", path: wtypePath };', source)
         self.assertIn("let canPasteWithKeyboard = Boolean(keyboardProgram);", source)
-        self.assertIn('let submitWithReturn = autoPasteTarget && method === "clipboard-paste" && canPasteWithKeyboard;', source)
+        self.assertIn('let submitWithReturn = outputActions.submit;', source)
         self.assertIn('let terminalPaste = this._isTerminalTargetWindow();', source)
         self.assertIn('let hasXdotool;', source)
         self.assertIn('hasXdotool = this._findTrustedProgramInPath("xdotool");', source)
