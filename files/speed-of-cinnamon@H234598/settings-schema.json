@@ -327,7 +327,7 @@
       "PulseAudio parecord": "parecord",
       "ALSA arecord": "arecord"
     },
-    "default": "arecord"
+    "default": "auto"
   },
   "input-device": {
     "type": "entry",

@@ -1233,6 +1233,8 @@ class AppletStaticTest(unittest.TestCase):
             set(schema["recorder"]["options"].values()),
             {"auto", "pw-record", "parecord", "arecord"},
         )
+        self.assertEqual(schema["recorder"]["default"], "auto")
+        self.assertIn('this.recorder = "auto";', source)
         self.assertIn("const RECORDER_METHODS = [", source)
         self.assertIn('this.recorderItem = new PopupMenu.PopupSubMenuMenuItem(_("Recorder: Automatic"))', source)
         self.assertIn("_populateRecorderMenu: function()", source)
