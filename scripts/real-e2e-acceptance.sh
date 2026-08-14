@@ -76,7 +76,7 @@ espeak-ng -v de -s 145 -w "${tmp_root}/source.wav" \
   'Dies ist ein echter Speed of Cinnamon Aufnahme Test.'
 ffmpeg -nostdin -loglevel error -y -i "${tmp_root}/source.wav" -ac 1 -ar 16000 "${tmp_root}/speech.wav"
 
-eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; if(!i) throw new Error(\"applet missing\"); i._socRealE2eSnapshot={insertMethod:i.insertMethod,autoRelisten:i.autoRelisten,showTranscriptionNotifications:i.showTranscriptionNotifications,openaiCompatibleFlexProcessing:i.openaiCompatibleFlexProcessing}; i.insertMethod=\"none\"; i.autoRelisten=false; i.showTranscriptionNotifications=false; \"prepared\";" >/dev/null
+eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; if(!i) throw new Error(\"applet missing\"); i._socRealE2eSnapshot={insertMethod:i.insertMethod,autoRelisten:i.autoRelisten,showTranscriptionNotifications:i.showTranscriptionNotifications,openaiCompatibleFlexProcessing:i.openaiCompatibleFlexProcessing,inputDevice:i.inputDevice}; if(i.recorder===\"arecord\") i.inputDevice=\"pipewire\"; i.insertMethod=\"none\"; i.autoRelisten=false; i.showTranscriptionNotifications=false; \"prepared\";" >/dev/null
 snapshot_set=1
 
 run_case() {

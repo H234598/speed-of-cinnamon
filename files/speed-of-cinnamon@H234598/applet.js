@@ -574,6 +574,7 @@ MyApplet.prototype = {
     this._cleanupCommandToken = null;
     this._recordingCommandToken = null;
     this.processCleanupRetryTimer = 0;
+    this.recordingStartRetryTimer = 0;
     this._externalApiEnvMonitorCancelSucceeded = false;
     this.maintenanceCleanupFailed = false;
   },
@@ -2967,6 +2968,59 @@ MyApplet.prototype = {
     return Boolean(timerId);
   },
 
+  _queueRecordingStartAfterCleanup: function() {
+    this.recordingStartPendingAfterCleanup = true;
+    this._setStatusPreservingRecording(
+      "ready",
+      _("Waiting for previous operation to finish before recording..."),
+      this.lastTranscript
+    );
+    if (this.recordingStartRetryTimer) {
+      return true;
+    }
+    let timerId = this._scheduleTrackedTimer("recording-start-retry", 1, () => {
+      if (this.recordingStartPendingAfterCleanup !== true) {
+        return false;
+      }
+      let processCleanupPending = false;
+      try {
+        processCleanupPending = typeof this._processCleanupStillPending === "function" &&
+          this._processCleanupStillPending();
+      } catch (error) {
+        this._recordLifecycleError("process-state", error);
+        processCleanupPending = true;
+      }
+      if (this._hasActiveRecordingState() || this.isCommandRunning ||
+          this._hasLocalProcessingWorkflow() || processCleanupPending) {
+        return true;
+      }
+      this.recordingStartPendingAfterCleanup = false;
+      if (this._toggleRecording("start")) {
+        return false;
+      }
+      this._setStatusPreservingRecording(
+        "error",
+        _("Could not start recording after cleanup"),
+        this.lastTranscript
+      );
+      return false;
+    }, true, "recordingStartRetryTimer");
+    if (!timerId) {
+      this.recordingStartPendingAfterCleanup = false;
+      this._setStatusPreservingRecording(
+        "error",
+        _("Recording start cleanup retry could not be scheduled"),
+        this.lastTranscript
+      );
+      return false;
+    }
+    return true;
+  },
+
+  _clearRecordingStartRetryTimer: function() {
+    return this._clearTrackedTimer("recording-start-retry", "recordingStartRetryTimer");
+  },
+
   _clearProcessCleanupRetryTimer: function() {
     return this._clearTrackedTimer("process-cleanup-retry", "processCleanupRetryTimer");
   },
@@ -3926,6 +3980,7 @@ MyApplet.prototype = {
     this.cancelIntentActive = false;
     this.cancelRecoveryAttempts = 0;
     this.stopPendingWhileCommandRunning = false;
+    this.recordingStartPendingAfterCleanup = false;
     this._statusRefreshToken = 0;
     this._statusCommandToken = null;
     this._statusCommandRunning = false;
@@ -5541,6 +5596,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-timer", () => this._clearAlarmTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearOllamaInstallWatchTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearProcessCleanupRetryTimer());
+    this._runTeardownGuarded("teardown-timer", () => this._clearRecordingStartRetryTimer());
     this._runTeardownGuarded("teardown-orphaned-timers", () => this._retryOrphanedTimers());
     this._runTeardownGuarded("teardown-monitor", () => this._clearExternalApiEnvMonitor());
     this._runTeardownGuarded("teardown-signals", () => this._disconnectAllSignals());
@@ -6959,6 +7015,16 @@ MyApplet.prototype = {
       (!backgroundCleanupSucceeded || !textInsertCleanupSucceeded) &&
       !hasExistingRecordingWork
     ) {
+      let processCleanupPending = false;
+      try {
+        processCleanupPending = typeof this._processCleanupStillPending === "function" &&
+          this._processCleanupStillPending();
+      } catch (error) {
+        this._recordLifecycleError("process-state", error);
+      }
+      if (forcedAction === "start" && processCleanupPending) {
+        return this._queueRecordingStartAfterCleanup();
+      }
       return false;
     }
     if (this.isCommandRunning) {

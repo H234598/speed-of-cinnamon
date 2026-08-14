@@ -431,6 +431,7 @@ const textInsertCleanupGroups = ["keyboard", "clipboard", "x11"];
 function makeRecordingApplet(options = {}) {
   const clock = { value: 1000 };
   const requests = [];
+  const scheduledTimers = [];
   const appliedPayloads = [];
   const statusEvents = [];
   const preservedStatusEvents = [];
@@ -486,6 +487,8 @@ function makeRecordingApplet(options = {}) {
     cancelPendingWhileCommandRunning: false,
     cancelIntentActive: false,
     cancelRecoveryAttempts: 0,
+    recordingStartPendingAfterCleanup: false,
+    recordingStartRetryTimer: 0,
 
     ollamaModelFlowToken: null,
     ollamaInstallWatchToken: null,
@@ -563,6 +566,11 @@ function makeRecordingApplet(options = {}) {
       "_runDoctor",
       clock
     ),
+    _queueRecordingStartAfterCleanup: loadAppletMethod(
+      "_queueRecordingStartAfterCleanup",
+      "_clearProcessCleanupRetryTimer",
+      clock
+    ),
 
     _hasActiveRecordingState() {
       return (
@@ -573,6 +581,14 @@ function makeRecordingApplet(options = {}) {
     },
     _hasLocalProcessingWorkflow() {
       return false;
+    },
+    _processCleanupStillPending() {
+      return false;
+    },
+    _scheduleTrackedTimer(name, delay, callback, useSeconds, propertyName) {
+      scheduledTimers.push({ name, delay, callback, useSeconds, propertyName });
+      this[propertyName] = scheduledTimers.length;
+      return scheduledTimers.length;
     },
     _cancelOllamaFlowForRecording() {
       return true;
@@ -707,6 +723,7 @@ function makeRecordingApplet(options = {}) {
   return {
     applet: state,
     requests,
+    scheduledTimers,
     appliedPayloads,
     statusEvents,
     preservedStatusEvents,
@@ -825,6 +842,27 @@ test("background cleanup failure still cleans text groups but does not spawn", (
       1
     );
   }
+});
+
+test("recording start waits for transient process cleanup and retries once", () => {
+  const harness = makeRecordingApplet({ failedCleanupGroups: ["doctor"] });
+  const { applet } = harness;
+  let processCleanupPending = true;
+  applet._processCleanupStillPending = () => processCleanupPending;
+
+  assert.equal(applet._toggleRecording("start"), true);
+  assert.equal(harness.requests.length, 0);
+  assert.equal(applet.recordingStartPendingAfterCleanup, true);
+  assert.equal(harness.scheduledTimers.length, 1);
+  assert.equal(harness.scheduledTimers[0].name, "recording-start-retry");
+
+  processCleanupPending = false;
+  applet._terminateProcessesByGroup = () => true;
+  harness.scheduledTimers[0].callback();
+
+  assert.equal(applet.recordingStartPendingAfterCleanup, false);
+  assert.equal(harness.requests.length, 1);
+  assert.equal(harness.requests[0].args[0], "start");
 });
 
 test("text cleanup failure does not spawn an idle recording", () => {
