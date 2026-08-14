@@ -25,8 +25,9 @@ class RealE2EAcceptanceStaticTest(unittest.TestCase):
     def test_release_requires_fresh_real_e2e_attestation(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
         verifier = (ROOT / "scripts" / "verify-real-e2e-attestation.sh").read_text(encoding="utf-8")
-        self.assertIn('release: release-validate-flags release-require-snap verify-real-e2e-attestation', makefile)
-        self.assertIn('release: release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation', makefile)
+        self.assertIn('release: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation', makefile)
+        self.assertIn('release-dry-run: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation', makefile)
+        self.assertIn('release-dry-run-no-snap: check release-validate-flags verify-real-e2e-attestation verify-local-model-e2e-attestation', makefile)
         self.assertIn('git_head', verifier)
         self.assertIn('timedelta(hours=24)', verifier)
 

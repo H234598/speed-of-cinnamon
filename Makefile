@@ -87,7 +87,7 @@ applet-crash-safety: applet-safety-check
 version-next:
 	@./scripts/next_version.py $(OPTS)
 
-release-dry-run: release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check
+release-dry-run: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
 		  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
 	else \
@@ -100,7 +100,7 @@ release-dry-run: release-validate-flags release-require-snap verify-real-e2e-att
 		"v$(PROJECT_VERSION)"
 
 release-dry-run-no-snap: SNAP_BUILD=0
-release-dry-run-no-snap: release-validate-flags verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check
+release-dry-run-no-snap: check release-validate-flags verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
 	  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
 	else \
@@ -112,7 +112,7 @@ release-dry-run-no-snap: release-validate-flags verify-real-e2e-attestation veri
 		$(if $(filter 0,$(BUILD_GENERIC_RPM)),--skip-generic-rpm) \
 		"v$(PROJECT_VERSION)"
 
-release: release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check
+release: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
 	  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
 	else \
