@@ -1925,6 +1925,28 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(command.name, "parecord")
         self.assertEqual(command.argv[0], "parecord")
 
+    def test_choose_arecord_rejects_pulse_source_name(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample.wav"
+            with mock.patch("speed_of_cinnamon.recorder.shutil.which", which_only("arecord")):
+                with self.assertRaisesRegex(RecorderError, "requires an ALSA PCM identifier"):
+                    choose_recorder("arecord", audio_path, 3, "alsa_input.usb-mic")
+
+    def test_choose_auto_reports_pulse_source_when_only_arecord_is_available(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample.wav"
+            with mock.patch("speed_of_cinnamon.recorder.shutil.which", which_only("arecord")):
+                with self.assertRaisesRegex(RecorderError, "select pw-record or parecord"):
+                    choose_recorder("auto", audio_path, 3, "alsa_input.usb-mic")
+
+    def test_choose_arecord_accepts_alsa_pcm_identifier(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio_path = Path(tmp) / "sample.wav"
+            with mock.patch("speed_of_cinnamon.recorder.shutil.which", which_only("arecord")):
+                command = choose_recorder("arecord", audio_path, 3, "hw:1,0")
+        self.assertEqual(command.name, "arecord")
+        self.assertIn("hw:1,0", command.argv)
+
     def test_choose_recorder_rejects_excessive_max_seconds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             audio_path = Path(tmp) / "sample.wav"

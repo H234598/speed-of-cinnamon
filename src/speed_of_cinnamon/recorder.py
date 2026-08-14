@@ -1895,6 +1895,19 @@ def normalize_input_device(value: str) -> str:
     return device
 
 
+def _is_known_pulse_or_pipewire_source_name(value: str) -> bool:
+    normalized = value.strip().lower()
+    return normalized.startswith(
+        (
+            "alsa_input.",
+            "alsa_output.",
+            "bluez_input.",
+            "bluez_output.",
+            "pipewire:",
+        )
+    ) or normalized.endswith(".monitor")
+
+
 def choose_recorder(preference: str, audio_path: Path, max_seconds: int, input_device: str = "") -> RecorderCommand:
     if not isinstance(preference, str) or isinstance(preference, bool):
         raise RecorderError("recording preference must be text")
@@ -1909,6 +1922,7 @@ def choose_recorder(preference: str, audio_path: Path, max_seconds: int, input_d
     preference = (preference or "auto").strip().lower()
     target = normalize_input_device(input_device)
     candidates = [preference] if preference != "auto" else ["pw-record", "parecord", "arecord"]
+    incompatible_alsa_target = False
     for candidate in candidates:
         if candidate == "pw-record" and _which("pw-record"):
             argv = ["pw-record", "--rate", "16000", "--channels", "1", "--format", "s16"]
@@ -1930,6 +1944,13 @@ def choose_recorder(preference: str, audio_path: Path, max_seconds: int, input_d
                 argv = ["timeout", "--signal=INT", "--kill-after=1", str(max_seconds), *argv]
             return RecorderCommand(candidate, argv)
         if candidate == "arecord" and _which("arecord"):
+            if target and _is_known_pulse_or_pipewire_source_name(target):
+                incompatible_alsa_target = True
+                if preference == "arecord":
+                    raise RecorderError(
+                        "arecord requires an ALSA PCM identifier; the configured input source is a PipeWire/Pulse name"
+                    )
+                continue
             argv = ["arecord", "-f", "S16_LE", "-r", "16000", "-c", "1"]
             if target:
                 argv.extend(["--device", target])
@@ -1937,6 +1958,10 @@ def choose_recorder(preference: str, audio_path: Path, max_seconds: int, input_d
                 argv.extend(["-d", str(max_seconds)])
             argv.append(str(audio_path))
             return RecorderCommand(candidate, argv)
+    if incompatible_alsa_target:
+        raise RecorderError(
+            "configured input source is a PipeWire/Pulse name; select pw-record or parecord, or provide an ALSA PCM identifier for arecord"
+        )
     raise RecorderError("no supported recorder found; install pipewire-utils or alsa-utils")
 
 
