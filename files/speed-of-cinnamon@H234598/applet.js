@@ -105,6 +105,7 @@ const SANITIZE_SPECIAL_CHAR_MAP = {
   "ç": "c", "Ç": "C", "¿": "", "¡": ""
 };
 const CLI_TEXT_SETTINGS = {
+  "auto-backup-directory": "auto backup directory",
   "input-device": "input device",
   "transcriber-command": "transcriber command",
   "post-process-command": "post-process command",
@@ -477,6 +478,18 @@ const EXPORTABLE_SETTINGS = [
   ["max-transcript-files", "maxTranscriptFiles"],
   ["artifact-encryption", "artifactEncryption"],
   ["auto-paste-window-title", "autoPasteWindowTitle"],
+  ["auto-backup-enabled", "autoBackupEnabled"],
+  ["auto-backup-directory", "autoBackupDirectory"],
+  ["auto-backup-config", "autoBackupConfig"],
+  ["auto-backup-transcripts", "autoBackupTranscripts"],
+  ["auto-backup-audio", "autoBackupAudio"],
+  ["auto-backup-encryption", "autoBackupEncryption"],
+  ["auto-backup-on-success", "autoBackupOnSuccess"],
+  ["auto-backup-config-debounce-seconds", "autoBackupConfigDebounceSeconds"],
+  ["auto-backup-retry-count", "autoBackupRetryCount"],
+  ["auto-backup-retry-delay-seconds", "autoBackupRetryDelaySeconds"],
+  ["auto-backup-notify-success", "autoBackupNotifySuccess"],
+  ["auto-backup-notify-error", "autoBackupNotifyError"],
   ["transcriber", "transcriber"],
   ["whisper-model", "whisperModel"],
   ["post-process-backend", "postProcessBackend"],
@@ -3979,6 +3992,22 @@ MyApplet.prototype = {
     this.artifactEncryption = DEFAULT_ARTIFACT_ENCRYPTION;
     this.clipboardBackend = "gtk";
     this.autoPasteWindowTitle = DEFAULT_AUTO_PASTE_TITLE;
+    this.autoBackupEnabled = false;
+    this.autoBackupDirectory = "";
+    this.autoBackupConfig = true;
+    this.autoBackupTranscripts = true;
+    this.autoBackupAudio = false;
+    this.autoBackupEncryption = DEFAULT_ARTIFACT_ENCRYPTION;
+    this.autoBackupOnSuccess = true;
+    this.autoBackupConfigDebounceSeconds = 30;
+    this.autoBackupRetryCount = 3;
+    this.autoBackupRetryDelaySeconds = 30;
+    this.autoBackupNotifySuccess = false;
+    this.autoBackupNotifyError = true;
+    this.autoBackupToken = null;
+    this.autoBackupTimerId = 0;
+    this.autoBackupRetryTimerId = 0;
+    this.autoBackupPending = false;
     this.cliPath = "";
     this.transcriber = "openai-compatible";
     this.whisperModel = "";
@@ -4130,6 +4159,18 @@ MyApplet.prototype = {
     this._bindSetting(Settings.BindingDirection.IN, "artifact-encryption", "artifactEncryption", this._onTextOutputSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "clipboard-backend", "clipboardBackend", this._onClipboardBackendSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-enabled", "autoBackupEnabled", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-directory", "autoBackupDirectory", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-config", "autoBackupConfig", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-transcripts", "autoBackupTranscripts", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-audio", "autoBackupAudio", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-encryption", "autoBackupEncryption", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-on-success", "autoBackupOnSuccess", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-config-debounce-seconds", "autoBackupConfigDebounceSeconds", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-retry-count", "autoBackupRetryCount", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-retry-delay-seconds", "autoBackupRetryDelaySeconds", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-notify-success", "autoBackupNotifySuccess", this._onAutoBackupSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "auto-backup-notify-error", "autoBackupNotifyError", this._onAutoBackupSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "cli-path", "cliPath", null, null);
     this._bindSetting(Settings.BindingDirection.IN, "transcriber", "transcriber", this._onVoiceBackendSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "whisper-model", "whisperModel", this._onVoiceBackendSettingsChanged, null);
@@ -5495,6 +5536,43 @@ MyApplet.prototype = {
     this._updatePanel();
   },
 
+  _onAutoBackupSettingsChanged: function() {
+    this.autoBackupEnabled = this.autoBackupEnabled === true;
+    this.autoBackupConfig = this.autoBackupConfig !== false;
+    this.autoBackupTranscripts = this.autoBackupTranscripts !== false;
+    this.autoBackupAudio = this.autoBackupAudio === true;
+    this.autoBackupOnSuccess = this.autoBackupOnSuccess !== false;
+    this.autoBackupNotifySuccess = this.autoBackupNotifySuccess === true;
+    this.autoBackupNotifyError = this.autoBackupNotifyError !== false;
+    this.autoBackupDirectory = String(this.autoBackupDirectory || "").trim();
+    this.autoBackupEncryption = this._normalizeArtifactEncryption(this.autoBackupEncryption);
+    this.autoBackupConfigDebounceSeconds = Math.max(0, Math.min(3600, Number(this.autoBackupConfigDebounceSeconds) || 0));
+    this.autoBackupRetryCount = Math.max(0, Math.min(10, Number(this.autoBackupRetryCount) || 0));
+    this.autoBackupRetryDelaySeconds = Math.max(1, Math.min(3600, Number(this.autoBackupRetryDelaySeconds) || 30));
+    if (!this.autoBackupEnabled || !this.autoBackupOnSuccess || this.autoBackupDirectory === "") {
+      this._cancelAutoBackupTimers();
+    }
+    this._updatePanel();
+  },
+
+  _cancelAutoBackupTimers: function() {
+    if (this.autoBackupTimerId) {
+      try {
+        GLib.source_remove(this.autoBackupTimerId);
+      } catch (ignored) {
+      }
+      this.autoBackupTimerId = 0;
+    }
+    if (this.autoBackupRetryTimerId) {
+      try {
+        GLib.source_remove(this.autoBackupRetryTimerId);
+      } catch (ignored) {
+      }
+      this.autoBackupRetryTimerId = 0;
+    }
+    this.autoBackupPending = false;
+  },
+
   _cancelTextInsertForSettingsChange: function() {
     this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
     this._clearClipboardOverwriteApproval();
@@ -5991,6 +6069,123 @@ MyApplet.prototype = {
 
   _settingsExportArgs: function() {
     return [this._cliCommand(), "settings-export", "--settings-json-stdin", "--json"];
+  },
+
+  _autoBackupArgs: function() {
+    let directory = String(this.autoBackupDirectory || "").trim();
+    let args = [this._cliCommand(), "backup", "create", "--directory", directory];
+    args.push(this.autoBackupConfig === true ? "--config" : "--no-config");
+    args.push(this.autoBackupTranscripts === true ? "--transcripts" : "--no-transcripts");
+    args.push(this.autoBackupAudio === true ? "--audio" : "--no-audio");
+    args.push("--artifact-encryption", this._normalizeArtifactEncryption(this.autoBackupEncryption));
+    args.push("--settings-json-stdin", "--json");
+    return args;
+  },
+
+  _maybeStartAutoBackup: function(payload) {
+    if (
+      this.autoBackupEnabled !== true ||
+      this.autoBackupOnSuccess !== true ||
+      String(this.autoBackupDirectory || "").trim() === ""
+    ) {
+      return;
+    }
+    if (this.autoBackupToken) {
+      this.autoBackupPending = true;
+      return;
+    }
+    if (this.autoBackupTimerId) {
+      try {
+        GLib.source_remove(this.autoBackupTimerId);
+      } catch (ignored) {
+      }
+      this.autoBackupTimerId = 0;
+    }
+    let delaySeconds = Math.max(0, Math.min(3600, Number(this.autoBackupConfigDebounceSeconds) || 0));
+    if (delaySeconds === 0) {
+      this._runAutoBackup(payload, 0);
+      return;
+    }
+    try {
+      this.autoBackupTimerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, delaySeconds, () => {
+        this.autoBackupTimerId = 0;
+        this._runAutoBackup(payload, 0);
+        return false;
+      });
+    } catch (error) {
+      this.autoBackupTimerId = 0;
+      this._recordLifecycleError("auto-backup-schedule", error);
+      if (this.autoBackupNotifyError === true) {
+        this._notify(_("Automatic backup failed"), this._sanitizeErrorMessage(error), true);
+      }
+    }
+  },
+
+  _runAutoBackup: function(payload, attempt) {
+    if (
+      this.autoBackupEnabled !== true ||
+      this.autoBackupOnSuccess !== true ||
+      String(this.autoBackupDirectory || "").trim() === ""
+    ) {
+      return;
+    }
+    if (this.autoBackupToken) {
+      this.autoBackupPending = true;
+      return;
+    }
+    let inputOption = this._settingsSnapshotInputOptionOrNull(false, undefined, true);
+    if (!inputOption) {
+      if (this.autoBackupNotifyError === true) {
+        this._notify(_("Automatic backup failed"), _("Could not export settings for backup"), true);
+      }
+      return;
+    }
+    let retryAttempt = Math.max(0, Number(attempt) || 0);
+    let retryCount = Math.max(0, Math.min(10, Number(this.autoBackupRetryCount) || 0));
+    let finishPending = () => {
+      if (!this.autoBackupPending) {
+        return;
+      }
+      this.autoBackupPending = false;
+      this._maybeStartAutoBackup({ status: "done" });
+    };
+    let backupProcess = this._spawnJson(this._autoBackupArgs(), (result) => {
+      this.autoBackupToken = null;
+      let failed = !result || result.status === "error" || Boolean(result.error);
+      if (failed && retryAttempt < retryCount) {
+        let retryDelay = Math.max(1, Math.min(3600, Number(this.autoBackupRetryDelaySeconds) || 30));
+        let retryScheduled = false;
+        try {
+          this.autoBackupRetryTimerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, retryDelay, () => {
+            this.autoBackupRetryTimerId = 0;
+            this._runAutoBackup(payload, retryAttempt + 1);
+            return false;
+          });
+          retryScheduled = true;
+        } catch (error) {
+          this.autoBackupRetryTimerId = 0;
+          this._recordLifecycleError("auto-backup-retry", error);
+        }
+        if (retryScheduled) {
+          return;
+        }
+      }
+      if (failed) {
+        if (this.autoBackupNotifyError === true) {
+          let message = result && result.error
+            ? this._payloadErrorMessage(result, _("Backup command failed"))
+            : _("Backup command failed");
+          this._notify(_("Automatic backup failed"), message, true);
+        }
+      } else if (this.autoBackupNotifySuccess === true) {
+        this._notify(_("Automatic backup completed"), _("Selected artifacts were backed up"), false);
+      }
+      finishPending();
+    }, Object.assign({}, inputOption, {
+      timeoutMs: CLI_COMMAND_TIMEOUT_MS,
+      resourceGroup: "backup"
+    }));
+    this.autoBackupToken = backupProcess;
   },
 
   _settingsImportArgs: function(preview) {
@@ -14234,6 +14429,7 @@ MyApplet.prototype = {
     }
     if (!cancelIntentActive && status === "done") {
       this._maybeWarnUnencryptedArtifactStorage(payload, status);
+      this._maybeStartAutoBackup(payload);
     }
     if (cancelIntentActive && (status === "done" || status === "idle")) {
       if (!hasTerminalCleanupResult) {

@@ -25,6 +25,7 @@ from typing import NoReturn
 
 from . import __version__
 from . import doctor
+from .backup import BackupError, BackupInput, create_backup, restore_dry_run, verify_backup
 from .alarms import (
     _locked_alarm_store,
     _save_alarm_store_unlocked,
@@ -9874,6 +9875,143 @@ def command_transcripts_export(args: argparse.Namespace) -> dict[str, object]:
     }
 
 
+def _backup_source_identity(kind: str, path: Path) -> str:
+    digest = hashlib.sha256(path.name.encode("utf-8")).hexdigest()[:24]
+    return f"{kind}-{digest}"
+
+
+def _backup_inputs(
+    *,
+    config: bool,
+    transcripts: bool,
+    audio: bool,
+    settings: dict[str, object],
+    alarm_store: dict[str, object],
+    settings_path: Path | None = None,
+) -> tuple[list[BackupInput], tuple[Path, ...]]:
+    settings_path = settings_path or default_settings_export_file()
+    sources: list[BackupInput] = []
+    if config:
+        write_export(settings_path, settings, alarm_store)
+        sources.append(
+            BackupInput(
+                "config",
+                "config/settings-export.json",
+                "settings-export",
+                settings_path,
+            )
+        )
+    if transcripts:
+        for path in _safe_transcript_artifact_files():
+            sources.append(
+                BackupInput(
+                    "transcript",
+                    f"transcripts/{path.name}",
+                    _backup_source_identity("transcript", path),
+                    path,
+                )
+            )
+    if audio:
+        for path in recording_artifact_files():
+            if not _is_recording_audio_artifact(path):
+                continue
+            sources.append(
+                BackupInput(
+                    "audio",
+                    f"audio/{path.name}",
+                    _backup_source_identity("audio", path),
+                    path,
+                )
+            )
+    return sources, (settings_path.parent, transcript_dir(), recordings_dir())
+
+
+def command_backup_create(args: argparse.Namespace) -> dict[str, object]:
+    ensure_runtime_dirs()
+    target = _coerce_path(args.directory, field_name="backup directory", resolve=True)
+    config = _coerce_bool(args.config, field_name="config")
+    transcripts = _coerce_bool(args.transcripts, field_name="transcripts")
+    audio = _coerce_bool(args.audio, field_name="audio")
+    settings = _settings_json_from_args(args)
+    settings_stage = tempfile.TemporaryDirectory(prefix="soc-backup-settings-") if config else None
+    try:
+        staged_settings_path = (
+            Path(settings_stage.name) / "settings-export.json"
+            if settings_stage is not None
+            else None
+        )
+        with _locked_alarm_store() as store_path:
+            alarm_store = load_alarm_store(store_path)
+            sources, source_roots = _backup_inputs(
+                config=config,
+                transcripts=transcripts,
+                audio=audio,
+                settings=settings,
+                alarm_store=alarm_store,
+                settings_path=staged_settings_path,
+            )
+        try:
+            result = create_backup(
+                target,
+                sources=sources,
+                source_roots=source_roots,
+                selection={"config": config, "transcripts": transcripts, "audio": audio},
+                app_version=__version__,
+                encryption_mode=args.artifact_encryption,
+            )
+        except BackupError:
+            raise
+    finally:
+        if settings_stage is not None:
+            settings_stage.cleanup()
+    opened = False
+    if _coerce_bool(getattr(args, "open", False), field_name="open") and result.archive_path is not None:
+        opened = _open_path_with_desktop(result.archive_path.parent)
+    return {
+        "status": "skipped" if result.skipped else "done",
+        "message": "backup skipped; selected artifacts are unchanged" if result.skipped else "backup created",
+        "opened": opened,
+        "archive_name": result.archive_path.name if result.archive_path is not None else "",
+        "archive_present": result.archive_path is not None,
+        "encrypted": result.manifest is not None and result.manifest.encryption_enabled,
+        "artifacts": len(result.manifest.artifacts) if result.manifest is not None else 0,
+    }
+
+
+def command_backup_verify(args: argparse.Namespace) -> dict[str, object]:
+    archive_path = _coerce_path(args.archive_path, field_name="backup archive path", resolve=True)
+    manifest = verify_backup(archive_path)
+    return {
+        "status": "done",
+        "message": "backup verified",
+        "verified": True,
+        "encrypted": manifest.encryption_enabled,
+        "encryption": manifest.encryption_mode,
+        "job_id": manifest.job_id,
+        "artifacts": len(manifest.artifacts),
+        "selection": dict(manifest.selection),
+    }
+
+
+def command_backup_restore_dry_run(args: argparse.Namespace) -> dict[str, object]:
+    archive_path = _coerce_path(args.archive_path, field_name="backup archive path", resolve=True)
+    destination = _coerce_path(args.destination_directory, field_name="restore destination", resolve=True)
+    plan = restore_dry_run(
+        archive_path,
+        destination,
+        source_roots=(default_settings_export_file().parent, transcript_dir(), recordings_dir()),
+    )
+    return {
+        "status": "done",
+        "message": "restore dry-run completed",
+        "verified": True,
+        "encrypted": plan.manifest.encryption_enabled,
+        "artifacts": len(plan.manifest.artifacts),
+        "members": len(plan.archive_members),
+        "destination_present": destination.exists(),
+    }
+
+
 def command_cleanup(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     store = build_store(args)
@@ -10742,6 +10880,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="open the encrypted export folder without returning its path",
     )
     transcripts_export.set_defaults(handler=command_transcripts_export)
+
+    backup = subparsers.add_parser("backup")
+    backup_subparsers = backup.add_subparsers(dest="backup_command", required=True)
+
+    backup_create = backup_subparsers.add_parser("create")
+    add_common_options(backup_create)
+    backup_create.add_argument("--directory", required=True)
+    backup_create.add_argument("--settings-json", default="{}")
+    backup_create.add_argument("--settings-json-stdin", action="store_true")
+    backup_create.add_argument("--config", action=argparse.BooleanOptionalAction, default=True)
+    backup_create.add_argument("--transcripts", action=argparse.BooleanOptionalAction, default=True)
+    backup_create.add_argument("--audio", action=argparse.BooleanOptionalAction, default=False)
+    backup_create.add_argument("--artifact-encryption", choices=ARTIFACT_ENCRYPTION_CHOICES, default="keyring")
+    backup_create.add_argument("--open", action="store_true")
+    backup_create.set_defaults(handler=command_backup_create)
+
+    backup_verify = backup_subparsers.add_parser("verify")
+    add_common_options(backup_verify)
+    backup_verify.add_argument("archive_path")
+    backup_verify.set_defaults(handler=command_backup_verify)
+
+    backup_restore = backup_subparsers.add_parser("restore-dry-run")
+    add_common_options(backup_restore)
+    backup_restore.add_argument("archive_path")
+    backup_restore.add_argument("destination_directory")
+    backup_restore.set_defaults(handler=command_backup_restore_dry_run)
 
     cleanup = subparsers.add_parser("cleanup")
     add_common_options(cleanup)

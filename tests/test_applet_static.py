@@ -11470,6 +11470,7 @@ class AppletStaticTest(unittest.TestCase):
             "notification-section",
             "status-icons-section",
             "output-section",
+            "backup-section",
             "text-polishing-section",
             "backend-section",
             "settings-logo-footer-section",

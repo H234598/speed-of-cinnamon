@@ -327,6 +327,29 @@ arguments. The export includes the local alarm store and intentionally excludes 
 fragments are rejected instead of being written to the export. Export files list these intentionally excluded private
 setting names in `excluded_private_settings`, but never include their values.
 
+## Automatic Backup
+
+```bash
+printf '%s' '{"language":"de","auto-backup-enabled":true}' | \
+  speed-of-cinnamon backup create \
+  --directory ~/.local/share/speed-of-cinnamon/backups \
+  --settings-json-stdin \
+  --artifact-encryption keyring \
+  --json
+speed-of-cinnamon backup verify ~/.local/share/speed-of-cinnamon/backups/backup.socbackup.socenc --json
+speed-of-cinnamon backup restore-dry-run \
+  ~/.local/share/speed-of-cinnamon/backups/backup.socbackup.socenc \
+  /tmp/speed-of-cinnamon-restore-check \
+  --json
+```
+
+`backup create` writes a versioned archive from selected settings, transcripts, and recordings. Use `--no-config`,
+`--no-transcripts`, or `--audio`/`--no-audio` to select sources. Encryption defaults to the configured keyring mode;
+`passphrase` is supported for CLI-friendly deployments and `off` deliberately creates plaintext archives. Settings are
+staged in a private temporary directory and removed after archive creation; the persistent settings-export state file is
+not used as backup staging. `backup verify` validates the encrypted envelope and archive manifest. `restore-dry-run`
+validates archive members and destination safety without writing restored artifacts.
+
 ## Alarms
 
 ```bash

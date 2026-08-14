@@ -17,6 +17,7 @@
         "notification-section",
         "status-icons-section",
         "output-section",
+        "backup-section",
         "text-polishing-section",
         "backend-section",
         "settings-logo-footer-section"
@@ -131,6 +132,25 @@
         "artifact-encryption-help-off",
         "clipboard-backend",
         "auto-paste-window-title"
+      ]
+    },
+    "backup-section": {
+      "type": "section",
+      "title": "Automatic backup",
+      "keys": [
+        "auto-backup-enabled",
+        "auto-backup-directory",
+        "auto-backup-config",
+        "auto-backup-transcripts",
+        "auto-backup-audio",
+        "auto-backup-encryption",
+        "auto-backup-on-success",
+        "auto-backup-config-debounce-seconds",
+        "auto-backup-retry-count",
+        "auto-backup-retry-delay-seconds",
+        "auto-backup-notify-success",
+        "auto-backup-notify-error",
+        "auto-backup-help"
       ]
     },
     "text-polishing-section": {
@@ -455,6 +475,94 @@
     "description": "Auto-Submit target markers",
     "tooltip": "Built-in marker names match the full window title or known window classes/app IDs; custom strings match the full window title case-insensitively. Matching targets receive Enter only after Clipboard and paste, not after Clipboard only. Empty disables Auto-Submit. Max 4096 chars.",
     "default": "codex, Terminal, Telegram, Ghostty, Kitty"
+  },
+  "auto-backup-enabled": {
+    "type": "switch",
+    "description": "Enable automatic backup after successful transcription",
+    "tooltip": "Runs backup creation asynchronously after a successful transcription. It never blocks clipboard, paste, or Auto-Submit. Disabled by default.",
+    "default": false
+  },
+  "auto-backup-directory": {
+    "type": "entry",
+    "description": "Automatic backup directory",
+    "tooltip": "Absolute destination directory for backup archives. The CLI rejects symlinked or unsafe destinations. Leave empty to disable automatic backup.",
+    "default": ""
+  },
+  "auto-backup-config": {
+    "type": "switch",
+    "description": "Back up settings",
+    "default": true
+  },
+  "auto-backup-transcripts": {
+    "type": "switch",
+    "description": "Back up transcripts",
+    "default": true
+  },
+  "auto-backup-audio": {
+    "type": "switch",
+    "description": "Back up recordings",
+    "tooltip": "Recording files may contain sensitive audio and can be large. Disabled by default.",
+    "default": false
+  },
+  "auto-backup-encryption": {
+    "type": "combobox",
+    "description": "Automatic backup encryption",
+    "tooltip": "Keyring is recommended. Passphrase uses the configured artifact key/passphrase. Off creates plaintext archives and should be used only deliberately.",
+    "options": {
+      "Secret Service keyring": "keyring",
+      "Passphrase": "passphrase",
+      "Off": "off"
+    },
+    "default": "keyring"
+  },
+  "auto-backup-on-success": {
+    "type": "switch",
+    "description": "Back up after successful transcription",
+    "default": true
+  },
+  "auto-backup-config-debounce-seconds": {
+    "type": "spinbutton",
+    "description": "Backup debounce",
+    "tooltip": "Wait this many seconds after the latest successful transcription before starting backup. This coalesces rapid completions without delaying paste.",
+    "min": 0,
+    "max": 3600,
+    "step": 1,
+    "units": "s",
+    "default": 30
+  },
+  "auto-backup-retry-count": {
+    "type": "spinbutton",
+    "description": "Automatic backup retries",
+    "tooltip": "Maximum retries after a failed backup command. Retries run in the background and never block transcript output.",
+    "min": 0,
+    "max": 10,
+    "step": 1,
+    "default": 3
+  },
+  "auto-backup-retry-delay-seconds": {
+    "type": "spinbutton",
+    "description": "Backup retry delay",
+    "tooltip": "Seconds between automatic backup retries.",
+    "min": 1,
+    "max": 3600,
+    "step": 1,
+    "units": "s",
+    "default": 30
+  },
+  "auto-backup-notify-success": {
+    "type": "switch",
+    "description": "Notify on successful backup",
+    "default": false
+  },
+  "auto-backup-notify-error": {
+    "type": "switch",
+    "description": "Notify on backup error",
+    "default": true
+  },
+  "auto-backup-help": {
+    "type": "label",
+    "description": "Automatic backups create versioned archives from selected settings, transcripts, and recordings. Archives are written asynchronously after transcription and use the selected encryption mode. Retention is manual for now; verify archives and preview restores through the CLI before restoring.",
+    "tooltip": "Security first: choose keyring or passphrase encryption, keep the destination private, and test restore-dry-run before trusting a backup."
   },
   "cli-path": {
     "type": "entry",
