@@ -6298,6 +6298,9 @@ def finalize_recording(
     log_deleted = False
     audio_suffix = ""
     keep_recording_artifacts = False
+    automatic_backup_result: dict[str, object] | None = None
+    automatic_backup_settings: dict[str, object] = {}
+    automatic_audio_backup_requested = False
     trimmed_audio_path: Path | None = None
     stabilized_audio_path: Path | None = None
     transcript_encryption = ARTIFACT_ENCRYPTION_OFF
@@ -6943,6 +6946,10 @@ def finalize_recording(
             getattr(args, "keep_recording_artifacts", False),
             field_name="keep_recording_artifacts",
         )
+        if _coerce_bool(getattr(args, "settings_json_stdin", False), field_name="settings_json_stdin"):
+            preserve_recording_artifacts_after_cleanup_failure = True
+            automatic_backup_settings = _settings_json_from_args(args)
+            automatic_audio_backup_requested = _auto_backup_configuration(automatic_backup_settings) is not None
         _coerce_bool(getattr(args, "skip_silent_auto_relisten", False), field_name="skip_silent_auto_relisten")
         artifact_encryption = _artifact_encryption_mode(args)
         if state.status != "finalizing":
@@ -7073,6 +7080,10 @@ def finalize_recording(
             state.transcript = ""
             artifact_cleanup = _enforce_recording_artifact_cap(state, state_path=store.path)
             cleanup_failures: list[tuple[str, str, str]] = []
+            if automatic_audio_backup_requested:
+                preserve_written_text_on_error = True
+                finalize_error_message = "automatic audio backup failed"
+                automatic_backup_result = _run_inline_auto_backup(args, automatic_backup_settings)
             if not keep_recording_artifacts:
                 audio_backup = _backup_cleanup_file(str(audio_path), suffix=audio_suffix)
                 log_backup = _backup_cleanup_file(cleanup_log_path, suffix=".log")
@@ -7153,6 +7164,7 @@ def finalize_recording(
                     "silence_detected": True,
                     "silence_duration_seconds": silence.silence_seconds,
                     "speech_duration_seconds": silence.speech_seconds,
+                    **({"automatic_backup": automatic_backup_result} if automatic_backup_result is not None else {}),
                 }
             done = _finalize_store_update(
                 status="done",
@@ -7184,6 +7196,7 @@ def finalize_recording(
                 "silence_detected": True,
                 "silence_duration_seconds": silence.silence_seconds,
                 "speech_duration_seconds": silence.speech_seconds,
+                **({"automatic_backup": automatic_backup_result} if automatic_backup_result is not None else {}),
             }
 
         text_path = _transcript_path_for_audio(audio_path)
@@ -7378,6 +7391,11 @@ def finalize_recording(
                 cleanup_log_path = done_log_path
                 done_log_path = ""
 
+        if automatic_audio_backup_requested:
+            preserve_written_text_on_error = True
+            finalize_error_message = "automatic audio backup failed"
+            automatic_backup_result = _run_inline_auto_backup(args, automatic_backup_settings)
+
         cleanup_failures: list[tuple[str, str, str]] = []
         audio_backup = (
             _backup_cleanup_file(str(cleanup_audio_path), suffix=audio_suffix)
@@ -7516,6 +7534,7 @@ def finalize_recording(
             "recording_artifacts_kept": keep_recording_artifacts,
             "audio_deleted": audio_deleted,
             "log_deleted": log_deleted,
+            **({"automatic_backup": automatic_backup_result} if automatic_backup_result is not None else {}),
         }
     except BaseException as exc:
         error_text = finalize_error_message
@@ -9932,7 +9951,8 @@ def command_backup_create(args: argparse.Namespace) -> dict[str, object]:
     config = _coerce_bool(args.config, field_name="config")
     transcripts = _coerce_bool(args.transcripts, field_name="transcripts")
     audio = _coerce_bool(args.audio, field_name="audio")
-    settings = _settings_json_from_args(args)
+    settings_override = getattr(args, "_settings_override", None)
+    settings = settings_override if isinstance(settings_override, dict) else _settings_json_from_args(args)
     settings_stage = tempfile.TemporaryDirectory(prefix="soc-backup-settings-") if config else None
     try:
         staged_settings_path = (
@@ -9976,6 +9996,55 @@ def command_backup_create(args: argparse.Namespace) -> dict[str, object]:
         "encrypted": result.manifest is not None and result.manifest.encryption_enabled,
         "artifacts": len(result.manifest.artifacts) if result.manifest is not None else 0,
     }
+
+
+def _auto_backup_configuration(settings: dict[str, object]) -> dict[str, object] | None:
+    if not isinstance(settings, dict):
+        raise RuntimeError("automatic backup settings must be an object")
+    enabled = _coerce_bool(settings.get("auto-backup-enabled", False), field_name="auto-backup-enabled")
+    on_success = _coerce_bool(settings.get("auto-backup-on-success", True), field_name="auto-backup-on-success")
+    audio = _coerce_bool(settings.get("auto-backup-audio", False), field_name="auto-backup-audio")
+    if not enabled or not on_success or not audio:
+        return None
+    directory = settings.get("auto-backup-directory", "")
+    if not isinstance(directory, str) or not directory.strip():
+        raise RuntimeError("automatic audio backup requires a backup directory")
+    config = _coerce_bool(settings.get("auto-backup-config", True), field_name="auto-backup-config")
+    transcripts = _coerce_bool(settings.get("auto-backup-transcripts", True), field_name="auto-backup-transcripts")
+    encryption = normalize_artifact_encryption(settings.get("auto-backup-encryption", "keyring"))
+    if not (config or transcripts or audio):
+        raise RuntimeError("automatic backup requires at least one selected category")
+    return {
+        "directory": directory.strip(),
+        "config": config,
+        "transcripts": transcripts,
+        "audio": audio,
+        "encryption": encryption,
+    }
+
+
+def _run_inline_auto_backup(
+    args: argparse.Namespace,
+    settings: dict[str, object],
+) -> dict[str, object] | None:
+    configuration = _auto_backup_configuration(settings)
+    if configuration is None:
+        return None
+    backup_args = argparse.Namespace(
+        directory=configuration["directory"],
+        config=configuration["config"],
+        transcripts=configuration["transcripts"],
+        audio=True,
+        artifact_encryption=configuration["encryption"],
+        open=False,
+        _settings_override=settings,
+    )
+    result = command_backup_create(backup_args)
+    if result.get("status") not in {"done", "skipped"}:
+        raise RuntimeError("automatic audio backup did not complete")
+    if result.get("status") == "done" and result.get("archive_present") is not True:
+        raise RuntimeError("automatic audio backup did not publish an archive")
+    return result
 
 
 def command_backup_verify(args: argparse.Namespace) -> dict[str, object]:
@@ -10684,6 +10753,12 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--post-process-prompt", default="")
     parser.add_argument("--personal-context", default="")
     parser.add_argument("--vocabulary", default="")
+    parser.add_argument("--settings-json", default="{}")
+    parser.add_argument(
+        "--settings-json-stdin",
+        action="store_true",
+        help="read private settings JSON from stdin for lifecycle-gated operations",
+    )
     parser.add_argument(
         "--insert-method",
         default="clipboard-paste",

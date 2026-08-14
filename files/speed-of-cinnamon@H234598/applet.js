@@ -5408,6 +5408,8 @@ MyApplet.prototype = {
   _onTextOutputSettingsChanged: function() {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
+    this.autoBackupToken = null;
+    this.autoBackupPending = false;
     this._historyMenuFingerprint = null;
     let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
     this._cancelTextInsertForSettingsChange();
@@ -5712,6 +5714,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-timer", () => this._clearOllamaInstallWatchTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearProcessCleanupRetryTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearRecordingStartRetryTimer());
+    this._runTeardownGuarded("teardown-timer", () => this._cancelAutoBackupTimers());
     this._runTeardownGuarded("teardown-orphaned-timers", () => this._retryOrphanedTimers());
     this._runTeardownGuarded("teardown-monitor", () => this._clearExternalApiEnvMonitor());
     this._runTeardownGuarded("teardown-signals", () => this._disconnectAllSignals());
@@ -5750,6 +5753,9 @@ MyApplet.prototype = {
     let safeWhisperModel = this._coerceCliTextArgOrFallback(this.whisperModel, "whisper model", "");
     let safePersonalContext = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.personalContext), "personal context", "");
     let safeVocabulary = this._coerceCliTextArgOrFallback(this._singleLineCliTextValue(this.vocabulary), "vocabulary", "");
+    let inlineAudioBackup = this.autoBackupEnabled === true &&
+      this.autoBackupOnSuccess !== false &&
+      this.autoBackupAudio === true;
     let safeRecorder = this._normalizeRecorder(this.recorder);
     let safeLanguage = this._normalizeLanguage(languageOverride, this._currentLanguage());
     let normalizedTranscriber = normalizeTranscriberMethod(this.transcriber);
@@ -5798,6 +5804,9 @@ MyApplet.prototype = {
     }
     if (this.keepRecordingArtifacts) {
       args.push("--keep-recording-artifacts");
+    }
+    if (inlineAudioBackup) {
+      args.push("--settings-json-stdin");
     }
     if (this.autoRelisten) {
       args.push("--skip-silent-auto-relisten");
@@ -5882,6 +5891,13 @@ MyApplet.prototype = {
       args[args.indexOf("--post-process-backend") + 1] = "none";
     }
     return args;
+  },
+
+  _recordingSettingsInputOptionOrNull: function() {
+    if (!(this.autoBackupEnabled === true && this.autoBackupOnSuccess !== false && this.autoBackupAudio === true)) {
+      return {};
+    }
+    return this._settingsSnapshotInputOptionOrNull(false, "error", true);
   },
 
   _appendCliOptionWithinBudget: function(args, flag, value) {
@@ -6083,6 +6099,14 @@ MyApplet.prototype = {
   },
 
   _maybeStartAutoBackup: function(payload) {
+    if (
+      payload &&
+      (payload.silence_detected === true ||
+       (payload.automatic_backup &&
+        (payload.automatic_backup.status === "done" || payload.automatic_backup.status === "skipped")))
+    ) {
+      return;
+    }
     if (
       this.autoBackupEnabled !== true ||
       this.autoBackupOnSuccess !== true ||
@@ -7344,8 +7368,15 @@ MyApplet.prototype = {
     }
     let commandAction = forcedAction === "start" || forcedAction === "stop" ? forcedAction : (hasExistingRecordingWork ? "stop" : "start");
     let toggleArgs;
+    let toggleInputOption = {};
     try {
       toggleArgs = this._baseArgs(commandAction);
+      toggleInputOption = typeof this._recordingSettingsInputOptionOrNull === "function"
+        ? this._recordingSettingsInputOptionOrNull()
+        : {};
+      if (toggleInputOption === null) {
+        return false;
+      }
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatusPreservingRecording("error", _("Could not prepare recording command: ") + safeError, this.lastTranscript);
@@ -7409,7 +7440,7 @@ MyApplet.prototype = {
         true,
         commandAction
       );
-    });
+    }, toggleInputOption);
     if (!toggleHandle) {
       if (this._recordingCommandToken === recordingCommandToken) {
         this._recordingCommandToken = null;
@@ -14711,8 +14742,15 @@ MyApplet.prototype = {
       return;
     }
     let stopArgs;
+    let stopInputOption = {};
     try {
       stopArgs = this._baseArgs("stop");
+      stopInputOption = typeof this._recordingSettingsInputOptionOrNull === "function"
+        ? this._recordingSettingsInputOptionOrNull()
+        : {};
+      if (stopInputOption === null) {
+        return;
+      }
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatusPreservingRecording("error", _("Could not prepare timed recording command: ") + safeError, this.lastTranscript);
@@ -14747,7 +14785,7 @@ MyApplet.prototype = {
       }
       this.isCommandRunning = false;
       this._applyPayloadSafely(nextPayload, undefined, true, "stop");
-    });
+    }, stopInputOption);
     if (!stopProcess && this._recordingCommandToken === recordingCommandToken) {
       this._recordingCommandToken = null;
       this.autoTranscribeRecordingKey = "";
@@ -17788,8 +17826,15 @@ MyApplet.prototype = {
       return false;
     }
     let startArgs;
+    let startInputOption = {};
     try {
       startArgs = this._baseArgs("start", relistenLanguage);
+      startInputOption = typeof this._recordingSettingsInputOptionOrNull === "function"
+        ? this._recordingSettingsInputOptionOrNull()
+        : {};
+      if (startInputOption === null) {
+        return false;
+      }
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatus("error", _("Could not prepare relisten command: ") + safeError, this.lastTranscript);
@@ -17835,7 +17880,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("recording-relisten", error);
         this._setStatus("error", _("Could not start next recording"), this.lastTranscript);
       }
-    });
+    }, startInputOption);
     if (!startHandle) {
       if (this._recordingCommandToken === recordingCommandToken) {
         this._recordingCommandToken = null;
