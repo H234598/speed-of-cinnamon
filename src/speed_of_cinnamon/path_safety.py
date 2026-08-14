@@ -2062,3 +2062,80 @@ def unlink_file_if_identity(
         secure_wipe=secure_wipe,
     )
     return bool(result)
+
+
+def normalize_backup_archive_path(value: object, *, field_name: str = "backup archive path") -> str:
+    """Return a canonical, relative POSIX archive path or reject it."""
+    if isinstance(value, bool) or not isinstance(value, str):
+        raise RuntimeError(f"{field_name} must be text")
+    if not value or len(value) > 4096:
+        raise RuntimeError(f"{field_name} is invalid")
+    if "\x00" in value or "\\" in value or value.startswith("/") or value.startswith("//"):
+        raise RuntimeError(f"{field_name} is not a safe relative path")
+    if len(value) >= 2 and value[1] == ":":
+        raise RuntimeError(f"{field_name} is not a safe relative path")
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        raise RuntimeError(f"{field_name} contains an invalid control character")
+    parts = value.split("/")
+    if any(part in {"", ".", ".."} for part in parts):
+        raise RuntimeError(f"{field_name} contains an unsafe path component")
+    normalized_parts = tuple(unicodedata.normalize("NFC", part) for part in parts)
+    if any(not part for part in normalized_parts):
+        raise RuntimeError(f"{field_name} contains an empty path component")
+    return "/".join(normalized_parts)
+
+
+def assert_backup_source_regular_file(path: Path, *, field_name: str = "backup source") -> os.stat_result:
+    """Validate a user-owned, unlinked regular source file and return its lstat."""
+    if not isinstance(path, Path):
+        raise RuntimeError(f"{field_name} must be a path")
+    assert_safe_path_components(path, field_name=field_name)
+    assert_no_symlink_ancestors(path, field_name=field_name)
+    try:
+        source_stat = os.lstat(path)
+    except FileNotFoundError:
+        raise OSError(f"{field_name} does not exist") from None
+    if not stat.S_ISREG(source_stat.st_mode):
+        raise OSError(f"{field_name} must be a regular file")
+    if getattr(source_stat, "st_nlink", 1) != 1:
+        raise OSError(f"{field_name} must not be hardlinked")
+    if hasattr(os, "getuid") and source_stat.st_uid != os.getuid():
+        raise OSError(f"{field_name} must be owned by the current user")
+    return source_stat
+
+
+def assert_backup_target_not_within_sources(
+    target: Path,
+    source_roots: object,
+    *,
+    field_name: str = "backup target",
+) -> None:
+    """Reject a backup target that aliases or nests any source root."""
+    if not isinstance(target, Path):
+        raise RuntimeError(f"{field_name} must be a path")
+    if isinstance(source_roots, (str, bytes, Path)):
+        raise RuntimeError("backup source roots must be a sequence of paths")
+    try:
+        roots = tuple(source_roots)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise RuntimeError("backup source roots must be a sequence of paths") from exc
+    if not roots:
+        raise RuntimeError("backup source roots must not be empty")
+    assert_safe_path_components(target, field_name=field_name)
+    assert_no_symlink_ancestors(target, field_name=field_name)
+    try:
+        target_resolved = target.resolve(strict=False)
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError(f"{field_name} could not be resolved") from exc
+    for index, root in enumerate(roots):
+        if not isinstance(root, Path):
+            raise RuntimeError(f"backup source root {index} must be a path")
+        root_label = f"backup source root {index}"
+        assert_safe_path_components(root, field_name=root_label)
+        assert_no_symlink_ancestors(root, field_name=root_label)
+        try:
+            root_resolved = root.resolve(strict=False)
+        except (OSError, RuntimeError) as exc:
+            raise RuntimeError(f"{root_label} could not be resolved") from exc
+        if target_resolved == root_resolved or root_resolved in target_resolved.parents:
+            raise RuntimeError(f"{field_name} must not be inside a backup source")

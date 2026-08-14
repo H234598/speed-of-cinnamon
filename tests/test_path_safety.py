@@ -3178,6 +3178,55 @@ class PathSafetyTest(unittest.TestCase):
             self.assertIn("secure path cleanup failed", "\n".join(notes))
             self.assertNotIn("source close failed", "\n".join(notes))
 
+    def test_backup_archive_path_is_relative_posix_and_normalized(self) -> None:
+        self.assertEqual(
+            path_safety.normalize_backup_archive_path("transcripts/ueber.txt"),
+            "transcripts/ueber.txt",
+        )
+        self.assertEqual(
+            path_safety.normalize_backup_archive_path("transcripts/e\u0301.txt"),
+            "transcripts/\u00e9.txt",
+        )
+        for value in ("/absolute.txt", "../escape.txt", "a/../b", "a\\b", "C:/escape", "a//b"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(RuntimeError, "safe|unsafe|invalid|empty"):
+                    path_safety.normalize_backup_archive_path(value)
+
+    def test_backup_source_rejects_symlink_fifo_and_hardlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "source.txt"
+            source.write_text("secret", encoding="utf-8")
+            self.assertEqual(path_safety.assert_backup_source_regular_file(source).st_size, 6)
+
+            symlink = root / "symlink.txt"
+            symlink.symlink_to(source)
+            with self.assertRaisesRegex(RuntimeError, "symlink"):
+                path_safety.assert_backup_source_regular_file(symlink)
+
+            fifo = root / "pipe"
+            os.mkfifo(fifo)
+            with self.assertRaisesRegex(OSError, "regular file"):
+                path_safety.assert_backup_source_regular_file(fifo)
+
+            hardlink = root / "hardlink.txt"
+            hardlink.hardlink_to(source)
+            with self.assertRaisesRegex(OSError, "hardlinked"):
+                path_safety.assert_backup_source_regular_file(source)
+
+    def test_backup_target_cannot_be_source_or_descendant(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "recordings"
+            source.mkdir()
+            with self.assertRaisesRegex(RuntimeError, "inside"):
+                path_safety.assert_backup_target_not_within_sources(source, (source,))
+            with self.assertRaisesRegex(RuntimeError, "inside"):
+                path_safety.assert_backup_target_not_within_sources(source / "nested", (source,))
+
+            target = root / "backups"
+            path_safety.assert_backup_target_not_within_sources(target, (source,))
+
 
 if __name__ == "__main__":
     unittest.main()
