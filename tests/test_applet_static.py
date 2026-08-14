@@ -247,7 +247,13 @@ class AppletStaticTest(unittest.TestCase):
     def test_status_recovery_is_explicit_and_never_reinserts_text(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        self.assertIn('return [this._cliCommand(), "status", "--confirm-plaintext-output", "--json"];', source)
+        status_start = source.index("_statusArgs: function() {")
+        status_end = source.index("\n  },", status_start)
+        status_block = source[status_start:status_end]
+        self.assertIn('let args = [this._cliCommand(), "status"];', status_block)
+        self.assertIn('if (this.showTranscriptText === true)', status_block)
+        self.assertIn('args.push("--confirm-plaintext-output");', status_block)
+        self.assertIn('args.push("--json");', status_block)
         self.assertIn('if (payload.transcript_recovered === true)', source)
         self.assertIn('_("Recovered saved transcript; use Copy last transcript to copy it")', source)
         self.assertIn('_("Saved transcript could not be restored; open Transcripts or Diagnostics")', source)

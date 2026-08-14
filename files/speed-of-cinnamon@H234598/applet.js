@@ -5757,7 +5757,12 @@ MyApplet.prototype = {
   },
 
   _statusArgs: function() {
-    return [this._cliCommand(), "status", "--confirm-plaintext-output", "--json"];
+    let args = [this._cliCommand(), "status"];
+    if (this.showTranscriptText === true) {
+      args.push("--confirm-plaintext-output");
+    }
+    args.push("--json");
+    return args;
   },
 
   _doctorArgs: function() {
