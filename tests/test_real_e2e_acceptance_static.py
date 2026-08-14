@@ -15,6 +15,7 @@ class RealE2EAcceptanceStaticTest(unittest.TestCase):
         self.assertIn('inputDevice:i.inputDevice', script)
         self.assertIn('i.recorder===\\\"arecord\\\"', script)
         self.assertIn('i.inputDevice=\\\"pipewire\\\"', script)
+        self.assertIn('snapshot_set=1\neval_cinnamon', script)
         self.assertIn('run_case true', script)
         self.assertIn('run_case false', script)
         self.assertIn('i&&i.status===\\"recording\\"', script)

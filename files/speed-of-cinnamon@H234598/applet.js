@@ -574,6 +574,7 @@ MyApplet.prototype = {
     this._cleanupCommandToken = null;
     this._recordingCommandToken = null;
     this.processCleanupRetryTimer = 0;
+    this.recordingStartPendingAfterCleanup = false;
     this.recordingStartRetryTimer = 0;
     this._externalApiEnvMonitorCancelSucceeded = false;
     this.maintenanceCleanupFailed = false;
@@ -2968,9 +2969,31 @@ MyApplet.prototype = {
     return Boolean(timerId);
   },
 
+  _cancelPendingRecordingStart: function() {
+    let pending = this.recordingStartPendingAfterCleanup === true || Boolean(this.recordingStartRetryTimer);
+    if (!pending) {
+      return false;
+    }
+    this.recordingStartPendingAfterCleanup = false;
+    if (!this._clearRecordingStartRetryTimer()) {
+      this._setStatus(
+        "error",
+        _("Recording start retry could not be cancelled"),
+        this.lastTranscript
+      );
+      return false;
+    }
+    this._setStatus(
+      "ready",
+      _("Recording start cancelled"),
+      this.lastTranscript
+    );
+    return true;
+  },
+
   _queueRecordingStartAfterCleanup: function() {
     this.recordingStartPendingAfterCleanup = true;
-    this._setStatusPreservingRecording(
+    this._setStatus(
       "ready",
       _("Waiting for previous operation to finish before recording..."),
       this.lastTranscript
@@ -2995,10 +3018,18 @@ MyApplet.prototype = {
         return true;
       }
       this.recordingStartPendingAfterCleanup = false;
+      if (!this._clearRecordingStartRetryTimer()) {
+        this._setStatus(
+          "error",
+          _("Recording start retry could not be cleared"),
+          this.lastTranscript
+        );
+        return false;
+      }
       if (this._toggleRecording("start")) {
         return false;
       }
-      this._setStatusPreservingRecording(
+      this._setStatus(
         "error",
         _("Could not start recording after cleanup"),
         this.lastTranscript
@@ -3007,7 +3038,7 @@ MyApplet.prototype = {
     }, true, "recordingStartRetryTimer");
     if (!timerId) {
       this.recordingStartPendingAfterCleanup = false;
-      this._setStatusPreservingRecording(
+      this._setStatus(
         "error",
         _("Recording start cleanup retry could not be scheduled"),
         this.lastTranscript
@@ -6972,6 +7003,14 @@ MyApplet.prototype = {
       );
       return false;
     }
+    if (this.recordingStartPendingAfterCleanup === true || this.recordingStartRetryTimer) {
+      if (forcedAction === "start") {
+        return this._queueRecordingStartAfterCleanup();
+      }
+      if (forcedAction === "stop" || forcedAction === "") {
+        return this._cancelPendingRecordingStart();
+      }
+    }
     let hasExistingRecordingWork = this._hasActiveRecordingState();
     if (this.isCommandRunning && this._recordingCommandToken) {
       let activeRecordingCommandAction = String(this._recordingCommandToken.action || "");
@@ -7306,6 +7345,10 @@ MyApplet.prototype = {
   },
 
   _cancelRecording: function(statusOverride) {
+    if (this.recordingStartPendingAfterCleanup === true || this.recordingStartRetryTimer) {
+      this._cancelPendingRecordingStart();
+      return;
+    }
     if (!this._hasCancelableRecordingWork(statusOverride)) {
       return;
     }

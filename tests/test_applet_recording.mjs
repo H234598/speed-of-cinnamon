@@ -566,6 +566,11 @@ function makeRecordingApplet(options = {}) {
       "_runDoctor",
       clock
     ),
+    _cancelPendingRecordingStart: loadAppletMethod(
+      "_cancelPendingRecordingStart",
+      "_queueRecordingStartAfterCleanup",
+      clock
+    ),
     _queueRecordingStartAfterCleanup: loadAppletMethod(
       "_queueRecordingStartAfterCleanup",
       "_clearProcessCleanupRetryTimer",
@@ -581,6 +586,10 @@ function makeRecordingApplet(options = {}) {
     },
     _hasLocalProcessingWorkflow() {
       return false;
+    },
+    _clearRecordingStartRetryTimer() {
+      this.recordingStartRetryTimer = 0;
+      return true;
     },
     _processCleanupStillPending() {
       return false;
@@ -852,6 +861,7 @@ test("recording start waits for transient process cleanup and retries once", () 
 
   assert.equal(applet._toggleRecording("start"), true);
   assert.equal(harness.requests.length, 0);
+  assert.equal(applet.status, "ready");
   assert.equal(applet.recordingStartPendingAfterCleanup, true);
   assert.equal(harness.scheduledTimers.length, 1);
   assert.equal(harness.scheduledTimers[0].name, "recording-start-retry");
@@ -863,6 +873,36 @@ test("recording start waits for transient process cleanup and retries once", () 
   assert.equal(applet.recordingStartPendingAfterCleanup, false);
   assert.equal(harness.requests.length, 1);
   assert.equal(harness.requests[0].args[0], "start");
+});
+
+test("pending recording start is cancelled by stop and cannot resurrect", () => {
+  const harness = makeRecordingApplet({ failedCleanupGroups: ["doctor"] });
+  const { applet } = harness;
+  applet._processCleanupStillPending = () => true;
+
+  assert.equal(applet._toggleRecording("start"), true);
+  assert.equal(applet._toggleRecording("stop"), true);
+  assert.equal(applet.status, "ready");
+  assert.equal(applet.recordingStartPendingAfterCleanup, false);
+  assert.equal(harness.requests.length, 0);
+
+  harness.scheduledTimers[0].callback();
+  assert.equal(harness.requests.length, 0);
+});
+
+test("cancel hotkey clears pending recording start without active recording", () => {
+  const harness = makeRecordingApplet({ failedCleanupGroups: ["doctor"] });
+  const { applet } = harness;
+  applet._processCleanupStillPending = () => true;
+
+  assert.equal(applet._toggleRecording("start"), true);
+  applet._cancelRecording();
+
+  assert.equal(applet.status, "ready");
+  assert.equal(applet.recordingStartPendingAfterCleanup, false);
+  assert.equal(harness.requests.length, 0);
+  harness.scheduledTimers[0].callback();
+  assert.equal(harness.requests.length, 0);
 });
 
 test("text cleanup failure does not spawn an idle recording", () => {

@@ -9796,6 +9796,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("(!backgroundCleanupSucceeded || !textInsertCleanupSucceeded)", toggle_block)
         self.assertIn("this._processCleanupStillPending()", toggle_block)
         self.assertIn("this._queueRecordingStartAfterCleanup()", toggle_block)
+        self.assertIn("this._cancelPendingRecordingStart()", toggle_block)
         self.assertLess(
             toggle_block.index("let textInsertCleanupSucceeded = this._cancelTextInsertForSettingsChange();"),
             toggle_block.index("(!backgroundCleanupSucceeded || !textInsertCleanupSucceeded)"),
@@ -9808,6 +9809,12 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('this._scheduleTrackedTimer("recording-start-retry"', queue_block)
         self.assertIn('this._toggleRecording("start")', queue_block)
         self.assertIn("this.recordingStartRetryTimer", queue_block)
+
+        cancel_start = source.index("_cancelPendingRecordingStart: function()")
+        cancel_end = source.index("\n  _queueRecordingStartAfterCleanup:", cancel_start)
+        cancel_block = source[cancel_start:cancel_end]
+        self.assertIn("this.recordingStartPendingAfterCleanup = false;", cancel_block)
+        self.assertIn("this._clearRecordingStartRetryTimer()", cancel_block)
 
         helper_start = source.index("_invalidateBackgroundCallbacksForRecording: function(skipTextInsertProcesses)")
         helper_end = source.index("\n  _runDoctor:", helper_start)
