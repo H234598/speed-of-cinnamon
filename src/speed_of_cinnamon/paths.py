@@ -252,6 +252,10 @@ def default_state_file() -> Path:
     return state_dir() / "state.json"
 
 
+def default_backup_state_file() -> Path:
+    return state_dir() / "backup-state.json"
+
+
 def default_settings_export_file() -> Path:
     return data_dir() / "settings-export.json"
 
