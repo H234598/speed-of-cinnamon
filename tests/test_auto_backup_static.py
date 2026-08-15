@@ -75,6 +75,7 @@ class AutoBackupStaticTest(unittest.TestCase):
         self.assertIn('this._recordLifecycleError("auto-backup-spawn"', source)
         self.assertIn('_("Could not start automatic backup")', source)
         self.assertIn("this._maybeStartAutoBackup(payload);", source)
+        self.assertIn('result && result.status === "skipped"', source)
         self.assertIn("this._finishAppletTextInsert(payload);", source)
         self.assertLess(source.index("this._maybeStartAutoBackup(payload);"), source.index("this._finishAppletTextInsert(payload);"))
 

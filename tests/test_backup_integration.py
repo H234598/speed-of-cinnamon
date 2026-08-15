@@ -398,6 +398,8 @@ class BackupIntegrationTests(unittest.TestCase):
             sha256=hashlib.sha256(self.config.read_bytes()).hexdigest(),
             mtime_ns=self.config.stat().st_mtime_ns,
         ))
+        current_stat = self.config.stat()
+        os.utime(self.config, ns=(current_stat.st_atime_ns, current_stat.st_mtime_ns + 1))
         second = create_backup(
             self.target,
             sources=(BackupInput("config", "config/settings.json", "settings", self.config),),

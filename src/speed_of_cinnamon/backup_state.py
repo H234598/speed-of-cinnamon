@@ -272,7 +272,10 @@ class BackupStateStore:
         size: int,
         sha256: str,
         mtime_ns: int,
+        match_mtime: bool = True,
     ) -> bool:
+        if type(match_mtime) is not bool:
+            raise BackupStateError("backup artifact mtime matching must be boolean")
         with self._locked():
             state = self._read_unlocked()
         wanted = {
@@ -280,9 +283,14 @@ class BackupStateStore:
             "source_identity": source_identity,
             "size": size,
             "sha256": sha256,
-            "mtime_ns": mtime_ns,
         }
+        if match_mtime:
+            wanted["mtime_ns"] = mtime_ns
         return any(
-            job["status"] == "success" and wanted in job["artifacts"]
+            job["status"] == "success"
+            and any(
+                all(artifact.get(key) == value for key, value in wanted.items())
+                for artifact in job["artifacts"]
+            )
             for job in state["jobs"]
         )

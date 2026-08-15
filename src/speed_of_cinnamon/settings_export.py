@@ -660,9 +660,12 @@ def build_export(
     alarm_store: dict[str, Any] | None = None,
     *,
     include_private_settings: bool = False,
+    include_created_at: bool = True,
 ) -> dict[str, Any]:
     if type(include_private_settings) is not bool:
         raise SettingsExportError("settings export private setting opt-in must be boolean")
+    if type(include_created_at) is not bool:
+        raise SettingsExportError("settings export created_at option must be boolean")
     normalized_alarm_store = normalize_alarm_store(alarm_store if alarm_store is not None else {})
     normalized_settings = normalize_settings(settings)
     if not include_private_settings:
@@ -677,7 +680,7 @@ def build_export(
     return {
         "app": APP_ID,
         "version": EXPORT_VERSION,
-        "created_at": datetime.now(timezone.utc).isoformat(),
+        "created_at": datetime.now(timezone.utc).isoformat() if include_created_at else "",
         "excluded_private_settings": excluded_private_settings,
         "included_private_settings": included_private_settings,
         "speed_of_cinnamon_version": __version__,
@@ -692,11 +695,17 @@ def write_export(
     alarm_store: dict[str, Any] | None = None,
     *,
     include_private_settings: bool = False,
+    include_created_at: bool = True,
 ) -> dict[str, Any]:
     _assert_clean_path(path, field_name="settings export path")
     if not path.is_absolute():
         raise SettingsExportError("settings export path must be absolute")
-    payload = build_export(settings, alarm_store, include_private_settings=include_private_settings)
+    payload = build_export(
+        settings,
+        alarm_store,
+        include_private_settings=include_private_settings,
+        include_created_at=include_created_at,
+    )
     try:
         rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     except (MemoryError, RecursionError) as exc:

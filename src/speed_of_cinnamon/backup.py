@@ -514,6 +514,7 @@ def create_backup(
                 size=artifact.size,
                 sha256=artifact.sha256,
                 mtime_ns=artifact.mtime_ns,
+                match_mtime=False,
             ):
                 continue
             collected.append((artifact, item.source_path))

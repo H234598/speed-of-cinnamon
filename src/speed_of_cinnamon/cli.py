@@ -9924,7 +9924,7 @@ def _backup_inputs(
     settings_path = settings_path or default_settings_export_file()
     sources: list[BackupInput] = []
     if config:
-        write_export(settings_path, settings, alarm_store)
+        write_export(settings_path, settings, alarm_store, include_created_at=False)
         sources.append(
             BackupInput(
                 "config",

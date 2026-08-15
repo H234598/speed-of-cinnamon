@@ -6241,6 +6241,8 @@ MyApplet.prototype = {
           let warning = this._sanitizeErrorMessage(result.warnings[0]) || _("Backup cleanup requires attention");
           this._notify(_("Automatic backup completed with warnings"), warning, true);
         }
+      } else if (result && result.status === "skipped") {
+        // No artifact was created because selected sources are unchanged.
       } else if (this.autoBackupNotifySuccess === true) {
         this._notify(_("Automatic backup completed"), _("Selected artifacts were backed up"), false);
       }

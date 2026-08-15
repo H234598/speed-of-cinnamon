@@ -54,6 +54,13 @@ class SettingsExportTest(unittest.TestCase):
                 with self.assertRaisesRegex(SettingsExportError, "settings export settings must be an object"):
                     build_export(settings)  # type: ignore[arg-type]
 
+    def test_backup_export_omits_volatile_timestamp(self) -> None:
+        first = build_export({"language": "en"}, include_created_at=False)
+        second = build_export({"language": "en"}, include_created_at=False)
+
+        self.assertEqual(first, second)
+        self.assertEqual(first["created_at"], "")
+
     def test_fsync_retries_interrupted_calls(self) -> None:
         with mock.patch.object(
             settings_export_module.os,
