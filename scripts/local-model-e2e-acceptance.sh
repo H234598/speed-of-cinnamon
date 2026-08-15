@@ -55,6 +55,7 @@ tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/speed-of-cinnamon-local-model-e2e.XXXXXX"
 tmp_identity="$(python3 "${safe_fs}" identity local-model-e2e "${tmp_root}" --kind dir)"
 models_json="${tmp_root}/models.json"
 cases_file="${tmp_root}/cases.tsv"
+models_manifest="${tmp_root}/models-manifest.json"
 
 espeak-ng -v de -s 145 -w "${tmp_root}/source-de.wav" \
   'Eins zwei drei vier fünf. Dies ist ein lokaler deutscher Transkriptionstest.'
@@ -64,22 +65,45 @@ ffmpeg -nostdin -loglevel error -y -i "${tmp_root}/source-de.wav" -ac 1 -ar 1600
 ffmpeg -nostdin -loglevel error -y -i "${tmp_root}/source-en.wav" -ac 1 -ar 16000 "${tmp_root}/speech-en.flac"
 
 "${backend}" models --json >"${models_json}"
-PYTHONPATH="${repo_dir}/src" python3 - "${models_json}" >"${cases_file}" <<'PY'
+PYTHONPATH="${repo_dir}/src" python3 - "${models_json}" "${models_manifest}" >"${cases_file}" <<'PY'
 import json
 import os
 import re
 import sys
 from pathlib import Path
 
-from speed_of_cinnamon.models import CATALOG, model_path
+from speed_of_cinnamon.models import CATALOG, model_attestation_snapshot, model_path
 
-payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+models_json_path, models_manifest_path = sys.argv[1:]
+MAX_LOCAL_MODEL_JSON_BYTES = 4 * 1024 * 1024
+
+
+def load_json(path: Path, label: str) -> object:
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(MAX_LOCAL_MODEL_JSON_BYTES + 1)
+    except OSError as exc:
+        raise SystemExit(f"local-model-e2e: cannot read {label}") from exc
+    if len(raw) > MAX_LOCAL_MODEL_JSON_BYTES:
+        raise SystemExit(f"local-model-e2e: {label} exceeds {MAX_LOCAL_MODEL_JSON_BYTES} bytes")
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, MemoryError) as exc:
+        raise SystemExit(f"local-model-e2e: {label} is invalid JSON") from exc
+
+
+payload = load_json(Path(models_json_path), "model inventory")
+if not isinstance(payload, dict):
+    raise SystemExit("local-model-e2e: model inventory is not a JSON object")
 models = payload.get("models")
 if payload.get("status") != "done" or not isinstance(models, list):
     raise SystemExit("local-model-e2e: model inventory is invalid")
 
 catalog = {model.name: model for model in CATALOG}
 seen_backends = set()
+unverified_installed = []
+selected_names = set()
+selected_languages = {}
 limit_per_backend = int(os.environ.get("SOC_LOCAL_MODEL_E2E_LIMIT_PER_BACKEND", "0"))
 if limit_per_backend < 0:
     raise SystemExit("local-model-e2e: model limit must not be negative")
@@ -107,6 +131,9 @@ for entry in models:
     path = model_path(model)
     if not path.is_absolute() or not path.exists() or any(char in str(path) for char in "\t\r\n\x00"):
         raise SystemExit("local-model-e2e: model path is invalid")
+    if entry.get("verified") is not True:
+        unverified_installed.append(name)
+        continue
     if not isinstance(languages, list) or not all(isinstance(language, str) for language in languages):
         raise SystemExit("local-model-e2e: model language metadata is invalid")
     normalized_languages = set()
@@ -121,11 +148,34 @@ for entry in models:
     for language in sorted(normalized_languages or {"de", "en"}):
         print(f"{backend}\t{name}\t{path}\t{language}")
         seen_backends.add(backend)
+        selected_names.add(name)
+        selected_languages.setdefault(name, set()).add(language)
     selected_per_backend[backend] = selected_per_backend.get(backend, 0) + 1
+
+if unverified_installed:
+    raise SystemExit(
+        "local-model-e2e: installed model integrity not verified: "
+        + ", ".join(sorted(unverified_installed))
+    )
 
 missing = {"whisper-cpp", "faster-whisper"} - seen_backends
 if missing:
     raise SystemExit("local-model-e2e: installed model matrix lacks " + ", ".join(sorted(missing)))
+
+attested_models = []
+for model in model_attestation_snapshot():
+    name = model["name"]
+    if name not in selected_names:
+        raise SystemExit("local-model-e2e: model selection is incomplete")
+    model_with_cases = dict(model)
+    model_with_cases["tested_languages"] = sorted(selected_languages[name])
+    attested_models.append(model_with_cases)
+if {model["name"] for model in attested_models} != selected_names:
+    raise SystemExit("local-model-e2e: model attestation selection is incomplete")
+Path(models_manifest_path).write_text(
+    json.dumps(attested_models, sort_keys=True, separators=(",", ":")) + "\n",
+    encoding="utf-8",
+)
 PY
 
 case_count=0
@@ -159,7 +209,21 @@ import json
 import sys
 from pathlib import Path
 
-payload = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+MAX_LOCAL_MODEL_JSON_BYTES = 4 * 1024 * 1024
+result_path = Path(sys.argv[1])
+try:
+    with result_path.open("rb") as handle:
+        raw = handle.read(MAX_LOCAL_MODEL_JSON_BYTES + 1)
+except OSError as exc:
+    raise SystemExit("local-model-e2e: transcription result cannot be read") from exc
+if len(raw) > MAX_LOCAL_MODEL_JSON_BYTES:
+    raise SystemExit(f"local-model-e2e: transcription result exceeds {MAX_LOCAL_MODEL_JSON_BYTES} bytes")
+try:
+    payload = json.loads(raw.decode("utf-8"))
+except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, MemoryError) as exc:
+    raise SystemExit("local-model-e2e: transcription result is invalid JSON") from exc
+if not isinstance(payload, dict):
+    raise SystemExit("local-model-e2e: transcription result is not a JSON object")
 text = payload.get("transcript")
 if payload.get("status") != "done" or not isinstance(text, str) or len(text.strip()) < 3:
     raise SystemExit("local-model-e2e: transcription did not produce usable text")
@@ -180,28 +244,53 @@ done <"${cases_file}"
 
 git_head="$(git -C "${repo_dir}" rev-parse HEAD)"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-python3 - "${attestation}" "${git_head}" "${created_at}" "${case_count}" "${ggml_case_count}" "${ct2_case_count}" <<'PY'
+PYTHONPATH="${repo_dir}/src" python3 - "${attestation}" "${git_head}" "${created_at}" "${case_count}" "${ggml_case_count}" "${ct2_case_count}" "${models_manifest}" "${repo_dir}" <<'PY'
 import json
 import os
 import secrets
 import stat
 import sys
+from datetime import datetime, timedelta
 from pathlib import Path
 
+from speed_of_cinnamon.models import ModelError, source_attestation_snapshot
+
 path = Path(sys.argv[1])
-head, created_at, total, ggml, ct2 = sys.argv[2:]
+head, created_at, total, ggml, ct2, models_manifest, repo_dir = sys.argv[2:]
+created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+expires_at = (created + timedelta(hours=24)).isoformat().replace("+00:00", "Z")
+MAX_LOCAL_MODEL_JSON_BYTES = 4 * 1024 * 1024
+try:
+    with Path(models_manifest).open("rb") as handle:
+        raw = handle.read(MAX_LOCAL_MODEL_JSON_BYTES + 1)
+except OSError as exc:
+    raise SystemExit("local-model-e2e: model manifest cannot be read") from exc
+if len(raw) > MAX_LOCAL_MODEL_JSON_BYTES:
+    raise SystemExit(f"local-model-e2e: model manifest exceeds {MAX_LOCAL_MODEL_JSON_BYTES} bytes")
+try:
+    models = json.loads(raw.decode("utf-8"))
+except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, MemoryError) as exc:
+    raise SystemExit("local-model-e2e: model manifest is invalid JSON") from exc
+try:
+    source = source_attestation_snapshot(Path(repo_dir))
+except (ModelError, OSError, RuntimeError, TypeError, ValueError) as exc:
+    raise SystemExit("local-model-e2e: source tree is not attestable") from exc
 path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
 parent = os.lstat(path.parent)
 if not stat.S_ISDIR(parent.st_mode) or stat.S_ISLNK(parent.st_mode) or parent.st_uid != os.geteuid():
     raise SystemExit("local-model-e2e: unsafe attestation directory")
 os.chmod(path.parent, 0o700)
 data = {
+    "schema_version": 1,
     "git_head": head,
     "created_at": created_at,
+    "expires_at": expires_at,
     "matrix": ["local-models", "generated-audio", "ggml", "ctranslate2", "explicit-backend", "auto-backend", "no-microphone", "no-clipboard"],
     "case_count": int(total),
     "ggml_case_count": int(ggml),
     "ct2_case_count": int(ct2),
+    "models": models,
+    "source": source,
 }
 tmp = path.parent / f".{path.name}.{secrets.token_hex(16)}.tmp"
 fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)

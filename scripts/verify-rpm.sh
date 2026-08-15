@@ -10,6 +10,7 @@ readonly MAX_RPM_PATH_CHARS=260
 readonly MAX_RPM_PATH_DEPTH=32
 readonly MAX_RPM_FILE_BYTES=$((64 * 1024 * 1024))
 readonly MAX_RPM_TOTAL_FILE_BYTES=$((512 * 1024 * 1024))
+readonly MAX_RPM_LISTING_BYTES=$((16 * 1024 * 1024))
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
@@ -245,13 +246,14 @@ file_list="${tmp_dir}/rpm-files.txt"
 file_metadata="${tmp_dir}/rpm-file-metadata.txt"
 
 rpm -qpl "${rpm_snapshot}" > "${file_list}"
-python3 - <<'PY' "${file_list}" "${MAX_RPM_FILES}" "${MAX_RPM_PATH_CHARS}" "${MAX_RPM_PATH_DEPTH}"
+python3 - <<'PY' "${file_list}" "${MAX_RPM_FILES}" "${MAX_RPM_PATH_CHARS}" "${MAX_RPM_PATH_DEPTH}" "${MAX_RPM_LISTING_BYTES}"
 from pathlib import Path
 import sys
 
 MAX_RPM_FILES = int(sys.argv[2])
 MAX_RPM_PATH_CHARS = int(sys.argv[3])
 MAX_RPM_PATH_DEPTH = int(sys.argv[4])
+MAX_RPM_LISTING_BYTES = int(sys.argv[5])
 ALLOWED_PREFIXES = (
     "/usr/bin/",
     "/usr/lib/",
@@ -259,9 +261,21 @@ ALLOWED_PREFIXES = (
     "/usr/share/",
 )
 
+
+def read_bounded_utf8(path: Path, label: str) -> str:
+    with path.open("rb") as handle:
+        payload = handle.read(MAX_RPM_LISTING_BYTES + 1)
+    if len(payload) > MAX_RPM_LISTING_BYTES:
+        raise SystemExit(f"{label} exceeds {MAX_RPM_LISTING_BYTES} bytes")
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SystemExit(f"{label} is not valid UTF-8") from exc
+
+
 file_list = Path(sys.argv[1])
 entry_count = 0
-for entry in file_list.read_text(encoding="utf-8").split("\n"):
+for entry in read_bounded_utf8(file_list, "RPM file listing").split("\n"):
     if not entry:
         continue
     entry_count += 1
@@ -287,18 +301,32 @@ for entry in file_list.read_text(encoding="utf-8").split("\n"):
 PY
 
 rpm -qp --qf '[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILECAPS}\t%{FILELINKTOS}\t%{FILESIZES}\n]' "${rpm_snapshot}" > "${file_metadata}"
-python3 - <<'PY' "${file_list}" "${file_metadata}" "${MAX_RPM_FILE_BYTES}" "${MAX_RPM_TOTAL_FILE_BYTES}"
+python3 - <<'PY' "${file_list}" "${file_metadata}" "${MAX_RPM_FILE_BYTES}" "${MAX_RPM_TOTAL_FILE_BYTES}" "${MAX_RPM_LISTING_BYTES}"
 from pathlib import Path
 import stat
 import sys
 
-file_entries = [entry for entry in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n") if entry]
+MAX_RPM_LISTING_BYTES = int(sys.argv[5])
+
+
+def read_bounded_utf8(path: Path, label: str) -> str:
+    with path.open("rb") as handle:
+        payload = handle.read(MAX_RPM_LISTING_BYTES + 1)
+    if len(payload) > MAX_RPM_LISTING_BYTES:
+        raise SystemExit(f"{label} exceeds {MAX_RPM_LISTING_BYTES} bytes")
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SystemExit(f"{label} is not valid UTF-8") from exc
+
+
+file_entries = [entry for entry in read_bounded_utf8(Path(sys.argv[1]), "RPM file listing").split("\n") if entry]
 metadata_entries: list[str] = []
 seen: set[str] = set()
 MAX_RPM_FILE_BYTES = int(sys.argv[3])
 MAX_RPM_TOTAL_FILE_BYTES = int(sys.argv[4])
 total_file_bytes = 0
-for raw in Path(sys.argv[2]).read_text(encoding="utf-8").split("\n"):
+for raw in read_bounded_utf8(Path(sys.argv[2]), "RPM file metadata").split("\n"):
     if not raw:
         continue
     parts = raw.split("\t", 4)

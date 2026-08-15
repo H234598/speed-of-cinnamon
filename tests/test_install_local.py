@@ -178,6 +178,53 @@ class InstallLocalTest(unittest.TestCase):
             self.assertNotIn("Invalid cross-device link", second.stderr)
             self.assertFalse(list((home / ".local" / "share" / "speed-of-cinnamon").glob("install-stage-*")))
 
+    def test_install_local_upgrade_replaces_payload_and_preserves_user_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            (repo_root / "files" / "speed-of-cinnamon@H234598" / "metadata.json").write_text(
+                '{"generation":"new"}\n', encoding="utf-8"
+            )
+            (repo_root / "src" / "speed_of_cinnamon" / "cli.py").write_text(
+                "NEW_PAYLOAD\n", encoding="utf-8"
+            )
+            home = tmp_path / "home"
+            home.mkdir()
+            app_data = home / ".local" / "share" / "speed-of-cinnamon"
+            applet_target = home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598"
+            python_target = app_data / "python" / "speed_of_cinnamon"
+            wrapper_target = home / ".local" / "bin" / "speed-of-cinnamon"
+            man_target = home / ".local" / "share" / "man" / "man1"
+            applet_target.mkdir(parents=True)
+            python_target.mkdir(parents=True)
+            wrapper_target.parent.mkdir(parents=True)
+            man_target.mkdir(parents=True)
+            (applet_target / "metadata.json").write_text('{"generation":"old"}\n', encoding="utf-8")
+            (python_target / "cli.py").write_text("OLD_PAYLOAD\n", encoding="utf-8")
+            wrapper_target.write_text("OLD_WRAPPER\n", encoding="utf-8")
+            (man_target / "speed-of-cinnamon.1").write_text("OLD_MAN\n", encoding="utf-8")
+            (man_target / "speed-of-cinnamon-alarms.1").write_text("OLD_ALARMS\n", encoding="utf-8")
+            (app_data / "settings.json").write_text("user settings\n", encoding="utf-8")
+            (app_data / "transcripts").mkdir()
+            (app_data / "transcripts" / "kept.txt").write_text("private transcript\n", encoding="utf-8")
+
+            result = self._run_install_local(repo_root, home)
+
+            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertEqual(
+                (applet_target / "metadata.json").read_text(encoding="utf-8"),
+                '{"generation":"new"}\n',
+            )
+            self.assertEqual((python_target / "cli.py").read_text(encoding="utf-8"), "NEW_PAYLOAD\n")
+            self.assertIn("speed_of_cinnamon", wrapper_target.read_text(encoding="utf-8"))
+            self.assertEqual((man_target / "speed-of-cinnamon.1").read_text(encoding="utf-8"), "man page\n")
+            self.assertEqual((app_data / "settings.json").read_text(encoding="utf-8"), "user settings\n")
+            self.assertEqual(
+                (app_data / "transcripts" / "kept.txt").read_text(encoding="utf-8"),
+                "private transcript\n",
+            )
+            self.assertFalse(list(app_data.glob("install-stage-*")))
+
     def test_install_local_preserves_existing_applet_when_staging_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

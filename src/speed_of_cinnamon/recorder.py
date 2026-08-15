@@ -81,6 +81,9 @@ _DANGEROUS_ENV_KEYS = {
     "PYTHONHOME",
     "BASH_ENV",
 }
+MAX_PROC_STAT_BYTES = 64 * 1024
+MAX_PROC_BOOT_ID_BYTES = 128
+MAX_PROC_DIRECTORY_ENTRIES = 100_000
 
 
 def _which(command_name: str) -> str | None:
@@ -443,7 +446,8 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
                 descendant_tree_stopped = _wait_for_output_process_tree_stop(descendant_identities)
                 return descendant_tree_cleanup and descendant_tree_stopped
             try:
-                raw = Path(f"/proc/{process.pid}/stat").read_text(encoding="ascii").strip()
+                with Path(f"/proc/{process.pid}/stat").open("r", encoding="ascii") as handle:
+                    raw = handle.read(MAX_PROC_STAT_BYTES).strip()
                 close = raw.rindex(")")
                 process_state = raw[close + 2 :].split()[0]
             except FileNotFoundError:
@@ -536,9 +540,12 @@ def _communicate_recorder_process_bounded(
         raise
     except BaseException as exc:
         try:
-            _reap_timed_out_recorder_process(process)
+            terminated = _reap_timed_out_recorder_process(process)
         except BaseException:
             exc.add_note(f"{process_name} process cleanup failed")
+        else:
+            if not terminated:
+                exc.add_note(f"{process_name} process cleanup was incomplete")
         raise
 
 
@@ -646,10 +653,9 @@ def _run_ffmpeg_bounded(
         finally:
             if proc is not None and primary_error is not None:
                 try:
-                    if proc.poll() is None:
-                        terminated = _reap_timed_out_recorder_process(proc)
-                        if not terminated:
-                            primary_error.add_note("ffmpeg process cleanup was incomplete")
+                    terminated = _reap_timed_out_recorder_process(proc)
+                    if not terminated:
+                        primary_error.add_note("ffmpeg process cleanup was incomplete")
                 except BaseException:
                     primary_error.add_note("ffmpeg process cleanup failed")
             try:
@@ -680,7 +686,8 @@ def _recording_process_stat_fields(pid: int) -> list[str] | None:
     if pid <= 0:
         return None
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+        with Path(f"/proc/{pid}/stat").open("r", encoding="ascii") as handle:
+            raw = handle.read(MAX_PROC_STAT_BYTES).strip()
     except (OSError, UnicodeDecodeError):
         return None
     try:
@@ -690,12 +697,25 @@ def _recording_process_stat_fields(pid: int) -> list[str] | None:
         return None
 
 
+def _bounded_proc_entries() -> tuple[Path, ...] | None:
+    entries: list[Path] = []
+    try:
+        for proc_entry in Path("/proc").iterdir():
+            if not proc_entry.name.isdecimal():
+                continue
+            if len(entries) >= MAX_PROC_DIRECTORY_ENTRIES:
+                return None
+            entries.append(proc_entry)
+    except OSError:
+        return None
+    return tuple(entries)
+
+
 def _same_session_process_group_states(session_id: int) -> dict[int, bool] | None:
     if session_id <= 0:
         return None
-    try:
-        proc_entries = tuple(Path("/proc").iterdir())
-    except OSError:
+    proc_entries = _bounded_proc_entries()
+    if proc_entries is None:
         return None
     process_group_states: dict[int, bool] = {}
     scan_incomplete = False
@@ -769,7 +789,8 @@ def _kernel_boot_id() -> str | None:
     if _BOOT_ID_CACHE:
         return _BOOT_ID_CACHE
     try:
-        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        with Path("/proc/sys/kernel/random/boot_id").open("r", encoding="ascii") as handle:
+            boot_id = handle.read(MAX_PROC_BOOT_ID_BYTES).strip()
     except (OSError, UnicodeDecodeError):
         return None
     if not boot_id:
@@ -910,7 +931,7 @@ def _create_recording_temp_file(audio_path: Path, *, marker: str, suffix: str) -
     if not isinstance(suffix, str) or not suffix.startswith(".") or any(char in suffix for char in ("/", "\\", "\x00")):
         raise RecorderError("recording temp suffix is invalid")
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise RecorderError("secure recording temp file creation is not supported on this platform")
     try:
         parent_fd = ensure_directory_without_following_symlinks(
@@ -1633,7 +1654,7 @@ def _wav_data_offset(header: bytes) -> int | None:
 def read_recording_level(audio_path: Path) -> RecordingLevel:
     audio_path = validate_recording_path(audio_path, suffix=".wav")
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise RecorderError("secure recording audio file open is not supported on this platform")
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     fd: int | None = None
@@ -1843,7 +1864,7 @@ def _validate_private_recording_audio_file(
 
 def _open_recording_artifact_leaf(path: Path, flags: int, *, field_name: str) -> int:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise RecorderError("secure recording artifact open is not supported on this platform")
     flags |= nofollow_flag
     parent_fd = open_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
@@ -1867,7 +1888,7 @@ def _open_private_recording_audio_file(
         recordings_root=recordings_root,
     )
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise RecorderError("secure recording audio file open is not supported on this platform")
     fd = _open_recording_artifact_leaf(
         normalized,
@@ -2096,13 +2117,6 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
                     _finish_bounded_output_captures(stdout_capture, stderr_capture)
                 except BaseException as capture_error:
                     try:
-                        terminated = _reap_timed_out_recorder_process(proc)
-                    except BaseException:
-                        capture_error.add_note("pactl process cleanup failed")
-                    else:
-                        if not terminated:
-                            capture_error.add_note("pactl process cleanup was incomplete")
-                    try:
                         _finish_bounded_output_captures(stdout_capture, stderr_capture)
                     except BaseException:
                         capture_error.add_note("pactl output capture cleanup failed")
@@ -2122,6 +2136,13 @@ def _run_pactl_command(command: list[str] | tuple[str, ...], *, required: bool) 
                 primary_error = exc
                 raise
             finally:
+                if proc is not None and primary_error is not None:
+                    try:
+                        terminated = _reap_timed_out_recorder_process(proc)
+                        if not terminated:
+                            primary_error.add_note("pactl process cleanup was incomplete")
+                    except BaseException:
+                        primary_error.add_note("pactl process cleanup failed")
                 try:
                     _finish_bounded_output_captures(stdout_capture, stderr_capture)
                 except BaseException:
@@ -2202,9 +2223,8 @@ def _same_file_identity(left: os.stat_result, right: os.stat_result) -> bool:
 def process_group_has_live_processes(process_group_id: int) -> bool | None:
     if process_group_id <= 0:
         return None
-    try:
-        proc_entries = tuple(Path("/proc").iterdir())
-    except OSError:
+    proc_entries = _bounded_proc_entries()
+    if proc_entries is None:
         return None
     try:
         target_group_id = os.getpgid(process_group_id)
@@ -2321,9 +2341,8 @@ def _recording_process_is_absent(pid: int) -> bool:
 def _process_group_has_recorder_session(process_group_id: int) -> bool | None:
     if process_group_id <= 0:
         return False
-    try:
-        proc_entries = tuple(Path("/proc").iterdir())
-    except OSError:
+    proc_entries = _bounded_proc_entries()
+    if proc_entries is None:
         return None
     scan_incomplete = False
     same_session_different_group = False
@@ -2374,7 +2393,7 @@ def _process_group_exists(process_group_id: int) -> bool | None:
 
 def _open_recorder_log_file(log_path: Path) -> tuple[io.BufferedWriter, bool]:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise RecorderError("secure log file open is not supported on this platform")
     try:
         parent_fd = ensure_directory_without_following_symlinks(

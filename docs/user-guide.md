@@ -297,6 +297,28 @@ excluded private setting names in `excluded_private_settings`, but never include
 
 Treat the export as private. Personal context, vocabulary, and alarm names may contain private data.
 
+For complete artifact bundles, use the backend CLI. Bundles can contain settings, transcripts, and recordings and are
+encrypted with the configured keyring by default:
+
+```bash
+printf '%s' '{"language":"de"}' | \
+  speed-of-cinnamon backup create \
+  --directory ~/.local/share/speed-of-cinnamon/backups \
+  --settings-json-stdin \
+  --artifact-encryption keyring \
+  --json
+speed-of-cinnamon backup verify ~/.local/share/speed-of-cinnamon/backups/backup.socbackup.socenc --json
+```
+
+Use `passphrase` only when an explicit passphrase source is configured. `off` creates plaintext archives and must be
+chosen deliberately. `backup restore-dry-run ARCHIVE DESTINATION --json` verifies archive and destination safety without
+writing; its JSON reports existing member conflicts. Existing non-directory targets and symlink paths fail closed.
+`backup restore ARCHIVE DESTINATION --json` performs the verified restore into a new destination through private staging
+and never overwrites an existing destination. Use the dry-run first.
+`backup create` always returns a `warnings` list. A non-empty list means the archive was published but bookkeeping or
+temporary cleanup needs attention; do not trigger an automatic retry. Verify the archive first and inspect the backup
+directory for leftovers.
+
 ## Diagnostics
 
 The applet provides `Copy diagnostics` and `Save diagnostics`. Saved reports are written below:

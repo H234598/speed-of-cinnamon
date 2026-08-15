@@ -116,7 +116,7 @@ def _acquire_log_lock(base_dir: Path) -> int:
         assert_fd_is_private_directory(directory_fd, field_name="log directory")
     finally:
         os.close(directory_fd)
-    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0)
     try:
         fd = open_file_without_following_symlinks(
             _log_lock_path(base_dir),
@@ -1106,7 +1106,7 @@ def _open_log_source_file(
 
 def _create_log_temp_file(directory: Path, *, prefix: str, suffix: str) -> tuple[int, int, str]:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise RuntimeError("secure log temporary file creation is not supported on this platform")
     try:
         parent_fd = ensure_directory_without_following_symlinks(directory, field_name="log directory")

@@ -83,10 +83,37 @@ allowed_history_commit_identities = {
 forbidden = re.compile("staff" + r"[-_ ]?" + "control", re.IGNORECASE)
 FORBIDDEN_SCAN_CHUNK_BYTES = 1 << 20
 FORBIDDEN_SCAN_OVERLAP_CHARS = 64
+MAX_PROJECT_METADATA_BYTES = 1 << 20
 
 
 def fail(message: str) -> None:
     raise SystemExit(message)
+
+
+def read_project_text(path: Path, label: str) -> str:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if not isinstance(no_follow, int) or isinstance(no_follow, bool) or no_follow <= 0:
+        fail("secure no-follow support is required for project metadata")
+    fd = os.open(path, os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0))
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAX_PROJECT_METADATA_BYTES:
+            fail(f"unsafe project metadata file: {label}")
+        raw = os.read(fd, MAX_PROJECT_METADATA_BYTES + 1)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if (
+        len(raw) > MAX_PROJECT_METADATA_BYTES
+        or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    ):
+        fail(f"project metadata changed while reading: {label}")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        fail(f"project metadata is not UTF-8: {label}")
+        raise AssertionError from exc
 
 
 if not Path(git_bin).is_absolute():
@@ -121,17 +148,17 @@ def normalize_remote_url(remote: str) -> str:
 
 
 def check_project_metadata() -> None:
-    pyproject = tomllib.loads((repo_dir / "pyproject.toml").read_text(encoding="utf-8"))
+    pyproject = tomllib.loads(read_project_text(repo_dir / "pyproject.toml", "pyproject.toml"))
     authors = pyproject["project"].get("authors", [])
     if authors != [{"name": expected_name}]:
         fail(f"pyproject authors must be {expected_name!r}, got {authors!r}")
 
     applet_metadata_path = repo_dir / "files" / "speed-of-cinnamon@H234598" / "metadata.json"
-    applet_metadata = json.loads(applet_metadata_path.read_text(encoding="utf-8"))
+    applet_metadata = json.loads(read_project_text(applet_metadata_path, "metadata.json"))
     if applet_metadata.get("author") != expected_name:
         fail(f"{applet_metadata_path.relative_to(repo_dir)} author must be {expected_name!r}")
 
-    spec = (repo_dir / "packaging" / "speed-of-cinnamon.spec").read_text(encoding="utf-8")
+    spec = read_project_text(repo_dir / "packaging" / "speed-of-cinnamon.spec", "speed-of-cinnamon.spec")
     if f"Packager:       {expected_name} <{expected_email}>" not in spec:
         fail("RPM spec Packager does not match the expected GitHub identity")
     if f"Vendor:         {expected_name}" not in spec:
@@ -164,6 +191,7 @@ def check_forbidden_names() -> None:
 def contains_forbidden_marker(path: Path) -> bool:
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     fd: int | None = None
+    primary_error: BaseException | None = None
     try:
         fd = os.open(path, flags)
         if not stat.S_ISREG(os.fstat(fd).st_mode):
@@ -182,10 +210,20 @@ def contains_forbidden_marker(path: Path) -> bool:
     except UnicodeDecodeError:
         return False
     except OSError as exc:
-        fail(f"could not inspect tracked file {path.relative_to(repo_dir)}: {exc}")
+        primary_error = SystemExit(f"could not inspect tracked file {path.relative_to(repo_dir)}: {exc}")
+        raise primary_error from exc
+    except BaseException as exc:
+        primary_error = exc
+        raise
     finally:
         if fd is not None:
-            os.close(fd)
+            try:
+                os.close(fd)
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    primary_error.add_note("authorship scan descriptor cleanup failed")
+                else:
+                    raise SystemExit("authorship scan descriptor cleanup failed") from cleanup_error
 
 
 def check_git_identity() -> None:

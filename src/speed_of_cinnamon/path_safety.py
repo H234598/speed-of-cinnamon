@@ -1472,6 +1472,20 @@ def write_bytes_atomically_without_following_symlinks(
     )
 
 
+def create_bytes_atomically_without_following_symlinks(
+    path: Path,
+    data: bytes,
+    *,
+    field_name: str = "path",
+) -> None:
+    _conditional_namespace_operation(
+        path,
+        ExpectedTarget.missing(),
+        replacement_data=data,
+        field_name=field_name,
+    )
+
+
 def _create_private_transaction_directory(
     parent_fd: int,
     leaf_name: str,

@@ -263,9 +263,26 @@ class NextVersionTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir, "pyproject.toml")
             path.write_text("[project]\nname=\"x\"\n", encoding="utf-8")
-            with mock.patch.object(Path, "read_text", side_effect=OSError("unreadable")):
+            with mock.patch.object(next_version.os, "open", side_effect=OSError("unreadable")):
                 with self.assertRaises(next_version.UserInputError):
                     next_version.read_current_version(path)
+
+    def test_read_current_version_rejects_oversized_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            path = Path(tmpdir, "pyproject.toml")
+            with path.open("wb") as handle:
+                handle.truncate(next_version.MAX_PROJECT_METADATA_BYTES + 1)
+            with self.assertRaises(next_version.UserInputError):
+                next_version.read_current_version(path)
+
+    def test_read_current_version_rejects_symlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            target = Path(tmpdir, "target.toml")
+            target.write_text('[project]\nversion = "1.2.3"\n', encoding="utf-8")
+            path = Path(tmpdir, "pyproject.toml")
+            path.symlink_to(target)
+            with self.assertRaises(next_version.UserInputError):
+                next_version.read_current_version(path)
 
     def test_read_current_version_missing_version_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -699,7 +716,7 @@ class NextVersionTest(unittest.TestCase):
 
     def test_main_breaking_overrides_feature(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "add_patches", return_value=(1, 2, 3)) as add_patches, \
+            mock.patch.object(next_version, "add_patches", return_value=(1, 2, 3)), \
             mock.patch.object(next_version, "apply_feature_increase") as apply_feature, \
             mock.patch.object(next_version, "apply_breaking_change", return_value=(2, 0, 0)) as apply_breaking, \
             mock.patch.object(next_version, "print"):
@@ -803,7 +820,7 @@ class NextVersionTest(unittest.TestCase):
     def test_main_uses_auto_tag_when_tag_exists(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args, \
             mock.patch.object(next_version, "read_current_version", return_value=(2, 0, 0)) as read_current_version, \
-            mock.patch.object(next_version, "tag_for_version", return_value="v2.0.0") as tag_for_version, \
+            mock.patch.object(next_version, "tag_for_version", return_value="v2.0.0"), \
             mock.patch.object(next_version, "tag_exists", return_value=True) as tag_exists, \
             mock.patch.object(next_version, "commits_since_tag", return_value=42) as commits_since_tag, \
             mock.patch.object(next_version, "add_patches", return_value=(2, 1, 0)) as add_patches, \

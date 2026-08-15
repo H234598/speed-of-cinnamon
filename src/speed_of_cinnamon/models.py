@@ -35,7 +35,11 @@ HUGGING_FACE_BASE_URL = "https://huggingface.co/ggerganov/whisper.cpp/resolve/ma
 TINY_DE_MODEL_URL = "https://huggingface.co/wabisabisocial/whisper-tiny-german-ggml/resolve/main/ggml-tiny-de.bin"
 HUGGING_FACE_RESOLVE_URL = "https://huggingface.co/{repo}/resolve/main/{filename}"
 HUGGING_FACE_DOWNLOAD_HOST = "huggingface.co"
-HUGGING_FACE_STORAGE_REDIRECT_HOSTS = {"cas-bridge.xethub.hf.co", "cdn-lfs.huggingface.co"}
+HUGGING_FACE_STORAGE_REDIRECT_HOSTS = {
+    "cas-bridge.xethub.hf.co",
+    "cdn-lfs.huggingface.co",
+    "us.aws.cdn.hf.co",
+}
 MAX_MODEL_DOWNLOAD_BYTES = 1_200_000_000
 MAX_MODEL_DOWNLOAD_CHUNK_BYTES = 1024 * 1024
 MODEL_DOWNLOAD_MIN_SECONDS = 5 * 60
@@ -54,6 +58,18 @@ MODEL_DOWNLOAD_REDIRECT_CODES = {301, 302, 303, 307, 308}
 MAX_MODEL_DOWNLOAD_REDIRECTS = 5
 MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS = 60 * 60
 _MODEL_OPERATION_LOCK_SUFFIX = "model-operation.lock"
+_MODEL_CHECKSUM_CACHE_LOCK_SUFFIX = "model-checksum-cache.lock"
+_LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS = (
+    "Makefile",
+    "pyproject.toml",
+    "src",
+    "scripts",
+    "files",
+    "snap",
+)
+_LOCAL_MODEL_ATTESTATION_IGNORED_DIRS = {"__pycache__", ".pytest_cache"}
+MAX_SOURCE_ATTESTATION_FILES = 10_000
+MAX_SOURCE_ATTESTATION_BYTES = 512 * 1024 * 1024
 
 
 def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
@@ -79,33 +95,38 @@ def _flock_retry(fd: int, operation: int) -> None:
 
 
 @contextmanager
-def _locked_model_operation(root: Path) -> Iterator[None]:
+def _locked_model_operation(
+    root: Path,
+    *,
+    lock_suffix: str = _MODEL_OPERATION_LOCK_SUFFIX,
+    lock_label: str = "model operation",
+) -> Iterator[None]:
     if isinstance(root, bool) or not isinstance(root, Path):
         raise ModelError("model root must be a path")
     lock_parent = root.parent
-    lock_path = lock_parent / f".{root.name}.{_MODEL_OPERATION_LOCK_SUFFIX}"
+    lock_path = lock_parent / f".{root.name}.{lock_suffix}"
     try:
-        assert_no_symlink_ancestors(lock_path, field_name="model operation lock path")
+        assert_no_symlink_ancestors(lock_path, field_name=f"{lock_label} lock path")
     except RuntimeError as exc:
         raise ModelError(str(exc)) from exc
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise ModelError("secure model operation lock is not supported on this platform")
 
     try:
         parent_fd = ensure_directory_without_following_symlinks(
             lock_parent,
-            field_name="model operation lock directory",
+            field_name=f"{lock_label} lock directory",
         )
     except (OSError, RuntimeError) as exc:
-        raise ModelError("model operation lock directory is not safe") from exc
+        raise ModelError(f"{lock_label} lock directory is not safe") from exc
 
     lock_fd: int | None = None
     primary_error: BaseException | None = None
     try:
         try:
             os.fchmod(parent_fd, 0o700)
-            assert_fd_is_private_directory(parent_fd, field_name="model operation lock directory")
+            assert_fd_is_private_directory(parent_fd, field_name=f"{lock_label} lock directory")
             lock_fd = os.open(
                 lock_path.name,
                 os.O_RDWR | os.O_CREAT | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
@@ -114,17 +135,17 @@ def _locked_model_operation(root: Path) -> Iterator[None]:
             )
             assert_fd_is_regular_private_file(
                 lock_fd,
-                field_name="model operation lock file",
+                field_name=f"{lock_label} lock file",
                 require_private_mode=True,
             )
             _flock_retry(lock_fd, fcntl.LOCK_EX)
             assert_fd_is_regular_private_file(
                 lock_fd,
-                field_name="model operation lock file",
+                field_name=f"{lock_label} lock file",
                 require_private_mode=True,
             )
         except (OSError, RuntimeError) as exc:
-            raise ModelError("failed to acquire model operation lock") from exc
+            raise ModelError(f"failed to acquire {lock_label} lock") from exc
         yield
     except BaseException as exc:
         primary_error = exc
@@ -149,7 +170,7 @@ def _locked_model_operation(root: Path) -> Iterator[None]:
                 for additional_error in cleanup_errors:
                     _note_cleanup_failure(primary_error, additional_error)
             else:
-                raise ModelError("failed to release model operation lock") from cleanup_errors[0]
+                raise ModelError(f"failed to release {lock_label} lock") from cleanup_errors[0]
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
@@ -294,30 +315,25 @@ def _remove_model_checksum_cache_file(cache_path: Path) -> bool:
                 os.close(parent_fd)
 
 
-def _load_model_checksum_cache() -> None:
-    global _model_checksum_cache_loaded
-    if _model_checksum_cache_loaded:
-        return
-    _model_checksum_cache_loaded = True
-
+def _read_model_checksum_cache() -> dict[str, dict[str, int | str]]:
     cache_path = _model_checksum_cache_path()
     try:
         cache_stat = cache_path.lstat()
     except FileNotFoundError:
-        return
+        return {}
     except OSError:
-        return
+        return {}
     if (
         not stat_module.S_ISREG(cache_stat.st_mode)
         or getattr(cache_stat, "st_nlink", 1) != 1
     ):
         _remove_model_checksum_cache_file(cache_path)
-        return
+        return {}
 
     try:
         if cache_stat.st_size > MAX_MODEL_CHECKSUM_JSON_BYTES:
             _remove_model_checksum_cache_file(cache_path)
-            return
+            return {}
         text = read_text_without_following_symlinks(
             cache_path,
             field_name="model checksum cache path",
@@ -326,20 +342,21 @@ def _load_model_checksum_cache() -> None:
         )
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, MemoryError):
         _remove_model_checksum_cache_file(cache_path)
-        return
+        return {}
     if _contains_escaped_null(text):
         _remove_model_checksum_cache_file(cache_path)
-        return
+        return {}
     try:
         payload = json.loads(text, parse_constant=_reject_non_finite_json_number)
     except (json.JSONDecodeError, ValueError, RecursionError, MemoryError):
         _remove_model_checksum_cache_file(cache_path)
-        return
+        return {}
 
     if not isinstance(payload, dict):
         _remove_model_checksum_cache_file(cache_path)
-        return
+        return {}
 
+    cache: dict[str, dict[str, int | str]] = {}
     for key, raw_entry in payload.items():
         try:
             key_byte_length = _safe_utf8_length(key, field_name="model checksum cache path key")
@@ -362,54 +379,88 @@ def _load_model_checksum_cache() -> None:
         for field_name in ("dev", "ino", "ctime_ns", "mode", "nlink"):
             if field_name in raw_entry:
                 cache_entry[field_name] = raw_entry[field_name]
-        _model_checksum_cache[key] = cache_entry
+        cache[key] = cache_entry
+
+    return cache
+
+
+def _load_model_checksum_cache() -> None:
+    global _model_checksum_cache_loaded
+    if _model_checksum_cache_loaded:
+        return
+    _model_checksum_cache_loaded = True
+    _model_checksum_cache.update(_read_model_checksum_cache())
 
     _prune_model_checksum_cache()
 
 
 def _prune_model_checksum_cache() -> None:
     removed = False
+    removed_keys: set[str] = set()
     for key, cached in list(_model_checksum_cache.items()):
         if not isinstance(key, str) or not isinstance(cached, dict):
             _model_checksum_cache.pop(key, None)
+            if isinstance(key, str):
+                removed_keys.add(key)
             removed = True
             continue
         if not _is_valid_cache_entry(cached):
             _model_checksum_cache.pop(key, None)
+            removed_keys.add(key)
             removed = True
             continue
         try:
             path = Path(key)
         except (TypeError, ValueError):
             _model_checksum_cache.pop(key, None)
+            removed_keys.add(key)
             removed = True
             continue
         try:
             if path.is_symlink() or not path.exists() or not path.is_file():
                 _model_checksum_cache.pop(key, None)
+                removed_keys.add(key)
                 removed = True
                 continue
         except OSError:
             _model_checksum_cache.pop(key, None)
+            removed_keys.add(key)
             removed = True
             continue
     if removed:
-        _write_model_checksum_cache()
+        _write_model_checksum_cache(remove_keys=removed_keys)
 
 
-def _write_model_checksum_cache() -> None:
+@contextmanager
+def _locked_model_checksum_cache() -> Iterator[None]:
+    with _locked_model_operation(
+        _model_checksum_cache_path().parent,
+        lock_suffix=_MODEL_CHECKSUM_CACHE_LOCK_SUFFIX,
+        lock_label="model checksum cache",
+    ):
+        yield
+
+
+def _write_model_checksum_cache(*, remove_keys: set[str] | frozenset[str] = frozenset()) -> None:
     cache_path = _model_checksum_cache_path()
     try:
-        rendered = json.dumps(_model_checksum_cache, indent=2, sort_keys=True) + "\n"
-        if _safe_utf8_length(rendered, field_name="model checksum cache JSON") > MAX_MODEL_CHECKSUM_JSON_BYTES:
+        with _locked_model_checksum_cache():
+            merged_cache = _read_model_checksum_cache()
+            merged_cache.update(_model_checksum_cache)
+            for key in remove_keys:
+                merged_cache.pop(key, None)
             _model_checksum_cache.clear()
-            _remove_model_checksum_cache_file(cache_path)
-            return
-        write_text_atomically_without_following_symlinks(
-            cache_path,
-            rendered,
-            field_name="model checksum cache path",
-        )
+            _model_checksum_cache.update(merged_cache)
+            rendered = json.dumps(_model_checksum_cache, indent=2, sort_keys=True) + "\n"
+            if _safe_utf8_length(rendered, field_name="model checksum cache JSON") > MAX_MODEL_CHECKSUM_JSON_BYTES:
+                _model_checksum_cache.clear()
+                _remove_model_checksum_cache_file(cache_path)
+                return
+            write_text_atomically_without_following_symlinks(
+                cache_path,
+                rendered,
+                field_name="model checksum cache path",
+            )
     except (OSError, RuntimeError, MemoryError):
         return
 
@@ -447,8 +498,8 @@ def _set_model_checksum_cache(path: Path, checksum: str, stat: os.stat_result) -
 
 
 def _clear_model_checksum_cache(path: Path) -> None:
-    if _model_checksum_cache.pop(str(path), None) is not None:
-        _write_model_checksum_cache()
+    _model_checksum_cache.pop(str(path), None)
+    _write_model_checksum_cache(remove_keys={str(path)})
 
 
 def _open_model_hash_file(path: Path) -> int:
@@ -863,7 +914,10 @@ def _huggingface_storage_redirect_matches(url: str, allowed_url: str) -> bool:
     if any(part in {".", ".."} for part in redirect_path.split("/")):
         return False
     redirect_path = redirect_path.rstrip("/")
-    if not redirect_path.endswith(f"/{leaf}"):
+    path_leaf = redirect_path.rsplit("/", 1)[-1]
+    if path_leaf != leaf and not (
+        len(path_leaf) == 64 and all(char in "0123456789abcdefABCDEF" for char in path_leaf)
+    ):
         return False
     disposition_values = urllib.parse.parse_qs(parsed.query).get("response-content-disposition", [])
     if len(disposition_values) != 1:
@@ -1024,6 +1078,7 @@ class ModelSpec:
     repo_id: str = ""
     files: tuple[str, ...] = ()
     file_sha1s: tuple[tuple[str, str], ...] = ()
+    file_repos: tuple[tuple[str, str], ...] = ()
 
     @property
     def url(self) -> str:
@@ -1087,7 +1142,14 @@ CATALOG: tuple[ModelSpec, ...] = (
         backend="faster-whisper",
         model_format="ctranslate2",
         repo_id="rhasspy/faster-whisper-base-int8",
-        files=("config.json", "model.bin", "vocabulary.txt"),
+        files=("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"),
+        file_sha1s=(
+            ("config.json", "d69880aac636d4ed90edfbeeb138f13471221ffc"),
+            ("model.bin", "1d0a27ef744937cbd4c35c351388528ce513fcf0"),
+            ("tokenizer.json", "0a049e2417c0474893689c8241687efa448796b6"),
+            ("vocabulary.txt", "ae8de1edec7d6675b2b8b233c6adb899a359dc17"),
+        ),
+        file_repos=(("tokenizer.json", "Systran/faster-whisper-base"),),
     ),
     ModelSpec(
         name="ct2-base",
@@ -1099,6 +1161,12 @@ CATALOG: tuple[ModelSpec, ...] = (
         model_format="ctranslate2",
         repo_id="Systran/faster-whisper-base",
         files=("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"),
+        file_sha1s=(
+            ("config.json", "831d77a5e7f30a9e4e8ef836e5f726faca705dcf"),
+            ("model.bin", "6684ca545055a7803c12aace9983469add0de103"),
+            ("tokenizer.json", "0a049e2417c0474893689c8241687efa448796b6"),
+            ("vocabulary.txt", "ae8de1edec7d6675b2b8b233c6adb899a359dc17"),
+        ),
     ),
     ModelSpec(
         name="ct2-tiny-de",
@@ -1111,6 +1179,13 @@ CATALOG: tuple[ModelSpec, ...] = (
         model_format="ctranslate2",
         repo_id="pbechhaus/whisper-tiny-german-ct2",
         files=("config.json", "model.bin", "preprocessor_config.json", "tokenizer.json", "vocabulary.json"),
+        file_sha1s=(
+            ("config.json", "a3132c082c2d1aa4bfa490b170bec236999c0b31"),
+            ("model.bin", "42887e500d03d214b712166a913a41b76ebe4702"),
+            ("preprocessor_config.json", "6c4669b444e02a2ab3c620e82c329aead587743c"),
+            ("tokenizer.json", "5b2d0331d111b6757e7e8e514e488418d992413d"),
+            ("vocabulary.json", "0baae797630e7a254820c477e7f4b7b50fa7f416"),
+        ),
     ),
     ModelSpec(
         name="ct2-small-de",
@@ -1122,7 +1197,15 @@ CATALOG: tuple[ModelSpec, ...] = (
         backend="faster-whisper",
         model_format="ctranslate2",
         repo_id="mkenfenheuer/whisper-small-cv11-german-ct2",
-        files=("config.json", "model.bin", "tokenizer_config.json", "vocabulary.json"),
+        files=("config.json", "model.bin", "tokenizer.json", "tokenizer_config.json", "vocabulary.json"),
+        file_sha1s=(
+            ("config.json", "92d18a65a30b4767f807c19c35772f15fb54c4e2"),
+            ("model.bin", "7effbf69c517e3efee45aaffde43609a589a0c7f"),
+            ("tokenizer.json", "0a049e2417c0474893689c8241687efa448796b6"),
+            ("tokenizer_config.json", "f6625117c0cc9548b913c1c253141c0aae64fbaf"),
+            ("vocabulary.json", "25a432d96a78808751cd891b1545f3849b0b8ea2"),
+        ),
+        file_repos=(("tokenizer.json", "Systran/faster-whisper-small"),),
     ),
     ModelSpec(
         name="ct2-small",
@@ -1134,6 +1217,12 @@ CATALOG: tuple[ModelSpec, ...] = (
         model_format="ctranslate2",
         repo_id="Systran/faster-whisper-small",
         files=("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"),
+        file_sha1s=(
+            ("config.json", "34c14a800bba7a208e7b231ec988bc06c0b83edd"),
+            ("model.bin", "433071fc506473e1028744cbc3ccb3db62e79427"),
+            ("tokenizer.json", "0a049e2417c0474893689c8241687efa448796b6"),
+            ("vocabulary.txt", "ae8de1edec7d6675b2b8b233c6adb899a359dc17"),
+        ),
     ),
     ModelSpec(
         name="small.en",
@@ -1331,9 +1420,12 @@ def _replace_model_sibling_path(
             raise ModelError(f"{field_name} source must be a regular file or directory: {source}")
         if expected_source_stat is not None and not source_identity(source_path_stat, expected_source_stat):
             raise ModelError(f"{field_name} source changed before activation: {source}")
+        nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+            raise ModelError(f"secure {field_name} source open is not supported on this platform")
         source_fd = os.open(
             source.name,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0),
+            os.O_RDONLY | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
             dir_fd=parent_fd,
         )
         source_primary_error: BaseException | None = None
@@ -1663,14 +1755,26 @@ def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
     filename = _validated_catalog_path_fragment(model.filename, field_name="model filename")
     if model.files:
         repo_id = _validated_huggingface_repo_id(model.repo_id)
+        file_repos: dict[str, str] = {}
+        for raw_filename, raw_repo_id in model.file_repos:
+            normalized_filename = str(_validated_catalog_path_fragment(raw_filename, field_name="model file repo path"))
+            if normalized_filename in file_repos:
+                raise ModelError(f"model catalog entry {model.name} has duplicate file repo")
+            if normalized_filename not in {str(Path(file_name)) for file_name in model.files}:
+                raise ModelError(f"model catalog entry {model.name} has a repo for an unknown file")
+            file_repos[normalized_filename] = _validated_huggingface_repo_id(
+                raw_repo_id,
+                field_name="model file repo_id",
+            )
         urls: list[tuple[str, str]] = []
         for raw_filename in model.files:
             normalized_filename = _validated_catalog_path_fragment(raw_filename, field_name="model file path")
             url_filename = urllib.parse.quote(normalized_filename.as_posix(), safe="/")
+            source_repo_id = file_repos.get(str(normalized_filename), repo_id)
             urls.append(
                 (
                     str(normalized_filename),
-                    HUGGING_FACE_RESOLVE_URL.format(repo=repo_id, filename=url_filename),
+                    HUGGING_FACE_RESOLVE_URL.format(repo=source_repo_id, filename=url_filename),
                 )
             )
         return urls
@@ -1730,6 +1834,21 @@ def _catalog_model_for_path(path: str | Path) -> ModelSpec | None:
     return filenames.get(filename) or lower_names.get(filename)
 
 
+def model_path_is_verified(path: str | Path) -> bool | None:
+    """Return catalog integrity for a model path, or None for custom models."""
+    if not isinstance(path, (str, Path)):
+        return None
+    try:
+        normalized = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
+        model = _catalog_model_for_path(normalized)
+        expected = Path(os.path.abspath(os.fspath(model_path(model)))) if model is not None else None
+        if model is None or expected != normalized:
+            return None
+        return _model_is_verified(model, normalized)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+
+
 def model_backend_for_path(path: str | Path) -> str:
     model = _catalog_model_for_path(path)
     return model.backend if model is not None else ""
@@ -1783,8 +1902,159 @@ def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
     }
 
 
-def list_models() -> list[dict[str, object]]:
-    return [model_status(model) for model in CATALOG]
+def list_models(*, verify: bool = False) -> list[dict[str, object]]:
+    if not isinstance(verify, bool):
+        raise ModelError("verify must be a boolean")
+    return [model_status(model, verify=verify) for model in CATALOG]
+
+
+def model_attestation_snapshot() -> list[dict[str, object]]:
+    """Return artifact fingerprints for every downloaded, verified catalog model."""
+    snapshot: list[dict[str, object]] = []
+    for model in CATALOG:
+        path = model_path(model)
+        if not _model_is_downloaded(model, path):
+            continue
+        if not _model_is_verified(model, path):
+            raise ModelError(f"model integrity is not verified: {model.name}")
+        if model.files:
+            file_names = tuple(
+                str(_validated_catalog_path_fragment(filename, field_name="model file path"))
+                for filename in model.files
+            )
+            file_paths = tuple(path / filename for filename in file_names)
+        else:
+            file_names = (path.name,)
+            file_paths = (path,)
+        files: list[dict[str, str]] = []
+        for filename, file_path in sorted(zip(file_names, file_paths), key=lambda item: item[0]):
+            checksum = _cached_verified_sha1(file_path)
+            if not _is_valid_checksum(checksum):
+                raise ModelError(f"model checksum is invalid: {model.name}")
+            files.append({"name": filename, "sha1": checksum})
+        snapshot.append(
+            {
+                "backend": model.backend,
+                "files": files,
+                "languages": list(model.languages),
+                "model_format": model.model_format,
+                "name": model.name,
+            }
+        )
+    return sorted(snapshot, key=lambda entry: str(entry["name"]))
+
+
+def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
+    """Return deterministic fingerprints for source files used by release gates."""
+    if isinstance(repo_root, bool) or not isinstance(repo_root, Path):
+        raise ModelError("source attestation root must be a path")
+    root = repo_root.resolve(strict=True)
+    if not root.is_dir():
+        raise ModelError("source attestation root must be a directory")
+
+    paths: list[tuple[str, Path]] = []
+    path_bytes = 0
+
+    def add_file(relative_path: str, path: Path) -> None:
+        nonlocal path_bytes
+        try:
+            entry = os.lstat(path)
+        except OSError as exc:
+            raise ModelError(f"source attestation entry is unreadable: {relative_path}") from exc
+        if stat_module.S_ISLNK(entry.st_mode) or not stat_module.S_ISREG(entry.st_mode):
+            raise ModelError(f"source attestation entry is not a regular file: {relative_path}")
+        if path.suffix == ".pyc":
+            return
+        if len(paths) >= MAX_SOURCE_ATTESTATION_FILES:
+            raise ModelError(f"source attestation exceeds {MAX_SOURCE_ATTESTATION_FILES} files")
+        if not isinstance(entry.st_size, int) or isinstance(entry.st_size, bool) or entry.st_size < 0:
+            raise ModelError(f"source attestation file size is invalid: {relative_path}")
+        if path_bytes > MAX_SOURCE_ATTESTATION_BYTES - entry.st_size:
+            raise ModelError(f"source attestation exceeds {MAX_SOURCE_ATTESTATION_BYTES} bytes")
+        paths.append((relative_path, path))
+        path_bytes += entry.st_size
+
+    for relative_root in _LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS:
+        path = root / relative_root
+        try:
+            entry = os.lstat(path)
+        except OSError as exc:
+            raise ModelError(f"source attestation root is unavailable: {relative_root}") from exc
+        if stat_module.S_ISLNK(entry.st_mode):
+            raise ModelError(f"source attestation root is symlinked: {relative_root}")
+        if stat_module.S_ISREG(entry.st_mode):
+            add_file(relative_root, path)
+            continue
+        if not stat_module.S_ISDIR(entry.st_mode):
+            raise ModelError(f"source attestation root is not a directory or file: {relative_root}")
+        for current_root, directory_names, file_names in os.walk(path, topdown=True, followlinks=False):
+            current = Path(current_root)
+            kept_directories: list[str] = []
+            for name in sorted(directory_names):
+                if name in _LOCAL_MODEL_ATTESTATION_IGNORED_DIRS:
+                    continue
+                child = current / name
+                child_entry = os.lstat(child)
+                if stat_module.S_ISLNK(child_entry.st_mode) or not stat_module.S_ISDIR(child_entry.st_mode):
+                    raise ModelError(f"source attestation directory is unsafe: {child}")
+                kept_directories.append(name)
+            directory_names[:] = kept_directories
+            for name in sorted(file_names):
+                relative_path = (current / name).relative_to(root).as_posix()
+                add_file(relative_path, current / name)
+
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+        raise ModelError("source attestation requires secure no-follow support")
+    snapshot: list[dict[str, str]] = []
+    hashed_bytes = 0
+    for relative_path, path in sorted(paths):
+        flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | nofollow_flag
+        try:
+            fd = os.open(path, flags)
+        except OSError as exc:
+            raise ModelError(f"source attestation file cannot be opened: {relative_path}") from exc
+        primary_error: BaseException | None = None
+        try:
+            before = os.fstat(fd)
+            if not stat_module.S_ISREG(before.st_mode):
+                raise ModelError(f"source attestation file changed type: {relative_path}")
+            digest = hashlib.sha256()
+            with os.fdopen(fd, "rb", closefd=False) as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    hashed_bytes += len(chunk)
+                    if hashed_bytes > MAX_SOURCE_ATTESTATION_BYTES:
+                        raise ModelError(f"source attestation exceeds {MAX_SOURCE_ATTESTATION_BYTES} bytes while reading")
+                    digest.update(chunk)
+            after = os.fstat(fd)
+        except OSError as exc:
+            primary_error = ModelError(f"source attestation file cannot be read: {relative_path}")
+            raise primary_error from exc
+        except BaseException as exc:
+            primary_error = exc
+            raise
+        finally:
+            try:
+                os.close(fd)
+            except BaseException as cleanup_error:
+                if primary_error is not None:
+                    primary_error.add_note("source attestation descriptor cleanup failed")
+                else:
+                    raise ModelError("source attestation descriptor cleanup failed") from cleanup_error
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+        ):
+            raise ModelError(f"source attestation file changed while reading: {relative_path}")
+        snapshot.append({"path": relative_path, "sha256": digest.hexdigest()})
+    return snapshot
 
 
 def downloaded_model_paths(language: str = "") -> list[Path]:
@@ -1963,7 +2233,7 @@ def _unlink_temporary_download_path(path: Path, *, expected_stat: os.stat_result
 
 def _create_temporary_file_in_parent_directory(parent_fd: int, *, prefix: str) -> tuple[str, int]:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise OSError("secure temporary file creation is not supported for model downloads")
     for _ in range(100):
         temporary_name = f"{prefix}{secrets.token_hex(8)}.tmp"

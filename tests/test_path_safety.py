@@ -414,6 +414,20 @@ class PathSafetyTest(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"old transcript")
             self.assertEqual(target.stat().st_mode & 0o777, 0o600)
 
+    def test_atomic_bytes_create_does_not_overwrite_existing_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "transcript.txt"
+            target.write_bytes(b"original")
+
+            with self.assertRaises(OSError):
+                path_safety.create_bytes_atomically_without_following_symlinks(
+                    target,
+                    b"replacement",
+                    field_name="restore artifact",
+                )
+
+            self.assertEqual(target.read_bytes(), b"original")
+
     def test_atomic_write_fsyncs_temp_file_and_parent_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "settings.json"
@@ -1745,7 +1759,6 @@ class PathSafetyTest(unittest.TestCase):
             target.write_text("payload", encoding="utf-8")
             real_open = path_safety.os.open
             real_close = path_safety.os.close
-            directory_flag = getattr(os, "O_DIRECTORY", 0)
             opened = []
             close_attempts = {}
             active_generation = {}

@@ -7,7 +7,6 @@ import fcntl
 import hashlib
 import http.client
 import shutil
-import sys
 import stat as stat_module
 import subprocess
 import tempfile
@@ -765,6 +764,7 @@ class TranscriberTest(unittest.TestCase):
                     elif backend == "faster-whisper":
                         model = root / "ct2-model"
                         model.mkdir(exist_ok=True)
+                        (model / "tokenizer.json").write_text("{}", encoding="utf-8")
                         call_options["whisper_model"] = str(model)
                     elif backend == "openai-compatible":
                         call_options.update(
@@ -859,6 +859,7 @@ class TranscriberTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             model = root / "ct2-model"
             model.mkdir()
+            (model / "tokenizer.json").write_text("{}", encoding="utf-8")
             text = root / "nested" / "sample.txt"
             with (
                 mock.patch(
@@ -3552,23 +3553,27 @@ class TranscriberTest(unittest.TestCase):
                         raise OSError(secret)
 
                 if entry_point == "regular-stat":
-                    call = lambda: transcriber_module._regular_file_stat(
-                        transcript,
-                        field_name="generated transcript",
-                    )
+                    def call():
+                        return transcriber_module._regular_file_stat(
+                            transcript,
+                            field_name="generated transcript",
+                        )
                 elif entry_point == "text-read":
-                    call = lambda: transcriber_module._read_text_file_with_target(transcript)
+                    def call():
+                        return transcriber_module._read_text_file_with_target(transcript)
                 elif entry_point == "private-read":
-                    call = lambda: transcriber_module._read_private_file_bytes(
-                        audio,
-                        field_name="audio file",
-                    )
+                    def call():
+                        return transcriber_module._read_private_file_bytes(
+                            audio,
+                            field_name="audio file",
+                        )
                 else:
-                    call = lambda: transcriber_module._snapshot_private_file(
-                        audio,
-                        field_name="audio file",
-                        include_hash=False,
-                    )
+                    def call():
+                        return transcriber_module._snapshot_private_file(
+                            audio,
+                            field_name="audio file",
+                            include_hash=False,
+                        )
 
                 if entry_point == "snapshot":
                     owned_fds.append(real_open(audio, os.O_RDONLY))
@@ -7209,6 +7214,7 @@ class TranscriberTest(unittest.TestCase):
             text_path = Path(tmp) / "sample.txt"
             default_model = Path(tmp) / "ct2-model"
             default_model.mkdir()
+            (default_model / "tokenizer.json").write_text("{}", encoding="utf-8")
 
             with (
                 mock.patch("speed_of_cinnamon.transcriber.transcribe_with_faster_whisper", return_value="ok transcript"),
@@ -7261,6 +7267,7 @@ class TranscriberTest(unittest.TestCase):
             text_path = Path(tmp) / "sample.txt"
             model_path = Path(tmp) / "secret-model"
             model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
             with mock.patch.dict("sys.modules", {"faster_whisper": fake_module}):
                 with self.assertRaises(TranscriptionError) as raised:
                     transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
@@ -7291,6 +7298,7 @@ class TranscriberTest(unittest.TestCase):
             text_path = Path(tmp) / "sample.txt"
             model_path = Path(tmp) / "model"
             model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
             with (
                 mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
                 mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
@@ -7301,6 +7309,83 @@ class TranscriberTest(unittest.TestCase):
 
         self.assertEqual(result, "local transcript")
         self.assertIs(captured.get("local_files_only"), True)
+
+    def test_faster_whisper_requires_local_tokenizer(self) -> None:
+        class WhisperModel:
+            def __init__(self, *_args: object, **_kwargs: object) -> None:
+                raise AssertionError("backend must not run for incomplete model")
+
+        fake_module = type("FakeFasterWhisper", (), {"WhisperModel": WhisperModel})
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            with (
+                mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+            ):
+                with self.assertRaisesRegex(
+                    TranscriptionError,
+                    "CTranslate2 model is missing required tokenizer.json",
+                ):
+                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+
+        self.assertFalse(text_path.exists())
+
+    def test_transcribe_preflight_rejects_missing_local_tokenizer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            with mock.patch(
+                "speed_of_cinnamon.transcriber.transcribe_with_faster_whisper",
+                side_effect=AssertionError("backend must not run for incomplete model"),
+            ):
+                with self.assertRaisesRegex(
+                    TranscriptionError,
+                    "CTranslate2 model is missing required tokenizer.json",
+                ):
+                    transcribe(
+                        audio,
+                        "en",
+                        text_path,
+                        backend="faster-whisper",
+                        whisper_model=str(model_path),
+                    )
+
+            self.assertFalse(text_path.exists())
+
+    def test_transcribe_preflight_rejects_unverified_catalog_model(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.model_path_is_verified", return_value=False),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.transcribe_with_faster_whisper",
+                    side_effect=AssertionError("backend must not run for unverified catalog model"),
+                ),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+                mock.patch("speed_of_cinnamon.transcriber._require_faster_whisper_available"),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "CTranslate2 model failed integrity verification"):
+                    transcribe(
+                        audio,
+                        "en",
+                        text_path,
+                        backend="faster-whisper",
+                        whisper_model=str(model_path),
+                    )
+
+            self.assertFalse(text_path.exists())
 
     def test_faster_whisper_timeout_includes_model_initialization(self) -> None:
         class WhisperModel:
@@ -7317,6 +7402,7 @@ class TranscriberTest(unittest.TestCase):
             text_path = Path(tmp) / "sample.txt"
             model_path = Path(tmp) / "model"
             model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
             with (
                 mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
                 mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
@@ -7341,6 +7427,7 @@ class TranscriberTest(unittest.TestCase):
             text_path = Path(tmp) / "sample.txt"
             model_path = Path(tmp) / "model"
             model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
             with (
                 mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
                 mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
@@ -7376,6 +7463,7 @@ class TranscriberTest(unittest.TestCase):
             text_path = Path(tmp) / "sample.txt"
             model_path = Path(tmp) / "model"
             model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
             with mock.patch("builtins.__import__", side_effect=fail_import):
                 with self.assertRaisesRegex(TranscriptionError, "faster-whisper could not be loaded"):
                     transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
@@ -7424,19 +7512,13 @@ class TranscriberTest(unittest.TestCase):
                 transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
 
     def test_faster_whisper_direct_helper_fails_closed_when_model_tree_scan_fails(self) -> None:
-        def walk_fails(*_args: object, **kwargs: object) -> list[tuple[str, list[str], list[str]]]:
-            onerror = kwargs.get("onerror")
-            if callable(onerror):
-                onerror(OSError("permission denied"))
-            return []
-
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
             text_path = Path(tmp) / "sample.txt"
             model_path = Path(tmp) / "ct2-model"
             model_path.mkdir()
-            with mock.patch("speed_of_cinnamon.transcriber.os.walk", side_effect=walk_fails):
+            with mock.patch("speed_of_cinnamon.transcriber.os.scandir", side_effect=OSError("permission denied")):
                 with self.assertRaisesRegex(TranscriptionError, "CTranslate2 model path is invalid"):
                     transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
 
@@ -7469,6 +7551,7 @@ class TranscriberTest(unittest.TestCase):
             text_path = Path(tmp) / "sample.txt"
             model_path = Path(tmp) / "model"
             model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
             with (
                 mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
                 mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
@@ -7496,6 +7579,7 @@ class TranscriberTest(unittest.TestCase):
             text_path = Path(tmp) / "sample.txt"
             model_path = Path(tmp) / "model"
             model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
             with (
                 mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
                 mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
@@ -7797,6 +7881,7 @@ class TranscriberTest(unittest.TestCase):
                         default_model.write_bytes(b"model")
                     else:
                         default_model.mkdir()
+                        (default_model / "tokenizer.json").write_text("{}", encoding="utf-8")
                     with (
                         mock.patch(
                             f"speed_of_cinnamon.transcriber.{default_path}",
@@ -8433,6 +8518,7 @@ class TranscriberTest(unittest.TestCase):
             text = root / "result.txt"
             hash_passes: list[int] = []
             read_bytes = 0
+            interrupted_once = False
             real_sha256 = hashlib.sha256
             real_read = os.read
 
@@ -8453,7 +8539,10 @@ class TranscriberTest(unittest.TestCase):
                     return self._hash.hexdigest()
 
             def counting_read(fd: int, size: int) -> bytes:
-                nonlocal read_bytes
+                nonlocal interrupted_once, read_bytes
+                if not interrupted_once:
+                    interrupted_once = True
+                    raise InterruptedError()
                 data = real_read(fd, size)
                 read_bytes += len(data)
                 return data

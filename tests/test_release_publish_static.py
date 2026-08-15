@@ -1,3 +1,4 @@
+import unittest
 from pathlib import Path
 
 
@@ -10,7 +11,7 @@ def test_new_release_rollback_state_is_set_only_after_create_success():
     )
 
     release_block = script[
-        script.index('release_probe_status=') : script.index(
+        script.index('release_probe_headers=') : script.index(
             'for upload_ref in "${upload_refs[@]}"'
         )
     ]
@@ -96,3 +97,11 @@ def test_release_requires_main_or_verified_github_release_ref():
     assert 'elif [[ "${GITHUB_REF_TYPE:-}" == "tag" ]]; then' in script
     assert '"${GITHUB_REF_NAME:-}" != "${tag}"' in script
     assert "release requires %s branch checkout or verified GitHub release ref" in script
+
+def load_tests(loader, tests, pattern):
+    suite = unittest.TestSuite(tests)
+    for name in sorted(globals()):
+        value = globals()[name]
+        if name.startswith("test_") and callable(value):
+            suite.addTest(unittest.FunctionTestCase(value, description=name))
+    return suite

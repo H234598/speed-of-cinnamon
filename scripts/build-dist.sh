@@ -38,7 +38,13 @@ name="$(
 import tomllib
 from pathlib import Path
 
-print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["name"])
+MAX_PROJECT_METADATA_BYTES = 1 << 20
+with Path("pyproject.toml").open("rb") as handle:
+    payload = handle.read(MAX_PROJECT_METADATA_BYTES + 1)
+if len(payload) > MAX_PROJECT_METADATA_BYTES:
+    raise SystemExit("pyproject.toml is too large")
+data = tomllib.loads(payload.decode("utf-8"))
+print(data["project"]["name"])
 PY
 )"
 version="$(
@@ -46,7 +52,13 @@ version="$(
 import tomllib
 from pathlib import Path
 
-print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])
+MAX_PROJECT_METADATA_BYTES = 1 << 20
+with Path("pyproject.toml").open("rb") as handle:
+    payload = handle.read(MAX_PROJECT_METADATA_BYTES + 1)
+if len(payload) > MAX_PROJECT_METADATA_BYTES:
+    raise SystemExit("pyproject.toml is too large")
+data = tomllib.loads(payload.decode("utf-8"))
+print(data["project"]["version"])
 PY
 )"
 if [[ ! "${name}" == "speed-of-cinnamon" ]]; then
@@ -160,7 +172,14 @@ try:
         raise SystemExit(1)
     os.fsync(fd)
 finally:
-    os.close(fd)
+    primary_error = sys.exc_info()[1]
+    try:
+        os.close(fd)
+    except BaseException as cleanup_error:
+        if primary_error is not None:
+            primary_error.add_note("build-dist fsync descriptor cleanup failed")
+        else:
+            raise SystemExit("build-dist fsync descriptor cleanup failed") from cleanup_error
 PY
 }
 
@@ -211,7 +230,14 @@ try:
             view = view[written:]
     os.fsync(fd)
 finally:
-    os.close(fd)
+    primary_error = sys.exc_info()[1]
+    try:
+        os.close(fd)
+    except BaseException as cleanup_error:
+        if primary_error is not None:
+            primary_error.add_note("build-dist write descriptor cleanup failed")
+        else:
+            raise SystemExit("build-dist write descriptor cleanup failed") from cleanup_error
 ' "${path}" "${label}" "${expected_identity}"
 }
 
@@ -456,7 +482,14 @@ try:
                 _run_safe_fs("remove-leaf", "build-dist", entry["backup"])
                 entry["backup_created"] = False
 finally:
-    os.close(parent_fd)
+    primary_error = sys.exc_info()[1]
+    try:
+        os.close(parent_fd)
+    except BaseException as cleanup_error:
+        if primary_error is not None:
+            primary_error.add_note("build-dist finalization descriptor cleanup failed")
+        else:
+            raise SystemExit("build-dist finalization descriptor cleanup failed") from cleanup_error
 PY
 }
 

@@ -27,6 +27,7 @@ function loadAppletMethod(name, nextName, clock, extraContext = {}) {
     FOCUS_RESTORE_POLL_MS: 20,
     FOCUS_RESTORE_TIMEOUT_MS: 1000,
     X11_COMMAND_TIMEOUT_MS: 100,
+    SCREEN_SAVER_QUERY_TIMEOUT_MS: 50,
     St: { ClipboardType: { CLIPBOARD: 1 } },
     Date: { now: () => clock.value },
     _: (value) => value,
@@ -96,12 +97,458 @@ test("output policy separates paste from auto-submit and fails closed", () => {
   );
   assert.deepEqual(
     { ...resolveOutputActions.call(applet, "clipboard-paste-submit", false, true) },
-    { copy: true, restoreFocus: false, paste: false, submit: false }
+    { copy: true, restoreFocus: true, paste: true, submit: false }
+  );
+  assert.deepEqual(
+    { ...resolveOutputActions.call(applet, "clipboard-paste", false, true) },
+    { copy: true, restoreFocus: true, paste: true, submit: false }
   );
   assert.deepEqual(
     { ...resolveOutputActions.call(applet, "clipboard-paste-submit", true, false) },
     { copy: true, restoreFocus: false, paste: false, submit: false }
   );
+});
+
+test("keyboard backend selects session-safe Wayland and X11 helpers", () => {
+  const clock = { value: 0 };
+  const preferredKeyboardProgram = loadAppletMethod(
+    "_preferredKeyboardProgram",
+    "_resolveOutputActions",
+    clock,
+    { GLib: { getenv: (name) => ({ XDG_SESSION_TYPE: "wayland", WAYLAND_DISPLAY: "wayland-0" }[name] || "") } }
+  );
+  const applet = {
+    _findTrustedProgramInPath: (name) => `/usr/bin/${name}`,
+    _isWaylandSession: () => true,
+    _recordLifecycleError() {},
+  };
+  const waylandProgram = preferredKeyboardProgram.call(applet);
+  assert.equal(waylandProgram.kind, "wtype");
+  assert.equal(waylandProgram.path, "/usr/bin/wtype");
+
+  const x11PreferredKeyboardProgram = loadAppletMethod(
+    "_preferredKeyboardProgram",
+    "_resolveOutputActions",
+    clock,
+    { GLib: { getenv: (name) => ({ XDG_SESSION_TYPE: "x11", WAYLAND_DISPLAY: "" }[name] || "") } }
+  );
+  const x11Program = x11PreferredKeyboardProgram.call({
+    ...applet,
+    _isWaylandSession: () => false,
+  });
+  assert.equal(x11Program.kind, "xdotool");
+  assert.equal(x11Program.path, "/usr/bin/xdotool");
+
+  const missingWaylandHelperApplet = {
+    _findTrustedProgramInPath: (name) => name === "wtype" ? null : "/usr/bin/xdotool",
+    _isWaylandSession: () => true,
+    _recordLifecycleError() {},
+  };
+  assert.equal(preferredKeyboardProgram.call(missingWaylandHelperApplet), null);
+});
+
+test("unknown session detection disables keyboard backend", () => {
+  const clock = { value: 0 };
+  const sessionHelper = loadAppletMethod(
+    "_isWaylandSession",
+    "_preferredKeyboardProgram",
+    clock,
+    { GLib: { getenv: () => { throw new Error("environment unavailable"); } } }
+  );
+  const preferredKeyboardProgram = loadAppletMethod(
+    "_preferredKeyboardProgram",
+    "_resolveOutputActions",
+    clock
+  );
+  const applet = {
+    _isWaylandSession: sessionHelper,
+    _findTrustedProgramInPath: (name) => `/usr/bin/${name}`,
+    _recordLifecycleError() {},
+  };
+  assert.equal(sessionHelper.call(applet), null);
+  assert.equal(preferredKeyboardProgram.call(applet), null);
+
+  const emptyEnvironmentSessionHelper = loadAppletMethod(
+    "_isWaylandSession",
+    "_preferredKeyboardProgram",
+    clock,
+    { GLib: { getenv: () => "" } }
+  );
+  assert.equal(emptyEnvironmentSessionHelper.call({ _recordLifecycleError() {} }), null);
+});
+
+test("explicit X11 session type wins over a leftover Wayland socket", () => {
+  const clock = { value: 0 };
+  const sessionHelper = loadAppletMethod(
+    "_isWaylandSession",
+    "_preferredKeyboardProgram",
+    clock,
+    { GLib: { getenv: (name) => ({
+      XDG_SESSION_TYPE: "x11",
+      WAYLAND_DISPLAY: "wayland-0",
+      DISPLAY: ":0",
+    }[name] || "") } }
+  );
+  assert.equal(sessionHelper.call({ _recordLifecycleError() {} }), false);
+});
+
+test("text-output settings changes preserve an in-flight backup owner", () => {
+  const clock = { value: 0 };
+  const onTextOutputSettingsChanged = loadAppletMethod(
+    "_onTextOutputSettingsChanged",
+    "_onTranscriptRetentionSettingsChanged",
+    clock
+  );
+  const backupToken = { id: "backup-1" };
+  const applet = {
+    customLimitPromptToken: { id: "prompt" },
+    autoPastePromptToken: { id: "paste-prompt" },
+    autoBackupToken: backupToken,
+    autoBackupPending: true,
+    _historyMenuFingerprint: "old",
+    _terminateProcessesByGroup: () => true,
+    _cancelTextInsertForSettingsChange() {},
+    _normalizeTypingDelayMs: (value) => value,
+    _normalizeArtifactEncryption: (value) => value,
+    _populateArtifactEncryptionMenu() {},
+    _populateTextOptionsMenu() {},
+    _updateAutoPasteItem() {},
+    _populateAutoPasteMenu() {},
+    _updatePanel() {},
+  };
+  onTextOutputSettingsChanged.call(applet);
+  assert.equal(applet.autoBackupToken, backupToken);
+  assert.equal(applet.autoBackupPending, true);
+});
+
+test("inline backup warnings are shown once without starting a second backup", () => {
+  const clock = { value: 0 };
+  const warnAutomaticBackup = loadAppletMethod(
+    "_maybeWarnAutomaticBackup",
+    "_maybeWarnRejectedArtifactPassphrase",
+    clock
+  );
+  const notifications = [];
+  const applet = {
+    lastAutomaticBackupWarningKey: "",
+    _sanitizeErrorMessage: (value) => String(value || ""),
+    _notify: (...args) => notifications.push(args),
+    _normalizePayloadStatus: () => "done",
+  };
+  const payload = {
+    status: "done",
+    automatic_backup: {
+      archive_name: "soc-backup-warning.socenc",
+      warnings: ["backup temporary cleanup failed"],
+    },
+  };
+  warnAutomaticBackup.call(applet, payload, "done");
+  warnAutomaticBackup.call(applet, payload, "done");
+  assert.equal(notifications.length, 1);
+  assert.equal(notifications[0][2], true);
+  assert.match(notifications[0][1], /backup temporary cleanup failed/);
+});
+
+test("Wayland never serializes X11 target identity", () => {
+  const clock = { value: 0 };
+  const targetSnapshot = loadAppletMethod(
+    "_targetXWindowSnapshot",
+    "_targetXWindowMatchesSnapshot",
+    clock
+  );
+  const targetWindow = {
+    get_wm_class: () => "org.example.Editor",
+    get_title: () => "Editor",
+  };
+  const snapshot = targetSnapshot.call({
+    targetWindow,
+    targetWindowXid: "42",
+    targetWindowXTitle: "Editor",
+    targetWindowXClass: "org.example.Editor",
+    targetWindowGeneration: 3,
+    _isWaylandSession: () => true,
+    _isTargetWindowXLookupPending: () => false,
+    _isUsableTargetWindow: (window) => window === targetWindow,
+    _windowProbeValue: (window, method) => String(window[method]() || "").toLowerCase(),
+  });
+  assert.equal(snapshot.window, targetWindow);
+  assert.equal(snapshot.xid, undefined);
+  assert.equal(snapshot.windowClass, "org.example.editor");
+  assert.equal(snapshot.windowTitle, "editor");
+  assert.equal(snapshot.targetWindowGeneration, 3);
+});
+
+test("X11 target validation tolerates mutable terminal titles but rejects class changes", () => {
+  const clock = { value: 0 };
+  const matchesSnapshot = loadAppletMethod(
+    "_targetXWindowMatchesSnapshot",
+    "_targetXWindowMatchesSnapshotTitle",
+    clock
+  );
+  const calls = [];
+  const applet = {
+    targetWindowGeneration: 8,
+    _isWaylandSession: () => false,
+    _isTargetWindowXLookupPending: () => false,
+    _xWindowLooksLikeSpeedOfCinnamon: () => false,
+    _xdotoolOutput(args, _maxBytes, callback) {
+      calls.push(args);
+      if (args[0] === "getactivewindow") {
+        callback("42");
+      } else {
+        callback("org.gnome.Terminal");
+      }
+      return true;
+    },
+  };
+  const snapshot = {
+    xid: "42",
+    windowClass: "org.gnome.terminal",
+    windowTitle: "codex - old tab title",
+    targetWindowGeneration: 8,
+  };
+  let result;
+  matchesSnapshot.call(applet, snapshot, (matches) => {
+    result = matches;
+  });
+  assert.equal(result, true);
+  assert.deepEqual(calls.map((args) => args[0]), ["getactivewindow", "getwindowclassname"]);
+
+  applet._xdotoolOutput = (args, _maxBytes, callback) => {
+    if (args[0] === "getactivewindow") {
+      callback("42");
+    } else {
+      callback("org.example.Editor");
+    }
+    return true;
+  };
+  result = undefined;
+  matchesSnapshot.call(applet, snapshot, (matches) => {
+    result = matches;
+  });
+  assert.equal(result, false);
+});
+
+test("X11 target validation rejects protected class before paste", () => {
+  const clock = { value: 0 };
+  const matchesSnapshot = loadAppletMethod(
+    "_targetXWindowMatchesSnapshot",
+    "_targetXWindowMatchesSnapshotTitle",
+    clock
+  );
+  const notifications = [];
+  const applet = {
+    targetWindowGeneration: 4,
+    _isWaylandSession: () => false,
+    _isTargetWindowXLookupPending: () => false,
+    _xWindowLooksLikeSpeedOfCinnamon: (_title, windowClass) => windowClass === "protected-class",
+    _notifySelfProtectionBlocked: (title, windowClass) => notifications.push({ title, windowClass }),
+    _xdotoolOutput(args, _maxBytes, callback) {
+      callback(args[0] === "getactivewindow" ? "7" : "protected-class");
+      return true;
+    },
+  };
+  let result;
+  matchesSnapshot.call(applet, {
+    xid: "7",
+    windowClass: "protected-class",
+    windowTitle: "mutable title",
+    targetWindowGeneration: 4,
+  }, (matches) => {
+    result = matches;
+  });
+  assert.equal(result, false);
+  assert.deepEqual(notifications, [{ title: "", windowClass: "protected-class" }]);
+});
+
+test("keyboard process refuses locked screen and runs only when unlocked", () => {
+  const clock = { value: 0 };
+  const spawnKeyboardProcess = loadAppletMethod(
+    "_spawnKeyboardProcess",
+    "_spawnKeyboardArgs",
+    clock
+  );
+  const calls = [];
+  let screenState = "The screensaver is active";
+  let failureMessage;
+  const applet = {
+    _lifecycleAllowsWork: () => true,
+    _recordLifecycleError() {},
+    _screenSaverAllowsKeyboardInput: loadAppletMethod(
+      "_screenSaverAllowsKeyboardInput",
+      "_spawnKeyboardAfterFocus",
+      clock
+    ),
+    _findTrustedProgramInPath: (name) => `/usr/bin/${name}`,
+    _coerceSpawnArgs: (args) => args,
+    _runBoundedSubprocess(args, _env, _options, callback) {
+      calls.push(Array.from(args));
+      if (args[1] === "--query") {
+        callback(screenState, "", { completed: true });
+      } else {
+        callback("", "", { completed: true });
+      }
+      return { token: calls.length };
+    },
+  };
+  let result;
+  spawnKeyboardProcess.call(applet, ["/usr/bin/xdotool", "key", "ctrl+v"], (completed, message) => {
+    result = completed;
+    failureMessage = message;
+  }, 1000);
+  assert.equal(result, false);
+  assert.equal(failureMessage, "Keyboard input blocked because the screen is locked");
+  assert.deepEqual(calls, [["/usr/bin/cinnamon-screensaver-command", "--query"]]);
+
+  screenState = "screensaver state unavailable";
+  calls.length = 0;
+  result = undefined;
+  failureMessage = undefined;
+  spawnKeyboardProcess.call(applet, ["/usr/bin/xdotool", "key", "ctrl+v"], (completed, message) => {
+    result = completed;
+    failureMessage = message;
+  }, 1000);
+  assert.equal(result, false);
+  assert.equal(failureMessage, "Keyboard input blocked: screen lock state unavailable");
+  assert.deepEqual(calls, [["/usr/bin/cinnamon-screensaver-command", "--query"]]);
+
+  screenState = "The screensaver is not active";
+  calls.length = 0;
+  result = undefined;
+  failureMessage = undefined;
+  spawnKeyboardProcess.call(applet, ["/usr/bin/xdotool", "key", "ctrl+v"], (completed) => {
+    result = completed;
+  }, 1000);
+  assert.equal(result, true);
+  assert.deepEqual(calls, [
+    ["/usr/bin/cinnamon-screensaver-command", "--query"],
+    ["/usr/bin/xdotool", "key", "ctrl+v"],
+  ]);
+
+  applet._findTrustedProgramInPath = () => null;
+  calls.length = 0;
+  result = undefined;
+  spawnKeyboardProcess.call(applet, ["/usr/bin/xdotool", "key", "ctrl+v"], (completed) => {
+    result = completed;
+  }, 1000);
+  assert.equal(result, false);
+  assert.deepEqual(calls, []);
+});
+
+test("keyboard process does not start after operation becomes stale during lock query", () => {
+  const clock = { value: 0 };
+  const spawnKeyboardProcess = loadAppletMethod(
+    "_spawnKeyboardProcess",
+    "_spawnKeyboardArgs",
+    clock
+  );
+  const calls = [];
+  let queryCallback;
+  let operationCurrent = true;
+  let failureMessage;
+  const applet = {
+    _lifecycleAllowsWork: () => true,
+    _recordLifecycleError() {},
+    _screenSaverAllowsKeyboardInput: loadAppletMethod(
+      "_screenSaverAllowsKeyboardInput",
+      "_spawnKeyboardAfterFocus",
+      clock
+    ),
+    _findTrustedProgramInPath: (name) => `/usr/bin/${name}`,
+    _coerceSpawnArgs: (args) => args,
+    _runBoundedSubprocess(args, _env, _options, callback) {
+      calls.push(Array.from(args));
+      if (args[1] === "--query") {
+        queryCallback = callback;
+      }
+      return { token: calls.length };
+    },
+  };
+  let result;
+  spawnKeyboardProcess.call(
+    applet,
+    ["/usr/bin/xdotool", "key", "ctrl+v"],
+    (completed, message) => {
+      result = completed;
+      failureMessage = message;
+    },
+    1000,
+    () => operationCurrent
+  );
+  operationCurrent = false;
+  queryCallback("The screensaver is not active", "", { completed: true });
+  assert.equal(result, false);
+  assert.equal(failureMessage, undefined);
+  assert.deepEqual(calls, [["/usr/bin/cinnamon-screensaver-command", "--query"]]);
+});
+
+test("paste resolves keyboard backend again at keystroke boundary", () => {
+  const clock = { value: 0 };
+  const pasteAfterFocus = loadAppletMethod(
+    "_pasteClipboardAfterFocus",
+    "_typeTextAfterFocus",
+    clock
+  );
+  const calls = [];
+  const applet = {
+    lastTranscript: "text",
+    _isTerminalTargetWindow: () => false,
+    _targetXWindowSnapshot: () => ({ window: {} }),
+    _preferredKeyboardProgram: () => ({ kind: "wtype", path: "/usr/bin/wtype" }),
+    _spawnKeyboardAfterFocus(...args) {
+      calls.push(args);
+      return true;
+    },
+    _setStatus() {},
+    _completeKeyboardInsertFailure() {},
+  };
+
+  assert.equal(
+    pasteAfterFocus.call(
+      applet,
+      false,
+      "hello",
+      () => {},
+      () => true,
+      { kind: "xdotool", path: "/usr/bin/xdotool" }
+    ),
+    true
+  );
+  assert.equal(Array.from(calls[0][0]).join("\u0000"), "/usr/bin/wtype\u0000-M\u0000ctrl\u0000v\u0000-m\u0000ctrl");
+});
+
+test("Codex terminal uses configured submit key", () => {
+  const clock = { value: 0 };
+  const pasteAfterFocus = loadAppletMethod(
+    "_pasteClipboardAfterFocus",
+    "_typeTextAfterFocus",
+    clock
+  );
+  const calls = [];
+  const applet = {
+    lastTranscript: "text",
+    _isTerminalTargetWindow: () => true,
+    _isCodexTerminalTargetWindow: () => true,
+    _codexTerminalSubmitKey: () => "Tab",
+    _targetXWindowSnapshot: () => ({ window: {} }),
+    _preferredKeyboardProgram: () => ({ kind: "xdotool", path: "/usr/bin/xdotool" }),
+    _spawnKeyboardAfterFocus(...args) {
+      calls.push(args);
+      return true;
+    },
+    _setStatus() {},
+    _completeKeyboardInsertFailure() {},
+  };
+
+  assert.equal(
+    pasteAfterFocus.call(applet, true, "hello", () => {}, () => true),
+    true
+  );
+  assert.deepEqual(Array.from(calls[0][1]), ["/usr/bin/xdotool", "key", "--clearmodifiers", "Tab"]);
+
+  applet._codexTerminalSubmitKey = () => "F6";
+  pasteAfterFocus.call(applet, true, "hello", () => {}, () => true);
+  assert.deepEqual(Array.from(calls[1][1]), ["/usr/bin/xdotool", "key", "--clearmodifiers", "F6"]);
 });
 
 test("old clipboard-paste setting migrates once and preserves auto-submit", () => {
@@ -213,6 +660,7 @@ function makeCaptureApplet(clock) {
       clock
     ),
     _findTrustedProgramInPath: (name) => `/usr/bin/${name}`,
+    _isWaylandSession: () => false,
     _lifecycleAllowsWork: () => true,
     _notifySelfProtectionBlocked() {},
     _recordLifecycleError() {},
@@ -360,6 +808,7 @@ function makeTargetApplet(clock) {
       clock
     ),
     _isUsableTargetWindow: () => false,
+    _isWaylandSession: () => false,
     _shortMenuText: (value, limit) => String(value).slice(0, limit),
     _xWindowLooksLikeSpeedOfCinnamon: () => false,
     _notifySelfProtectionBlocked() {},
@@ -679,6 +1128,149 @@ test("duplicate clipboard callback while paste is pending is ignored", () => {
   state.processCallbacks[0](true);
 
   assert.deepEqual(state.completions, [true]);
+});
+
+test("GTK clipboard target probe times out into configured xclip fallback", () => {
+  const clock = { value: 0 };
+  const nativeTargetSnapshot = loadAppletMethod(
+    "_clipboardNativeTargetSnapshotAsync",
+    "_clipboardPayloadSnapshotAsync",
+    clock,
+    {
+      CLIPBOARD_COMMAND_TIMEOUT_MS: 1500,
+      CLIPBOARD_MAX_TARGETS: 16,
+      Gdk: {
+        Display: { get_default: () => ({}) },
+        Atom: { intern: () => "CLIPBOARD" },
+      },
+      Gtk: {
+        Clipboard: {
+          get_for_display: () => ({ request_targets: () => {} }),
+        },
+      },
+    }
+  );
+  const payloadSnapshot = loadAppletMethod(
+    "_clipboardPayloadSnapshotAsync",
+    "_clipboardPayloadFingerprintFromTargetsAsync",
+    clock,
+    {
+      CLIPBOARD_COMMAND_TIMEOUT_MS: 1500,
+      CLIPBOARD_MAX_TARGETS: 16,
+      CLIPBOARD_PAYLOAD_FINGERPRINT_MAX_BUDGET_MS: 6000,
+      Gdk: {
+        Display: { get_default: () => ({}) },
+        Atom: { intern: () => "CLIPBOARD" },
+      },
+      Gtk: {
+        Clipboard: {
+          get_for_display: () => ({ request_targets: () => {} }),
+        },
+      },
+    }
+  );
+  let timerCallback;
+  let clearedTimers = 0;
+  let externalCalls = [];
+  let snapshot;
+  const applet = {
+    clipboardBackend: "xclip-fallback",
+    _lifecycleAllowsWork: () => true,
+    _guardStateCallback: (_name, callback) => callback,
+    _clipboardUnknownPayloadSnapshot: () => ({ signature: "unknown", payloadFingerprint: "unknown" }),
+    _clipboardNativeTargetSnapshotAsync: nativeTargetSnapshot,
+    _clipboardProgramSpec: () => ({
+      program: "xclip",
+      targetArgs: ["-selection", "clipboard", "-t", "TARGETS", "-out"],
+    }),
+    _clipboardTargetList: (program, args, callback) => {
+      externalCalls.push([program, args]);
+      callback("UTF8_STRING\ntext/plain\n", "xclip");
+      return true;
+    },
+    _clipboardNonTextPayloadTargets: () => [],
+    _clipboardPayloadFingerprintFromTargetsAsync: (_spec, _targets, callback) => callback("no-nontext"),
+    _clipboardPayloadDescriptionFromTargets: () => "clipboard text",
+    _scheduleTrackedTimer: (name, delay, callback) => {
+      assert.match(name, /^clipboard-native-target-\d+$/);
+      assert.equal(delay, 1500);
+      timerCallback = callback;
+      return 42;
+    },
+    _clearTrackedTimer: (name) => {
+      assert.match(name, /^clipboard-native-target-\d+$/);
+      clearedTimers += 1;
+      return true;
+    },
+    _recordLifecycleError: (name, error) => { throw error || new Error(name); },
+    _normalizeClipboardBackend: (value) => value,
+  };
+
+  assert.equal(payloadSnapshot.call(applet, (value) => { snapshot = value; }), true);
+  assert.equal(snapshot, undefined);
+  assert.equal(typeof timerCallback, "function");
+  assert.equal(timerCallback(), false);
+  assert.equal(snapshot.signature, "UTF8_STRING\ntext/plain\n");
+  assert.equal(snapshot.hasNonTextPayload, false);
+  assert.equal(snapshot.payloadFingerprint, "no-nontext");
+  assert.equal(snapshot.description, "clipboard text");
+  assert.deepEqual(externalCalls, [[
+    "xclip",
+    ["-selection", "clipboard", "-t", "TARGETS", "-out"],
+  ]]);
+  assert.equal(clearedTimers, 1);
+});
+
+test("parallel GTK clipboard probes keep independent tracked timers", () => {
+  const clock = { value: 0 };
+  const nativeTargetSnapshot = loadAppletMethod(
+    "_clipboardNativeTargetSnapshotAsync",
+    "_clipboardPayloadSnapshotAsync",
+    clock,
+    {
+      CLIPBOARD_COMMAND_TIMEOUT_MS: 1500,
+      CLIPBOARD_MAX_TARGETS: 16,
+      Gdk: {
+        Display: { get_default: () => ({}) },
+        Atom: { intern: () => "CLIPBOARD" },
+      },
+      Gtk: {
+        Clipboard: {
+          get_for_display: () => ({ request_targets: () => {} }),
+        },
+      },
+    }
+  );
+  const scheduled = new Map();
+  const cleared = [];
+  let nextSourceId = 0;
+  const applet = {
+    _lifecycleAllowsWork: () => true,
+    _clipboardNonTextPayloadTargets: () => [],
+    _scheduleTrackedTimer: (name, delay, callback) => {
+      assert.equal(delay, 1500);
+      const sourceId = ++nextSourceId;
+      scheduled.set(name, { callback, sourceId });
+      return sourceId;
+    },
+    _clearTrackedTimer: (name) => {
+      cleared.push(name);
+      scheduled.delete(name);
+      return true;
+    },
+    _recordLifecycleError: (name, error) => { throw error || new Error(name); },
+  };
+
+  assert.equal(nativeTargetSnapshot.call(applet, () => {}), true);
+  assert.equal(nativeTargetSnapshot.call(applet, () => {}), true);
+  assert.equal(scheduled.size, 2);
+  const timerNames = [...scheduled.keys()];
+  assert.notEqual(timerNames[0], timerNames[1]);
+
+  assert.equal(scheduled.get(timerNames[0]).callback(), false);
+  assert.equal(scheduled.get(timerNames[1]).callback(), false);
+  assert.deepEqual(cleared, timerNames);
+  assert.equal(scheduled.size, 0);
 });
 
 test("paste without follow-up revalidates target before completion", () => {
@@ -1300,6 +1892,7 @@ function makeAsyncTargetRememberApplet(clock) {
     ),
     _terminateProcessesByGroup: () => true,
     _isUsableTargetWindow: () => false,
+    _isWaylandSession: () => false,
     _windowLooksLikeSpeedOfCinnamon: () => false,
     _rememberActiveXWindow(callback) {
       pendingCallback = callback;

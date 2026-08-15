@@ -1,3 +1,4 @@
+import unittest
 from pathlib import Path
 import re
 
@@ -27,3 +28,11 @@ def test_security_scan_run_blocks_do_not_interpolate_ref_input_directly():
     assert run_blocks
     for block in run_blocks:
         assert "${{ inputs.ref }}" not in block
+
+def load_tests(loader, tests, pattern):
+    suite = unittest.TestSuite(tests)
+    for name in sorted(globals()):
+        value = globals()[name]
+        if name.startswith("test_") and callable(value):
+            suite.addTest(unittest.FunctionTestCase(value, description=name))
+    return suite

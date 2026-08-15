@@ -28,6 +28,7 @@ fi
   pipewire-utils \
   pulseaudio-utils \
   xdotool \
+  wtype \
   libnotify
 
 cat <<'MSG'

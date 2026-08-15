@@ -31,6 +31,23 @@ def _require_tool(name: str) -> str:
     return path
 
 
+def _require_unlocked_screensaver() -> None:
+    command = _require_tool("cinnamon-screensaver-command")
+    try:
+        result = subprocess.run(
+            [command, "--query"],
+            capture_output=True,
+            check=False,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise unittest.SkipTest(f"live paste test requires an unlocked screensaver: {exc}") from exc
+    state = f"{result.stdout}\n{result.stderr}".lower()
+    if result.returncode != 0 or ("not active" not in state and "inactive" not in state):
+        raise unittest.SkipTest("live paste test requires an unlocked screensaver")
+
+
 def _run(
     args: list[str],
     *,
@@ -89,7 +106,8 @@ def _require_cinnamon_applet() -> None:
   return A.definitions.some(d =>
     (d.real_uuid === {json.dumps(APPLET_UUID)} || d.uuid === {json.dumps(APPLET_UUID)}) &&
     !!d.applet &&
-    typeof d.applet._copyAndMaybePasteTranscriptText === "function"
+    typeof d.applet._copyAndMaybePasteTranscriptText === "function" &&
+    typeof d.applet._screenSaverAllowsKeyboardInput === "function"
   );
 }})()
 """
@@ -97,7 +115,7 @@ def _require_cinnamon_applet() -> None:
     except (AssertionError, subprocess.SubprocessError) as exc:
         raise unittest.SkipTest(f"live paste test requires Cinnamon Eval: {exc}") from exc
     if payload is not True:
-        raise unittest.SkipTest(f"live paste test requires running applet {APPLET_UUID}")
+        raise unittest.SkipTest(f"live paste test requires current running applet {APPLET_UUID}")
 
 
 def _require_clipboard_target_probe() -> None:
@@ -194,6 +212,7 @@ def _trigger_applet_clipboard_paste(
     *,
     simulate_menu_click: bool = False,
     auto_paste_window_title: str = "",
+    insert_method: str = "clipboard-paste",
     retitle_window_id: str = "",
     retitle_window_name: str = "",
     clear_target_window_id: str = "",
@@ -274,7 +293,7 @@ def _trigger_applet_clipboard_paste(
   const oldAppendSpace = applet.appendSpace;
   const oldAutoPasteWindowTitle = applet.autoPasteWindowTitle;
   const oldClipboardPayloadSnapshotAsync = applet._clipboardPayloadSnapshotAsync;
-  applet.insertMethod = "clipboard-paste";
+  applet.insertMethod = {json.dumps(insert_method)};
   applet.appendSpace = false;
   applet.autoPasteWindowTitle = {json.dumps(auto_paste_window_title)};
   applet._clipboardPayloadSnapshotAsync = function(callback) {{
@@ -340,6 +359,7 @@ class LivePasteEditorTest(unittest.TestCase):
         terminal = _require_tool("gnome-terminal")
         xdotool = _require_tool("xdotool")
         _require_cinnamon_applet()
+        _require_unlocked_screensaver()
         _require_clipboard_target_probe()
 
         paste_text = f"soc-terminal-paste-{uuid.uuid4().hex}"
@@ -380,6 +400,7 @@ class LivePasteEditorTest(unittest.TestCase):
                     paste_text,
                     simulate_menu_click=simulate_menu_click,
                     auto_paste_window_title="Terminal",
+                    insert_method="clipboard-paste-submit",
                     retitle_window_id=window_id if change_title_after_capture else "",
                     retitle_window_name=changed_title if change_title_after_capture else "",
                     clear_target_window_id=window_id,
@@ -422,6 +443,7 @@ class LivePasteEditorTest(unittest.TestCase):
         xed = _require_tool("xed")
         xdotool = _require_tool("xdotool")
         _require_cinnamon_applet()
+        _require_unlocked_screensaver()
         _require_clipboard_target_probe()
 
         paste_text = f"soc-live-paste-{uuid.uuid4().hex}"

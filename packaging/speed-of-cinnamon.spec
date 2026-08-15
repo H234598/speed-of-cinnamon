@@ -14,7 +14,7 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildArch:      noarch
 Requires:       python3
-Requires:       python3-cryptography
+Requires:       python3-cryptography >= 50.0.0
 Requires:       cinnamon
 Requires:       pipewire-utils
 Requires:       pulseaudio-utils
@@ -22,6 +22,7 @@ Requires:       libnotify
 Requires:       python3-pywhispercpp
 Recommends:     libsecret
 Recommends:     xdotool
+Recommends:     wtype
 Recommends:     xclip
 Recommends:     xsel
 Recommends:     alsa-utils

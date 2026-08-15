@@ -456,6 +456,51 @@ class ModelsTest(unittest.TestCase):
         ):
             models._write_model_checksum_cache()
 
+    def test_write_model_checksum_cache_merges_concurrent_disk_entries(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", True),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            disk_key = str(cache_path.parent / "disk-model.bin")
+            local_key = str(cache_path.parent / "local-model.bin")
+            entry = {"checksum": "a" * 40, "size": 1, "mtime_ns": 1}
+            cache_path.write_text(json.dumps({disk_key: entry}), encoding="utf-8")
+            models._model_checksum_cache[local_key] = {**entry, "size": 2}
+
+            models._write_model_checksum_cache()
+
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            self.assertEqual(payload[disk_key], entry)
+            self.assertEqual(payload[local_key]["size"], 2)
+
+    def test_clear_model_checksum_cache_preserves_concurrent_disk_entries(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", True),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            removed_path = cache_path.parent / "removed-model.bin"
+            kept_key = str(cache_path.parent / "kept-model.bin")
+            entry = {"checksum": "a" * 40, "size": 1, "mtime_ns": 1}
+            models._model_checksum_cache[str(removed_path)] = entry
+            cache_path.write_text(
+                json.dumps({kept_key: entry, str(removed_path): entry}),
+                encoding="utf-8",
+            )
+
+            models._clear_model_checksum_cache(removed_path)
+
+            payload = json.loads(cache_path.read_text(encoding="utf-8"))
+            self.assertIn(kept_key, payload)
+            self.assertNotIn(str(removed_path), payload)
+
     def test_model_checksum_cache_prunes_stale_entries(self) -> None:
         spec = models.ModelSpec(
             name="cache-prune",
@@ -1148,6 +1193,16 @@ class ModelsTest(unittest.TestCase):
         self.assertIn("speed-of-cinnamon/models/whisper.cpp/ggml-tiny.en.bin", payload[0]["path"])
         self.assertFalse(payload[0]["downloaded"])
 
+    def test_list_models_forwards_integrity_verification_flag(self) -> None:
+        spec = models.CATALOG[0]
+        with (
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "model_status", return_value={"name": spec.name}) as mocked_status,
+        ):
+            payload = models.list_models(verify=True)
+        self.assertEqual(payload, [{"name": spec.name}])
+        mocked_status.assert_called_once_with(spec, verify=True)
+
     def test_catalog_includes_german_tiny_model(self) -> None:
         spec = models.resolve_model("tiny-de")
         self.assertEqual(spec.filename, "ggml-tiny-de.bin")
@@ -1460,16 +1515,26 @@ class ModelsTest(unittest.TestCase):
             with self.assertRaisesRegex(models.ModelError, "missing per-file checksums"):
                 models.download_model("ct2-unhashed")
 
-    def test_catalog_multifile_models_without_hashes_are_marked_not_downloadable(self) -> None:
-        unhashed_models = [model for model in models.CATALOG if model.files and not model.file_sha1s]
-        self.assertGreater(len(unhashed_models), 0)
-
-        for model in unhashed_models:
+    def test_catalog_multifile_models_have_pinned_file_hashes(self) -> None:
+        multifile_models = [model for model in models.CATALOG if model.files]
+        self.assertGreater(len(multifile_models), 0)
+        for model in multifile_models:
             with self.subTest(model=model.name):
-                status = models.model_status(model)
-                self.assertFalse(status["downloadable"])
-                with self.assertRaisesRegex(models.ModelError, "missing per-file checksums"):
-                    models.download_model(model.name)
+                self.assertEqual({filename for filename, _checksum in model.file_sha1s}, set(model.files))
+                self.assertTrue(models._model_is_downloadable(model))
+
+    def test_catalog_ctranslate2_models_match_published_file_lists(self) -> None:
+        expected_files = {
+            "ct2-base-int8": ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"),
+            "ct2-base": ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"),
+            "ct2-tiny-de": ("config.json", "model.bin", "preprocessor_config.json", "tokenizer.json", "vocabulary.json"),
+            "ct2-small-de": ("config.json", "model.bin", "tokenizer.json", "tokenizer_config.json", "vocabulary.json"),
+            "ct2-small": ("config.json", "model.bin", "tokenizer.json", "vocabulary.txt"),
+        }
+        for model in models.CATALOG:
+            if model.model_format == "ctranslate2":
+                with self.subTest(model=model.name):
+                    self.assertEqual(model.files, expected_files[model.name])
 
     def test_catalog_single_file_models_with_invalid_checksums_are_not_downloadable(self) -> None:
         spec = models.ModelSpec(
@@ -4072,6 +4137,34 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(models.default_whisper_cpp_model_path(), "")
             path.write_bytes(good_data)
             self.assertEqual(models.default_whisper_cpp_model_path(), str(path))
+
+    def test_model_path_integrity_distinguishes_catalog_and_custom_models(self) -> None:
+        good_data = b"good model"
+        spec = models.ModelSpec(
+            name="integrity-boundary",
+            filename="ggml-integrity-boundary.bin",
+            size="1 KiB",
+            sha1=hashlib.sha1(good_data).hexdigest(),
+            description="integrity boundary",
+        )
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "CATALOG", (spec,)),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            path = models.model_path(spec)
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b"tampered model")
+            self.assertFalse(models.model_path_is_verified(path))
+            path.write_bytes(good_data)
+            self.assertTrue(models.model_path_is_verified(path))
+            equivalent_path = path.parent / "nested" / ".." / path.name
+            self.assertTrue(models.model_path_is_verified(equivalent_path))
+            custom_path = Path(tmp) / "custom-model.bin"
+            custom_path.write_bytes(b"custom model")
+            self.assertIsNone(models.model_path_is_verified(custom_path))
 
     def test_default_model_path_does_not_trust_stale_checksum_cache(self) -> None:
         good_data = b"good model"

@@ -6,6 +6,7 @@ This document covers local checks, coverage, release archives, RPMs, and CI beha
 
 ```bash
 make check
+make check-fast
 make lint-workflows
 make python-security-scan
 make shell-security-scan
@@ -19,7 +20,11 @@ development. CI installs a pinned `actionlint` release before running workflow l
 `make python-security-scan` runs Bandit over `src/speed_of_cinnamon`, and `make shell-security-scan` runs ShellCheck
 over `scripts/*.sh`. `make security-scan` runs both local scans.
 
-`make check` runs:
+`make check-fast` is the iterative guard: version consistency, syntax/JSON checks, local-priority regression tests, and
+the applet keyboard tests. Use it after each focused change. It does not run the full repository suite.
+
+`make check` is the release-grade full suite. Run it once after implementation and targeted fixes are complete, directly
+before release validation. It runs:
 
 - Python unit tests with `unittest`,
 - Python bytecode compilation for `src` and `tests`,
@@ -28,6 +33,9 @@ over `scripts/*.sh`. `make security-scan` runs both local scans.
 - backend doctor smoke check,
 - repository security scan,
 - workflow linting (best-effort locally, fail-closed in CI).
+
+Version consistency is checked against `pyproject.toml`, Cinnamon metadata, settings schema, and the manpage. A release
+cannot proceed with stale embedded version text.
 
 The authorship guard checks the expected GitHub repo URL, commit author/committer identity, applet metadata, Python
 project metadata, RPM spec metadata, and forbidden upstream author markers in tracked text files.

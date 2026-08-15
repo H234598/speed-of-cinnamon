@@ -1,13 +1,11 @@
 from __future__ import annotations
 
-import json
-import os
 import tempfile
 import unittest
 from pathlib import Path
 from unittest import mock
 
-from speed_of_cinnamon import backup_manifest
+from speed_of_cinnamon import backup, backup_manifest
 
 
 class BackupManifestTest(unittest.TestCase):
@@ -35,6 +33,12 @@ class BackupManifestTest(unittest.TestCase):
             selection={"config": False, "transcripts": True, "audio": False},
             artifacts=(artifact or self._artifact(),),
         )
+
+    def test_close_fd_strict_mode_surfaces_close_failure(self) -> None:
+        with mock.patch.object(backup.os, "close", side_effect=OSError("close denied")):
+            backup._close_fd(42)
+            with self.assertRaises(OSError):
+                backup._close_fd(42, strict=True)
 
     def test_manifest_roundtrip_is_canonical(self) -> None:
         manifest = self._manifest()

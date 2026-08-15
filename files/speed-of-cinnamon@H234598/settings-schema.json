@@ -131,7 +131,9 @@
         "artifact-encryption-help-passphrase",
         "artifact-encryption-help-off",
         "clipboard-backend",
-        "auto-paste-window-title"
+        "auto-paste-window-title",
+        "codex-terminal-submit-key",
+        "codex-terminal-custom-key"
       ]
     },
     "backup-section": {
@@ -199,7 +201,7 @@
   },
   "about-version": {
     "type": "label",
-    "description": "Version: 0.2.5\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
+    "description": "Version: 0.3.5\nAuthor: H234598\nCinnamon-native voice typing for Fedora Cinnamon."
   },
   "main-menu-settings-map": {
     "type": "label",
@@ -476,6 +478,23 @@
     "tooltip": "Built-in marker names match the full window title or known window classes/app IDs; custom strings match the full window title case-insensitively. Matching targets receive Enter only after Clipboard and paste, not after Clipboard only. Empty disables Auto-Submit. Max 4096 chars.",
     "default": "codex, Terminal, Telegram, Ghostty, Kitty"
   },
+  "codex-terminal-submit-key": {
+    "type": "combobox",
+    "description": "Codex terminal submit key",
+    "tooltip": "When Auto-Submit targets a terminal whose title or class contains codex, choose the key sent after paste. Other targets keep Enter. Custom uses the separate key field.",
+    "options": {
+      "Enter": "enter",
+      "Tab": "tab",
+      "Custom": "custom"
+    },
+    "default": "enter"
+  },
+  "codex-terminal-custom-key": {
+    "type": "entry",
+    "description": "Custom Codex terminal submit key",
+    "tooltip": "One key name for xdotool/wtype, for example F6, Escape, Space, Page_Up, or Return. Invalid values fail closed to F6. Used only when Codex terminal submit key is Custom.",
+    "default": "F6"
+  },
   "auto-backup-enabled": {
     "type": "switch",
     "description": "Enable automatic backup after successful transcription",
@@ -561,8 +580,8 @@
   },
   "auto-backup-help": {
     "type": "label",
-    "description": "Automatic backups create versioned archives from selected settings, transcripts, and recordings. Archives are written asynchronously after transcription and use the selected encryption mode. Retention is manual for now; verify archives and preview restores through the CLI before restoring.",
-    "tooltip": "Security first: choose keyring or passphrase encryption, keep the destination private, and test restore-dry-run before trusting a backup."
+    "description": "Automatic backups create versioned archives from selected settings, transcripts, and recordings. Archives are written asynchronously after transcription and use the selected encryption mode. Retention is manual for now; verify archives with the CLI and use its non-overwriting restore command only for a new destination.",
+    "tooltip": "Security first: choose keyring or passphrase encryption, keep the destination private, run restore-dry-run first, then use backup restore only for a new destination."
   },
   "cli-path": {
     "type": "entry",

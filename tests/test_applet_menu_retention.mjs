@@ -95,6 +95,7 @@ const methodContext = {
   MAX_INPUT_SOURCE_MENU_ENTRIES: 128,
   MAX_MODEL_MENU_ENTRIES: 128,
   MAX_VOICE_MODEL_MENU_ENTRIES: 128,
+  MODEL_MENU_REFRESH_TTL_MS: 5000,
   TEXT_POLISHING_PRESETS: ["default", "clean", "code"],
   PopupMenu: { PopupMenuItem, PopupSubMenuMenuItem, PopupIconMenuItem, PopupSeparatorMenuItem },
   St: { IconType: { SYMBOLIC: 1 } },
@@ -346,6 +347,44 @@ test("voice model menu reuses lazy catalog rows and current model data", () => {
   row.menu.open();
   row._socUse.activate();
   assert.equal(state.selectedVoice, "voice-0-999");
+});
+
+test("voice model refresh skips recent CLI work but refreshes after TTL", () => {
+  const previousDate = methodContext.Date;
+  let now = 1000;
+  methodContext.Date = { now: () => now };
+  try {
+    const refreshModelMenu = loadMethod("_refreshModelMenu", "_populateModelMenu");
+    let spawned = 0;
+    const state = {
+      ...commonState(),
+      modelItem: { menu: { isOpen: true } },
+      _modelMenuFingerprint: { loaded: true },
+      _modelMenuLastRefreshAt: 1000,
+      modelMenuRefreshToken: null,
+      voiceModelActionToken: null,
+      voiceModelCleanupFailed: false,
+      isCommandRunning: false,
+      _hasActiveRecordingState: () => false,
+      _hasLocalProcessingWorkflow: () => false,
+      _terminateProcessesByGroup: () => true,
+      _modelsArgs: () => ["speed-of-cinnamon", "models"],
+      _spawnJson: () => { spawned += 1; return {}; },
+    };
+
+    refreshModelMenu.call(state);
+    assert.equal(spawned, 0);
+
+    now = 6001;
+    refreshModelMenu.call(state);
+    assert.equal(spawned, 1);
+
+    state.modelMenuRefreshToken = null;
+    refreshModelMenu.call(state, true);
+    assert.equal(spawned, 2);
+  } finally {
+    methodContext.Date = previousDate;
+  }
 });
 
 test("text model menu reuses rows and current provider data", () => {

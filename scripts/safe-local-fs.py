@@ -27,6 +27,10 @@ def _source_file_signature(stat_result: os.stat_result) -> tuple[int, int, int, 
     )
 
 
+MAX_TREE_ENTRIES = 100_000
+MAX_TREE_FILE_BYTES = 512 * 1024 * 1024
+
+
 def fail(message: str) -> None:
     print(message, file=sys.stderr)
     raise SystemExit(1)
@@ -57,7 +61,7 @@ def _open_dir_chain(path: Path, *, action: str, create: bool = False, missing_ok
                 next_fd = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd)
             except FileNotFoundError:
                 if missing_ok:
-                    os.close(fd)
+                    _close_fds(fd, action=action)
                     return None
                 if not create:
                     fail(f"path is missing during {action}: {path}")
@@ -71,12 +75,12 @@ def _open_dir_chain(path: Path, *, action: str, create: bool = False, missing_ok
                 if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
                     fail(f"refusing to follow symlink during {action}: {path}")
                 fail(f"failed to open path during {action}: {path}: {exc}")
-            os.close(fd)
+            _close_fds(fd, action=action)
             fd = next_fd
         return fd
     except BaseException:
         with context_suppress():
-            os.close(fd)
+            _close_fds(fd, action=action, primary_error=sys.exc_info()[1])
         raise
 
 
@@ -86,6 +90,21 @@ class context_suppress:
 
     def __exit__(self, *_args: object) -> bool:
         return True
+
+
+def _close_fds(*fds: int, action: str, primary_error: BaseException | None = None) -> None:
+    cleanup_errors: list[BaseException] = []
+    for fd in fds:
+        try:
+            os.close(fd)
+        except BaseException as exc:
+            cleanup_errors.append(exc)
+    if not cleanup_errors:
+        return
+    if primary_error is not None:
+        primary_error.add_note(f"{action} descriptor cleanup failed")
+        return
+    raise OSError(f"{action} descriptor cleanup failed") from cleanup_errors[0]
 
 
 def _open_parent(path: Path, *, action: str, create: bool = False, missing_ok: bool = False) -> tuple[int | None, str]:
@@ -310,7 +329,7 @@ def cmd_mkdirs(args: argparse.Namespace) -> None:
     path = _validate_absolute(args.path, "directory path")
     fd = _open_dir_chain(path, action=args.action, create=True)
     if fd is not None:
-        os.close(fd)
+        _close_fds(fd, action=args.action)
 
 
 def cmd_replace(args: argparse.Namespace) -> None:
@@ -320,9 +339,9 @@ def cmd_replace(args: argparse.Namespace) -> None:
     dst_fd, dst_name = _open_parent(dst, action=args.action)
     if src_fd is None or dst_fd is None:
         if src_fd is not None:
-            os.close(src_fd)
+            _close_fds(src_fd, action=args.action)
         if dst_fd is not None:
-            os.close(dst_fd)
+            _close_fds(dst_fd, action=args.action)
         fail(f"failed to open parent directory during {args.action}")
     try:
         _check_leaf(src_fd, src_name, src, action=args.action, kind=args.src_kind, must_exist=True)
@@ -386,8 +405,7 @@ def cmd_replace(args: argparse.Namespace) -> None:
         _fsync_directory_fd(dst_fd, action=args.action)
         _fsync_directory_fd(src_fd, action=args.action)
     finally:
-        os.close(src_fd)
-        os.close(dst_fd)
+        _close_fds(src_fd, dst_fd, action=args.action, primary_error=sys.exc_info()[1])
 
 
 def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> None:
@@ -424,11 +442,11 @@ def _write_bytes_atomic(dst: Path, data: bytes, mode: int, *, action: str) -> No
     except BaseException:
         with context_suppress():
             if fd is not None:
-                os.close(fd)
+                _close_fds(fd, action=action, primary_error=sys.exc_info()[1])
             _cleanup_temporary_file(parent_fd, tmp_name, tmp_stat, action=action)
         raise
     finally:
-        os.close(parent_fd)
+        _close_fds(parent_fd, action=action, primary_error=sys.exc_info()[1])
 
 
 def cmd_write_wrapper(args: argparse.Namespace) -> None:
@@ -531,11 +549,11 @@ def _copy_file_atomically_from_checked_source(
     except BaseException:
         with context_suppress():
             if fd is not None:
-                os.close(fd)
+                _close_fds(fd, action=action, primary_error=sys.exc_info()[1])
             _cleanup_temporary_file(parent_fd, tmp_name, tmp_stat, action=action)
         raise
     finally:
-        os.close(parent_fd)
+        _close_fds(parent_fd, action=action, primary_error=sys.exc_info()[1])
 
 
 def cmd_copy_file(args: argparse.Namespace) -> None:
@@ -578,7 +596,7 @@ def cmd_copy_file(args: argparse.Namespace) -> None:
                 max_bytes=max_bytes,
             )
     finally:
-        os.close(src_fd)
+        _close_fds(src_fd, action=args.action, primary_error=sys.exc_info()[1])
 
 
 def _hash_file(path: Path) -> str:
@@ -604,7 +622,7 @@ def cmd_assert_file(args: argparse.Namespace) -> None:
         if stat_result.st_nlink != 1:
             fail(f"refusing to use hardlinked {args.label} during {args.action}: {path}")
     finally:
-        os.close(parent_fd)
+        _close_fds(parent_fd, action=args.action, primary_error=sys.exc_info()[1])
 
 
 def cmd_identity(args: argparse.Namespace) -> None:
@@ -621,7 +639,7 @@ def cmd_identity(args: argparse.Namespace) -> None:
             fail(f"refusing to use hardlinked file during {args.action}: {path}")
         print(_identity_text(stat_result))
     finally:
-        os.close(parent_fd)
+        _close_fds(parent_fd, action=args.action, primary_error=sys.exc_info()[1])
 
 
 def _reject_unsafe_tree(
@@ -640,9 +658,7 @@ def _reject_unsafe_tree(
     if stat_is_symlink_no_follow(root_stat.st_mode) or not stat_is_dir_no_follow(root_stat.st_mode):
         fail(f"refusing to install unsafe {label}: {tree}")
     root_identity = _stat_identity(root_stat)
-    for root, dirs, files in os.walk(tree):
-        dirs[:] = [name for name in dirs if name not in exclude_names]
-        files = [name for name in files if name not in exclude_names]
+    for root, dirs, files in _bounded_tree_walk(tree, label, exclude_names=exclude_names):
         root_path = Path(root)
         for name in [*dirs, *files]:
             path = root_path / name
@@ -663,6 +679,54 @@ def _reject_unsafe_tree(
     if _stat_identity(final_root_stat) != root_identity:
         fail(f"{label} root changed during traversal: {tree}")
     return root_identity
+
+
+def _bounded_tree_walk(
+    tree: Path,
+    label: str,
+    *,
+    exclude_names: frozenset[str],
+):
+    pending = [tree]
+    inspected_entries = 0
+    inspected_file_bytes = 0
+    while pending:
+        root = pending.pop()
+        dirs: list[str] = []
+        files: list[str] = []
+        try:
+            with os.scandir(root) as entries:
+                for directory_entry in entries:
+                    name = directory_entry.name
+                    if name in exclude_names:
+                        continue
+                    inspected_entries += 1
+                    if inspected_entries > MAX_TREE_ENTRIES:
+                        fail(f"{label} contains too many entries (max {MAX_TREE_ENTRIES})")
+                    path = Path(directory_entry.path)
+                    try:
+                        stat_result = path.lstat()
+                    except OSError as exc:
+                        fail(f"failed to inspect {label}: {path}: {exc}")
+                    if stat_is_symlink_no_follow(stat_result.st_mode):
+                        fail(f"refusing to install unsafe {label}: {path}")
+                    if stat_is_dir_no_follow(stat_result.st_mode):
+                        dirs.append(name)
+                        pending.append(path)
+                        continue
+                    if stat_is_file_no_follow(stat_result.st_mode):
+                        inspected_file_bytes += stat_result.st_size
+                        if inspected_file_bytes > MAX_TREE_FILE_BYTES:
+                            fail(
+                                f"{label} contains too many file bytes "
+                                f"(max {MAX_TREE_FILE_BYTES})"
+                            )
+                        files.append(name)
+                        continue
+                    fail(f"refusing unsupported file type in {label}: {path}")
+        except OSError as exc:
+            fail(f"failed to inspect {label}: {root}: {exc}")
+        yield root, dirs, files
 
 
 def _reject_symlink_ancestors(path: Path, label: str) -> None:
@@ -702,9 +766,7 @@ def _tree_signature(
         )
     else:
         signature["."] = (0, 0, root_stat.st_mode, 0, "")
-    for root, dirs, files in os.walk(tree):
-        dirs[:] = [name for name in dirs if name not in exclude_names]
-        files = [name for name in files if name not in exclude_names]
+    for root, dirs, files in _bounded_tree_walk(tree, "source tree", exclude_names=exclude_names):
         root_path = Path(root)
         for name in [*dirs, *files]:
             path = root_path / name
@@ -820,7 +882,7 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
         try:
             _check_leaf(stage_fd, leaf, staged_tree, action=args.action, kind="dir", must_exist=True)
         finally:
-            os.close(stage_fd)
+            _close_fds(stage_fd, action=args.action, primary_error=sys.exc_info()[1])
         existing = _lstat_at(parent_fd, leaf)
         _assert_target_unchanged(parent_fd, leaf, existing, action=args.action)
         if existing is not None:
@@ -892,7 +954,7 @@ def cmd_install_tree(args: argparse.Namespace) -> None:
         # A backup that is still marked as created is the only recovery copy
         # left after a failed rollback.  Keep it instead of deleting the
         # previous installation while handling the original error.
-        os.close(parent_fd)
+        _close_fds(parent_fd, action=args.action, primary_error=sys.exc_info()[1])
 
 
 def cmd_remove(args: argparse.Namespace) -> None:
@@ -932,7 +994,7 @@ def cmd_remove(args: argparse.Namespace) -> None:
         else:
             fail(f"unsupported remove kind: {args.kind}")
     finally:
-        os.close(parent_fd)
+        _close_fds(parent_fd, action=args.action, primary_error=sys.exc_info()[1])
 
 
 def cmd_remove_leaf(args: argparse.Namespace) -> None:
@@ -966,7 +1028,7 @@ def cmd_remove_leaf(args: argparse.Namespace) -> None:
             os.unlink(leaf, dir_fd=parent_fd)
         _fsync_directory_fd(parent_fd, action=args.action)
     finally:
-        os.close(parent_fd)
+        _close_fds(parent_fd, action=args.action, primary_error=sys.exc_info()[1])
 
 
 def cmd_rmdir(args: argparse.Namespace) -> None:
@@ -1005,7 +1067,7 @@ def cmd_rmdir(args: argparse.Namespace) -> None:
                 return
             raise
     finally:
-        os.close(parent_fd)
+        _close_fds(parent_fd, action=args.action, primary_error=sys.exc_info()[1])
 
 
 def build_parser() -> argparse.ArgumentParser:

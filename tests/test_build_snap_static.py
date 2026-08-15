@@ -63,6 +63,14 @@ class BuildSnapStaticTest(unittest.TestCase):
         self.assertIn('"--expected-dst-identity",', activation)
         self.assertIn('"missing",', activation)
 
+    def test_build_metadata_reads_are_bounded(self) -> None:
+        source = BUILD_SNAP.read_text(encoding="utf-8")
+
+        self.assertIn("MAX_PROJECT_METADATA_BYTES = 1 << 20", source)
+        self.assertIn("handle.read(MAX_PROJECT_METADATA_BYTES + 1)", source)
+        self.assertIn("MAX_SNAPCRAFT_TEMPLATE_BYTES = 1 << 20", source)
+        self.assertIn("handle.read(MAX_SNAPCRAFT_TEMPLATE_BYTES + 1)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

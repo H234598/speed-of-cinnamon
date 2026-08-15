@@ -387,6 +387,21 @@ class RecorderTest(unittest.TestCase):
         self.assertIn("ffmpeg process cleanup failed", notes)
         self.assertNotIn("cleanup interrupted", notes)
 
+    def test_bounded_communicate_reports_incomplete_cleanup_for_generic_error(self) -> None:
+        process = mock.Mock()
+        process.communicate.side_effect = OSError("read failed")
+
+        with mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", return_value=False):
+            with self.assertRaises(OSError) as raised:
+                recorder_module._communicate_recorder_process_bounded(
+                    process,
+                    timeout=1,
+                    process_name="pactl",
+                )
+
+        self.assertIs(raised.exception, process.communicate.side_effect)
+        self.assertIn("pactl process cleanup was incomplete", "\n".join(raised.exception.__notes__))
+
     def test_run_ffmpeg_rejects_invalid_timeout(self) -> None:
         for value, message in (
             (0, "ffmpeg timeout must be positive"),
@@ -502,6 +517,24 @@ class RecorderTest(unittest.TestCase):
                     os.kill(child_pid, 9)
                 except ProcessLookupError:
                     pass
+
+    def test_run_ffmpeg_reaps_after_leader_exit_on_late_output_error(self) -> None:
+        process = mock.Mock()
+        process.pid = 12345
+        process.returncode = 0
+        process.poll.return_value = 0
+
+        with (
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+            mock.patch.object(recorder_module, "_communicate_recorder_process_bounded"),
+            mock.patch.object(recorder_module, "_finish_bounded_output_captures"),
+            mock.patch.object(recorder_module, "_read_ffmpeg_output", side_effect=RecorderError("late output error")),
+            mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", return_value=True) as mocked_reap,
+        ):
+            with self.assertRaisesRegex(RecorderError, "late output error"):
+                recorder_module._run_ffmpeg_bounded(["/usr/bin/ffmpeg"], timeout=2, pass_fds=())
+
+        mocked_reap.assert_called_once_with(process)
 
     def test_run_ffmpeg_cleans_reparented_new_session_child_with_pipe_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -3268,6 +3301,26 @@ class RecorderTest(unittest.TestCase):
                 os.kill(child_pid, 9)
                 self.fail(f"pactl descendant {child_pid} survived timeout")
 
+    def test_run_pactl_reaps_after_leader_exit_on_late_error(self) -> None:
+        process = mock.Mock()
+        process.pid = 12345
+        process.returncode = 1
+        process.poll.return_value = 0
+
+        with (
+            mock.patch.object(recorder_module, "_command_path", return_value="/usr/bin/pactl"),
+            mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+            mock.patch.object(recorder_module, "_communicate_recorder_process_bounded"),
+            mock.patch.object(recorder_module, "_pipe_targets_for_process", return_value=[]),
+            mock.patch.object(recorder_module, "_finish_bounded_output_captures"),
+            mock.patch.object(recorder_module, "_ensure_file_head", return_value=b""),
+            mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", return_value=True) as mocked_reap,
+        ):
+            with self.assertRaisesRegex(RecorderError, "pactl failed"):
+                recorder_module._run_pactl_command(["pactl"], required=True)
+
+        mocked_reap.assert_called_once_with(process)
+
     def test_run_pactl_cleans_descendant_when_leader_exits_with_pipe_open(self) -> None:
         if not Path("/proc/self/stat").exists() or not hasattr(os, "killpg"):
             self.skipTest("process group inspection unavailable")
@@ -3712,7 +3765,7 @@ Source #13
                 recorder_module,
                 "_recording_process_stat_fields",
                 return_value=["S", "1", str(pid), str(pid)],
-            ) as leader_stat,
+            ),
             mock.patch.object(recorder_module, "_run_kill") as mocked_kill,
             mock.patch.object(
                 recorder_module.time,
@@ -3862,9 +3915,18 @@ Source #13
 
     def test_recording_process_stat_decode_errors_fail_closed(self) -> None:
         error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid process name")
-        with mock.patch.object(recorder_module.Path, "read_text", side_effect=error):
+        with mock.patch.object(recorder_module.Path, "open", side_effect=error):
             self.assertIsNone(recorder_module._recording_process_stat_fields(1234))
             self.assertIsNone(recorder_module._recording_process_identity_for_pid(1234))
+
+    def test_recording_process_stat_read_is_bounded(self) -> None:
+        mocked_open = mock.mock_open(read_data="1234 (ffmpeg) S 1 2 3")
+        with mock.patch.object(recorder_module.Path, "open", mocked_open):
+            stat_fields = recorder_module._recording_process_stat_fields(1234)
+
+        self.assertEqual(stat_fields, ["S", "1", "2", "3"])
+        mocked_open.assert_called_once_with("r", encoding="ascii")
+        mocked_open.return_value.read.assert_called_once_with(recorder_module.MAX_PROC_STAT_BYTES)
 
     def test_recording_process_identity_caches_boot_id_only(self) -> None:
         previous_cache = recorder_module._BOOT_ID_CACHE
@@ -3872,9 +3934,10 @@ Source #13
         stat_fields[19] = "12345"
         try:
             recorder_module._BOOT_ID_CACHE = None
+            mocked_open = mock.mock_open(read_data="boot-id")
             with (
                 mock.patch.object(recorder_module, "_recording_process_stat_fields", return_value=stat_fields),
-                mock.patch.object(recorder_module.Path, "read_text", return_value="boot-id") as mocked_read,
+                mock.patch.object(recorder_module.Path, "open", mocked_open),
             ):
                 first = recorder_module._recording_process_identity_for_pid(1234)
                 second = recorder_module._recording_process_identity_for_pid(1234)
@@ -3883,7 +3946,8 @@ Source #13
 
         self.assertEqual(first, "boot-id:12345")
         self.assertEqual(second, first)
-        mocked_read.assert_called_once_with(encoding="utf-8")
+        mocked_open.assert_called_once_with("r", encoding="ascii")
+        mocked_open.return_value.read.assert_called_once_with(recorder_module.MAX_PROC_BOOT_ID_BYTES)
 
     def test_recording_process_identity_falls_back_to_pid_start_time_prefix_when_boot_id_missing(self) -> None:
         previous_cache = recorder_module._BOOT_ID_CACHE
@@ -3895,7 +3959,7 @@ Source #13
                 mock.patch.object(recorder_module, "_recording_process_stat_fields", return_value=stat_fields),
                 mock.patch.object(
                     recorder_module.Path,
-                    "read_text",
+                    "open",
                     side_effect=OSError("boot_id missing"),
                 ) as mocked_read,
             ):

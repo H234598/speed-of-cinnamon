@@ -1,5 +1,7 @@
 name: speed-of-cinnamon
 base: core22
+architectures:
+  - amd64
 version: git
 title: Speed of Cinnamon
 summary: Cinnamon-native voice typing helper
@@ -19,10 +21,19 @@ parts:
   app:
     plugin: dump
     source: .
+    build-packages:
+      - python3-pip
     stage-packages:
       - python3-minimal
-      - python3-cryptography
       - libsecret-tools
+    override-build: |
+      craftctl default
+      python3 -m pip install \
+        --disable-pip-version-check \
+        --no-cache-dir \
+        --target="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages" \
+        --require-hashes \
+        -r "${CRAFT_PROJECT_DIR}/snap/requirements.txt"
     organize:
       snap/local/bin/speed-of-cinnamon: bin/speed-of-cinnamon
 

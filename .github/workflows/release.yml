@@ -127,6 +127,8 @@ jobs:
     permissions:
       contents: write
     runs-on: ubuntu-24.04
+    environment:
+      name: release
     env:
       SNAP_BUILD: "1"
       BUILD_GENERIC_RPM: ${{ github.event_name != 'workflow_dispatch' && '1' || (inputs.build_generic_rpm && '1' || '0') }}
@@ -229,7 +231,19 @@ jobs:
             exit 1
           fi
 
-          project_version="$(python3 -c 'import pathlib, tomllib; data = tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8")); print(data["project"]["version"])')"
+          project_version="$(python3 - <<'PY'
+          import pathlib
+          import tomllib
+
+          MAX_PROJECT_METADATA_BYTES = 1 << 20
+          with pathlib.Path("pyproject.toml").open("rb") as handle:
+              payload = handle.read(MAX_PROJECT_METADATA_BYTES + 1)
+          if len(payload) > MAX_PROJECT_METADATA_BYTES:
+              raise SystemExit("pyproject.toml is too large")
+          data = tomllib.loads(payload.decode("utf-8"))
+          print(data["project"]["version"])
+          PY
+          )"
           expected_tag="v${project_version}"
 
           if [[ "${tag}" != "${expected_tag}" ]]; then
@@ -260,6 +274,8 @@ jobs:
           } >> "${GITHUB_ENV}"
       - name: Verify project
         run: make check
+      - name: Verify source-bound release attestations
+        run: make verify-release-attestations
       - name: Build and verify source archive
         run: make dist-check
       - name: Build RPM package

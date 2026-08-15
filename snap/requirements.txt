@@ -1,0 +1,3 @@
+# Hash-locked Python runtime dependencies for the Snap payload.
+--require-hashes
+-r ../.github/requirements/ci-project.txt

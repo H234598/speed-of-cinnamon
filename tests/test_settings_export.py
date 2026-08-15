@@ -651,6 +651,46 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaisesRegex(SettingsExportError, "metadata conflicts"):
                 read_export(path)
 
+    def test_read_export_rejects_unknown_private_metadata_name(self) -> None:
+        for field in ("included_private_settings", "excluded_private_settings"):
+            with self.subTest(field=field):
+                payload = build_export({"language": "de"})
+                payload[field].append("not-a-private-setting")
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "settings-export.json"
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(SettingsExportError, "unknown settings export"):
+                        read_export(path)
+
+    def test_read_export_rejects_duplicate_private_metadata_name(self) -> None:
+        cases = [
+            build_export({"language": "de"}),
+            build_export({"personal-context": "private"}, include_private_settings=True),
+        ]
+        for payload in cases:
+            with self.subTest(field=payload["included_private_settings"]):
+                field = "included_private_settings" if payload["included_private_settings"] else "excluded_private_settings"
+                payload[field].append(payload[field][0])
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "settings-export.json"
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(SettingsExportError, "duplicate settings export"):
+                        read_export(path)
+
+    def test_read_export_rejects_incomplete_private_metadata(self) -> None:
+        cases = [
+            (build_export({"language": "de"}), "excluded_private_settings"),
+            (build_export({"personal-context": "private"}, include_private_settings=True), "included_private_settings"),
+        ]
+        for payload, field in cases:
+            with self.subTest(field=field):
+                payload[field].pop()
+                with tempfile.TemporaryDirectory() as tmp:
+                    path = Path(tmp) / "settings-export.json"
+                    path.write_text(json.dumps(payload), encoding="utf-8")
+                    with self.assertRaisesRegex(SettingsExportError, "metadata is incomplete"):
+                        read_export(path)
+
     def test_read_export_uses_schema_aligned_show_panel_label_default(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"

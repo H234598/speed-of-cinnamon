@@ -36,7 +36,8 @@ if [[ "${run_status}" == "1" ]]; then
 fi
 
 if command -v -- python3 >/dev/null 2>&1; then
-  if python3 - <<'PY'
+  yaml_status=0
+  python3 - <<'PY' || yaml_status=$?
 import sys
 import glob
 
@@ -45,17 +46,28 @@ try:
 except ImportError:
     sys.exit(2)
 
+MAX_WORKFLOW_BYTES = 1 * 1024 * 1024
+
 for workflow in sorted(glob.glob('.github/workflows/*.yml') + glob.glob('.github/workflows/*.yaml')):
-    with open(workflow, 'r', encoding='utf-8') as stream:
-        yaml.safe_load(stream)
+    try:
+        with open(workflow, 'rb') as stream:
+            payload = stream.read(MAX_WORKFLOW_BYTES + 1)
+        if len(payload) > MAX_WORKFLOW_BYTES:
+            raise ValueError(f"workflow exceeds {MAX_WORKFLOW_BYTES} bytes")
+        text = payload.decode('utf-8')
+        yaml.safe_load(text)
+    except (OSError, UnicodeDecodeError, ValueError, yaml.YAMLError) as exc:
+        print(f"workflow YAML validation failed: {workflow}: {type(exc).__name__}", file=sys.stderr)
+        sys.exit(1)
     print(f"yaml_ok: {workflow}")
 PY
-  then
+  if [[ "${yaml_status}" == "0" ]]; then
     exit 0
-  else
-    printf 'Python YAML parser unavailable. Install actionlint for full workflow checks.\n' >&2
-    exit 1
   fi
+  if [[ "${yaml_status}" == "2" ]]; then
+    printf 'Python YAML parser unavailable. Install actionlint for full workflow checks.\n' >&2
+  fi
+  exit 1
 fi
 
 printf 'No actionlint or YAML fallback available. Install actionlint or python3+PyYAML.\n' >&2

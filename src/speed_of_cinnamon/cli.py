@@ -25,7 +25,7 @@ from typing import NoReturn
 
 from . import __version__
 from . import doctor
-from .backup import BackupError, BackupInput, create_backup, restore_dry_run, verify_backup
+from .backup import BackupError, BackupInput, create_backup, restore_backup, restore_dry_run, verify_backup
 from .alarms import (
     _locked_alarm_store,
     _save_alarm_store_unlocked,
@@ -64,6 +64,8 @@ from .models import (
     remove_model,
 )
 from .output import insert_text
+from .proc_safety import _read_proc_boot_id, _read_proc_stat
+from .process_priority import apply_process_priority
 from .paths import (
     APP_ID,
     APP_NAME,
@@ -226,6 +228,7 @@ MAX_SETTINGS_JSON_CHARS = 250_000
 MAX_SETTINGS_FILE_BYTES = 1_000_000
 MAX_DIAGNOSTICS_JSON_BYTES = 1_000_000
 MAX_FINALIZATION_LOCK_BYTES = 1_024
+MAX_PROC_STAT_BYTES = 64 * 1024
 MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS = 300
 MAX_URL_CHARS = 2_048
 MAX_ALARM_CATCH_UP_MINUTES = 14_400
@@ -304,7 +307,7 @@ def _finalization_lock_path(state_path: Path) -> Path:
 
 def _read_finalization_lock_pid_state(lock_path: Path) -> object:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         return _FINALIZATION_LOCK_PID_UNKNOWN
     try:
         nonblock_flag = _required_nonblocking_flag()
@@ -369,7 +372,7 @@ def _finalization_lock_identity_for_pid(pid: int) -> str | None:
     if pid <= 0:
         return None
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+        raw = _read_proc_stat(pid)
     except OSError:
         return None
     try:
@@ -380,7 +383,7 @@ def _finalization_lock_identity_for_pid(pid: int) -> str | None:
     if len(rest) < 20:
         return None
     try:
-        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        boot_id = _read_proc_boot_id()
     except OSError:
         return None
     start_time = rest[19]
@@ -393,13 +396,14 @@ def _finalization_lock_process_start_time_for_pid(pid: int) -> float | None:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return None
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+        raw = _read_proc_stat(pid)
         close = raw.rindex(")")
         rest = raw[close + 2 :].split()
         if len(rest) < 20:
             return None
         start_time_ticks = int(rest[19])
-        proc_stat = Path("/proc/stat").read_text(encoding="utf-8")
+        with Path("/proc/stat").open("r", encoding="ascii") as handle:
+            proc_stat = handle.read(MAX_PROC_STAT_BYTES)
         boot_time = next(
             int(line.split()[1])
             for line in proc_stat.split("\n")
@@ -434,7 +438,7 @@ def _process_is_zombie(pid: int) -> bool | None:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+        raw = _read_proc_stat(pid)
         close = raw.rindex(")")
         rest = raw[close + 2 :].split()
     except (OSError, UnicodeError, ValueError, IndexError):
@@ -531,7 +535,7 @@ def _unlink_finalization_lock_at(
     operation_error: BaseException | None = None
     try:
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if nofollow_flag is None:
+        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
             return False
         try:
             nonblock_flag = _required_nonblocking_flag()
@@ -649,7 +653,7 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
     except RuntimeError:
         return None
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         return None
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     try:
@@ -1295,7 +1299,7 @@ def read_file_tail(path: Path, max_chars: int) -> str:
     except RuntimeError as exc:
         raise OSError(str(exc)) from exc
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise OSError("secure file open is not supported on this platform")
     nonblock_flag = _required_nonblocking_flag()
     fd: int | None = None
@@ -1413,8 +1417,13 @@ def _read_binary_output(file: io.BufferedRandom, max_bytes: int, *, field_name: 
     if size > max_bytes:
         raise RuntimeError(f"{field_name} exceeded {max_bytes} bytes")
     file.seek(0)
+    data = file.read(max_bytes + 1)
+    if not isinstance(data, bytes):
+        raise RuntimeError(f"{field_name} must return bytes")
+    if len(data) > max_bytes:
+        raise RuntimeError(f"{field_name} exceeded {max_bytes} bytes")
     try:
-        text = file.read().decode("utf-8")
+        text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise RuntimeError(f"{field_name} is not valid UTF-8: {exc}") from exc
     if _contains_escaped_null(text):
@@ -1572,6 +1581,8 @@ def _public_transcription_failure_message(error: BaseException) -> str:
         "configured model requires whisper.cpp",
         "configured whisper model requires whisper.cpp",
         "configured whisper model path is missing",
+        "whisper.cpp model failed integrity verification",
+        "CTranslate2 model failed integrity verification",
     }:
         return (
             "transcribe failed (SOC-T003): selected transcription model is unavailable. "
@@ -2464,7 +2475,9 @@ def _prepare_transient_transcript_path_impl(
                 )
             _raise_sanitized_transient_exception(primary_error)
 
-    nofollow_flag = getattr(os, "O_NOFOLLOW", 0)
+    nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+        raise OSError("secure transient transcript file open is not supported on this platform")
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     fd: int | None = None
     file_stat: os.stat_result | None = None
@@ -2646,7 +2659,7 @@ def _copy_recording_artifact_to_backup(
     expected_stat: os.stat_result,
 ) -> None:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise RuntimeError("secure recording cleanup backup copy is not supported on this platform")
     try:
         nonblock_flag = _required_nonblocking_flag()
@@ -3572,7 +3585,7 @@ def _prepare_private_file(
         raise RuntimeError(f"{field_name} must be a path")
     assert_safe_path_components(path, field_name=field_name)
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise RuntimeError(f"secure {field_name} open is not supported on this platform")
     try:
         parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
@@ -4205,7 +4218,7 @@ def _recorder_process_liveness_snapshot(
     if group_live is None:
         return False, "recording process liveness could not be verified; recording state preserved"
     if group_live is False:
-        return True, "recording process could not be stopped safely"
+        return True, "recording process has exited; stop confirmation was unavailable"
     return False, "recording process could not be stopped safely"
 
 
@@ -9330,7 +9343,7 @@ def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
 
 def command_models(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    return {"status": "done", "models": _redact_model_payload_paths(list_models())}
+    return {"status": "done", "models": _redact_model_payload_paths(list_models(verify=True))}
 
 
 def command_text_models(args: argparse.Namespace) -> dict[str, object]:
@@ -9987,14 +10000,23 @@ def command_backup_create(args: argparse.Namespace) -> dict[str, object]:
     opened = False
     if _coerce_bool(getattr(args, "open", False), field_name="open") and result.archive_path is not None:
         opened = _open_path_with_desktop(result.archive_path.parent)
+    warnings = list(result.warnings)
     return {
         "status": "skipped" if result.skipped else "done",
-        "message": "backup skipped; selected artifacts are unchanged" if result.skipped else "backup created",
+        "message": (
+            "backup skipped; selected artifacts are unchanged"
+            if result.skipped
+            else "backup created with cleanup warnings"
+            if warnings
+            else "backup created"
+        ),
         "opened": opened,
         "archive_name": result.archive_path.name if result.archive_path is not None else "",
+        "archive_path": str(result.archive_path) if result.archive_path is not None else "",
         "archive_present": result.archive_path is not None,
         "encrypted": result.manifest is not None and result.manifest.encryption_enabled,
         "artifacts": len(result.manifest.artifacts) if result.manifest is not None else 0,
+        "warnings": warnings,
     }
 
 
@@ -10044,6 +10066,7 @@ def _run_inline_auto_backup(
         raise RuntimeError("automatic audio backup did not complete")
     if result.get("status") == "done" and result.get("archive_present") is not True:
         raise RuntimeError("automatic audio backup did not publish an archive")
+    result.pop("archive_path", None)
     return result
 
 
@@ -10078,6 +10101,29 @@ def command_backup_restore_dry_run(args: argparse.Namespace) -> dict[str, object
         "artifacts": len(plan.manifest.artifacts),
         "members": len(plan.archive_members),
         "destination_present": destination.exists(),
+        "conflicts": list(plan.conflicts),
+        "conflict_count": len(plan.conflicts),
+    }
+
+
+def command_backup_restore(args: argparse.Namespace) -> dict[str, object]:
+    archive_path = _coerce_path(args.archive_path, field_name="backup archive path", resolve=True)
+    destination = _coerce_path(args.destination_directory, field_name="restore destination", resolve=True)
+    plan = restore_backup(
+        archive_path,
+        destination,
+        source_roots=(default_settings_export_file().parent, transcript_dir(), recordings_dir()),
+    )
+    return {
+        "status": "done",
+        "message": "backup restored",
+        "verified": True,
+        "encrypted": plan.manifest.encryption_enabled,
+        "artifacts": len(plan.manifest.artifacts),
+        "members": len(plan.archive_members),
+        "destination": str(destination),
+        "conflicts": [],
+        "conflict_count": 0,
     }
 
 
@@ -10982,6 +11028,12 @@ def build_parser() -> argparse.ArgumentParser:
     backup_restore.add_argument("destination_directory")
     backup_restore.set_defaults(handler=command_backup_restore_dry_run)
 
+    backup_restore_apply = backup_subparsers.add_parser("restore")
+    add_common_options(backup_restore_apply)
+    backup_restore_apply.add_argument("archive_path")
+    backup_restore_apply.add_argument("destination_directory")
+    backup_restore_apply.set_defaults(handler=command_backup_restore)
+
     cleanup = subparsers.add_parser("cleanup")
     add_common_options(cleanup)
     cleanup.add_argument("--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS)
@@ -11210,6 +11262,7 @@ def run(argv: list[str] | None = None) -> int:
 
 
 def main() -> None:
+    apply_process_priority()
     sys.exit(run())
 
 

@@ -1,4 +1,4 @@
-.PHONY: check test coverage lint lint-workflows lint-workflows-check python-security-scan shell-security-scan security-scan verify-authorship smoke-doctor smoke-backend real-e2e-acceptance verify-real-e2e-attestation local-model-e2e-acceptance verify-local-model-e2e-attestation applet-safety-check applet-crash-safety release-dry-run release-dry-run-no-snap release release-require-snap dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean version-next
+.PHONY: check check-fast test coverage lint lint-workflows lint-workflows-check python-security-scan shell-security-scan security-scan verify-version-consistency verify-authorship smoke-doctor smoke-backend real-e2e-acceptance verify-real-e2e-attestation local-model-e2e-acceptance verify-local-model-e2e-attestation export-release-attestations verify-release-attestations applet-safety-check applet-crash-safety release-dry-run release-dry-run-no-snap release release-require-snap dist dist-check rpm rpm-check rpm-generic rpm-generic-check snap snap-check release-validate-flags install-local uninstall-local clean version-next
 SHELL := /usr/bin/env bash
 
 PYTHON := $(shell command -v python3 2>/dev/null | awk 'NR==1 {print}')
@@ -12,7 +12,11 @@ PROJECT_VERSION := $(shell $(PYTHON) -c 'import tomllib, pathlib; print(tomllib.
 SNAP_BUILD ?= 1
 BUILD_GENERIC_RPM ?= 1
 
-check: test lint lint-workflows-check verify-authorship smoke-doctor security-scan
+check: verify-version-consistency test lint lint-workflows-check verify-authorship smoke-doctor security-scan
+
+check-fast: verify-version-consistency lint
+	PYTHONPATH=src $(PYTHON) -m unittest tests.test_process_priority tests.test_process_priority_local_model
+	node --test tests/test_applet_keyboard.mjs
 
 test:
 	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests
@@ -30,6 +34,9 @@ lint:
 	$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/metadata.json >/dev/null
 	$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/settings-schema.json >/dev/null
 	node --check files/speed-of-cinnamon@H234598/applet.js >/dev/null
+
+verify-version-consistency:
+	$(PYTHON) scripts/verify-version-consistency.py
 
 lint-workflows-check:
 	@export ACTIONLINT_STRICT=true; \
@@ -75,6 +82,13 @@ local-model-e2e-acceptance:
 verify-local-model-e2e-attestation:
 	./scripts/verify-local-model-e2e-attestation.sh
 
+export-release-attestations:
+	./scripts/export-release-attestations.sh "v$(PROJECT_VERSION)"
+
+verify-release-attestations:
+	@expected_parent="$$(git rev-parse HEAD^ 2>/dev/null)" && \
+		./scripts/verify-release-attestation.py "release-attestations/v$(PROJECT_VERSION)" "$$(pwd -P)" "$${expected_parent}"
+
 applet-safety-check:
 	node --check files/speed-of-cinnamon@H234598/applet.js
 	PYTHONPATH=src $(PYTHON) -m unittest tests.test_applet_static
@@ -87,7 +101,7 @@ applet-crash-safety: applet-safety-check
 version-next:
 	@./scripts/next_version.py $(OPTS)
 
-release-dry-run: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check
+release-dry-run: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation verify-release-attestations dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
 		  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
 	else \
@@ -100,7 +114,7 @@ release-dry-run: check release-validate-flags release-require-snap verify-real-e
 		"v$(PROJECT_VERSION)"
 
 release-dry-run-no-snap: SNAP_BUILD=0
-release-dry-run-no-snap: check release-validate-flags verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check
+release-dry-run-no-snap: check release-validate-flags verify-real-e2e-attestation verify-local-model-e2e-attestation verify-release-attestations dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
 	  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
 	else \
@@ -112,7 +126,7 @@ release-dry-run-no-snap: check release-validate-flags verify-real-e2e-attestatio
 		$(if $(filter 0,$(BUILD_GENERIC_RPM)),--skip-generic-rpm) \
 		"v$(PROJECT_VERSION)"
 
-release: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check
+release: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation verify-release-attestations dist-check rpm rpm-check
 	@if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then \
 	  printf 'Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\n'; \
 	else \
@@ -164,7 +178,7 @@ snap-check: release-validate-flags
 	  ./scripts/verify-snap.sh "$${snap_file}"; \
 	fi
 
-release-validate-flags:
+release-validate-flags: verify-version-consistency
 	@if [ "$(SNAP_BUILD)" != "0" ] && [ "$(SNAP_BUILD)" != "1" ]; then \
 		printf 'SNAP_BUILD must be 0 or 1.\n' >&2; \
 		exit 1; \

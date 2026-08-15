@@ -1149,6 +1149,17 @@ class ArtifactCryptoTest(unittest.TestCase):
                     with artifact_crypto._keyring_initialization_lock():
                         self.fail("lock unexpectedly acquired")
 
+    def test_keyring_initialization_lock_rejects_invalid_no_follow_flag(self) -> None:
+        for value in (None, 0, -1, True, "nofollow"):
+            with self.subTest(value=value):
+                with mock.patch.object(artifact_crypto.os, "O_NOFOLLOW", value, create=True):
+                    with self.assertRaisesRegex(
+                        artifact_crypto.ArtifactCryptoError,
+                        "initialization locking is not supported",
+                    ):
+                        with artifact_crypto._keyring_initialization_lock():
+                            self.fail("lock unexpectedly acquired")
+
     def _pipe_reader(self, payload: bytes) -> object:
         read_fd, write_fd = os.pipe()
         os.write(write_fd, payload)
@@ -1517,12 +1528,27 @@ class ArtifactCryptoTest(unittest.TestCase):
 
         with mock.patch(
             "speed_of_cinnamon.artifact_crypto._terminate_output_process_group",
+            return_value=True,
         ) as mocked_stop:
             artifact_crypto._stop_secret_tool_process(process)
 
         mocked_stop.assert_called_once_with(process)
         process.kill.assert_not_called()
         process.wait.assert_called_once_with(timeout=1)
+
+    def test_secret_tool_stop_reports_failed_process_group_cleanup(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.returncode = None
+        process._soc_process_identity = "owner-identity"
+
+        with mock.patch(
+            "speed_of_cinnamon.artifact_crypto._terminate_output_process_group",
+            return_value=False,
+        ):
+            self.assertFalse(artifact_crypto._stop_secret_tool_process(process))
+
+        process.wait.assert_not_called()
 
     def test_secret_tool_stop_kills_same_session_child_process_group(self) -> None:
         process = subprocess.Popen(
@@ -1646,12 +1672,12 @@ class ArtifactCryptoTest(unittest.TestCase):
         proc_entry = mock.Mock()
         proc_entry.name = "1234"
         stat_entry = mock.Mock()
-        stat_entry.read_text.side_effect = decode_error
+        stat_entry.open.side_effect = decode_error
         proc_entry.joinpath.return_value = stat_entry
 
         with mock.patch.object(artifact_crypto.Path, "iterdir", return_value=(proc_entry,)):
             self.assertIsNone(artifact_crypto._secret_tool_process_group_has_live_descendants(1234))
-        with mock.patch.object(artifact_crypto.Path, "read_text", side_effect=decode_error):
+        with mock.patch.object(artifact_crypto, "_read_proc_stat", side_effect=decode_error):
             self.assertFalse(artifact_crypto._secret_tool_leader_is_gone_or_zombie(1234))
 
     def test_secret_tool_process_scan_reports_live_same_session_different_group(self) -> None:
@@ -1661,7 +1687,7 @@ class ArtifactCryptoTest(unittest.TestCase):
         )
         with (
             mock.patch.object(artifact_crypto.Path, "iterdir", return_value=(Path("/proc/100"),)),
-            mock.patch.object(artifact_crypto.Path, "read_text", return_value=stat_line),
+            mock.patch.object(artifact_crypto, "_read_proc_stat_path", return_value=stat_line),
         ):
             self.assertTrue(artifact_crypto._secret_tool_process_group_has_live_descendants(1234))
 
@@ -1672,7 +1698,7 @@ class ArtifactCryptoTest(unittest.TestCase):
         )
         with (
             mock.patch.object(artifact_crypto.Path, "iterdir", return_value=(Path("/proc/100"),)),
-            mock.patch.object(artifact_crypto.Path, "read_text", return_value=stat_line),
+            mock.patch.object(artifact_crypto, "_read_proc_stat_path", return_value=stat_line),
         ):
             self.assertEqual(artifact_crypto._secret_tool_same_session_process_group_ids(1234), {9999})
 
@@ -1738,10 +1764,14 @@ class ArtifactCryptoTest(unittest.TestCase):
             mock.patch("speed_of_cinnamon.artifact_crypto._secret_tool_path", return_value="/usr/bin/secret-tool"),
             mock.patch("speed_of_cinnamon.artifact_crypto.subprocess.Popen", side_effect=FakePopen),
         ):
-            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "request timed out"):
+            with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "request timed out") as raised:
                 artifact_crypto._run_secret_tool(["lookup", "application", "test"])
 
         self.assertEqual(getattr(fake_proc_holder["proc"], "wait_calls"), 1)
+        self.assertIn(
+            "artifact encryption cleanup failed",
+            getattr(raised.exception, "__notes__", []),
+        )
 
     def test_secret_tool_wait_uses_remaining_request_deadline(self) -> None:
         fake_proc_holder: dict[str, object] = {}

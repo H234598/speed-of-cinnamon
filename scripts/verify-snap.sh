@@ -10,6 +10,7 @@ readonly MAX_SNAP_PATH_CHARS=320
 readonly MAX_SNAP_PATH_DEPTH=40
 readonly MAX_SNAP_FILE_BYTES=$((128 * 1024 * 1024))
 readonly MAX_SNAP_TOTAL_FILE_BYTES=$((1024 * 1024 * 1024))
+readonly MAX_SNAP_LISTING_BYTES=$((16 * 1024 * 1024))
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
@@ -197,7 +198,7 @@ size="${snapshot_size}"
 
 snap_listing="${tmp_dir}/snap-listing.txt"
 unsquashfs -lln -no-progress "${snap_snapshot}" > "${snap_listing}"
-python3 - <<'PY' "${snap_listing}" "${MAX_SNAP_ENTRIES}" "${MAX_SNAP_PATH_CHARS}" "${MAX_SNAP_PATH_DEPTH}" "${MAX_SNAP_FILE_BYTES}" "${MAX_SNAP_TOTAL_FILE_BYTES}"
+python3 - <<'PY' "${snap_listing}" "${MAX_SNAP_ENTRIES}" "${MAX_SNAP_PATH_CHARS}" "${MAX_SNAP_PATH_DEPTH}" "${MAX_SNAP_FILE_BYTES}" "${MAX_SNAP_TOTAL_FILE_BYTES}" "${MAX_SNAP_LISTING_BYTES}"
 from pathlib import PurePosixPath
 from pathlib import Path
 import posixpath
@@ -208,6 +209,7 @@ MAX_SNAP_PATH_CHARS = int(sys.argv[3])
 MAX_SNAP_PATH_DEPTH = int(sys.argv[4])
 MAX_SNAP_FILE_BYTES = int(sys.argv[5])
 MAX_SNAP_TOTAL_FILE_BYTES = int(sys.argv[6])
+MAX_SNAP_LISTING_BYTES = int(sys.argv[7])
 REQUIRED_ENTRIES = {
     "squashfs-root/meta/snap.yaml",
     "squashfs-root/bin/speed-of-cinnamon",
@@ -217,6 +219,7 @@ REQUIRED_RUNTIME_ENTRIES = {
     "squashfs-root/usr/bin/python3",
     "squashfs-root/usr/bin/secret-tool",
     "squashfs-root/usr/lib/python3/dist-packages/cryptography/__init__.py",
+    "squashfs-root/usr/lib/python3/dist-packages/cryptography/__about__.py",
 }
 REQUIRED_REGULAR_ENTRIES = {
     "squashfs-root/meta/snap.yaml",
@@ -224,6 +227,7 @@ REQUIRED_REGULAR_ENTRIES = {
     "squashfs-root/src/speed_of_cinnamon/cli.py",
     "squashfs-root/usr/bin/secret-tool",
     "squashfs-root/usr/lib/python3/dist-packages/cryptography/__init__.py",
+    "squashfs-root/usr/lib/python3/dist-packages/cryptography/__about__.py",
 }
 REQUIRED_EXECUTABLE_ENTRIES = {
     "squashfs-root/bin/speed-of-cinnamon",
@@ -338,10 +342,21 @@ def validate_symlink_target(path: PurePosixPath, target_text: str) -> None:
         raise SystemExit(f"snap package contains unsafe link target: {path} -> {target_text}")
 
 
+def read_bounded_utf8(path: Path, label: str) -> str:
+    with path.open("rb") as handle:
+        payload = handle.read(MAX_SNAP_LISTING_BYTES + 1)
+    if len(payload) > MAX_SNAP_LISTING_BYTES:
+        raise SystemExit(f"{label} exceeds {MAX_SNAP_LISTING_BYTES} bytes")
+    try:
+        return payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise SystemExit(f"{label} is not valid UTF-8") from exc
+
+
 seen: dict[str, str] = {}
 entry_count = 0
 total_file_bytes = 0
-for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\n"):
+for raw in read_bounded_utf8(Path(sys.argv[1]), "snap listing").split("\n"):
     if not raw:
         continue
     entry_count += 1
@@ -408,15 +423,53 @@ PY
 
 snap_yaml="${tmp_dir}/snap.yaml"
 snap_backend="${tmp_dir}/speed-of-cinnamon"
+snap_cryptography_about="${tmp_dir}/cryptography-about.py"
 unsquashfs -cat "${snap_snapshot}" meta/snap.yaml > "${snap_yaml}"
 unsquashfs -cat "${snap_snapshot}" bin/speed-of-cinnamon > "${snap_backend}"
+unsquashfs -cat "${snap_snapshot}" usr/lib/python3/dist-packages/cryptography/__about__.py > "${snap_cryptography_about}"
+python3 - "${snap_cryptography_about}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+MAX_SNAP_METADATA_BYTES = 1 << 20
+about_path = Path(sys.argv[1])
+version = None
+with about_path.open("rb") as handle:
+    payload = handle.read(MAX_SNAP_METADATA_BYTES + 1)
+if len(payload) > MAX_SNAP_METADATA_BYTES:
+    raise SystemExit("snap cryptography metadata is too large")
+try:
+    text = payload.decode("utf-8")
+except UnicodeDecodeError as exc:
+    raise SystemExit("snap cryptography metadata is not valid UTF-8") from exc
+for raw_line in text.split("\n"):
+    match = re.fullmatch(r"__version__\s*=\s*['\"](\d+)\.(\d+)\.(\d+)['\"]", raw_line.strip())
+    if match:
+        version = tuple(int(part) for part in match.groups())
+        break
+
+if version is None:
+    raise SystemExit("snap cryptography version is missing or malformed")
+if version < (50, 0, 0):
+    raise SystemExit(f"snap cryptography is too old: {'.'.join(map(str, version))}; need >= 50.0.0")
+PY
 python3 - "${snap_yaml}" "${snap_filename_version}" <<'PY'
 from pathlib import Path
 import sys
 
+MAX_SNAP_METADATA_BYTES = 1 << 20
 snap_yaml_path, expected_version = sys.argv[1:]
 fields: dict[str, str] = {}
-for raw_line in Path(snap_yaml_path).read_text(encoding="utf-8").split("\n"):
+with Path(snap_yaml_path).open("rb") as handle:
+    payload = handle.read(MAX_SNAP_METADATA_BYTES + 1)
+if len(payload) > MAX_SNAP_METADATA_BYTES:
+    raise SystemExit("snap metadata is too large")
+try:
+    text = payload.decode("utf-8")
+except UnicodeDecodeError as exc:
+    raise SystemExit("snap metadata is not valid UTF-8") from exc
+for raw_line in text.split("\n"):
     if raw_line.startswith("name:") or raw_line.startswith("version:"):
         key, raw_value = raw_line.split(":", 1)
         if key in fields:

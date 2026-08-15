@@ -629,7 +629,7 @@ def _acquire_blacklist_lock(path: Path) -> int:
     except (MemoryError, RecursionError, RuntimeError) as exc:
         raise ValueError("blacklist lock file path is not safe") from exc
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise ValueError("secure blacklist lock open is not supported on this platform")
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     try:

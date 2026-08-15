@@ -45,7 +45,7 @@ def secure_wipe_regular_file_at(
     if not isinstance(expected_stat, os.stat_result):
         raise RuntimeError(f"{field_name} secure deletion identity is invalid")
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise RuntimeError(f"secure deletion is not supported for {field_name}")
     secure_fd = -1
     primary_error: BaseException | None = None

@@ -280,7 +280,14 @@ try:
             # available as a recovery copy instead of risking a partial rollback.
             _run_safe_fs("remove-leaf", "build-snap", backup_path)
 finally:
-    os.close(parent_fd)
+    primary_error = sys.exc_info()[1]
+    try:
+        os.close(parent_fd)
+    except BaseException as cleanup_error:
+        if primary_error is not None:
+            primary_error.add_note("build-snap finalization descriptor cleanup failed")
+        else:
+            raise SystemExit("build-snap finalization descriptor cleanup failed") from cleanup_error
 PY
 }
 
@@ -320,7 +327,14 @@ version="$(
   python3 - <<'PY'
 import tomllib
 from pathlib import Path
-print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])
+
+MAX_PROJECT_METADATA_BYTES = 1 << 20
+with Path("pyproject.toml").open("rb") as handle:
+    payload = handle.read(MAX_PROJECT_METADATA_BYTES + 1)
+if len(payload) > MAX_PROJECT_METADATA_BYTES:
+    raise SystemExit("pyproject.toml is too large")
+data = tomllib.loads(payload.decode("utf-8"))
+print(data["project"]["version"])
 PY
 )"
 if [[ -z "${version}" || ! "${version}" =~ ^[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
@@ -442,6 +456,16 @@ if ! "${safe_fs_cmd[@]}" copy-file build-snap "${repo_dir}/README.md" "${snap_wo
   printf 'failed to prepare temporary snap workspace: %s\n' "${snap_workspace}" >&2
   exit 1
 fi
+if ! "${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace}/.github/requirements"; then
+  printf 'failed to prepare temporary snap lockfile directory: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
+if ! "${safe_fs_cmd[@]}" copy-file build-snap \
+  "${repo_dir}/.github/requirements/ci-project.txt" \
+  "${snap_workspace}/.github/requirements/ci-project.txt" 0644 --dst-must-not-exist; then
+  printf 'failed to prepare temporary snap lockfile: %s\n' "${snap_workspace}" >&2
+  exit 1
+fi
 python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}" <<'PYCODE'
 import os
 import pathlib
@@ -452,7 +476,12 @@ path = pathlib.Path(sys.argv[1])
 output_path = pathlib.Path(sys.argv[2])
 version = sys.argv[3]
 base = sys.argv[4]
-text = path.read_text(encoding="utf-8")
+MAX_SNAPCRAFT_TEMPLATE_BYTES = 1 << 20
+with path.open("rb") as handle:
+    payload = handle.read(MAX_SNAPCRAFT_TEMPLATE_BYTES + 1)
+if len(payload) > MAX_SNAPCRAFT_TEMPLATE_BYTES:
+    raise SystemExit("snapcraft manifest is too large")
+text = payload.decode("utf-8")
 out = []
 replaced = False
 base_replaced = False
@@ -485,15 +514,28 @@ try:
     os.fsync(parent_fd)
     tmp_name = ""
 finally:
+    primary_error = sys.exc_info()[1]
+    cleanup_errors = []
     if fd >= 0:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except BaseException as cleanup_error:
+            cleanup_errors.append(cleanup_error)
     if tmp_name:
         try:
             os.unlink(tmp_name, dir_fd=parent_fd)
             os.fsync(parent_fd)
-        except OSError:
-            pass
-    os.close(parent_fd)
+        except BaseException as cleanup_error:
+            cleanup_errors.append(cleanup_error)
+    try:
+        os.close(parent_fd)
+    except BaseException as cleanup_error:
+        cleanup_errors.append(cleanup_error)
+    if cleanup_errors:
+        if primary_error is not None:
+            primary_error.add_note("build-snap manifest descriptor cleanup failed")
+        else:
+            raise SystemExit("build-snap manifest descriptor cleanup failed") from cleanup_errors[0]
 PYCODE
 snapcraft_mode="$(stat -c '%a' "${snapcraft_file}")"
 if ! snapcraft_rendered_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snapcraft_file_rendered}" --kind file)"; then
@@ -526,7 +568,14 @@ try:
     os.fchmod(fd, int(mode_text, 8))
     os.fsync(fd)
 finally:
-    os.close(fd)
+    primary_error = sys.exc_info()[1]
+    try:
+        os.close(fd)
+    except BaseException as cleanup_error:
+        if primary_error is not None:
+            primary_error.add_note("build-snap chmod descriptor cleanup failed")
+        else:
+            raise SystemExit("build-snap chmod descriptor cleanup failed") from cleanup_error
 PY
 
 if ! (

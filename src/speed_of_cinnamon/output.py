@@ -27,6 +27,7 @@ from .path_safety import (
     write_text_atomically_without_following_symlinks,
 )
 from .paths import state_dir
+from .proc_safety import _read_proc_boot_id, _read_proc_stat, _read_proc_stat_path
 
 
 class OutputError(RuntimeError):
@@ -411,7 +412,7 @@ def _clipboard_lock_pid_is_zombie(pid: int) -> bool:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+        raw = _read_proc_stat(pid)
         close = raw.rindex(")")
         rest = raw[close + 2 :].split()
     except (OSError, UnicodeDecodeError, ValueError):
@@ -439,7 +440,7 @@ def _clipboard_lock_identity_for_pid(pid: int) -> str | None:
     if pid <= 0:
         return None
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").strip()
+        raw = _read_proc_stat(pid)
     except (OSError, UnicodeDecodeError):
         return None
     try:
@@ -451,7 +452,7 @@ def _clipboard_lock_identity_for_pid(pid: int) -> str | None:
         return None
     boot_id = None
     try:
-        boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(encoding="utf-8").strip()
+        boot_id = _read_proc_boot_id()
     except (OSError, UnicodeDecodeError):
         return None
     if not boot_id:
@@ -497,7 +498,7 @@ def _read_clipboard_dedup_lock_identity(path: Path) -> str | None:
 
 def _read_clipboard_dedup_lock_lines_at(parent_fd: int, name: str) -> list[str] | None:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if not isinstance(nofollow_flag, int) or isinstance(nofollow_flag, bool) or nofollow_flag <= 0:
         return None
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
@@ -651,7 +652,7 @@ def _unlink_clipboard_lock_at(
     if expected_stat is not None and not _same_clipboard_lock_snapshot(current, expected_stat):
         return False
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if not isinstance(nofollow_flag, int) or isinstance(nofollow_flag, bool) or nofollow_flag <= 0:
         return False
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     for _ in range(100):
@@ -746,7 +747,7 @@ def _acquire_clipboard_dedup_lock() -> Path | None:
     except RuntimeError:
         return None
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if not isinstance(nofollow_flag, int) or isinstance(nofollow_flag, bool) or nofollow_flag <= 0:
         return None
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     try:
@@ -1142,7 +1143,7 @@ def _acquire_clipboard_pending_quarantine_lock() -> int | None:
     try:
         path = _clipboard_pending_quarantine_lock_path()
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if nofollow_flag is None:
+        if not isinstance(nofollow_flag, int) or isinstance(nofollow_flag, bool) or nofollow_flag <= 0:
             return None
         cloexec_flag = getattr(os, "O_CLOEXEC", 0)
         parent_fd = ensure_directory_without_following_symlinks(
@@ -1987,7 +1988,7 @@ def _same_session_process_identities(session_id: int) -> dict[int, str] | None:
         if not proc_entry.name.isdecimal():
             continue
         try:
-            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+            raw = _read_proc_stat_path(proc_entry.joinpath("stat"))
         except FileNotFoundError:
             continue
         except (OSError, UnicodeDecodeError):
@@ -2027,7 +2028,7 @@ def _process_tree_descendant_identities(process_id: int) -> dict[int, str] | Non
             continue
         member_id = int(proc_entry.name)
         try:
-            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+            raw = _read_proc_stat_path(proc_entry.joinpath("stat"))
         except FileNotFoundError:
             continue
         except (OSError, UnicodeDecodeError):
@@ -2089,7 +2090,7 @@ def _process_pipe_holder_identities(process: subprocess.Popen[bytes]) -> dict[in
             except OSError:
                 continue
         try:
-            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+            raw = _read_proc_stat_path(proc_entry.joinpath("stat"))
             close = raw.rindex(")")
             fields = raw[close + 2 :].split()
             start_time = fields[19]
@@ -2137,7 +2138,7 @@ def _output_process_identity_is_current(process: subprocess.Popen[bytes]) -> boo
 def _process_tree_has_live_processes(process_identities: dict[int, str]) -> bool | None:
     for process_id, expected_start_time in process_identities.items():
         try:
-            raw = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii").strip()
+            raw = _read_proc_stat(process_id)
         except FileNotFoundError:
             continue
         except (OSError, UnicodeDecodeError):
@@ -2173,7 +2174,7 @@ def _kill_output_process_with_pidfd(process_id: int, expected_start_time: str) -
         return False
     try:
         try:
-            raw = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii").strip()
+            raw = _read_proc_stat(process_id)
             close = raw.rindex(")")
             current_start_time = raw[close + 2 :].split()[19]
         except FileNotFoundError:
@@ -2200,7 +2201,7 @@ def _kill_output_process_tree(process_identities: dict[int, str]) -> bool:
     cleanup_incomplete = False
     for process_id, expected_start_time in sorted(process_identities.items()):
         try:
-            raw = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii").strip()
+            raw = _read_proc_stat(process_id)
         except FileNotFoundError:
             continue
         except (OSError, UnicodeDecodeError):
@@ -2253,7 +2254,7 @@ def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
             continue
         process_id = int(proc_entry.name)
         try:
-            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+            raw = _read_proc_stat_path(proc_entry.joinpath("stat"))
         except FileNotFoundError:
             continue
         except (OSError, UnicodeDecodeError):
@@ -2310,7 +2311,7 @@ def _terminate_output_process_group(process: subprocess.Popen[bytes]) -> bool:
                 if not pipe_holders:
                     return descendants is False
             try:
-                raw = Path(f"/proc/{process.pid}/stat").read_text(encoding="ascii").strip()
+                raw = _read_proc_stat(process.pid)
                 close = raw.rindex(")")
                 process_state = raw[close + 2 :].split()[0]
             except FileNotFoundError:
@@ -2911,7 +2912,10 @@ def _clipboard_paste_helper_available() -> bool:
 
 
 def _clipboard_paste_writer_available() -> bool:
-    return bool(_which("xclip") or _which("xsel"))
+    # xsel can write the X11 clipboard but cannot enumerate TARGETS. Without
+    # that probe, clipboard-paste could overwrite an unknown non-text payload.
+    # Let insert_text fall back to clipboard-only when xclip is unavailable.
+    return bool(_which("xclip"))
 
 
 def type_text(

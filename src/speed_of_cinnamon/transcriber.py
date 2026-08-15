@@ -26,8 +26,15 @@ from enum import Enum
 from pathlib import Path
 from typing import NoReturn
 
-from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
+from .models import (
+    default_ctranslate2_model_path,
+    default_whisper_cpp_model_path,
+    model_backend_for_path,
+    model_path_is_verified,
+    model_supports_language,
+)
 from .command_chain import CommandChainError, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, run_process_bounded_output, split_command_chain
+from .process_priority import local_model_command, with_local_model_priority
 from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
 from .http_safety import PinnedHTTPHandler, PinnedHTTPSHandler, UnsafeUrlError, is_loopback_hostname, resolve_url_host
 from .postprocessor import (
@@ -307,6 +314,9 @@ def _model_path_exists(path: str) -> bool:
         return False
 
 
+MAX_CTRANSLATE2_MODEL_TREE_ENTRIES = 100_000
+
+
 def _local_model_path_kind(path: Path, *, field_name: str) -> str | None:
     try:
         path_stat = path.stat(follow_symlinks=False)
@@ -324,26 +334,40 @@ def _local_model_path_kind(path: Path, *, field_name: str) -> str | None:
 
 
 def _validate_ctranslate2_model_tree(path: Path, *, field_name: str) -> None:
-    def raise_walk_error(exc: OSError) -> None:
-        raise exc
-
+    pending_directories = [path]
+    inspected_entries = 0
     try:
-        for root, dirnames, filenames in os.walk(path, followlinks=False, onerror=raise_walk_error):
-            root_path = Path(root)
-            for name in dirnames:
-                entry = root_path / name
-                entry_kind = _local_model_path_kind(entry, field_name=field_name)
-                if entry_kind != "directory":
-                    raise TranscriptionError(f"{field_name} contains unsafe directory entries")
-            for name in filenames:
-                entry = root_path / name
-                entry_kind = _local_model_path_kind(entry, field_name=field_name)
-                if entry_kind != "file":
-                    raise TranscriptionError(f"{field_name} contains unsafe file entries")
+        while pending_directories:
+            root = pending_directories.pop()
+            with os.scandir(root) as entries:
+                for directory_entry in entries:
+                    inspected_entries += 1
+                    if inspected_entries > MAX_CTRANSLATE2_MODEL_TREE_ENTRIES:
+                        raise TranscriptionError(
+                            f"{field_name} contains too many entries (max {MAX_CTRANSLATE2_MODEL_TREE_ENTRIES})"
+                        )
+                    entry = Path(directory_entry.path)
+                    try:
+                        directory_hint = directory_entry.is_dir(follow_symlinks=False)
+                    except OSError as exc:
+                        raise TranscriptionError(f"{field_name} is invalid") from exc
+                    entry_kind = _local_model_path_kind(entry, field_name=field_name)
+                    if entry_kind == "directory":
+                        pending_directories.append(entry)
+                    elif directory_hint:
+                        raise TranscriptionError(f"{field_name} contains unsafe directory entries")
+                    elif entry_kind != "file":
+                        raise TranscriptionError(f"{field_name} contains unsafe file entries")
     except TranscriptionError:
         raise
     except OSError as exc:
         raise TranscriptionError(f"{field_name} is invalid") from exc
+
+
+def _require_ctranslate2_tokenizer(path: str) -> None:
+    tokenizer_path = Path(path) / "tokenizer.json"
+    if _local_model_path_kind(tokenizer_path, field_name="CTranslate2 model path") != "file":
+        raise TranscriptionError("CTranslate2 model is missing required tokenizer.json")
 
 
 def _validate_local_model_path(value: str, *, field_name: str, directory: bool) -> str:
@@ -374,6 +398,15 @@ def _validate_local_model_path(value: str, *, field_name: str, directory: bool) 
     elif path_kind != "file":
         raise TranscriptionError(f"{field_name} must be a file")
     return str(path)
+
+
+def _require_verified_catalog_model(path: str, *, field_name: str) -> None:
+    try:
+        verified = model_path_is_verified(path)
+    except Exception as exc:
+        raise TranscriptionError(f"{field_name} failed integrity verification") from exc
+    if verified is False:
+        raise TranscriptionError(f"{field_name} failed integrity verification")
 
 
 def _write_text_atomic(path: Path, text: str) -> None:
@@ -716,8 +749,10 @@ def _cleanup_stale_staged_audio_dirs(runtime_root: Path) -> None:
     if (
         isinstance(nofollow_flag, bool)
         or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
         or isinstance(directory_flag, bool)
         or not isinstance(directory_flag, int)
+        or directory_flag <= 0
     ):
         return
     directory_open_flags = os.O_RDONLY | nofollow_flag | directory_flag | getattr(os, "O_CLOEXEC", 0)
@@ -1010,7 +1045,7 @@ def _file_size(file: io.BufferedRandom) -> int:
 
 def _run_transcriber_process(command: list[str], *, timeout: int, env: dict[str, str]) -> subprocess.CompletedProcess[bytes]:
     returncode, stdout_data, stderr_data = run_process_bounded_output(
-        command,
+        local_model_command(command),
         b"",
         timeout_seconds=timeout,
         max_output_bytes=MAX_COMMAND_OUTPUT_CHARS,
@@ -1820,7 +1855,10 @@ def _staged_audio_file_for_local_backend(
             staging_stat = os.fstat(target_fd)
             with os.fdopen(target_fd, "wb", closefd=False) as target:
                 while True:
-                    chunk = os.read(source_fd, 65536)
+                    try:
+                        chunk = os.read(source_fd, 65536)
+                    except InterruptedError:
+                        continue
                     if not chunk:
                         break
                     staging_hasher.update(chunk)
@@ -2575,6 +2613,7 @@ def transcribe_with_whisper_cpp(
     except RuntimeError as exc:
         raise TranscriptionError(str(exc)) from exc
     model_path = _validate_local_model_path(model_path, field_name="whisper.cpp model path", directory=False)
+    _require_verified_catalog_model(model_path, field_name="whisper.cpp model")
     if not model_supports_language(model_path, language):
         raise TranscriptionError(
             f"English-only whisper.cpp model does not support language {language}; use a multilingual model"
@@ -2760,6 +2799,7 @@ def _faster_whisper_deadline(deadline: float):
             signal.setitimer(signal.ITIMER_REAL, restored_delay, previous_timer[1])
 
 
+@with_local_model_priority
 def transcribe_with_faster_whisper(
     audio_path: Path,
     language: str,
@@ -2780,6 +2820,8 @@ def transcribe_with_faster_whisper(
     )
     text_path = _normalize_transcript_path(text_path)
     model_path = _validate_local_model_path(model_path, field_name="CTranslate2 model path", directory=True)
+    _require_verified_catalog_model(model_path, field_name="CTranslate2 model")
+    _require_ctranslate2_tokenizer(model_path)
     if not model_supports_language(model_path, language):
         raise TranscriptionError(
             f"CTranslate2 model does not support language {language}; use a multilingual model"
@@ -3778,6 +3820,7 @@ def transcribe(
             field_name="whisper.cpp model path",
             directory=False,
         )
+        _require_verified_catalog_model(preflight_model, field_name="whisper.cpp model")
         if not model_supports_language(preflight_model, language):
             raise TranscriptionError(
                 f"English-only whisper.cpp model does not support language {language}; use a multilingual model"
@@ -3797,6 +3840,8 @@ def transcribe(
             field_name="CTranslate2 model path",
             directory=True,
         )
+        _require_verified_catalog_model(preflight_model, field_name="CTranslate2 model")
+        _require_ctranslate2_tokenizer(preflight_model)
         if not model_supports_language(preflight_model, language):
             raise TranscriptionError(
                 f"CTranslate2 model does not support language {language}; use a multilingual model"

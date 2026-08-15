@@ -29,6 +29,12 @@ class PublishGithubReleaseStaticTest(unittest.TestCase):
         self.assertIn('refusing release notes cleanup without verified identity', source)
         self.assertIn('refusing existing release notes cleanup without verified identity', source)
 
+    def test_project_metadata_read_is_bounded(self):
+        source = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+
+        self.assertIn("MAX_PROJECT_METADATA_BYTES = 1 << 20", source)
+        self.assertIn("handle.read(MAX_PROJECT_METADATA_BYTES + 1)", source)
+
 
 if __name__ == "__main__":
     unittest.main()

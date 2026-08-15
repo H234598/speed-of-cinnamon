@@ -170,6 +170,11 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("max_cycles=1000", harness)
         self.assertIn("${#cycles} -gt 4", harness)
         self.assertIn("cycles > max_cycles", harness)
+        self.assertIn("APPLET_CRASH_SAFETY_DBUS_TIMEOUT_SECONDS", harness)
+        self.assertIn("max_dbus_timeout_seconds=60", harness)
+        self.assertIn('APPLET_CRASH_SAFETY_DBUS_TIMEOUT_SECONDS="${dbus_timeout_seconds}"', harness)
+        self.assertIn("timeout --signal=TERM --kill-after=2s \"${dbus_timeout_seconds}s\" \\\n    gdbus call --session", harness)
+        self.assertEqual(harness.count("gdbus call --session"), 1)
         self.assertIn("max_heartbeat_limit_ms=60000", harness)
         self.assertIn("${#heartbeat_limit_ms} -gt 5", harness)
         self.assertIn("heartbeat_limit_ms > max_heartbeat_limit_ms", harness)
@@ -455,7 +460,7 @@ class CiStaticTest(unittest.TestCase):
         allowed_applet_shell_lines = {
             '"    sudo dnf install -y ollama",',
             '"    sudo apt-get install -y ollama",',
-            '"if command -v dnf >/dev/null 2>&1; then sudo dnf install -y zenity xdotool xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip; fi",',
+            '"if command -v dnf >/dev/null 2>&1; then sudo dnf install -y zenity xdotool wtype xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip; fi",',
         }
         offenders: list[str] = []
         files = [
@@ -745,8 +750,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("format('refs/tags/{0}', inputs.tag)", workflow)
         self.assertNotIn("if [[ ! \"${tag}\" =~ ^v[0-9]+(\\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]", workflow)
         self.assertIn('if [[ ! "${tag}" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then', workflow)
-        self.assertIn("project_version=\"$(python3 -c 'import pathlib, tomllib;", workflow)
-        self.assertIn('pathlib.Path("pyproject.toml").read_text(encoding="utf-8")', workflow)
+        self.assertIn('project_version="$(python3 - <<\'PY\'', workflow)
+        self.assertIn("MAX_PROJECT_METADATA_BYTES = 1 << 20", workflow)
+        self.assertIn("handle.read(MAX_PROJECT_METADATA_BYTES + 1)", workflow)
+        self.assertNotIn('pathlib.Path("pyproject.toml").read_text(encoding="utf-8")', workflow)
         self.assertIn('expected_tag="v${project_version}"', workflow)
         self.assertIn('if [[ "${tag}" != "${expected_tag}" ]]; then', workflow)
         self.assertIn(
@@ -854,6 +861,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('if ! remove_python_bytecode_from_snap_source; then', build_snap)
         self.assertIn('copy-file build-snap "${repo_dir}/pyproject.toml" "${snap_workspace}/pyproject.toml" 0644', build_snap)
         self.assertIn('copy-file build-snap "${repo_dir}/README.md" "${snap_workspace}/README.md" 0644', build_snap)
+        self.assertIn('mkdirs build-snap "${snap_workspace}/.github/requirements"', build_snap)
+        self.assertIn('"${repo_dir}/.github/requirements/ci-project.txt"', build_snap)
+        self.assertIn('"${snap_workspace}/.github/requirements/ci-project.txt" 0644 --dst-must-not-exist', build_snap)
         self.assertNotIn('install-tree build-snap "${repo_dir}" "${snap_workspace}" "snap temporary source tree"', build_snap)
         self.assertIn('python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}"', build_snap)
         self.assertIn('snapcraft_rendered_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snapcraft_file_rendered}" --kind file)"', build_snap)
@@ -879,13 +889,16 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("0xDC80 <= ord(char) <= 0xDCFF for char in member.name", verify_dist)
         self.assertIn("0x80 <= ord(char) <= 0x9F for char in entry", verify_rpm)
         self.assertIn("0xDC80 <= ord(char) <= 0xDCFF for char in entry", verify_rpm)
-        self.assertIn('for entry in file_list.read_text(encoding="utf-8").split("\\n"):', verify_rpm)
+        self.assertIn('read_bounded_utf8(file_list, "RPM file listing")', verify_rpm)
+        self.assertIn('read_bounded_utf8(Path(sys.argv[2]), "RPM file metadata")', verify_rpm)
+        self.assertNotIn('file_list.read_text(encoding="utf-8")', verify_rpm)
         self.assertNotIn(".splitlines()", verify_rpm)
         self.assertNotIn("entry.strip()", verify_rpm)
         self.assertNotIn("entry = raw.strip()", verify_rpm)
         self.assertIn("contains_unsafe_text(path_text)", verify_snap)
         self.assertIn("contains_unsafe_text(path_text)", verify_snap)
-        self.assertIn('for raw in Path(sys.argv[1]).read_text(encoding="utf-8").split("\\n"):', verify_snap)
+        self.assertIn('read_bounded_utf8(Path(sys.argv[1]), "snap listing")', verify_snap)
+        self.assertNotIn('Path(sys.argv[1]).read_text(encoding="utf-8")', verify_snap)
         self.assertNotIn(".splitlines()", verify_snap)
         self.assertNotIn("raw.strip()", verify_snap)
         self.assertNotIn("${tarball_input}\" == *$'\\n'* || \"${tarball_input}\" == *$'\\r'* || \"${tarball_input}\" == *$'\\t'*", verify_dist)
@@ -1169,7 +1182,8 @@ class CiStaticTest(unittest.TestCase):
             install_local,
         )
         self.assertIn('dbus_send_command="$(command -v -- dbus-send || true)"', install_local)
-        self.assertIn('if [[ -n "${dbus_send_command}" ]]; then', install_local)
+        self.assertIn('timeout_command="$(command -v -- timeout || true)"', install_local)
+        self.assertIn('if [[ -n "${dbus_send_command}" && -n "${timeout_command}" ]]; then', install_local)
         self.assertIn("reject_unsafe_tree()", install_local)
         self.assertIn('find "${tree}" \\( -type l -o -type f -links +1 \\) -print -quit', install_local)
         self.assertIn("reject_unsafe_file()", install_local)
@@ -1699,6 +1713,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("run: make dist-check", workflow)
         self.assertIn("run: make rpm", workflow)
         self.assertIn("run: make rpm-check", workflow)
+        self.assertIn("run: make verify-release-attestations", workflow)
+        self.assertIn("verify-release-attestations:", (REPO_ROOT / "Makefile").read_text(encoding="utf-8"))
+        self.assertIn("scripts/verify-release-attestation.py", (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8"))
+        self.assertIn("scripts/export-release-attestations.sh", (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8"))
         self.assertIn("run: make rpm-generic", workflow)
         self.assertIn("run: make rpm-generic-check", workflow)
         self.assertTrue("if: env.BUILD_GENERIC_RPM == 'true'" in workflow or "if: env.BUILD_GENERIC_RPM == '1'" in workflow)
@@ -1746,6 +1764,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('existing release notes file escaped temporary root', publisher)
         self.assertIn("fsync_regular_file() {", publisher)
         self.assertIn("write_regular_file_from_stdin() {", publisher)
+        self.assertIn("MAX_RELEASE_NOTES_BYTES = 1_000_000", publisher)
+        self.assertIn("sys.stdin.buffer.read(MAX_RELEASE_NOTES_BYTES + 1)", publisher)
+        self.assertIn("exceeds {MAX_RELEASE_NOTES_BYTES} bytes", publisher)
         self.assertIn('write_regular_file_from_stdin "${notes_file}" "release notes file" "${notes_file_identity}" <<EOF', publisher)
         self.assertIn('write_regular_file_from_stdin "${existing_notes_file}" "existing release notes file" "${existing_notes_file_identity}"', publisher)
         self.assertIn("flags = os.O_WRONLY", publisher)
@@ -1918,11 +1939,11 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\\n", makefile)
         self.assertIn("--skip-generic-rpm", makefile)
         self.assertIn(
-            "release-dry-run: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check",
+            "release-dry-run: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation verify-release-attestations dist-check rpm rpm-check",
             makefile,
         )
         self.assertIn(
-            "release: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation dist-check rpm rpm-check",
+            "release: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation verify-release-attestations dist-check rpm rpm-check",
             makefile,
         )
         self.assertIn("release-validate-flags", makefile)
@@ -2258,6 +2279,15 @@ class CiStaticTest(unittest.TestCase):
                 / "cryptography"
                 / "__init__.py"
             ).write_text("# fixture\n", encoding="utf-8")
+            (
+                source_dir
+                / "usr"
+                / "lib"
+                / "python3"
+                / "dist-packages"
+                / "cryptography"
+                / "__about__.py"
+            ).write_text('__version__ = "50.0.0"\n', encoding="utf-8")
 
             snap_path = Path(snap_tmp) / "speed-of-cinnamon_0.0.0_amd64.snap"
             subprocess.run(

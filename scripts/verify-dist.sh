@@ -115,7 +115,8 @@ import re
 import sys
 
 checksum_path, expected_name = sys.argv[1:]
-raw = Path(checksum_path).read_bytes()
+with Path(checksum_path).open("rb") as handle:
+    raw = handle.read(4097)
 if len(raw) > 4096:
     raise SystemExit("archive checksum file is too large")
 try:
@@ -275,7 +276,7 @@ with tarfile.open(tarball_snapshot, "r:gz") as archive:
     package_root = None
     member_count = 0
     total_file_size = 0
-    for member in archive.getmembers():
+    for member in archive:
         member_count += 1
         if member_count > MAX_DIST_MEMBERS:
             raise SystemExit("dist archive contains too many entries")
@@ -433,7 +434,9 @@ for path in \
   files/speed-of-cinnamon@H234598/settings-schema.json \
   scripts/install-local.sh \
   scripts/local-model-e2e-acceptance.sh \
+  scripts/export-release-attestations.sh \
   scripts/real-e2e-acceptance.sh \
+  scripts/verify-release-attestation.py \
   scripts/safe-local-fs.py \
   scripts/verify-local-model-e2e-attestation.sh \
   scripts/verify-real-e2e-attestation.sh \

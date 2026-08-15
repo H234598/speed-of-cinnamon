@@ -264,8 +264,9 @@ class AppletStaticTest(unittest.TestCase):
         end = source.index("\n  _targetXWindowMatchesSnapshotTitle:", start)
         block = source[start:end]
 
-        class_check = 'if (String(classOutput || "").trim().toLowerCase() !== expectedClass) {'
+        class_check = 'let activeClass = String(classOutput || "").trim().toLowerCase();'
         self.assertIn(class_check, block)
+        self.assertIn('this._xWindowLooksLikeSpeedOfCinnamon("", activeClass)', block)
         self.assertIn("complete(true);", block)
         self.assertLess(block.index(class_check), block.index("complete(true);"))
         class_verified_block = block[block.index(class_check):]
@@ -347,6 +348,11 @@ class AppletStaticTest(unittest.TestCase):
         monitor_block = source[monitor_start:monitor_end]
         self.assertIn("this._applyExternalApiEnvFile(false, transaction, applyTarget)", monitor_block)
         self.assertNotIn("this._applyExternalApiEnvFile(true)", monitor_block)
+        self.assertIn('this._scheduleTrackedTimer("external-api-env", 100', monitor_block)
+        self.assertIn("this.externalApiEnvRefreshTimer", monitor_block)
+        self.assertIn("this.externalApiEnvRefreshRunning = true;", monitor_block)
+        self.assertIn("this.externalApiEnvRefreshRunning = false;", monitor_block)
+        self.assertIn("_clearExternalApiEnvRefreshTimer: function()", source)
         self.assertIn("this._applyExternalApiEnvTarget(applyTarget, true, transaction)", monitor_block)
         self.assertIn("transaction.rollback() !== false", monitor_block)
         self.assertIn("transaction.targetRollbackFailed === true", monitor_block)
@@ -1863,7 +1869,10 @@ class AppletStaticTest(unittest.TestCase):
             end = source.index(next_method, start)
             block = source[start:end]
             self.assertIn("try {", block)
-            self.assertIn('this._findTrustedProgramInPath("xdotool")', block)
+            if method.startswith("_pasteClipboardAfterFocus"):
+                self.assertIn("this._preferredKeyboardProgram()", block)
+            else:
+                self.assertIn('this._findTrustedProgramInPath("xdotool")', block)
             self.assertIn('this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);', block)
             self.assertIn("return false;", block)
 
@@ -1878,14 +1887,7 @@ class AppletStaticTest(unittest.TestCase):
         resolver_start = insert_block.index("let keyboardProgram = null;")
         resolver_end = insert_block.index("let submitWithReturn", resolver_start)
         resolver_block = insert_block[resolver_start:resolver_end]
-        self.assertEqual(
-            resolver_block.count('this._findTrustedProgramInPath("xdotool")'),
-            1,
-        )
-        self.assertEqual(
-            resolver_block.count('this._findTrustedProgramInPath("wtype")'),
-            1,
-        )
+        self.assertIn("keyboardProgram = this._preferredKeyboardProgram();", resolver_block)
         self.assertIn("let canPasteWithKeyboard = Boolean(keyboardProgram);", resolver_block)
 
         type_start = insert_block.index('if (method === "type")')
@@ -1943,26 +1945,11 @@ class AppletStaticTest(unittest.TestCase):
         )
         paste_helper_end = source.index("\n  _typeTextAfterFocus:", paste_helper_start)
         paste_helper = source[paste_helper_start:paste_helper_end]
-        self.assertIn(
-            "    if (keyboardProgram &&\n"
-            '        keyboardProgram.kind === "xdotool"',
-            paste_helper,
-        )
-        self.assertIn("hasXdotool = keyboardProgram.path;", paste_helper)
-        self.assertIn("hasWtype = keyboardProgram.path;", paste_helper)
-        self.assertEqual(
-            paste_helper.count('this._findTrustedProgramInPath("xdotool")'), 1
-        )
-        self.assertEqual(
-            paste_helper.count('this._findTrustedProgramInPath("wtype")'), 1
-        )
-        self.assertIn(
-            "    } else {\n"
-            "      try {\n"
-            '        hasXdotool = this._findTrustedProgramInPath("xdotool");\n'
-            '        hasWtype = this._findTrustedProgramInPath("wtype");',
-            paste_helper,
-        )
+        self.assertIn("let selectedKeyboardProgram;", paste_helper)
+        self.assertIn("Resolve at the keystroke boundary", paste_helper)
+        self.assertIn("selectedKeyboardProgram.kind === \"xdotool\"", paste_helper)
+        self.assertIn("selectedKeyboardProgram.kind === \"wtype\"", paste_helper)
+        self.assertIn("selectedKeyboardProgram = this._preferredKeyboardProgram();", paste_helper)
         self.assertIn("return false;", paste_helper)
 
         type_helper_start = source.index(
@@ -2233,6 +2220,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (name === "")', block)
         self.assertIn("name = this._starterVoiceModelName();", block)
         self.assertIn("this._selectVoiceModel(payload, false);", block)
+        self.assertIn("model.downloadable !== true", block)
+        self.assertIn('_("Model download unavailable: integrity metadata is missing")', block)
 
     def test_voice_model_download_ignores_stale_settings_callbacks(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -2423,10 +2412,32 @@ class AppletStaticTest(unittest.TestCase):
         start = source.index("_addModelMenuEntry: function(model, parentMenu)")
         end = source.index("\n  _isEnglishLanguage:", start)
         block = source[start:end]
-        self.assertIn("let usable = downloaded && this._isUsableVoiceModelPayload(model);", block)
+        self.assertIn("let verified = model.verified === true;", block)
+        self.assertIn("let usable = downloaded && verified && this._isUsableVoiceModelPayload(model);", block)
         self.assertIn("let current = usable && this.whisperModel", block)
         self.assertIn('label += _(" - invalid metadata");', block)
+        self.assertIn('label += _(" - integrity not verified");', block)
         self.assertIn("useItem.setSensitive(!current && compatible && usable);", block)
+
+    def test_non_downloadable_voice_model_cannot_start_download(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        populate_start = source.index("_populateModelMenu: function(models, message)")
+        populate_end = source.index("\n  _populateExternalApiVoiceMenu:", populate_start)
+        populate_block = source[populate_start:populate_end]
+        self.assertIn("let downloadable = model.downloadable === true;", populate_block)
+        self.assertIn("let verified = model.verified === true;", populate_block)
+        self.assertIn("let usable = downloaded && verified && this._isUsableVoiceModelPayload(model);", populate_block)
+        self.assertIn('downloadable ? _(" - not downloaded") : _(" - download unavailable")', populate_block)
+        self.assertIn('label += _(" - integrity not verified");', populate_block)
+        self.assertIn("downloadable: downloadable,", populate_block)
+        self.assertIn("verified: verified,", populate_block)
+        self.assertIn("!data.downloaded && data.downloadable === true", source)
+
+        legacy_start = source.index("_addModelMenuEntry: function(model, parentMenu)")
+        legacy_end = source.index("\n  _isEnglishLanguage:", legacy_start)
+        legacy_block = source[legacy_start:legacy_end]
+        self.assertIn("let downloadable = model.downloadable === true;", legacy_block)
+        self.assertIn("if (!downloadable) {", legacy_block)
 
     def test_voice_model_remove_requires_explicit_backend_confirmation(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -3055,6 +3066,12 @@ class AppletStaticTest(unittest.TestCase):
             guard = f"!this._canMutateMenu(this.{item}) || this.{item}.menu.isOpen !== true"
             self.assertIn(guard, block)
             self.assertLess(block.index(guard), block.index(f"this.{token}"))
+        model_start = source.index("_refreshModelMenu: function()")
+        model_end = source.index("\n  _populateModelMenu:", model_start)
+        model_block = source[model_start:model_end]
+        self.assertIn("let forceRefresh = arguments.length > 0 && arguments[0] === true;", model_block)
+        self.assertIn("MODEL_MENU_REFRESH_TTL_MS", model_block)
+        self.assertIn("this._modelMenuLastRefreshAt", model_block)
 
     def test_ollama_flows_stop_catalog_refresh_before_starting(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -7113,18 +7130,19 @@ class AppletStaticTest(unittest.TestCase):
         remember_start = source.index("_rememberFocusedWindow: function(preserveOnFailure, completionCallback)")
         remember_end = source.index("\n  _closeMenuForKeyboardInsert:", remember_start)
         remember_block = source[remember_start:remember_end]
-        keyboard_start = source.index("_spawnKeyboardProcess: function(args, completionCallback, timeoutMs)")
+        keyboard_start = source.index("_spawnKeyboardProcess: function(args, completionCallback, timeoutMs, operationGuard)")
         keyboard_end = source.index("\n  _spawnKeyboardArgs:", keyboard_start)
         keyboard_block = source[keyboard_start:keyboard_end]
 
         self.assertIn('for (let group of ["keyboard", "x11", "clipboard"])', remember_block)
         self.assertIn('this._terminateProcessesByGroup(group, true) === false', remember_block)
-        self.assertIn("let completeOnce = (result) =>", keyboard_block)
-        self.assertIn("if (!handle) {\n        completeOnce(false);", keyboard_block)
+        self.assertIn("let completeOnce = (result, message) =>", keyboard_block)
+        self.assertIn("let spawnKeyboard = () =>", keyboard_block)
+        self.assertIn("return this._screenSaverAllowsKeyboardInput", keyboard_block)
         self.assertIn("result.cancelled", keyboard_block)
         self.assertRegex(
             keyboard_block,
-            r"(?s)if \(!this\._lifecycleAllowsWork\(\)\) \{\s*"
+            r"(?s)if \(!this\._lifecycleAllowsWork\(\)\s*\|\|\s*!isCurrentOperation\(\)\) \{\s*"
             r"completeOnce\(false\);\s*return false;\s*\}",
         )
         self.assertRegex(
@@ -7263,7 +7281,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("if (this._isTargetWindowXLookupPending())", activate_block)
         self.assertIn("let targetGeneration = Number(this.targetWindowGeneration || 0);", activate_block)
         self.assertIn("targetGeneration === Number(this.targetWindowGeneration || 0) && output !== null", activate_block)
-        self.assertIn("let xid = this._isTargetWindowXLookupPending()", snapshot_block)
+        self.assertIn("let xid = waylandSession", snapshot_block)
+        self.assertIn("let waylandSession = typeof this._isWaylandSession === \"function\"", snapshot_block)
+        self.assertIn(": true;", snapshot_block)
 
         identity_start = source.index("_windowIdentityMatchesAutoPaste: function(marker)")
         identity_end = source.index("\n  _windowIdentityValueMatchesMarker:", identity_start)
@@ -7863,7 +7883,9 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_starterVoiceModelName: function()", source)
         self.assertIn("_voiceModelLanguage: function()", source)
         self.assertIn("return this._primaryLanguage();", source)
-        self.assertIn('return "ct2-base-int8";', source)
+        self.assertIn('return "tiny.en";', source)
+        self.assertIn('return "tiny-de";', source)
+        self.assertIn('return "tiny";', source)
         self.assertIn("_ensureVoiceModelCompatibleWithPrimaryLanguage(false);", source)
         self.assertIn("_ensureVoiceModelCompatibleWithCurrentLanguage(true)", source)
         self.assertIn('_("Active: ") + this._activeVoiceModelSummary()', source)
@@ -8059,7 +8081,11 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn("_closeMenuForKeyboardInsert: function() {", source)
         self.assertIn("Could not close applet menu before keyboard insert", source)
         self.assertIn("_spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs) {", source)
-        self.assertIn("_spawnKeyboardProcess: function(args, completionCallback, timeoutMs)", source)
+        self.assertIn("_spawnKeyboardProcess: function(args, completionCallback, timeoutMs, operationGuard)", source)
+        self.assertIn('let waylandSession = typeof this._isWaylandSession === "function"', source)
+        self.assertIn('if (typeof this._isWaylandSession !== "function" || this._isWaylandSession() !== false) {', source)
+        self.assertIn('if ((typeof this._isWaylandSession !== "function" || this._isWaylandSession() !== false) && snapshot && snapshot.xid) {', source)
+        self.assertIn('Automatic keyboard paste unavailable; using clipboard fallback.', source)
 
     def test_prepared_transcript_keeps_hard_insert_limit_after_append_space(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -8180,8 +8206,8 @@ class AppletStaticTest(unittest.TestCase):
         keyboard_args_start = source.index("_spawnKeyboardArgs: function(")
         keyboard_args_end = source.index("\n  _finishAppletTextInsert:", keyboard_args_start)
         keyboard_args_block = source[keyboard_args_start:keyboard_args_end]
-        self.assertIn("this._spawnKeyboardProcess(args, (firstCompleted) => {\n          try {", keyboard_args_block)
-        self.assertIn("this._spawnKeyboardProcess(followUpArgs, (submitCompleted) => {\n                      try {", keyboard_args_block)
+        self.assertIn("this._spawnKeyboardProcess(args, (firstCompleted, firstFailureMessage) => {\n          try {", keyboard_args_block)
+        self.assertIn("this._spawnKeyboardProcess(followUpArgs, (submitCompleted, submitFailureMessage) => {\n                      try {", keyboard_args_block)
         self.assertNotIn("if (!this._spawnKeyboardProcess(args,", keyboard_args_block)
         self.assertNotIn("if (!this._spawnKeyboardProcess(followUpArgs,", keyboard_args_block)
         self.assertIn("this._targetXWindowMatchesSnapshot(expectedTargetWindow, (matches) => {\n      try {", keyboard_args_block)
@@ -9015,7 +9041,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('if (!this._closeMenuForKeyboardInsert()) {', source)
         self.assertIn('this._setStatus("error", _("Could not close applet menu before keyboard insert"), transcript);', source)
         self.assertIn('this._restoreTargetWindowForPaste((restored) => {', source)
-        self.assertIn("_spawnKeyboardProcess: function(args, completionCallback, timeoutMs)", source)
+        self.assertIn("_spawnKeyboardProcess: function(args, completionCallback, timeoutMs, operationGuard)", source)
         self.assertIn('let xdotool;', source)
         self.assertIn('xdotool = this._findTrustedProgramInPath("xdotool");', source)
         self.assertIn('[xdotool, "type", "--clearmodifiers", "--delay", String(delay), "--", typedText]', source)
@@ -9023,17 +9049,18 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('let isPasteMethod = method === "clipboard-paste" || method === "clipboard-paste-submit";', source)
         self.assertIn('let autoPasteTarget = isPasteMethod && this._windowTitleMatchesAutoPaste();', source)
         self.assertIn("let keyboardProgram = null;", source)
-        self.assertIn('let xdotoolPath = this._findTrustedProgramInPath("xdotool");', source)
-        self.assertIn('let wtypePath = this._findTrustedProgramInPath("wtype");', source)
-        self.assertIn('keyboardProgram = { kind: "xdotool", path: xdotoolPath };', source)
-        self.assertIn('keyboardProgram = { kind: "wtype", path: wtypePath };', source)
+        self.assertIn("_preferredKeyboardProgram: function()", source)
+        self.assertIn('sessionType = String(GLib.getenv("XDG_SESSION_TYPE") || "").trim().toLowerCase();', source)
+        self.assertIn('waylandDisplay = String(GLib.getenv("WAYLAND_DISPLAY") || "").trim();', source)
+        self.assertIn("_isWaylandSession: function()", source)
+        self.assertIn("let preferWayland = this._isWaylandSession();", source)
+        self.assertIn('return { kind: "wtype", path: wtypePath };', source)
         self.assertIn("let canPasteWithKeyboard = Boolean(keyboardProgram);", source)
         self.assertIn('let submitWithReturn = outputActions.submit;', source)
         self.assertIn('let terminalPaste = this._isTerminalTargetWindow();', source)
-        self.assertIn('let hasXdotool;', source)
-        self.assertIn('hasXdotool = this._findTrustedProgramInPath("xdotool");', source)
-        self.assertIn('let hasWtype;', source)
-        self.assertIn('hasWtype = this._findTrustedProgramInPath("wtype");', source)
+        self.assertIn('let hasXdotool = selectedKeyboardProgram && selectedKeyboardProgram.kind === "xdotool"', source)
+        self.assertIn("selectedKeyboardProgram = this._preferredKeyboardProgram();", source)
+        self.assertIn('let hasWtype = selectedKeyboardProgram && selectedKeyboardProgram.kind === "wtype"', source)
         self.assertIn(
             "if (!targetWindowUsable && (!xTargetAvailable || (!this.targetWindowXClass && !this.targetWindowXTitle))) {",
             source,
@@ -9047,7 +9074,8 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('[hasWtype, "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"]', source)
         self.assertIn('[hasWtype, "-M", "ctrl", "v", "-m", "ctrl"]', source)
         self.assertIn('if (sendEnter) {', source)
-        self.assertIn('followUpArgs = [hasWtype, "-k", "Return"];', source)
+        self.assertIn('let submitKey = codexTerminal && typeof this._codexTerminalSubmitKey === "function"', source)
+        self.assertIn('followUpArgs = [hasWtype, "-k", submitKey];', source)
         self.assertIn("let expectedTargetWindow = this._targetXWindowSnapshot();", source)
         self.assertIn('if (!expectedTargetWindow) {\n      this._setStatus("error", _("Target window unavailable for automatic paste"), this.lastTranscript);', source)
         self.assertIn("return this._spawnKeyboardAfterFocus(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, isCurrentOperation);", source)
@@ -9371,9 +9399,7 @@ class AppletStaticTest(unittest.TestCase):
         )
         fn_body = source[fn_index:confirm_index]
 
-        close_menu_index = fn_body.index("if (!this._closeMenuForKeyboardInsert()) {")
         restore_index = fn_body.index("this._restoreTargetWindowForPaste((restored) => {")
-        paste_command_index = fn_body.index('if (!this._pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {')
 
         self.assertNotIn("this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);", fn_body)
         write_start = fn_body.index("let writeClipboardAndPaste = (restored) => {")

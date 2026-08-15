@@ -43,11 +43,16 @@ class AutoBackupGateTest(unittest.TestCase):
         with mock.patch.object(
             cli,
             "command_backup_create",
-            return_value={"status": "done", "archive_present": True},
+            return_value={
+                "status": "done",
+                "archive_present": True,
+                "archive_path": "/home/teladi/private-backups/backup.socbackup.socenc",
+            },
         ) as create:
             result = cli._run_inline_auto_backup(argparse.Namespace(), settings)
 
         self.assertEqual(result["status"], "done")
+        self.assertNotIn("archive_path", result)
         backup_args = create.call_args.args[0]
         self.assertEqual(backup_args.directory, "/tmp/backups")
         self.assertFalse(backup_args.config)

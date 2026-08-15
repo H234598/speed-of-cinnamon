@@ -6,6 +6,7 @@ import os
 import secrets
 import shutil
 import stat
+import sys
 import tarfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -39,16 +40,20 @@ from .path_safety import (
     _rename_without_replacing,
     assert_backup_source_regular_file,
     assert_backup_target_not_within_sources,
+    assert_fd_is_private_directory,
     assert_no_symlink_ancestors,
     assert_safe_path_components,
+    create_bytes_atomically_without_following_symlinks,
     ensure_directory_without_following_symlinks,
     normalize_backup_archive_path,
     open_file_without_following_symlinks,
+    _resolve_no_follow_flag,
     write_bytes_atomically_without_following_symlinks,
 )
 from .secure_delete import secure_wipe_regular_file_at
 
 MAX_BACKUP_MEMBER_COUNT = 10_001
+MAX_BACKUP_ARCHIVE_BYTES = MAX_ENCRYPTED_ARTIFACT_BYTES
 HASH_CHUNK_BYTES = 1024 * 1024
 
 
@@ -70,6 +75,7 @@ class BackupResult:
     archive_path: Path | None
     manifest: BackupManifest | None
     skipped: bool = False
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,6 +84,7 @@ class RestoreDryRun:
     destination_directory: Path
     manifest: BackupManifest
     archive_members: tuple[str, ...]
+    conflicts: tuple[str, ...] = ()
 
 
 def _utc_now() -> str:
@@ -133,12 +140,13 @@ def _archive_name(job_id: str, created_at_utc: str, *, encrypted: bool) -> str:
     return f"soc-backup-{timestamp}-{job_id[:16]}{suffix}"
 
 
-def _close_fd(fd: int | None) -> None:
+def _close_fd(fd: int | None, *, strict: bool = False) -> None:
     if fd is not None:
         try:
             os.close(fd)
         except OSError:
-            pass
+            if strict:
+                raise
 
 
 def _copy_source_to_stage(artifact: BackupArtifact, source: Path, destination: Path) -> None:
@@ -160,16 +168,30 @@ def _copy_source_to_stage(artifact: BackupArtifact, source: Path, destination: P
             raise BackupError("backup source metadata changed before copying")
         parent_fd = ensure_directory_without_following_symlinks(destination.parent, field_name="backup staging directory")
         name = destination.name
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | _resolve_no_follow_flag(field_name="backup staging file")
+            | getattr(os, "O_CLOEXEC", 0)
+        )
         destination_fd = os.open(name, flags, 0o600, dir_fd=parent_fd)
         offset = 0
         while offset < opened.st_size:
-            chunk = os.pread(source_fd, min(HASH_CHUNK_BYTES, opened.st_size - offset), offset)
+            while True:
+                try:
+                    chunk = os.pread(source_fd, min(HASH_CHUNK_BYTES, opened.st_size - offset), offset)
+                    break
+                except InterruptedError:
+                    continue
             if not chunk:
                 raise BackupError("backup source ended during copying")
             written = 0
             while written < len(chunk):
-                written += os.write(destination_fd, chunk[written:])
+                try:
+                    written += os.write(destination_fd, chunk[written:])
+                except InterruptedError:
+                    continue
             offset += len(chunk)
         os.fsync(destination_fd)
         after = os.fstat(source_fd)
@@ -203,7 +225,13 @@ def _create_stage_directory(target_fd: int, target: Path) -> Path:
 
 
 def _create_archive_file(target_fd: int, archive_name: str) -> tuple[str, int]:
-    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_RDWR
+        | os.O_CREAT
+        | os.O_EXCL
+        | _resolve_no_follow_flag(field_name="backup archive file")
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     for _ in range(32):
         temporary_name = f".{archive_name}.{secrets.token_hex(12)}.tmp"
         try:
@@ -243,6 +271,12 @@ def _secure_remove_temporary_file(target_fd: int, name: str) -> None:
     except FileNotFoundError:
         return
     os.fsync(target_fd)
+
+
+def _secure_remove_stage_directory(target_fd: int, stage: Path) -> None:
+    if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        raise OSError("secure backup staging cleanup is not supported")
+    shutil.rmtree(stage.name, dir_fd=target_fd)
 
 
 def _add_stage_file(archive: tarfile.TarFile, path: Path, archive_path: str) -> None:
@@ -316,8 +350,12 @@ def _hash_tar_member(archive: tarfile.TarFile, member: tarfile.TarInfo, expected
 
 
 def _verify_tar_archive(archive: tarfile.TarFile) -> BackupManifest:
-    members = archive.getmembers()
-    if not members or len(members) > MAX_BACKUP_MEMBER_COUNT:
+    members: list[tarfile.TarInfo] = []
+    for member in archive:
+        members.append(member)
+        if len(members) > MAX_BACKUP_MEMBER_COUNT:
+            raise BackupError("backup archive member count is invalid")
+    if not members:
         raise BackupError("backup archive member count is invalid")
     by_name: dict[str, tarfile.TarInfo] = {}
     for member in members:
@@ -350,7 +388,9 @@ def _verify_tar_archive(archive: tarfile.TarFile) -> BackupManifest:
 
 
 def _verify_archive(path: Path) -> BackupManifest:
-    assert_backup_source_regular_file(path, field_name="backup archive")
+    archive_stat = assert_backup_source_regular_file(path, field_name="backup archive")
+    if archive_stat.st_size > MAX_BACKUP_ARCHIVE_BYTES:
+        raise BackupError("backup archive is too large")
     fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name="backup archive")
     try:
         with os.fdopen(fd, "rb", closefd=True) as stream:
@@ -440,13 +480,14 @@ def create_backup(
     published = False
     ledger_started = False
     manifest: BackupManifest | None = None
+    result: BackupResult | None = None
     try:
         target_fd = ensure_directory_without_following_symlinks(target_directory, field_name="backup target directory")
         target_stat = os.fstat(target_fd)
         if not stat.S_ISDIR(target_stat.st_mode) or (hasattr(os, "getuid") and target_stat.st_uid != os.getuid()):
             raise BackupError("backup target directory is not owned by the current user")
-        ledger.record_job(job_id=job, status="running", created_at_utc=created)
         ledger_started = True
+        ledger.record_job(job_id=job, status="running", created_at_utc=created)
         collected: list[tuple[BackupArtifact, Path]] = []
         seen_fingerprints: set[tuple[str, int, str]] = set()
         seen_archive_paths: set[str] = set()
@@ -478,7 +519,8 @@ def create_backup(
             collected.append((artifact, item.source_path))
         if not collected:
             ledger.record_job(job_id=job, status="skipped", created_at_utc=created)
-            return BackupResult(job, None, None, skipped=True)
+            result = BackupResult(job, None, None, skipped=True)
+            return result
         effective_selection = dict(normalized_selection)
         for kind, selection_key in (("config", "config"), ("transcript", "transcripts"), ("audio", "audio")):
             if effective_selection[selection_key] and not any(artifact.kind == kind for artifact, _ in collected):
@@ -518,6 +560,8 @@ def create_backup(
             if hashlib.sha256(decrypted_payload).digest() != hashlib.sha256(plain_payload).digest():
                 raise BackupError("encrypted backup payload failed round-trip verification")
             encrypted_temporary_name, encrypted_temporary_fd = _create_archive_file(target_fd, archive_name)
+            temporary_name = encrypted_temporary_name
+            temporary_path = target_directory / temporary_name
             try:
                 _write_fd_all(encrypted_temporary_fd, encrypted_payload)
                 os.fsync(encrypted_temporary_fd)
@@ -525,8 +569,6 @@ def create_backup(
                 _close_fd(encrypted_temporary_fd)
             _secure_remove_temporary_file(target_fd, plain_temporary_name)
             plain_temporary_name = None
-            temporary_name = encrypted_temporary_name
-            temporary_path = target_directory / temporary_name
             del plain_payload, encrypted_payload, decrypted_payload
         temporary_stat = os.stat(temporary_path, follow_symlinks=False)
         _rename_without_replacing(
@@ -537,6 +579,7 @@ def create_backup(
             field_name="backup archive publication",
         )
         published = True
+        result = BackupResult(job, target_directory / archive_name, verified_manifest)
         os.fsync(target_fd)
         ledger.record_job(
             job_id=job,
@@ -545,8 +588,24 @@ def create_backup(
             archive_name=archive_name,
             artifacts=_ledger_artifacts(collected),
         )
-        return BackupResult(job, target_directory / archive_name, verified_manifest)
+        return result
     except (BackupManifestError, OSError, RuntimeError, TypeError, ValueError, tarfile.TarError) as exc:
+        if published and result is not None:
+            warnings = list(result.warnings)
+            warnings.append("backup published but post-publish bookkeeping failed")
+            try:
+                ledger.record_job(
+                    job_id=job,
+                    status="success",
+                    created_at_utc=created,
+                    archive_name=archive_name,
+                    artifacts=_ledger_artifacts(collected),
+                    error=warnings[-1],
+                )
+            except Exception:
+                warnings.append("backup warning could not be recorded")
+            object.__setattr__(result, "warnings", tuple(warnings))
+            return result
         if ledger_started and not published:
             try:
                 ledger.record_job(
@@ -561,25 +620,73 @@ def create_backup(
         if isinstance(exc, BackupError):
             raise
         raise BackupError("backup job failed") from exc
+    except BaseException as exc:
+        if ledger_started and not published:
+            try:
+                ledger.record_job(
+                    job_id=job,
+                    status="failed",
+                    created_at_utc=created,
+                    error="backup job interrupted",
+                )
+            except Exception as ledger_error:
+                exc.add_note("backup interruption could not be recorded")
+                exc.add_note(type(ledger_error).__name__)
+        raise
     finally:
+        cleanup_errors: list[OSError] = []
         if not published and target_fd is not None:
             if plain_temporary_name is not None:
                 try:
                     _secure_remove_temporary_file(target_fd, plain_temporary_name)
-                except OSError:
+                except FileNotFoundError:
                     pass
-                if temporary_name == plain_temporary_name:
-                    temporary_name = None
+                except OSError as exc:
+                    cleanup_errors.append(exc)
+                else:
+                    if temporary_name == plain_temporary_name:
+                        temporary_name = None
             if temporary_name is not None:
                 try:
                     os.unlink(temporary_name, dir_fd=target_fd)
                 except FileNotFoundError:
                     pass
-                except OSError:
-                    pass
+                except OSError as exc:
+                    cleanup_errors.append(exc)
         if stage is not None:
-            shutil.rmtree(stage, ignore_errors=True)
-        _close_fd(target_fd)
+            try:
+                _secure_remove_stage_directory(target_fd, stage)
+            except FileNotFoundError:
+                pass
+            except OSError as exc:
+                cleanup_errors.append(exc)
+        try:
+            _close_fd(target_fd, strict=True)
+        except OSError as exc:
+            cleanup_errors.append(exc)
+        if cleanup_errors:
+            if published and result is not None:
+                warnings = list(result.warnings)
+                warnings.append("backup temporary cleanup failed")
+                try:
+                    ledger.record_job(
+                        job_id=job,
+                        status="success",
+                        created_at_utc=created,
+                        archive_name=archive_name,
+                        artifacts=_ledger_artifacts(collected),
+                        error=warnings[-1],
+                    )
+                except Exception:
+                    warnings.append("backup cleanup warning could not be recorded")
+                object.__setattr__(result, "warnings", tuple(warnings))
+            else:
+                pending_exception = sys.exc_info()[1]
+                if pending_exception is not None:
+                    pending_exception.add_note("backup temporary cleanup failed")
+                    pending_exception.add_note(type(cleanup_errors[0]).__name__)
+                else:
+                    raise BackupError("backup temporary cleanup failed") from cleanup_errors[0]
 
 
 def restore_dry_run(
@@ -593,14 +700,167 @@ def restore_dry_run(
     try:
         assert_safe_path_components(destination_directory, field_name="restore destination")
         assert_no_symlink_ancestors(destination_directory, field_name="restore destination")
+        try:
+            destination_stat = destination_directory.lstat()
+        except FileNotFoundError:
+            destination_stat = None
+        except OSError as exc:
+            raise RuntimeError("restore destination could not be inspected") from exc
+        if destination_stat is not None and not stat.S_ISDIR(destination_stat.st_mode):
+            raise RuntimeError("restore destination must be a directory")
         if source_roots:
             assert_backup_target_not_within_sources(destination_directory, source_roots, field_name="restore destination")
     except (RuntimeError, TypeError, ValueError) as exc:
         raise BackupError("restore destination is unsafe") from exc
     manifest = verify_backup(archive_path)
+    member_paths = ("manifest.json",) + tuple(artifact.archive_path for artifact in manifest.artifacts)
+    conflicts: list[str] = []
+    for member_path in member_paths:
+        candidate = destination_directory / member_path
+        try:
+            assert_safe_path_components(candidate, field_name="restore member")
+            assert_no_symlink_ancestors(candidate, field_name="restore member")
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise BackupError("restore destination is unsafe") from exc
+        try:
+            candidate.lstat()
+        except FileNotFoundError:
+            continue
+        except OSError as exc:
+            raise BackupError("restore member could not be inspected") from exc
+        else:
+            conflicts.append(member_path)
     return RestoreDryRun(
         archive_path=archive_path,
         destination_directory=destination_directory,
         manifest=manifest,
         archive_members=("manifest.json",) + tuple(artifact.archive_path for artifact in manifest.artifacts),
+        conflicts=tuple(conflicts),
     )
+
+
+def _read_backup_payload(archive_path: Path) -> bytes:
+    if is_encrypted_path(archive_path):
+        return read_decrypted_bytes_from_file(
+            archive_path,
+            kind="backup",
+            field_name="backup archive",
+            max_bytes=MAX_ENCRYPTED_ARTIFACT_BYTES,
+            require_encrypted=True,
+        )
+    return read_private_bytes(
+        archive_path,
+        field_name="backup archive",
+        max_bytes=MAX_ENCRYPTED_ARTIFACT_BYTES,
+    )
+
+
+def _create_restore_stage_directory(parent_fd: int, destination: Path) -> tuple[str, Path, int]:
+    nofollow_flag = _resolve_no_follow_flag(field_name="restore staging directory")
+    directory_flag = getattr(os, "O_DIRECTORY", None)
+    if isinstance(directory_flag, bool) or not isinstance(directory_flag, int) or directory_flag <= 0:
+        raise BackupError("secure restore staging is not supported")
+    for _ in range(100):
+        stage_name = f".{destination.name}.{secrets.token_hex(16)}.restore"
+        try:
+            os.mkdir(stage_name, 0o700, dir_fd=parent_fd)
+        except FileExistsError:
+            continue
+        stage_fd: int | None = None
+        try:
+            stage_fd = os.open(
+                stage_name,
+                os.O_RDONLY | directory_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+                dir_fd=parent_fd,
+            )
+            assert_fd_is_private_directory(stage_fd, field_name="restore staging directory")
+            return stage_name, destination.parent / stage_name, stage_fd
+        except BaseException:
+            if stage_fd is not None:
+                _close_fd(stage_fd)
+            try:
+                os.rmdir(stage_name, dir_fd=parent_fd)
+            except OSError:
+                pass
+            raise
+    raise BackupError("failed to create restore staging directory")
+
+
+def restore_backup(
+    archive_path: Path,
+    destination_directory: Path,
+    *,
+    source_roots: Sequence[Path] = (),
+) -> RestoreDryRun:
+    plan = restore_dry_run(
+        archive_path,
+        destination_directory,
+        source_roots=source_roots,
+    )
+    if plan.conflicts:
+        raise BackupError("restore destination contains existing members")
+
+    payload = _read_backup_payload(archive_path)
+    payload_manifest = _verify_archive_bytes(payload)
+    if payload_manifest != plan.manifest:
+        raise BackupError("backup archive changed during restore")
+
+    parent_fd: int | None = None
+    stage_fd: int | None = None
+    stage_name = ""
+    stage_path: Path | None = None
+    published = False
+    try:
+        parent_fd = ensure_directory_without_following_symlinks(
+            destination_directory.parent,
+            field_name="restore destination parent",
+        )
+        try:
+            os.stat(destination_directory.name, dir_fd=parent_fd, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            raise BackupError("restore destination already exists")
+        stage_name, stage_path, stage_fd = _create_restore_stage_directory(parent_fd, destination_directory)
+        with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
+            for member_name in plan.archive_members:
+                member = archive.getmember(member_name)
+                stream = archive.extractfile(member)
+                if stream is None:
+                    raise BackupError("backup archive member cannot be read")
+                member_data = stream.read(member.size + 1)
+                if len(member_data) != member.size:
+                    raise BackupError("backup archive member size changed during restore")
+                target = stage_path / member_name
+                create_bytes_atomically_without_following_symlinks(
+                    target,
+                    member_data,
+                    field_name="restore artifact",
+                )
+        os.fsync(stage_fd)
+        stage_stat = os.fstat(stage_fd)
+        _rename_without_replacing(
+            stage_name,
+            destination_directory.name,
+            directory_fd=parent_fd,
+            target_directory_fd=parent_fd,
+            expected_source_stat=stage_stat,
+            field_name="restore destination publication",
+        )
+        published = True
+        os.fsync(parent_fd)
+        return plan
+    except (ArtifactCryptoError, BackupManifestError, OSError, RuntimeError, TypeError, ValueError, tarfile.TarError) as exc:
+        if isinstance(exc, BackupError):
+            raise
+        raise BackupError("backup restore failed") from exc
+    finally:
+        if stage_fd is not None:
+            _close_fd(stage_fd)
+        if not published and stage_name and parent_fd is not None:
+            try:
+                _secure_remove_stage_directory(parent_fd, stage_path or destination_directory.parent / stage_name)
+            except FileNotFoundError:
+                pass
+        if parent_fd is not None:
+            _close_fd(parent_fd)

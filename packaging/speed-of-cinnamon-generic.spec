@@ -14,12 +14,14 @@ Source0:        %{name}-%{version}.tar.gz
 
 BuildArch:      noarch
 Requires:       python3
-Requires:       python3-cryptography
+Requires:       python3-cryptography >= 50.0.0
 Requires:       cinnamon
 Requires:       libnotify
 Requires:       pipewire-utils
 Requires:       pulseaudio-utils
 Recommends:     libsecret
+Recommends:     wtype
+Recommends:     xdotool
 
 %description
 Speed of Cinnamon is a Cinnamon-native voice typing applet plus a small

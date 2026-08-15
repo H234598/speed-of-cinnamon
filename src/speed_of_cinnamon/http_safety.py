@@ -64,6 +64,8 @@ def _getaddrinfo_with_timeout(hostname: str, port: int, *, timeout_seconds: floa
             if worker.is_alive():
                 worker.kill()
                 worker.join(0.5)
+            if worker.is_alive():
+                raise TimeoutError("DNS resolver process could not be stopped")
             raise TimeoutError("DNS resolution deadline expired")
         if not result_connection.poll(0.1):
             raise OSError("DNS resolver exited without result")

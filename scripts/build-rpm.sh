@@ -102,7 +102,14 @@ try:
             check=True,
         )
 finally:
-    os.close(parent_fd)
+    primary_error = sys.exc_info()[1]
+    try:
+        os.close(parent_fd)
+    except BaseException as cleanup_error:
+        if primary_error is not None:
+            primary_error.add_note("build-rpm finalization descriptor cleanup failed")
+        else:
+            raise SystemExit("build-rpm finalization descriptor cleanup failed") from cleanup_error
 PY
 }
 
@@ -256,7 +263,12 @@ from pathlib import Path
 import tomllib
 
 repo_dir = Path(sys.argv[1])
-data = tomllib.loads((repo_dir / "pyproject.toml").read_text(encoding="utf-8"))
+MAX_PROJECT_METADATA_BYTES = 1 << 20
+with (repo_dir / "pyproject.toml").open("rb") as handle:
+    payload = handle.read(MAX_PROJECT_METADATA_BYTES + 1)
+if len(payload) > MAX_PROJECT_METADATA_BYTES:
+    raise SystemExit("pyproject.toml is too large")
+data = tomllib.loads(payload.decode("utf-8"))
 print(data["project"]["version"])
 PY
 )"
@@ -278,7 +290,12 @@ import sys
 
 spec_path = Path(sys.argv[1])
 version = sys.argv[2]
-text = spec_path.read_text(encoding="utf-8")
+MAX_RPM_SPEC_BYTES = 1 << 20
+with spec_path.open("rb") as handle:
+    payload = handle.read(MAX_RPM_SPEC_BYTES + 1)
+if len(payload) > MAX_RPM_SPEC_BYTES:
+    raise SystemExit("RPM spec is too large")
+text = payload.decode("utf-8")
 text = re.sub(r"^Version:\s*.*$", f"Version:        {version}", text, flags=re.M)
 payload = text.encode("utf-8")
 parent_fd = os.open(spec_path.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -296,15 +313,28 @@ try:
     os.fsync(parent_fd)
     tmp_name = ""
 finally:
+    primary_error = sys.exc_info()[1]
+    cleanup_errors = []
     if fd >= 0:
-        os.close(fd)
+        try:
+            os.close(fd)
+        except BaseException as cleanup_error:
+            cleanup_errors.append(cleanup_error)
     if tmp_name:
         try:
             os.unlink(tmp_name, dir_fd=parent_fd)
             os.fsync(parent_fd)
-        except OSError:
-            pass
-    os.close(parent_fd)
+        except BaseException as cleanup_error:
+            cleanup_errors.append(cleanup_error)
+    try:
+        os.close(parent_fd)
+    except BaseException as cleanup_error:
+        cleanup_errors.append(cleanup_error)
+    if cleanup_errors:
+        if primary_error is not None:
+            primary_error.add_note("build-rpm spec descriptor cleanup failed")
+        else:
+            raise SystemExit("build-rpm spec descriptor cleanup failed") from cleanup_errors[0]
 PY
 
 rpmbuild \

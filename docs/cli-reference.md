@@ -341,6 +341,10 @@ speed-of-cinnamon backup restore-dry-run \
   ~/.local/share/speed-of-cinnamon/backups/backup.socbackup.socenc \
   /tmp/speed-of-cinnamon-restore-check \
   --json
+speed-of-cinnamon backup restore \
+  ~/.local/share/speed-of-cinnamon/backups/backup.socbackup.socenc \
+  /tmp/speed-of-cinnamon-restore \
+  --json
 ```
 
 `backup create` writes a versioned archive from selected settings, transcripts, and recordings. Use `--no-config`,
@@ -348,7 +352,19 @@ speed-of-cinnamon backup restore-dry-run \
 `passphrase` is supported for CLI-friendly deployments and `off` deliberately creates plaintext archives. Settings are
 staged in a private temporary directory and removed after archive creation; the persistent settings-export state file is
 not used as backup staging. `backup verify` validates the encrypted envelope and archive manifest. `restore-dry-run`
-validates archive members and destination safety without writing restored artifacts.
+validates archive members and destination safety without writing restored artifacts. JSON output includes `conflicts`
+and `conflict_count` for existing `manifest.json` or artifact paths. Existing non-directory targets and symlink paths
+are rejected instead of being treated as ordinary conflicts.
+
+The `backup create` JSON response includes the absolute local `archive_path` and the basename `archive_name`, plus
+`warnings`. An empty warning list is normal. If the archive was already
+published but post-publish bookkeeping or temporary cleanup failed, the response remains `status: "done"` with a
+non-empty warning list; do not retry automatically. Run `backup verify` first and inspect the target directory for
+cleanup leftovers.
+
+`backup restore` performs the same verification, restores into a private staging directory, and publishes it with a
+no-clobber rename. The destination must not already exist; use `restore-dry-run` first to inspect conflicts. Partial
+staging data is removed on failure. There is deliberately no overwrite or force mode.
 
 ## Alarms
 

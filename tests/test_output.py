@@ -862,13 +862,12 @@ class OutputTest(unittest.TestCase):
     def test_process_tree_uses_pidfd_after_identity_check(self) -> None:
         stat_fields = " ".join(["S", *(["0"] * 18), "owned-start"])
         with (
-            mock.patch("speed_of_cinnamon.output.Path") as path_factory,
+            mock.patch("speed_of_cinnamon.output._read_proc_stat", return_value=f"123 (worker) {stat_fields}"),
             mock.patch("speed_of_cinnamon.output.os.pidfd_open", return_value=42) as mocked_open,
             mock.patch("speed_of_cinnamon.output.signal.pidfd_send_signal") as mocked_send,
             mock.patch("speed_of_cinnamon.output.os.close") as mocked_close,
             mock.patch("speed_of_cinnamon.output.os.kill") as mocked_kill,
         ):
-            path_factory.return_value.read_text.return_value = f"123 (worker) {stat_fields}"
             self.assertTrue(output_module._kill_output_process_tree({123: "owned-start"}))
 
         mocked_open.assert_called_once_with(123, 0)
@@ -879,11 +878,10 @@ class OutputTest(unittest.TestCase):
     def test_process_tree_fails_closed_without_pidfd(self) -> None:
         stat_fields = " ".join(["S", *(["0"] * 18), "owned-start"])
         with (
-            mock.patch("speed_of_cinnamon.output.Path") as path_factory,
+            mock.patch("speed_of_cinnamon.output._read_proc_stat", return_value=f"123 (worker) {stat_fields}"),
             mock.patch("speed_of_cinnamon.output.os.pidfd_open", new=None),
             mock.patch("speed_of_cinnamon.output.os.kill") as mocked_kill,
         ):
-            path_factory.return_value.read_text.return_value = f"123 (worker) {stat_fields}"
             self.assertFalse(output_module._kill_output_process_tree({123: "owned-start"}))
 
         mocked_kill.assert_not_called()
@@ -2227,6 +2225,27 @@ class OutputTest(unittest.TestCase):
         mocked_clipboard.assert_called_once_with("wiederholung")
         mocked_run.assert_not_called()
 
+    def test_clipboard_paste_xsel_only_falls_back_to_clipboard_only(self) -> None:
+        def fake_which(command: str) -> str | None:
+            return {
+                "xdotool": "/usr/bin/xdotool",
+                "xsel": "/usr/bin/xsel",
+            }.get(command)
+
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+            mock.patch("speed_of_cinnamon.output._which", side_effect=fake_which),
+            mock.patch("speed_of_cinnamon.output._active_x_window_snapshot", return_value=("1", "Editor", "Xed")),
+            mock.patch("speed_of_cinnamon.output.set_clipboard") as mocked_clipboard,
+            mock.patch("speed_of_cinnamon.output.paste_from_clipboard") as mocked_paste,
+            mock.patch("speed_of_cinnamon.output._clipboard_has_non_text_payload", return_value=False),
+        ):
+            self.assertTrue(insert_text("wiederholung", "clipboard-paste"))
+
+        mocked_clipboard.assert_called_once_with("wiederholung")
+        mocked_paste.assert_not_called()
+
     def test_clipboard_fallback_allows_unknown_payload_without_target_helper(self) -> None:
         with mock.patch("speed_of_cinnamon.output._which", return_value=None):
             self.assertTrue(output_module._clipboard_has_non_text_payload())
@@ -3328,6 +3347,15 @@ class OutputTest(unittest.TestCase):
                 )
             )
 
+    def test_clipboard_pending_lock_rejects_invalid_no_follow_flags(self) -> None:
+        for invalid_flag in (None, 0, -1, True, "nofollow"):
+            with self.subTest(invalid_flag=invalid_flag), mock.patch.object(
+                output_module.os,
+                "O_NOFOLLOW",
+                invalid_flag,
+            ):
+                self.assertIsNone(output_module._acquire_clipboard_pending_quarantine_lock())
+
     def test_invalid_pending_ledger_is_untouched_and_blocks_dedupe(self) -> None:
         path = output_module._clipboard_pending_quarantine_path()
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -4193,19 +4221,19 @@ class OutputTest(unittest.TestCase):
 
     def test_clipboard_lock_proc_decode_errors_fail_closed(self) -> None:
         error = UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid process name")
-        with mock.patch.object(output_module.Path, "read_text", side_effect=error):
+        with mock.patch.object(output_module, "_read_proc_stat", side_effect=error):
             self.assertFalse(output_module._clipboard_lock_pid_is_zombie(1234))
             self.assertIsNone(output_module._clipboard_lock_identity_for_pid(1234))
 
     def test_output_process_scan_decode_errors_fail_closed(self) -> None:
         error = UnicodeDecodeError("ascii", b"\xff", 0, 1, "invalid process name")
-        with mock.patch.object(output_module.Path, "read_text", side_effect=error):
+        with mock.patch.object(output_module, "_read_proc_stat_path", side_effect=error):
             self.assertIsNone(output_module._process_group_has_live_descendants(1234))
 
     def test_output_process_scan_reports_live_same_session_different_group(self) -> None:
         with (
             mock.patch.object(output_module.Path, "iterdir", return_value=(Path("/proc/100"),)),
-            mock.patch.object(output_module.Path, "read_text", return_value="100 (child) S 1 9999 1234"),
+            mock.patch.object(output_module, "_read_proc_stat_path", return_value="100 (child) S 1 9999 1234"),
         ):
             self.assertTrue(output_module._process_group_has_live_descendants(1234))
 

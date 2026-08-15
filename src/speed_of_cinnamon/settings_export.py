@@ -326,7 +326,7 @@ def _reject_non_finite_json_number(_value: str) -> object:
 def _create_private_temp_file(parent_fd: int, final_name: str) -> tuple[int, str]:
     safe_name = final_name.replace("/", "_") or "settings-export.json"
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise SettingsExportError("secure settings export temp file creation is not supported on this platform")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag | getattr(os, "O_CLOEXEC", 0)
     for _ in range(100):
@@ -387,7 +387,7 @@ def _scrub_temp_settings_export_file(
     if not temp_name:
         return
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise SettingsExportError("secure settings export temp file scrubbing is not supported on this platform")
     nonblock_flag = _required_nonblock_flag("settings export temp file scrubbing")
     fd = os.open(
@@ -626,10 +626,13 @@ def normalize_excluded_private_settings(value: Any) -> list[str]:
     normalized: list[str] = []
     for raw_item in value:
         if not isinstance(raw_item, str):
-            continue
+            raise SettingsExportError("settings export excluded private settings must contain setting names")
         item = _sanitize_text_field(raw_item, field_name="settings export excluded private setting")
-        if item in allowed and item not in normalized:
-            normalized.append(item)
+        if item not in allowed:
+            raise SettingsExportError(f"unknown settings export excluded private setting: {item}")
+        if item in normalized:
+            raise SettingsExportError(f"duplicate settings export excluded private setting: {item}")
+        normalized.append(item)
     return normalized
 
 
@@ -642,10 +645,13 @@ def normalize_included_private_settings(value: Any) -> list[str]:
     normalized: list[str] = []
     for raw_item in value:
         if not isinstance(raw_item, str):
-            continue
+            raise SettingsExportError("settings export included private settings must contain setting names")
         item = _sanitize_text_field(raw_item, field_name="settings export included private setting")
-        if item in allowed and item not in normalized:
-            normalized.append(item)
+        if item not in allowed:
+            raise SettingsExportError(f"unknown settings export included private setting: {item}")
+        if item in normalized:
+            raise SettingsExportError(f"duplicate settings export included private setting: {item}")
+        normalized.append(item)
     return normalized
 
 
@@ -809,7 +815,7 @@ def write_export(
             except (OSError, ValueError) as exc:
                 raise OSError("settings export temporary file identity is unavailable") from exc
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if nofollow_flag is None:
+        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
             raise OSError("settings export temporary file cleanup is not supported on this platform")
         claim_fd = os.open(
             temp_name,
@@ -910,7 +916,7 @@ def write_export(
         ):
             raise _RecoveryBackupChanged("settings export recovery backup changed before cleanup")
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if nofollow_flag is None:
+        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
             raise _RecoveryBackupChanged("settings export recovery backup cleanup is not supported on this platform")
         claim_flags = (
             os.O_RDONLY
@@ -1032,7 +1038,7 @@ def write_export(
         if not _same_leaf_snapshot(current_stat, expected_stat):
             raise OSError(f"{field_name} changed before cleanup")
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if nofollow_flag is None:
+        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
             raise OSError(f"{field_name} cleanup is not supported on this platform")
         claim_flags = (
             getattr(os, "O_PATH", os.O_RDONLY)
@@ -1485,6 +1491,8 @@ def read_export(path: Path) -> dict[str, Any]:
         ]
     if set(excluded_private_settings).intersection(included_private_settings):
         raise SettingsExportError("settings export private setting metadata conflicts")
+    if set(excluded_private_settings).union(included_private_settings) != set(NON_EXPORTABLE_PRIVATE_SETTINGS):
+        raise SettingsExportError("settings export private setting metadata is incomplete")
     importable_settings = normalize_settings(raw_settings)
     allowed_private_settings = set(included_private_settings)
     for key in NON_EXPORTABLE_PRIVATE_SETTINGS:

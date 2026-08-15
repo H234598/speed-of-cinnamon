@@ -7,7 +7,7 @@ import re
 import stat
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Mapping, Sequence
 
 from .path_safety import (
     assert_backup_source_regular_file,

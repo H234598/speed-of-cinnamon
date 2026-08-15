@@ -57,6 +57,7 @@ const CLIPBOARD_MAX_TARGETS = 16;
 const MAX_CLIPBOARD_TARGET_OUTPUT_BYTES = 65536;
 const MAX_XDOTOOL_TARGET_OUTPUT_BYTES = 4096;
 const X11_COMMAND_TIMEOUT_MS = 2000;
+const SCREEN_SAVER_QUERY_TIMEOUT_MS = 500;
 const MAX_KEYBOARD_COMMAND_TIMEOUT_MS = 300000;
 const MAX_CANCEL_RECOVERY_ATTEMPTS = 3;
 const ALARM_CHECK_SECONDS = 60;
@@ -64,6 +65,7 @@ const MAX_ALARM_MENU_ENTRIES = 128;
 const MAX_ALARM_NOTIFICATIONS = 32;
 const MAX_INPUT_SOURCE_MENU_ENTRIES = 128;
 const MAX_VOICE_MODEL_MENU_ENTRIES = 128;
+const MODEL_MENU_REFRESH_TTL_MS = 5000;
 const MAX_HISTORY_MENU_ENTRIES = 128;
 const MAX_CLI_ARG_BYTES = 4096;
 const MAX_CLI_ARG_COUNT = 128;
@@ -159,6 +161,9 @@ function utf8ByteLength(value) {
 const MIN_TRANSCRIPT_FILES = 1;
 const MAX_TRANSCRIPT_FILES = 1000;
 const DEFAULT_AUTO_PASTE_TITLE = "codex, Terminal, Telegram, Ghostty, Kitty";
+const CODEX_TERMINAL_SUBMIT_KEY_MODES = ["enter", "tab", "custom"];
+const DEFAULT_CODEX_TERMINAL_SUBMIT_KEY = "enter";
+const DEFAULT_CODEX_TERMINAL_CUSTOM_KEY = "F6";
 const AUTO_PASTE_TITLE_PRESETS = [
   "codex",
   "Terminal",
@@ -396,6 +401,8 @@ const IMPORT_TEXT_SETTINGS = {
   "personal-context": "personal context",
   "vocabulary": "vocabulary",
   "auto-paste-window-title": "auto-paste window title",
+  "codex-terminal-submit-key": "Codex terminal submit key",
+  "codex-terminal-custom-key": "custom Codex terminal submit key",
   "whisper-model": "whisper model",
   "transcriber-command": "transcriber command",
   "post-process-command": "post-process command",
@@ -478,6 +485,8 @@ const EXPORTABLE_SETTINGS = [
   ["max-transcript-files", "maxTranscriptFiles"],
   ["artifact-encryption", "artifactEncryption"],
   ["auto-paste-window-title", "autoPasteWindowTitle"],
+  ["codex-terminal-submit-key", "codexTerminalSubmitKey"],
+  ["codex-terminal-custom-key", "codexTerminalCustomKey"],
   ["auto-backup-enabled", "autoBackupEnabled"],
   ["auto-backup-directory", "autoBackupDirectory"],
   ["auto-backup-config", "autoBackupConfig"],
@@ -593,6 +602,8 @@ MyApplet.prototype = {
     this.recordingStartPendingAfterCleanup = false;
     this.recordingStartRetryTimer = 0;
     this._externalApiEnvMonitorCancelSucceeded = false;
+    this.externalApiEnvRefreshTimer = 0;
+    this.externalApiEnvRefreshRunning = false;
     this.maintenanceCleanupFailed = false;
   },
 
@@ -3958,6 +3969,7 @@ MyApplet.prototype = {
     this._historyMenuFingerprint = null;
     this._inputSourceMenuFingerprint = null;
     this._modelMenuFingerprint = null;
+    this._modelMenuLastRefreshAt = 0;
     this._textModelMenuFingerprint = null;
     this._textModelMenuProvider = "";
     this._alarmMenuFingerprint = null;
@@ -3992,6 +4004,8 @@ MyApplet.prototype = {
     this.artifactEncryption = DEFAULT_ARTIFACT_ENCRYPTION;
     this.clipboardBackend = "gtk";
     this.autoPasteWindowTitle = DEFAULT_AUTO_PASTE_TITLE;
+    this.codexTerminalSubmitKey = DEFAULT_CODEX_TERMINAL_SUBMIT_KEY;
+    this.codexTerminalCustomKey = DEFAULT_CODEX_TERMINAL_CUSTOM_KEY;
     this.autoBackupEnabled = false;
     this.autoBackupDirectory = "";
     this.autoBackupConfig = true;
@@ -4055,6 +4069,7 @@ MyApplet.prototype = {
     this.notificationSessionActive = false;
     this.lastNotificationKey = "";
     this.lastArtifactEncryptionWarningKey = "";
+    this.lastAutomaticBackupWarningKey = "";
     this.lastRejectedArtifactPassphraseWarningKey = "";
     this.selfProtectionNoticeKey = "";
     this.selfProtectionNoticeAtMs = 0;
@@ -4159,6 +4174,8 @@ MyApplet.prototype = {
     this._bindSetting(Settings.BindingDirection.IN, "artifact-encryption", "artifactEncryption", this._onTextOutputSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "clipboard-backend", "clipboardBackend", this._onClipboardBackendSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "auto-paste-window-title", "autoPasteWindowTitle", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "codex-terminal-submit-key", "codexTerminalSubmitKey", this._onTextOutputSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "codex-terminal-custom-key", "codexTerminalCustomKey", this._onTextOutputSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "auto-backup-enabled", "autoBackupEnabled", this._onAutoBackupSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "auto-backup-directory", "autoBackupDirectory", this._onAutoBackupSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "auto-backup-config", "autoBackupConfig", this._onAutoBackupSettingsChanged, null);
@@ -5408,12 +5425,19 @@ MyApplet.prototype = {
   _onTextOutputSettingsChanged: function() {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
-    this.autoBackupToken = null;
-    this.autoBackupPending = false;
+    // Backup owns a frozen settings snapshot and runs independently from
+    // text-output changes. Keep its token until its process callback arrives;
+    // clearing it here would allow concurrent backup jobs.
     this._historyMenuFingerprint = null;
     let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
     this._cancelTextInsertForSettingsChange();
     this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
+    if (typeof this._normalizeCodexTerminalSubmitKey === "function") {
+      this.codexTerminalSubmitKey = this._normalizeCodexTerminalSubmitKey(this.codexTerminalSubmitKey);
+    }
+    if (typeof this._normalizeCodexTerminalCustomKey === "function") {
+      this.codexTerminalCustomKey = this._normalizeCodexTerminalCustomKey(this.codexTerminalCustomKey);
+    }
     this.artifactEncryption = this._normalizeArtifactEncryption(this.artifactEncryption);
     this._populateArtifactEncryptionMenu();
     this._populateTextOptionsMenu();
@@ -5714,6 +5738,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-timer", () => this._clearOllamaInstallWatchTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearProcessCleanupRetryTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearRecordingStartRetryTimer());
+    this._runTeardownGuarded("teardown-timer", () => this._clearExternalApiEnvRefreshTimer());
     this._runTeardownGuarded("teardown-timer", () => this._cancelAutoBackupTimers());
     this._runTeardownGuarded("teardown-orphaned-timers", () => this._retryOrphanedTimers());
     this._runTeardownGuarded("teardown-monitor", () => this._clearExternalApiEnvMonitor());
@@ -6173,8 +6198,18 @@ MyApplet.prototype = {
       this.autoBackupPending = false;
       this._maybeStartAutoBackup({ status: "done" });
     };
-    let backupProcess = this._spawnJson(this._autoBackupArgs(), (result) => {
-      this.autoBackupToken = null;
+    let backupProcess = null;
+    let backupCallbackCompleted = false;
+    let backupStartToken = {};
+    let releaseBackupToken = () => {
+      if (this.autoBackupToken === backupStartToken || this.autoBackupToken === backupProcess) {
+        this.autoBackupToken = null;
+      }
+    };
+    this.autoBackupToken = backupStartToken;
+    backupProcess = this._spawnJson(this._autoBackupArgs(), (result) => {
+      backupCallbackCompleted = true;
+      releaseBackupToken();
       let failed = !result || result.status === "error" || Boolean(result.error);
       if (failed && retryAttempt < retryCount) {
         let retryDelay = Math.max(1, Math.min(3600, Number(this.autoBackupRetryDelaySeconds) || 30));
@@ -6201,6 +6236,11 @@ MyApplet.prototype = {
             : _("Backup command failed");
           this._notify(_("Automatic backup failed"), message, true);
         }
+      } else if (Array.isArray(result && result.warnings) && result.warnings.length > 0) {
+        if (this.autoBackupNotifyError === true) {
+          let warning = this._sanitizeErrorMessage(result.warnings[0]) || _("Backup cleanup requires attention");
+          this._notify(_("Automatic backup completed with warnings"), warning, true);
+        }
       } else if (this.autoBackupNotifySuccess === true) {
         this._notify(_("Automatic backup completed"), _("Selected artifacts were backed up"), false);
       }
@@ -6209,7 +6249,20 @@ MyApplet.prototype = {
       timeoutMs: CLI_COMMAND_TIMEOUT_MS,
       resourceGroup: "backup"
     }));
-    this.autoBackupToken = backupProcess;
+    if (this.autoBackupToken === backupStartToken) {
+      if (backupProcess) {
+        this.autoBackupToken = backupProcess;
+      } else if (!backupCallbackCompleted) {
+        this.autoBackupToken = null;
+        this.autoBackupPending = false;
+        this._recordLifecycleError("auto-backup-spawn", new Error("Subprocess could not be started"));
+        if (this.autoBackupNotifyError === true) {
+          this._notify(_("Automatic backup failed"), _("Could not start automatic backup"), true);
+        }
+      } else {
+        this.autoBackupToken = null;
+      }
+    }
   },
 
   _settingsImportArgs: function(preview) {
@@ -6271,18 +6324,66 @@ MyApplet.prototype = {
     return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "none";
   },
 
+  _isWaylandSession: function() {
+    let sessionType = "";
+    let waylandDisplay = "";
+    let x11Display = "";
+    try {
+      sessionType = String(GLib.getenv("XDG_SESSION_TYPE") || "").trim().toLowerCase();
+      waylandDisplay = String(GLib.getenv("WAYLAND_DISPLAY") || "").trim();
+      x11Display = String(GLib.getenv("DISPLAY") || "").trim();
+    } catch (error) {
+      this._recordLifecycleError("session-detection", error);
+      return null;
+    }
+    // Explicit session type is authoritative. X11 sessions can still expose a
+    // Wayland socket through a compositor or compatibility environment.
+    if (sessionType === "wayland") {
+      return true;
+    }
+    if (sessionType === "x11") {
+      return false;
+    }
+    if (waylandDisplay !== "") {
+      return true;
+    }
+    if (x11Display !== "") {
+      return false;
+    }
+    return null;
+  },
+
+  _preferredKeyboardProgram: function() {
+    let xdotoolPath = this._findTrustedProgramInPath("xdotool");
+    let wtypePath = this._findTrustedProgramInPath("wtype");
+    let preferWayland = this._isWaylandSession();
+    if (preferWayland === null) {
+      return null;
+    }
+    if (preferWayland) {
+      return wtypePath ? { kind: "wtype", path: wtypePath } : null;
+    }
+    if (xdotoolPath) {
+      return { kind: "xdotool", path: xdotoolPath };
+    }
+    if (wtypePath) {
+      return { kind: "wtype", path: wtypePath };
+    }
+    return null;
+  },
+
   _resolveOutputActions: function(method, targetMatched, keyboardBackendAvailable) {
     let normalized = this._normalizeOutputMethod(method);
     if (normalized === "clipboard") {
       return { copy: true, restoreFocus: false, paste: false, submit: false };
     }
     if (normalized === "clipboard-paste" || normalized === "clipboard-paste-submit") {
-      let canPaste = targetMatched === true && keyboardBackendAvailable === true;
+      let canPaste = keyboardBackendAvailable === true;
       return {
         copy: true,
         restoreFocus: canPaste,
         paste: canPaste,
-        submit: canPaste && normalized === "clipboard-paste-submit",
+        submit: canPaste && targetMatched === true && normalized === "clipboard-paste-submit",
       };
     }
     if (normalized === "type") {
@@ -8628,7 +8729,7 @@ MyApplet.prototype = {
     let cli = this._terminalCommandQuote(this._cliCommand(), "CLI command");
     return this._terminalWorkflowScript([
       "echo 'Running Speed of Cinnamon basic setup...'",
-      "echo 'Install OS packages manually if missing: zenity xdotool xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip.'",
+      "echo 'Install OS packages manually if missing: zenity xdotool wtype xclip xsel wl-clipboard pipewire-utils pulseaudio-utils alsa-utils python3-pip.'",
       "if command -v python3 >/dev/null 2>&1; then python3 -m pip install --user --upgrade faster-whisper; fi",
       cli + " download-model ct2-base-int8 --json",
       "echo 'Basic setup finished.'"
@@ -9628,6 +9729,13 @@ MyApplet.prototype = {
     if (!this._canMutateMenu(this.modelItem) || this.modelItem.menu.isOpen !== true) {
       return;
     }
+    let forceRefresh = arguments.length > 0 && arguments[0] === true;
+    let now = Date.now();
+    if (!forceRefresh && this._modelMenuFingerprint !== null &&
+        Number.isFinite(this._modelMenuLastRefreshAt) && this._modelMenuLastRefreshAt > 0 &&
+        now >= this._modelMenuLastRefreshAt && now - this._modelMenuLastRefreshAt < MODEL_MENU_REFRESH_TTL_MS) {
+      return;
+    }
     let canReportModelStatus = () => !this.isCommandRunning &&
       !this._hasActiveRecordingState() && !this._hasLocalProcessingWorkflow();
     if (this.modelMenuRefreshToken || this.voiceModelActionToken || this.voiceModelCleanupFailed === true) {
@@ -9680,6 +9788,7 @@ MyApplet.prototype = {
           return;
         }
         this._populateModelMenu(payload.models || []);
+        this._modelMenuLastRefreshAt = Date.now();
       } catch (error) {
         if (this.modelMenuRefreshToken === refreshToken) {
           this.modelMenuRefreshToken = null;
@@ -9807,7 +9916,7 @@ MyApplet.prototype = {
     this._setPooledMenuItemVisible(row._socIncompatible, !data.compatible);
     this._setPooledMenuItemVisible(row._socUse, data.downloaded);
     this._setPooledMenuItemVisible(row._socRemove, data.downloaded);
-    this._setPooledMenuItemVisible(row._socDownload, !data.downloaded);
+    this._setPooledMenuItemVisible(row._socDownload, !data.downloaded && data.downloadable === true);
     this._setMenuItemSensitiveSafely(row._socUse, !data.current && data.compatible && data.usable);
   },
 
@@ -9823,6 +9932,9 @@ MyApplet.prototype = {
     }
     let messageText = typeof message === "string" ? message.trim() : "";
     messageText = this._uiMessageText(messageText);
+    if (messageText !== "") {
+      this._modelMenuLastRefreshAt = 0;
+    }
     let nextFingerprint = JSON.stringify({
       transcriber: String(this.transcriber || ""),
       whisperModel: String(this.whisperModel || ""),
@@ -9891,7 +10003,9 @@ MyApplet.prototype = {
         let name = typeof model.name === "string" ? model.name.trim() : "";
         let path = this._modelPathFromPayload(model);
         let downloaded = model.downloaded === true;
-        let usable = downloaded && this._isUsableVoiceModelPayload(model);
+        let downloadable = model.downloadable === true;
+        let verified = model.verified === true;
+        let usable = downloaded && verified && this._isUsableVoiceModelPayload(model);
         let current = usable && this.whisperModel && path === String(this.whisperModel);
         let compatible = this._voiceModelSupportsCurrentLanguage(model);
         let size = typeof model.size === "string" ? model.size.trim() : "";
@@ -9899,11 +10013,14 @@ MyApplet.prototype = {
         description = this._uiMessageText(description);
         let label = (current ? "[x] " : "[ ] ") + name + " (" + (size || "?") + ")";
         if (!compatible) label += _(" - English only");
-        if (!downloaded) label += _(" - not downloaded");
+        if (!downloaded) label += downloadable ? _(" - not downloaded") : _(" - download unavailable");
+        else if (!verified) label += _(" - integrity not verified");
         else if (!usable) label += _(" - invalid metadata");
         row._socData = {
           model: model,
           downloaded: downloaded,
+          downloadable: downloadable,
+          verified: verified,
           usable: usable,
           current: current,
           compatible: compatible,
@@ -9984,7 +10101,7 @@ MyApplet.prototype = {
       : modelFormat === "ctranslate2"
         ? "faster-whisper"
         : "";
-    return Boolean(model && typeof model === "object" && model.downloaded === true && name !== "" &&
+    return Boolean(model && typeof model === "object" && model.downloaded === true && model.verified === true && name !== "" &&
       this._modelPathFromPayload(model) !== "" &&
       backend === expectedBackend);
   },
@@ -10002,7 +10119,9 @@ MyApplet.prototype = {
       return;
     }
     let downloaded = model.downloaded === true;
-    let usable = downloaded && this._isUsableVoiceModelPayload(model);
+    let downloadable = model.downloadable === true;
+    let verified = model.verified === true;
+    let usable = downloaded && verified && this._isUsableVoiceModelPayload(model);
     let current = usable && this.whisperModel && path === String(this.whisperModel);
     let compatible = this._voiceModelSupportsCurrentLanguage(model);
     let size = typeof model.size === "string" ? model.size.trim() : "";
@@ -10013,7 +10132,9 @@ MyApplet.prototype = {
       label += _(" - English only");
     }
     if (!downloaded) {
-      label += _(" - not downloaded");
+      label += downloadable ? _(" - not downloaded") : _(" - download unavailable");
+    } else if (!verified) {
+      label += _(" - integrity not verified");
     } else if (!usable) {
       label += _(" - invalid metadata");
     }
@@ -10038,6 +10159,10 @@ MyApplet.prototype = {
       let removeItem = new PopupMenu.PopupIconMenuItem(_("Remove model"), "edit-delete-symbolic", St.IconType.SYMBOLIC);
       this._connectSafe(removeItem, "activate", () => this._removeVoiceModel(model));
       entry.menu.addMenuItem(removeItem);
+      return;
+    }
+
+    if (!downloadable) {
       return;
     }
 
@@ -10095,7 +10220,14 @@ MyApplet.prototype = {
   },
 
   _starterVoiceModelName: function() {
-    return "ct2-base-int8";
+    let language = String(this._primaryLanguage() || "").trim().toLowerCase().replace("_", "-");
+    if (language === "en" || language.indexOf("en-") === 0) {
+      return "tiny.en";
+    }
+    if (language === "de" || language.indexOf("de-") === 0) {
+      return "tiny-de";
+    }
+    return "tiny";
   },
 
   _activeVoiceModelSummary: function() {
@@ -10163,7 +10295,7 @@ MyApplet.prototype = {
     )) {
       return false;
     }
-    this._refreshModelMenu();
+    this._refreshModelMenu(true);
     if (showStatus) {
       this._setStatus("error", _("English-only model was disabled because it does not support ") + label + ": " + language, this.lastTranscript);
     }
@@ -10171,7 +10303,7 @@ MyApplet.prototype = {
   },
 
   _downloadStarterModel: function() {
-    this._downloadVoiceModel({ name: this._starterVoiceModelName() });
+    this._downloadVoiceModel({ name: this._starterVoiceModelName(), downloadable: true });
   },
 
   _downloadVoiceModel: function(model) {
@@ -10181,6 +10313,10 @@ MyApplet.prototype = {
       return;
     }
     let name = model && typeof model.name === "string" ? model.name.trim() : "";
+    if (name !== "" && (!model || model.downloadable !== true)) {
+      this._setStatus("error", _("Model download unavailable: integrity metadata is missing"), this.lastTranscript);
+      return;
+    }
     if (name === "") {
       name = this._starterVoiceModelName();
     }
@@ -10210,16 +10346,16 @@ MyApplet.prototype = {
         this.voiceModelActionToken = null;
         if (payload.error) {
           this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-          this._refreshModelMenu();
+          this._refreshModelMenu(true);
           return;
         }
         if (!this._isUsableVoiceModelPayload(payload)) {
           this._setStatus("error", _("Downloaded model response was invalid"), this.lastTranscript);
-          this._refreshModelMenu();
+          this._refreshModelMenu(true);
           return;
         }
         this._selectVoiceModel(payload, false);
-        this._refreshModelMenu();
+        this._refreshModelMenu(true);
       } catch (error) {
         this.isCommandRunning = false;
         if (this.voiceModelActionToken === actionToken) {
@@ -10274,12 +10410,12 @@ MyApplet.prototype = {
         this.voiceModelActionToken = null;
         if (payload.error) {
           this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
-          this._refreshModelMenu();
+          this._refreshModelMenu(true);
           return;
         }
         if (payload.removed !== true) {
           this._setStatus("ready", _("Model was not downloaded: ") + name, this.lastTranscript);
-          this._refreshModelMenu();
+          this._refreshModelMenu(true);
           return;
         }
         if (path !== "" && path === String(this.whisperModel || "")) {
@@ -10290,12 +10426,12 @@ MyApplet.prototype = {
             _("Removed model, but voice settings could not be updated"),
             false
           )) {
-            this._refreshModelMenu();
+            this._refreshModelMenu(true);
             return;
           }
         }
         this._setStatus("done", _("Removed model: ") + name, this.lastTranscript);
-        this._refreshModelMenu();
+        this._refreshModelMenu(true);
       } catch (error) {
         this.isCommandRunning = false;
         if (this.voiceModelActionToken === actionToken) {
@@ -10355,7 +10491,7 @@ MyApplet.prototype = {
     )) {
       return false;
     }
-    this._refreshModelMenu();
+    this._refreshModelMenu(true);
     this._setStatusPreservingRecording("ready", _("Voice model: automatic"), this.lastTranscript);
     return true;
   },
@@ -10372,7 +10508,7 @@ MyApplet.prototype = {
     )) {
       return false;
     }
-    this._refreshModelMenu();
+    this._refreshModelMenu(true);
     this._setStatusPreservingRecording("ready", message, this.lastTranscript);
     return true;
   },
@@ -10908,7 +11044,17 @@ MyApplet.prototype = {
     return true;
   },
 
+  _clearExternalApiEnvRefreshTimer: function() {
+    if (this.externalApiEnvRefreshRunning === true || !this.externalApiEnvRefreshTimer) {
+      return true;
+    }
+    return this._clearTrackedTimer("external-api-env", "externalApiEnvRefreshTimer") !== false;
+  },
+
   _clearExternalApiEnvMonitor: function() {
+    if (!this._clearExternalApiEnvRefreshTimer()) {
+      this._recordLifecycleError("external-api-env-refresh", new Error("External API refresh timer could not be cleared"));
+    }
     if (!this.externalApiEnvMonitor) {
       return this._retryOrphanedMonitors(true);
     }
@@ -10979,34 +11125,49 @@ MyApplet.prototype = {
           return;
         }
         if (eventType === Gio.FileMonitorEvent.CHANGES_DONE_HINT || eventType === Gio.FileMonitorEvent.CREATED) {
-          let transaction = {};
-          let envApplied = this._applyExternalApiEnvFile(false, transaction, applyTarget);
-          if (!envApplied) {
-            if (transaction.rollbackFailed === true && this.externalApiEnvMonitor === monitor) {
-              this._clearExternalApiEnvMonitor();
-            }
+          if (this.externalApiEnvRefreshTimer) {
             return;
           }
-          if (envApplied) {
-            if (!this._lifecycleAllowsWork() || this.externalApiEnvMonitor !== monitor) {
-              if (typeof transaction.rollback === "function" && transaction.rollback() === false) {
-                this._recordLifecycleError(
-                  "settings-external-api-rollback",
-                  new Error("External API settings rollback failed")
-                );
+          let refreshTimer = this._scheduleTrackedTimer("external-api-env", 100, () => {
+            this.externalApiEnvRefreshRunning = true;
+            try {
+              if (this.appletRemoved || !this._lifecycleAllowsWork() || this.externalApiEnvMonitor !== monitor) {
+                return false;
               }
-              return;
-            }
-            if (!this._applyExternalApiEnvTarget(applyTarget, true, transaction)) {
-              let envRollbackSucceeded = typeof transaction.rollback === "function" &&
-                transaction.rollback() !== false;
-              if (!envRollbackSucceeded || transaction.targetRollbackFailed === true) {
-                this._setStatusPreservingRecording("error", _("External API settings rollback failed"), this.lastTranscript);
-                if (this.externalApiEnvMonitor === monitor) {
+              let transaction = {};
+              let envApplied = this._applyExternalApiEnvFile(false, transaction, applyTarget);
+              if (!envApplied) {
+                if (transaction.rollbackFailed === true && this.externalApiEnvMonitor === monitor) {
                   this._clearExternalApiEnvMonitor();
                 }
+                return false;
               }
+              if (!this._lifecycleAllowsWork() || this.externalApiEnvMonitor !== monitor) {
+                if (typeof transaction.rollback === "function" && transaction.rollback() === false) {
+                  this._recordLifecycleError(
+                    "settings-external-api-rollback",
+                    new Error("External API settings rollback failed")
+                  );
+                }
+                return false;
+              }
+              if (!this._applyExternalApiEnvTarget(applyTarget, true, transaction)) {
+                let envRollbackSucceeded = typeof transaction.rollback === "function" &&
+                  transaction.rollback() !== false;
+                if (!envRollbackSucceeded || transaction.targetRollbackFailed === true) {
+                  this._setStatusPreservingRecording("error", _("External API settings rollback failed"), this.lastTranscript);
+                  if (this.externalApiEnvMonitor === monitor) {
+                    this._clearExternalApiEnvMonitor();
+                  }
+                }
+              }
+            } finally {
+              this.externalApiEnvRefreshRunning = false;
             }
+            return false;
+          }, false, "externalApiEnvRefreshTimer");
+          if (!refreshTimer) {
+            this._recordLifecycleError("external-api-env-refresh", new Error("External API refresh timer could not be scheduled"));
           }
         }
       });
@@ -11124,7 +11285,7 @@ MyApplet.prototype = {
     )) {
       return false;
     }
-    this._refreshModelMenu();
+    this._refreshModelMenu(true);
     let model = String(this.openaiCompatibleModel || "").trim();
     if (model === "") {
       this._setStatusPreservingRecording("error", _("External API speech model is not configured"), this.lastTranscript);
@@ -14460,6 +14621,7 @@ MyApplet.prototype = {
     }
     if (!cancelIntentActive && status === "done") {
       this._maybeWarnUnencryptedArtifactStorage(payload, status);
+      this._maybeWarnAutomaticBackup(payload, status);
       this._maybeStartAutoBackup(payload);
     }
     if (cancelIntentActive && (status === "done" || status === "idle")) {
@@ -14605,6 +14767,40 @@ MyApplet.prototype = {
       normalized.indexOf("must be owned by the current user") >= 0 ||
       normalized.indexOf("must not be a symlink") >= 0 ||
       normalized.indexOf("must not be hardlinked") >= 0
+    );
+  },
+
+  _maybeWarnAutomaticBackup: function(payload, statusOverride) {
+    let status = statusOverride || this._normalizePayloadStatus(payload && payload.status, Boolean(payload && payload.error));
+    if (!payload || status !== "done") {
+      return;
+    }
+    let backup = payload.automatic_backup;
+    if (!backup || typeof backup !== "object" || Array.isArray(backup) || !Array.isArray(backup.warnings)) {
+      return;
+    }
+    let warnings = backup.warnings.filter((warning) => typeof warning === "string" && warning.trim() !== "");
+    if (warnings.length === 0) {
+      return;
+    }
+    let warning = this._sanitizeErrorMessage(warnings[0]);
+    if (warning === "") {
+      return;
+    }
+    let identity = typeof backup.archive_name === "string" && backup.archive_name.trim() !== ""
+      ? backup.archive_name.trim()
+      : typeof backup.job_id === "string" && backup.job_id.trim() !== ""
+        ? backup.job_id.trim()
+        : "inline";
+    let warningKey = identity + "|" + warning;
+    if (warningKey === this.lastAutomaticBackupWarningKey) {
+      return;
+    }
+    this.lastAutomaticBackupWarningKey = warningKey;
+    this._notify(
+      _("Speed of Cinnamon backup warning"),
+      _("Automatic backup completed with warnings: ") + warning,
+      true
     );
   },
 
@@ -15182,6 +15378,9 @@ MyApplet.prototype = {
       deliver(false, false);
       return false;
     }
+    let waylandSession = typeof this._isWaylandSession === "function"
+      ? this._isWaylandSession()
+      : true;
     let window = global.display ? global.display.focus_window : null;
     if (this._isUsableTargetWindow(window)) {
       if (this._windowLooksLikeSpeedOfCinnamon(window)) {
@@ -15198,7 +15397,7 @@ MyApplet.prototype = {
       }
       this.targetWindow = window;
       let xid = this._windowProbeValue(window, "get_xwindow").trim();
-      if (/^[0-9]+$/.test(xid)) {
+      if (/^[0-9]+$/.test(xid) && waylandSession === false) {
         this.targetWindowXid = xid;
         this.targetWindowXTitle = this._windowProbeValue(window, "get_title");
         this.targetWindowXClass = this._shortMenuText(
@@ -15222,6 +15421,11 @@ MyApplet.prototype = {
       );
     }
     this.targetWindow = null;
+    if (waylandSession !== false) {
+      this._clearTargetWindowXid();
+      deliver(false, false);
+      return false;
+    }
     if (!preserveOnFailure) {
       this._clearTargetWindowXid();
     }
@@ -15248,6 +15452,9 @@ MyApplet.prototype = {
 
   _restoreTargetWindowForPaste: function(completionCallback) {
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    let waylandSession = typeof this._isWaylandSession === "function"
+      ? this._isWaylandSession()
+      : true;
     if (!this._lifecycleAllowsWork()) {
       complete(false);
       return false;
@@ -15255,7 +15462,7 @@ MyApplet.prototype = {
     // Cinnamon can report the old focus while a just-closed applet menu still
     // owns the X11 keyboard grab. Re-activate the captured XID synchronously
     // before sending paste keys; title changes do not affect this identity.
-    if (/^[0-9]+$/.test(String(this.targetWindowXid || "").trim())) {
+    if (waylandSession === false && /^[0-9]+$/.test(String(this.targetWindowXid || "").trim())) {
       return this._activateTargetXWindow(complete);
     }
     if (this._isUsableTargetWindow(this.targetWindow)) {
@@ -15480,6 +15687,10 @@ MyApplet.prototype = {
 
   _activateTargetXWindow: function(completionCallback) {
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    if (typeof this._isWaylandSession !== "function" || this._isWaylandSession() !== false) {
+      complete(false);
+      return false;
+    }
     if (this._isTargetWindowXLookupPending()) {
       complete(false);
       return false;
@@ -15496,9 +15707,14 @@ MyApplet.prototype = {
   },
 
   _targetXWindowSnapshot: function() {
-    let xid = this._isTargetWindowXLookupPending()
+    let waylandSession = typeof this._isWaylandSession === "function"
+      ? this._isWaylandSession()
+      : true;
+    let xid = waylandSession !== false
       ? ""
-      : String(this.targetWindowXid || "").trim();
+      : this._isTargetWindowXLookupPending()
+        ? ""
+        : String(this.targetWindowXid || "").trim();
     if (!/^[0-9]+$/.test(xid)) {
       if (this._isUsableTargetWindow(this.targetWindow)) {
         return {
@@ -15520,6 +15736,10 @@ MyApplet.prototype = {
 
   _targetXWindowMatchesSnapshot: function(snapshot, completionCallback) {
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    if ((typeof this._isWaylandSession !== "function" || this._isWaylandSession() !== false) && snapshot && snapshot.xid) {
+      complete(false);
+      return false;
+    }
     let expectedGeneration = snapshot && snapshot.targetWindowGeneration !== undefined
       ? Number(snapshot.targetWindowGeneration)
       : null;
@@ -15578,7 +15798,13 @@ MyApplet.prototype = {
           complete(false);
           return;
         }
-        if (String(classOutput || "").trim().toLowerCase() !== expectedClass) {
+        let activeClass = String(classOutput || "").trim().toLowerCase();
+        if (this._xWindowLooksLikeSpeedOfCinnamon("", activeClass)) {
+          this._notifySelfProtectionBlocked("", activeClass);
+          complete(false);
+          return;
+        }
+        if (activeClass !== expectedClass) {
           complete(false);
           return;
         }
@@ -15765,6 +15991,47 @@ MyApplet.prototype = {
       return true;
     }
     return this._windowIdentityMatchesAutoPaste(marker);
+  },
+
+  _isCodexTerminalTargetWindow: function() {
+    if (!this._isTerminalTargetWindow()) {
+      return false;
+    }
+    let values = [
+      this._windowProbeValue(this.targetWindow, "get_title"),
+      this._windowProbeValue(this.targetWindow, "get_wm_class"),
+      this._windowProbeValue(this.targetWindow, "get_wm_class_instance"),
+      this._windowProbeValue(this.targetWindow, "get_gtk_application_id"),
+      String(this.targetWindowXTitle || ""),
+      String(this.targetWindowXClass || "")
+    ];
+    return values.some((value) => /\bcodex\b/i.test(String(value || "")));
+  },
+
+  _normalizeCodexTerminalSubmitKey: function(value) {
+    let normalized = String(value || "").trim().toLowerCase();
+    return CODEX_TERMINAL_SUBMIT_KEY_MODES.indexOf(normalized) >= 0
+      ? normalized
+      : DEFAULT_CODEX_TERMINAL_SUBMIT_KEY;
+  },
+
+  _normalizeCodexTerminalCustomKey: function(value) {
+    let normalized = String(value || "").trim();
+    if (/^(?:[A-Za-z0-9]|F(?:[1-9]|[12][0-9]|3[0-5])|Return|Tab|Escape|Space|BackSpace|Delete|Home|End|Page_(?:Up|Down)|Insert|Left|Right|Up|Down)$/i.test(normalized)) {
+      return normalized.toLowerCase() === "enter" ? "Return" : normalized;
+    }
+    return DEFAULT_CODEX_TERMINAL_CUSTOM_KEY;
+  },
+
+  _codexTerminalSubmitKey: function() {
+    let mode = this._normalizeCodexTerminalSubmitKey(this.codexTerminalSubmitKey);
+    if (mode === "tab") {
+      return "Tab";
+    }
+    if (mode === "custom") {
+      return this._normalizeCodexTerminalCustomKey(this.codexTerminalCustomKey);
+    }
+    return "Return";
   },
 
   _isTerminalTargetWindow: function() {
@@ -16048,6 +16315,26 @@ MyApplet.prototype = {
 
   _clipboardNativeTargetSnapshotAsync: function(completionCallback) {
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    let probeSequence = Number(this._clipboardNativeTargetProbeSequence);
+    if (!isFinite(probeSequence) || Math.floor(probeSequence) !== probeSequence || probeSequence < 0 || probeSequence >= 2147483647) {
+      probeSequence = 0;
+    }
+    probeSequence += 1;
+    this._clipboardNativeTargetProbeSequence = probeSequence;
+    let timerName = "clipboard-native-target-" + String(probeSequence);
+    let timerSourceId = 0;
+    let completed = false;
+    let finish = (snapshot) => {
+      if (completed) {
+        return;
+      }
+      completed = true;
+      if (timerSourceId) {
+        this._clearTrackedTimer(timerName);
+        timerSourceId = 0;
+      }
+      complete(snapshot);
+    };
     try {
       let display = Gdk.Display.get_default();
       let selection = Gdk.Atom.intern("CLIPBOARD", false);
@@ -16057,19 +16344,31 @@ MyApplet.prototype = {
       if (!clipboard || typeof clipboard.request_targets !== "function") {
         return false;
       }
+      try {
+        timerSourceId = this._scheduleTrackedTimer(timerName, CLIPBOARD_COMMAND_TIMEOUT_MS, () => {
+          finish(null);
+          return false;
+        });
+      } catch (error) {
+        this._recordLifecycleError("clipboard-query-timeout", error);
+        return false;
+      }
+      if (!timerSourceId) {
+        return false;
+      }
       clipboard.request_targets((_clipboard, targets) => {
         try {
           if (!Array.isArray(targets) || targets.length > CLIPBOARD_MAX_TARGETS) {
-            complete(null);
+            finish(null);
             return;
           }
           let targetText = targets.map((target) => String(target || "").trim()).filter((target) => target !== "").join("\n");
           let nonTextTargets = this._clipboardNonTextPayloadTargets(targetText);
           if (nonTextTargets.length > 0) {
-            complete(null);
+            finish(null);
             return;
           }
-          complete({
+          finish({
             signature: "gtk-targets:" + targetText,
             hasNonTextPayload: false,
             payloadFingerprint: "no-nontext",
@@ -16077,12 +16376,13 @@ MyApplet.prototype = {
           });
         } catch (error) {
           this._recordLifecycleError("clipboard-query", error);
-          complete(null);
+          finish(null);
         }
       });
       return true;
     } catch (error) {
       this._recordLifecycleError("clipboard-query", error);
+      finish(null);
       return false;
     }
   },
@@ -16665,46 +16965,46 @@ MyApplet.prototype = {
       return false;
     }
     let terminalPaste = this._isTerminalTargetWindow();
+    let codexTerminal = terminalPaste &&
+      typeof this._isCodexTerminalTargetWindow === "function" &&
+      this._isCodexTerminalTargetWindow();
+    let submitKey = codexTerminal && typeof this._codexTerminalSubmitKey === "function"
+      ? this._codexTerminalSubmitKey()
+      : "Return";
     let expectedTargetWindow = this._targetXWindowSnapshot();
     if (!expectedTargetWindow) {
       this._setStatus("error", _("Target window unavailable for automatic paste"), this.lastTranscript);
       return false;
     }
-    let hasXdotool;
-    let hasWtype;
-    if (keyboardProgram &&
-        keyboardProgram.kind === "xdotool" &&
-        typeof keyboardProgram.path === "string" &&
-        keyboardProgram.path !== "") {
-      hasXdotool = keyboardProgram.path;
-    } else if (keyboardProgram &&
-               keyboardProgram.kind === "wtype" &&
-               typeof keyboardProgram.path === "string" &&
-               keyboardProgram.path !== "") {
-      hasWtype = keyboardProgram.path;
-    } else {
-      try {
-        hasXdotool = this._findTrustedProgramInPath("xdotool");
-        hasWtype = this._findTrustedProgramInPath("wtype");
-      } catch (error) {
-        this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
-        return false;
-      }
+    let selectedKeyboardProgram;
+    try {
+      // Resolve at the keystroke boundary. A program selected before focus or
+      // session changes must not cross an X11/Wayland boundary.
+      selectedKeyboardProgram = this._preferredKeyboardProgram();
+    } catch (error) {
+      this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
+      return false;
     }
+    let hasXdotool = selectedKeyboardProgram && selectedKeyboardProgram.kind === "xdotool"
+      ? selectedKeyboardProgram.path
+      : null;
+    let hasWtype = selectedKeyboardProgram && selectedKeyboardProgram.kind === "wtype"
+      ? selectedKeyboardProgram.path
+      : null;
     let args = null;
     let followUpArgs = null;
     if (hasXdotool) {
       let pasteKey = terminalPaste ? "ctrl+shift+v" : "ctrl+v";
       args = [hasXdotool, "key", "--clearmodifiers", pasteKey];
       if (sendEnter) {
-        followUpArgs = [hasXdotool, "key", "--clearmodifiers", "Return"];
+        followUpArgs = [hasXdotool, "key", "--clearmodifiers", submitKey];
       }
     } else if (hasWtype) {
       args = terminalPaste
         ? [hasWtype, "-M", "ctrl", "-M", "shift", "v", "-m", "shift", "-m", "ctrl"]
         : [hasWtype, "-M", "ctrl", "v", "-m", "ctrl"];
       if (sendEnter) {
-        followUpArgs = [hasWtype, "-k", "Return"];
+        followUpArgs = [hasWtype, "-k", submitKey];
       }
     }
     if (!args) {
@@ -16788,6 +17088,64 @@ MyApplet.prototype = {
     }
   },
 
+  _screenSaverAllowsKeyboardInput: function(completionCallback) {
+    let complete = typeof completionCallback === "function" ? completionCallback : function() {};
+    let unavailableMessage = _("Keyboard input blocked: screen lock state unavailable");
+    let lockedMessage = _("Keyboard input blocked because the screen is locked");
+    if (!this._lifecycleAllowsWork()) {
+      complete(false);
+      return false;
+    }
+    let screenSaverCommand;
+    try {
+      screenSaverCommand = this._findTrustedProgramInPath("cinnamon-screensaver-command");
+    } catch (error) {
+      this._recordLifecycleError("screensaver-query", error);
+      complete(false, unavailableMessage);
+      return false;
+    }
+    if (!screenSaverCommand) {
+      this._recordLifecycleError("screensaver-query", new Error("cinnamon-screensaver-command is unavailable"));
+      complete(false, unavailableMessage);
+      return false;
+    }
+    let handle;
+    try {
+      handle = this._runBoundedSubprocess([screenSaverCommand, "--query"], {}, {
+        timeoutMs: SCREEN_SAVER_QUERY_TIMEOUT_MS,
+        minimumTimeoutMs: 1,
+        maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
+        maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
+        resourceGroup: "keyboard",
+      }, (stdout, stderr, result) => {
+        if (result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)) {
+          complete(false, unavailableMessage);
+          return;
+        }
+        let state = String(stdout || "").trim().toLowerCase();
+        if (state.indexOf("not active") >= 0 || state.indexOf("inactive") >= 0) {
+          complete(true);
+          return;
+        }
+        if (state.indexOf("active") >= 0) {
+          complete(false, lockedMessage);
+          return;
+        }
+        // Unknown output is not proof that synthetic keyboard input is safe.
+        complete(false, unavailableMessage);
+      });
+    } catch (error) {
+      this._recordLifecycleError("screensaver-query", error);
+      complete(false, unavailableMessage);
+      return false;
+    }
+    if (!handle) {
+      complete(false, unavailableMessage);
+      return false;
+    }
+    return true;
+  },
+
   _spawnKeyboardAfterFocus: function(args, followUpArgs, expectedClipboardText, expectedTargetWindow, completionCallback, operationGuard, processTimeoutMs) {
     let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
     let completed = false;
@@ -16858,42 +17216,56 @@ MyApplet.prototype = {
     }
   },
 
-  _spawnKeyboardProcess: function(args, completionCallback, timeoutMs) {
+  _spawnKeyboardProcess: function(args, completionCallback, timeoutMs, operationGuard) {
+    let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
     let completed = false;
-    let completeOnce = (result) => {
+    let completeOnce = (result, message) => {
       if (completed) {
         return;
       }
       completed = true;
-      complete(result === true);
+      complete(result === true, message);
     };
-    if (!this._lifecycleAllowsWork()) {
+    if (!this._lifecycleAllowsWork() || !isCurrentOperation()) {
       completeOnce(false);
       return false;
     }
-    try {
-      let handle = this._runBoundedSubprocess(this._coerceSpawnArgs(args), {}, {
-        timeoutMs: Math.max(1, Math.min(
-          MAX_KEYBOARD_COMMAND_TIMEOUT_MS,
-          Number(timeoutMs || X11_COMMAND_TIMEOUT_MS)
-        )),
-        maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
-        maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
-        resourceGroup: "keyboard",
-      }, (stdout, stderr, result) => {
-        completeOnce(!(result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)));
-      });
-      if (!handle) {
+    let spawnKeyboard = () => {
+      if (!this._lifecycleAllowsWork() || !isCurrentOperation()) {
         completeOnce(false);
         return false;
       }
-      return true;
-    } catch (error) {
-      this._recordLifecycleError("keyboard-process", error);
-      completeOnce(false);
-      return false;
-    }
+      try {
+        let handle = this._runBoundedSubprocess(this._coerceSpawnArgs(args), {}, {
+          timeoutMs: Math.max(1, Math.min(
+            MAX_KEYBOARD_COMMAND_TIMEOUT_MS,
+            Number(timeoutMs || X11_COMMAND_TIMEOUT_MS)
+          )),
+          maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
+          maxStderrBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
+          resourceGroup: "keyboard",
+        }, (stdout, stderr, result) => {
+          completeOnce(!(result && (result.error || result.cancelled || result.timedOut || result.outputTooLarge)));
+        });
+        if (!handle) {
+          completeOnce(false);
+          return false;
+        }
+        return true;
+      } catch (error) {
+        this._recordLifecycleError("keyboard-process", error);
+        completeOnce(false);
+        return false;
+      }
+    };
+    return this._screenSaverAllowsKeyboardInput((allowed, reason) => {
+      if (allowed !== true || !this._lifecycleAllowsWork() || !isCurrentOperation()) {
+        completeOnce(false, reason);
+        return;
+      }
+      spawnKeyboard();
+    });
   },
 
   _spawnKeyboardArgs: function(args, followUpArgs, expectedTargetWindow, expectedClipboardText, expectedClipboardDeadlineMs, completionCallback, operationGuard, processTimeoutMs) {
@@ -17057,10 +17429,10 @@ MyApplet.prototype = {
           fail(_("Target window changed before automatic paste"));
           return;
         }
-        this._spawnKeyboardProcess(args, (firstCompleted) => {
+        this._spawnKeyboardProcess(args, (firstCompleted, firstFailureMessage) => {
           try {
             if (!firstCompleted) {
-              fail(_("Keyboard insert failed"));
+              fail(isCurrentOperation() ? (firstFailureMessage || _("Keyboard insert failed")) : null);
               return;
             }
             if (!isCurrentOperation()) {
@@ -17109,21 +17481,21 @@ MyApplet.prototype = {
                       fail(_("Target window changed before automatic submit"));
                       return;
                     }
-                    this._spawnKeyboardProcess(followUpArgs, (submitCompleted) => {
+                    this._spawnKeyboardProcess(followUpArgs, (submitCompleted, submitFailureMessage) => {
                       try {
                         if (!isCurrentOperation()) {
                           fail();
                           return;
                         }
                         if (!submitCompleted) {
-                          fail(_("Keyboard insert failed"));
+                          fail(submitFailureMessage || _("Keyboard insert failed"));
                           return;
                         }
                         if (typeof completionCallback === "function") completionCallback(true);
                       } catch (error) {
                         this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
                       }
-                    }, processTimeoutMs);
+                    }, processTimeoutMs, isCurrentOperation);
                   } catch (error) {
                     this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
                   }
@@ -17138,7 +17510,7 @@ MyApplet.prototype = {
           } catch (error) {
             this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
           }
-        }, processTimeoutMs);
+        }, processTimeoutMs, isCurrentOperation);
       } catch (error) {
         this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
       }
@@ -17551,13 +17923,17 @@ MyApplet.prototype = {
     let autoPasteTarget = isPasteMethod && this._windowTitleMatchesAutoPaste();
     let keyboardProgram = null;
     if (isPasteMethod) {
-      let xdotoolPath = this._findTrustedProgramInPath("xdotool");
-      if (xdotoolPath) {
-        keyboardProgram = { kind: "xdotool", path: xdotoolPath };
-      } else {
-        let wtypePath = this._findTrustedProgramInPath("wtype");
-        if (wtypePath) {
-          keyboardProgram = { kind: "wtype", path: wtypePath };
+      try {
+        keyboardProgram = this._preferredKeyboardProgram();
+      } catch (error) {
+        this._recordLifecycleError("keyboard-backend", error);
+        if (!this.keyboardBackendWarningShown) {
+          this.keyboardBackendWarningShown = true;
+          this._notify(
+            _("Speed of Cinnamon"),
+            _("Automatic keyboard paste unavailable; using clipboard fallback."),
+            true
+          );
         }
       }
     }

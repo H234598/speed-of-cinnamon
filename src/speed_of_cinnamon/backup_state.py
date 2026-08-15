@@ -29,6 +29,11 @@ class BackupStateError(RuntimeError):
     pass
 
 
+def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+    del cleanup_error
+    primary.add_note("backup state lock cleanup failed")
+
+
 def _reject_non_finite_json_number(value: str) -> object:
     raise BackupStateError("backup state contains a non-finite number")
 
@@ -132,11 +137,19 @@ class BackupStateStore:
     @contextmanager
     def _locked(self) -> Iterator[None]:
         lock_path = self.path.with_name(f".{self.path.name}.lock")
-        parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="backup state directory")
+        parent_fd: int | None = None
         fd: int | None = None
+        primary_error: BaseException | None = None
         try:
+            parent_fd = ensure_directory_without_following_symlinks(
+                lock_path.parent,
+                field_name="backup state directory",
+            )
             assert_fd_is_private_directory(parent_fd, field_name="backup state directory")
-            flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_CLOEXEC", 0)
+            nofollow_flag = getattr(os, "O_NOFOLLOW", None)
+            if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+                raise BackupStateError("backup state lock requires secure no-follow support")
+            flags = os.O_RDWR | os.O_CREAT | nofollow_flag | getattr(os, "O_CLOEXEC", 0)
             fd = os.open(lock_path.name, flags, 0o600, dir_fd=parent_fd)
             assert_fd_is_regular_private_file(fd, field_name="backup state lock", require_private_mode=True)
             while True:
@@ -147,21 +160,33 @@ class BackupStateStore:
                     continue
             yield
         except OSError as exc:
-            raise BackupStateError("backup state lock failed") from exc
+            primary_error = BackupStateError("backup state lock failed")
+            raise primary_error from exc
+        except BaseException as exc:
+            primary_error = exc
+            raise
         finally:
+            cleanup_errors: list[BaseException] = []
             if fd is not None:
                 try:
                     fcntl.flock(fd, fcntl.LOCK_UN)
-                except OSError:
-                    pass
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
                 try:
                     os.close(fd)
-                except OSError:
-                    pass
-            try:
-                os.close(parent_fd)
-            except OSError:
-                pass
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+            if parent_fd is not None:
+                try:
+                    os.close(parent_fd)
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+            if cleanup_errors:
+                if primary_error is not None:
+                    for cleanup_error in cleanup_errors:
+                        _note_lock_cleanup_failure(primary_error, cleanup_error)
+                else:
+                    raise BackupStateError("backup state lock cleanup failed") from cleanup_errors[0]
 
     def _read_unlocked(self) -> dict[str, object]:
         if not self.path.exists():
@@ -171,7 +196,12 @@ class BackupStateStore:
         except FileNotFoundError:
             return _empty_state()
         try:
-            payload = os.read(fd, MAX_BACKUP_STATE_BYTES + 1)
+            while True:
+                try:
+                    payload = os.read(fd, MAX_BACKUP_STATE_BYTES + 1)
+                    break
+                except InterruptedError:
+                    continue
         finally:
             os.close(fd)
         if len(payload) > MAX_BACKUP_STATE_BYTES:

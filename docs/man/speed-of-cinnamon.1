@@ -1,4 +1,4 @@
-.TH SPEED-OF-CINNAMON 1 "June 2026" "speed-of-cinnamon 0.2.5" "User Commands"
+.TH SPEED-OF-CINNAMON 1 "August 2026" "speed-of-cinnamon 0.3.5" "User Commands"
 .SH NAME
 speed-of-cinnamon \- Cinnamon-native voice typing backend
 .SH SYNOPSIS
@@ -88,6 +88,20 @@ Write a portable applet settings backup.
 .TP
 .B settings-import
 Read a portable applet settings backup and restore local alarm state.
+.TP
+.B backup
+Create and verify versioned backup bundles, or inspect a restore with the
+.B restore-dry-run
+subcommand. The
+.B create
+subcommand supports config, transcript, and recording categories with keyring,
+passphrase, or explicit plaintext encryption modes. The dry run validates
+archive and destination safety, reports existing member conflicts, and never
+writes restored artifacts. Existing non-directory targets and symlink paths
+are rejected.
+.B restore
+performs the same verification and publishes a non-overwriting restore into a
+new destination through private staging. Existing destinations are rejected.
 .TP
 .B alarms-import
 Read normalized alarm state from standard input and replace local alarm state.

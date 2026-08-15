@@ -269,6 +269,18 @@ class CliTest(unittest.TestCase):
         self.assertEqual(message, cli._RECORDING_PROCESS_GROUP_ACTIVE_ERROR)
         self.assertEqual(group_probe.call_count, 1)
 
+    def test_recorder_process_failure_snapshot_distinguishes_exited_process(self) -> None:
+        process = mock.Mock()
+        process.poll.return_value = 1
+
+        with mock.patch.object(cli, "process_group_has_live_processes", return_value=False):
+            snapshot = cli._recorder_process_liveness_snapshot(process)
+
+        self.assertEqual(
+            snapshot,
+            (True, "recording process has exited; stop confirmation was unavailable"),
+        )
+
     def test_recorder_process_liveness_snapshot_propagates_control_flow(self) -> None:
         process = mock.Mock()
         process.poll.return_value = 1
@@ -5596,6 +5608,14 @@ class CliTest(unittest.TestCase):
         self.assertTrue(payload["models"][0]["path_present"])
         self.assertNotIn("path", payload["models"][0])
         self.assertNotIn(str(tmp), json.dumps(payload))
+
+    @mock.patch("speed_of_cinnamon.cli.list_models", return_value=[])
+    def test_models_requests_verified_model_status(self, mocked_list_models: mock.Mock) -> None:
+        stdout = io.StringIO()
+        with redirect_stdout(stdout):
+            code = cli.run(["models", "--json"])
+        self.assertEqual(code, 0)
+        mocked_list_models.assert_called_once_with(verify=True)
 
     @mock.patch("speed_of_cinnamon.cli.list_models", return_value="invalid")
     def test_models_rejects_non_list_models_payload(self, mocked_models: mock.Mock) -> None:
@@ -21160,7 +21180,7 @@ class CliTest(unittest.TestCase):
         mocked_choose.assert_not_called()
 
     def test_zombie_probe_error_is_unknown(self) -> None:
-        with mock.patch.object(cli.Path, "read_text", side_effect=OSError("/proc/private")):
+        with mock.patch.object(cli, "_read_proc_stat", side_effect=OSError("/proc/private")):
             self.assertIsNone(cli._process_is_zombie(1234))
 
     def test_status_preserves_state_when_zombie_probe_is_unknown(self) -> None:

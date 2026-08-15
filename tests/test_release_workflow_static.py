@@ -1,3 +1,4 @@
+import unittest
 from pathlib import Path
 import re
 
@@ -27,3 +28,19 @@ def test_release_workflow_run_blocks_do_not_interpolate_tag_input_directly():
     assert run_blocks
     for block in run_blocks:
         assert "${{ inputs.tag }}" not in block
+
+
+def test_release_publish_job_uses_protected_release_environment():
+    workflow = _release_workflow()
+
+    publish_start = workflow.index("  publish:\n")
+    publish_block = workflow[publish_start:]
+    assert "    environment:\n      name: release\n" in publish_block
+
+def load_tests(loader, tests, pattern):
+    suite = unittest.TestSuite(tests)
+    for name in sorted(globals()):
+        value = globals()[name]
+        if name.startswith("test_") and callable(value):
+            suite.addTest(unittest.FunctionTestCase(value, description=name))
+    return suite

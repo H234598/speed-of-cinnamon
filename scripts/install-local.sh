@@ -43,10 +43,15 @@ if [[ "${SPEED_OF_CINNAMON_TEST_HOME:-0}" != "1" && ( -z "${account_home}" || "$
 fi
 
 dbus_send_command=""
+timeout_command=""
 if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" && -n "${account_home}" && "${HOME}" == "${account_home}" ]]; then
   dbus_send_command="$(command -v -- dbus-send || true)"
+  timeout_command="$(command -v -- timeout || true)"
   if [[ -z "${dbus_send_command}" ]]; then
     printf 'dbus-send not available; Cinnamon applet reload will be skipped.\n' >&2
+  fi
+  if [[ -z "${timeout_command}" ]]; then
+    printf 'timeout not available; Cinnamon applet reload will be skipped.\n' >&2
   fi
 fi
 
@@ -408,8 +413,10 @@ if ! command -v -- whisper >/dev/null 2>&1 \
     printf 'ASR backend missing. On Fedora install python3-pywhispercpp, then run: speed-of-cinnamon download-model tiny --json\n'
 fi
 account_home="$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6 || true)"
-if [[ -n "${dbus_send_command}" ]]; then
-    if "${dbus_send_command}" --session --dest=org.Cinnamon.LookingGlass --type=method_call \
+if [[ -n "${dbus_send_command}" && -n "${timeout_command}" ]]; then
+    if "${timeout_command}" --signal=TERM --kill-after=2s 10s \
+        "${dbus_send_command}" --session --reply-timeout=10000 \
+        --dest=org.Cinnamon.LookingGlass --type=method_call \
         /org/Cinnamon/LookingGlass org.Cinnamon.LookingGlass.ReloadExtension \
         string:"${uuid}" string:'APPLET' >/dev/null 2>&1; then
         printf 'Reloaded Cinnamon applet %s\n' "${uuid}"

@@ -37,6 +37,8 @@ class AutoBackupStaticTest(unittest.TestCase):
         self.assertEqual(schema["auto-backup-retry-delay-seconds"]["default"], 30)
         self.assertIn("asynchronously", schema["auto-backup-enabled"]["tooltip"])
         self.assertIn("never blocks clipboard", schema["auto-backup-enabled"]["tooltip"])
+        self.assertIn("non-overwriting restore", schema["auto-backup-help"]["description"])
+        self.assertIn("backup restore", schema["auto-backup-help"]["tooltip"])
 
     def test_applet_exports_and_runs_backup_outside_transcript_flow(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -66,6 +68,12 @@ class AutoBackupStaticTest(unittest.TestCase):
         self.assertIn("autoBackupConfigDebounceSeconds", source)
         self.assertIn("autoBackupRetryCount", source)
         self.assertIn("autoBackupRetryDelaySeconds", source)
+        self.assertIn("let backupCallbackCompleted = false;", source)
+        self.assertIn("let backupStartToken = {};", source)
+        self.assertIn("this.autoBackupToken = backupStartToken;", source)
+        self.assertIn("} else if (!backupCallbackCompleted) {", source)
+        self.assertIn('this._recordLifecycleError("auto-backup-spawn"', source)
+        self.assertIn('_("Could not start automatic backup")', source)
         self.assertIn("this._maybeStartAutoBackup(payload);", source)
         self.assertIn("this._finishAppletTextInsert(payload);", source)
         self.assertLess(source.index("this._maybeStartAutoBackup(payload);"), source.index("this._finishAppletTextInsert(payload);"))

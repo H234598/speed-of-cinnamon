@@ -21,7 +21,7 @@ sink_module=""
 old_source=""
 snapshot_set=0
 
-for tool in arecord espeak-ng ffmpeg gdbus pactl pw-play python3 mktemp git; do
+for tool in arecord espeak-ng ffmpeg gdbus pactl pw-play python3 mktemp git timeout; do
   command -v -- "${tool}" >/dev/null 2>&1 || {
     printf 'real-e2e: required tool missing: %s\n' "${tool}" >&2
     exit 2
@@ -37,7 +37,8 @@ done
 }
 
 eval_cinnamon() {
-  gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon \
+  timeout --signal=TERM --kill-after=2s 10s \
+    gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon \
     --method org.Cinnamon.Eval "$1"
 }
 
@@ -113,9 +114,64 @@ mkdir -p -- "${state_dir}"
 chmod 700 "${state_dir}"
 git_head="$(git -C "${repo_dir}" rev-parse HEAD)"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-attestation_tmp="${attestation}.tmp.$$"
-printf '{"git_head":"%s","created_at":"%s","matrix":["live-applet","arecord","pipewire","openai-compatible","gpt-transcribe-configured","text-model-configured","flex-on","flex-off","clipboard-disabled"]}\n' \
-  "${git_head}" "${created_at}" >"${attestation_tmp}"
-chmod 600 "${attestation_tmp}"
-mv -f -- "${attestation_tmp}" "${attestation}"
+PYTHONPATH="${repo_dir}/src" python3 - "${attestation}" "${git_head}" "${created_at}" "${repo_dir}" <<'PY'
+import json
+import os
+import secrets
+import stat
+import sys
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+
+from speed_of_cinnamon.models import ModelError, source_attestation_snapshot
+
+path = Path(sys.argv[1])
+head, created_at, repo_dir = sys.argv[2:]
+created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+expires_at = (created + timedelta(hours=24)).isoformat().replace("+00:00", "Z")
+try:
+    source = source_attestation_snapshot(Path(repo_dir))
+except (ModelError, OSError, RuntimeError, TypeError, ValueError) as exc:
+    raise SystemExit("real-e2e: source tree is not attestable") from exc
+path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+parent = os.lstat(path.parent)
+if not stat.S_ISDIR(parent.st_mode) or stat.S_ISLNK(parent.st_mode) or parent.st_uid != os.geteuid():
+    raise SystemExit("real-e2e: unsafe attestation directory")
+os.chmod(path.parent, 0o700)
+data = {
+    "schema_version": 1,
+    "git_head": head,
+    "created_at": created_at,
+    "expires_at": expires_at,
+    "matrix": [
+        "live-applet",
+        "arecord",
+        "pipewire",
+        "openai-compatible",
+        "gpt-transcribe-configured",
+        "text-model-configured",
+        "flex-on",
+        "flex-off",
+        "clipboard-disabled",
+    ],
+    "source": source,
+}
+nofollow = getattr(os, "O_NOFOLLOW", None)
+if not isinstance(nofollow, int) or isinstance(nofollow, bool) or nofollow <= 0:
+    raise SystemExit("real-e2e: secure no-follow support is required")
+tmp = path.parent / f".{path.name}.{secrets.token_hex(16)}.tmp"
+fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow | getattr(os, "O_CLOEXEC", 0), 0o600)
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        json.dump(data, handle, separators=(",", ":"))
+        handle.write("\n")
+        handle.flush()
+        os.fsync(handle.fileno())
+    os.replace(tmp, path)
+finally:
+    try:
+        tmp.unlink()
+    except FileNotFoundError:
+        pass
+PY
 printf 'real-e2e: passed; attestation: %s\n' "${attestation}"

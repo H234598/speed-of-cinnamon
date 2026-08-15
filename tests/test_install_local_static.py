@@ -20,6 +20,11 @@ class InstallLocalStaticTest(unittest.TestCase):
             'refusing install cleanup without verified identity',
             source,
         )
+        self.assertIn('timeout_command=""', source)
+        self.assertIn('timeout_command="$(command -v -- timeout || true)"', source)
+        self.assertIn('"${timeout_command}" --signal=TERM --kill-after=2s 10s', source)
+        self.assertIn('"${dbus_send_command}" --session --reply-timeout=10000', source)
+        self.assertIn('if [[ -n "${dbus_send_command}" && -n "${timeout_command}" ]]; then', source)
 
 
 if __name__ == "__main__":

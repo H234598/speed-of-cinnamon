@@ -10,6 +10,25 @@ from speed_of_cinnamon.http_safety import UnsafeUrlError, resolve_url_host
 
 
 class HttpSafetyTest(unittest.TestCase):
+    def test_dns_resolution_fails_closed_when_worker_survives_kill(self) -> None:
+        worker = mock.Mock()
+        worker.is_alive.return_value = True
+        context = mock.Mock()
+        result_connection = mock.Mock()
+        child_connection = mock.Mock()
+        context.Pipe.return_value = (result_connection, child_connection)
+        context.Process.return_value = worker
+
+        with mock.patch.object(http_safety, "_DNS_RESOLUTION_CONTEXT", context):
+            with self.assertRaisesRegex(TimeoutError, "could not be stopped"):
+                http_safety._getaddrinfo_with_timeout("example.test", 443, timeout_seconds=0.01)
+
+        worker.terminate.assert_called_once_with()
+        worker.kill.assert_called_once_with()
+        self.assertEqual(worker.join.call_count, 3)
+        result_connection.close.assert_called_once_with()
+        self.assertEqual(child_connection.close.call_count, 2)
+
     def test_dns_resolution_timeout_releases_worker(self) -> None:
         def blocked_resolution(*_: object, **__: object) -> list[tuple[object, ...]]:
             time.sleep(1.0)

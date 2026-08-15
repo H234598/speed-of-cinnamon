@@ -634,6 +634,44 @@ class CommandChainTest(unittest.TestCase):
         proc.wait.assert_called_once_with(timeout=1)
         self.assertNotIn("cleanup", " ".join(getattr(caught.exception, "__notes__", ())))
 
+    def test_run_process_bounded_output_retries_interrupted_pipe_read(self) -> None:
+        real_read = command_chain_module.os.read
+        real_popen = command_chain_module.subprocess.Popen
+        active = False
+        attempts = 0
+
+        def interrupted_once(fd, size):
+            nonlocal attempts
+            if not active:
+                return real_read(fd, size)
+            attempts += 1
+            if attempts == 1:
+                raise InterruptedError()
+            return real_read(fd, size)
+
+        def start_process(*args, **kwargs):
+            nonlocal active
+            process = real_popen(*args, **kwargs)
+            active = True
+            return process
+
+        with (
+            mock.patch.object(command_chain_module.os, "read", side_effect=interrupted_once),
+            mock.patch.object(command_chain_module.subprocess, "Popen", side_effect=start_process),
+        ):
+            returncode, stdout, stderr = run_process_bounded_output(
+                [sys.executable, "-c", "print('ok')"],
+                timeout_seconds=2,
+                max_output_bytes=128,
+                env={},
+                label="post-process",
+            )
+
+        self.assertEqual(returncode, 0)
+        self.assertEqual(stdout, b"ok\n")
+        self.assertEqual(stderr, b"")
+        self.assertGreaterEqual(attempts, 2)
+
     def test_run_process_bounded_output_does_not_wait_for_inherited_pipe_after_root_exit(self) -> None:
         code = (
             "import os, time\n"
@@ -656,6 +694,13 @@ class CommandChainTest(unittest.TestCase):
         self.assertEqual(stdout, b"")
         self.assertEqual(stderr, b"")
         self.assertLess(time.monotonic() - started, 2.0)
+
+    def test_process_scan_retries_transient_incomplete_result(self) -> None:
+        scans = iter((None, {1234: "4567"}))
+
+        result = command_chain_module._retry_process_scan(lambda: next(scans))
+
+        self.assertEqual(result, {1234: "4567"})
 
     def test_run_process_bounded_output_cleans_pipe_holder_after_root_exit_race(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 import argparse
+import os
 import re
 import sys
 import subprocess  # nosec B404
+import stat
 from pathlib import Path
 try:
     import tomllib
@@ -28,6 +30,7 @@ COMMITS_PER_PATCH = 100
 PATCHES_PER_MINOR = 100
 MINORS_PER_MAJOR = 100
 VERSION_PATTERN = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
+MAX_PROJECT_METADATA_BYTES = 1 << 20
 
 
 def _assert_non_negative_int(name: str, value: int) -> int:
@@ -155,13 +158,38 @@ def apply_breaking_change(major:int, minor:int, patch:int) -> tuple[int,int,int]
     patch = _assert_non_negative_int("patch", patch)
     return major+1, 0, 0
 
+
+def _read_project_metadata(path: Path) -> str:
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if not isinstance(no_follow, int) or isinstance(no_follow, bool) or no_follow <= 0:
+        raise ValueError("secure no-follow support is unavailable")
+    fd = os.open(path, os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0))
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAX_PROJECT_METADATA_BYTES:
+            raise ValueError("project metadata file is unsafe or too large")
+        raw = os.read(fd, MAX_PROJECT_METADATA_BYTES + 1)
+        after = os.fstat(fd)
+    finally:
+        os.close(fd)
+    if (
+        len(raw) > MAX_PROJECT_METADATA_BYTES
+        or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
+        != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
+    ):
+        raise ValueError("project metadata changed while reading")
+    try:
+        return raw.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise ValueError("project metadata is not UTF-8") from exc
+
 def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int,int,int]:
     if not isinstance(path, Path):
         raise UserInputError("path must be a pathlib.Path")
     if str(path) == "":
         raise UserInputError("path must not be empty")
     try:
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        data = tomllib.loads(_read_project_metadata(path))
     except FileNotFoundError as exc:
         raise UserInputError(f"project metadata file not found: {path}") from exc
     except OSError as exc:

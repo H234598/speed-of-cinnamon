@@ -26,6 +26,13 @@ class VerifyDistStaticTest(unittest.TestCase):
             source,
         )
         self.assertIn('snapshot_bytes="$(stat -c \'%s\' "${tarball_snapshot}")"', source)
+        self.assertIn('raw = handle.read(4097)', source)
+
+    def test_member_limit_is_checked_during_tar_iteration(self) -> None:
+        source = VERIFY_DIST.read_text(encoding="utf-8")
+
+        self.assertIn("for member in archive:\n", source)
+        self.assertNotIn("for member in archive.getmembers():", source)
 
 
 if __name__ == "__main__":

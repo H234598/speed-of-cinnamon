@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from contextlib import suppress
 import codecs
 import math
@@ -17,6 +17,7 @@ import shutil
 from pathlib import Path
 
 from .personalization import command_environment
+from .proc_safety import _read_proc_stat, _read_proc_stat_path
 from .output import (
     _clipboard_lock_identity_for_pid,
     _kill_output_process_with_pidfd,
@@ -36,6 +37,8 @@ _REDACTED_COMMAND_OUTPUT = "exit code {returncode}; command output redacted"
 _PIPE_DRAIN_GRACE_SECONDS = 0.25
 _PROCESS_POLL_INTERVAL_SECONDS = 0.05
 _PROCESS_TREE_SNAPSHOT_INTERVAL_SECONDS = 0.05
+_PROCESS_DISCOVERY_RETRY_COUNT = 3
+_PROCESS_DISCOVERY_RETRY_INTERVAL_SECONDS = 0.01
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 _BASE_ENV_KEYS = {
     "HOME",
@@ -270,7 +273,7 @@ def _process_has_exited_without_reaping(process_id: int) -> bool:
     if not isinstance(process_id, int) or isinstance(process_id, bool) or process_id <= 0:
         return False
     try:
-        raw = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii").strip()
+        raw = _read_proc_stat(process_id)
     except (FileNotFoundError, OSError, UnicodeDecodeError):
         return False
     try:
@@ -306,7 +309,7 @@ def _process_session_descendant_identities(
         if member_id == process_id:
             continue
         try:
-            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+            raw = _read_proc_stat_path(proc_entry.joinpath("stat"))
         except FileNotFoundError:
             continue
         except (OSError, UnicodeDecodeError):
@@ -329,6 +332,18 @@ def _process_session_descendant_identities(
     if not root_identity_verified and descendants:
         return None
     return descendants
+
+
+def _retry_process_scan(
+    scan: Callable[[], dict[int, str] | None],
+) -> dict[int, str] | None:
+    for attempt in range(_PROCESS_DISCOVERY_RETRY_COUNT):
+        result = scan()
+        if result is not None:
+            return result
+        if attempt + 1 < _PROCESS_DISCOVERY_RETRY_COUNT:
+            time.sleep(_PROCESS_DISCOVERY_RETRY_INTERVAL_SECONDS)
+    return None
 
 
 def run_process_bounded_output(
@@ -416,14 +431,16 @@ def run_process_bounded_output(
             process_tree_at_exit = process_tree_snapshot or {}
             if process_tree_snapshot_scan_incomplete:
                 process_tree_at_exit_scan_incomplete = True
-            pipe_holders = _process_pipe_holder_identities(proc)
+            pipe_holders = _retry_process_scan(lambda: _process_pipe_holder_identities(proc))
             if pipe_holders is None:
                 process_tree_at_exit_scan_incomplete = True
             else:
                 process_tree_at_exit.update(pipe_holders)
-            session_descendants = _process_session_descendant_identities(
-                proc.pid,
-                expected_process_identity=vars(proc).get("_soc_process_identity"),
+            session_descendants = _retry_process_scan(
+                lambda: _process_session_descendant_identities(
+                    proc.pid,
+                    expected_process_identity=vars(proc).get("_soc_process_identity"),
+                )
             )
             if session_descendants is None:
                 process_tree_at_exit_scan_incomplete = True
@@ -439,7 +456,9 @@ def run_process_bounded_output(
             while selector.get_map():
                 now = time.monotonic()
                 if now >= next_process_tree_snapshot:
-                    current_process_tree = _process_tree_descendant_identities(proc.pid)
+                    current_process_tree = _retry_process_scan(
+                        lambda: _process_tree_descendant_identities(proc.pid)
+                    )
                     if current_process_tree is not None:
                         process_tree_snapshot_scan_incomplete = False
                         if process_tree_snapshot is None:
@@ -477,7 +496,12 @@ def run_process_bounded_output(
                     continue
                 for key, _event_mask in events:
                     stream = key.fileobj
-                    data = os.read(stream.fileno(), 65_536)
+                    while True:
+                        try:
+                            data = os.read(stream.fileno(), 65_536)
+                            break
+                        except InterruptedError:
+                            continue
                     if not data:
                         selector.unregister(stream)
                         try:

@@ -115,7 +115,7 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
     lock_path = store_path.with_name(f".{store_path.name}.lock")
     _assert_clean_path(lock_path, field_name="alarm store lock")
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise RuntimeError("secure alarm store lock open is not supported on this platform")
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="alarm store lock directory")

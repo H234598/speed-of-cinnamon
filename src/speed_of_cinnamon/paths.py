@@ -11,6 +11,7 @@ from .path_safety import (
     assert_no_symlink_ancestors,
     assert_safe_path_components,
     ensure_directory_without_following_symlinks,
+    _resolve_no_follow_flag,
 )
 
 APP_ID = "speed-of-cinnamon"
@@ -123,8 +124,10 @@ def _private_runtime_temp_root() -> Path:
         assert_no_symlink_ancestors(temp_root, field_name="temporary directory")
     uid = os.getuid() if hasattr(os, "getuid") else os.getpid()
     private_root = temp_root / f"{APP_ID}-{uid}"
-    if getattr(os, "O_NOFOLLOW", None) is None:
-        raise RuntimeError("secure temporary directory open is not supported on this platform")
+    try:
+        _resolve_no_follow_flag(field_name="temporary directory")
+    except OSError as exc:
+        raise RuntimeError("secure temporary directory open is not supported on this platform") from exc
     try:
         fd = ensure_directory_without_following_symlinks(private_root, field_name="temporary directory")
     except (OSError, RuntimeError) as exc:

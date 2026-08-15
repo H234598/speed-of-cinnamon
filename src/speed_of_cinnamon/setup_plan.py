@@ -222,7 +222,7 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 output.get("detail"),
                 "Install clipboard and keyboard helpers for the selected output mode.",
             ),
-            ["sudo dnf install -y xdotool xclip xsel wl-clipboard"],
+            ["sudo dnf install -y xdotool wtype xclip xsel wl-clipboard"],
         )
 
     for warning in _warnings(doctor_payload):

@@ -12,11 +12,13 @@ reload_mode="${APPLET_CRASH_SAFETY_RELOAD_MODE:-module}"
 display_number="${APPLET_CRASH_SAFETY_DISPLAY:-99}"
 heartbeat_limit_ms="${APPLET_CRASH_SAFETY_HEARTBEAT_MS:-250}"
 max_heartbeat_limit_ms=60000
+dbus_timeout_seconds="${APPLET_CRASH_SAFETY_DBUS_TIMEOUT_SECONDS:-10}"
+max_dbus_timeout_seconds=60
 fault_injection="${APPLET_CRASH_SAFETY_FAULT_INJECTION:-0}"
 force_gc="${APPLET_CRASH_SAFETY_FORCE_GC:-1}"
 host_display="${APPLET_CRASH_SAFETY_HOST_DISPLAY:-${DISPLAY:-}}"
 
-for tool in Xephyr dbus-run-session dconf gdbus cinnamon mktemp ps sed awk date xprop rg python3; do
+for tool in Xephyr dbus-run-session dconf gdbus timeout cinnamon mktemp ps sed awk date xprop rg python3; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf 'applet-crash-safety: required tool missing: %s\n' "${tool}" >&2
     exit 2
@@ -79,6 +81,11 @@ fi
 if [[ ! "${heartbeat_limit_ms}" =~ ^[1-9][0-9]*$ || ${#heartbeat_limit_ms} -gt 5 ]] ||
    (( heartbeat_limit_ms > max_heartbeat_limit_ms )); then
   printf 'APPLET_CRASH_SAFETY_HEARTBEAT_MS must be an integer from 1 to %s.\n' "${max_heartbeat_limit_ms}" >&2
+  exit 2
+fi
+if [[ ! "${dbus_timeout_seconds}" =~ ^[1-9][0-9]*$ || ${#dbus_timeout_seconds} -gt 2 ]] ||
+   (( dbus_timeout_seconds > max_dbus_timeout_seconds )); then
+  printf 'APPLET_CRASH_SAFETY_DBUS_TIMEOUT_SECONDS must be an integer from 1 to %s.\n' "${max_dbus_timeout_seconds}" >&2
   exit 2
 fi
 if [[ -z "${host_display}" ]]; then
@@ -165,11 +172,22 @@ export GIO_USE_VFS=local
 nested_display=":${display_number}"
 export DISPLAY="${nested_display}"
 
+run_gdbus() {
+  timeout --signal=TERM --kill-after=2s "${dbus_timeout_seconds}s" \
+    gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon "$@"
+}
+
+eval_cinnamon() {
+  local script="$1"
+  run_gdbus --method org.Cinnamon.Eval "${script}"
+}
+
 if [[ "${APPLET_CRASH_SAFETY_INSIDE:-0}" != "1" ]]; then
   if dbus-run-session -- env \
       APPLET_CRASH_SAFETY_INSIDE=1 \
       APPLET_CRASH_SAFETY_REPO="${repo_dir}" \
       APPLET_CRASH_SAFETY_TEST_ROOT="${test_root}" \
+      APPLET_CRASH_SAFETY_DBUS_TIMEOUT_SECONDS="${dbus_timeout_seconds}" \
       APPLET_CRASH_SAFETY_HOST_DISPLAY="${host_display}" \
       bash "${BASH_SOURCE[0]}" "$@"; then
     nested_status=0
@@ -234,7 +252,7 @@ cinnamon --replace >"${cinnamon_log}" 2>&1 &
 cinnamon_pid=$!
 
 for _ in $(seq 1 180); do
-  if gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon --method org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; then
+  if run_gdbus --method org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; then
     break
   fi
   if ! kill -0 "${cinnamon_pid}" >/dev/null 2>&1; then
@@ -244,16 +262,11 @@ for _ in $(seq 1 180); do
   fi
   sleep 0.25
 done
-if ! gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon --method org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; then
+if ! run_gdbus --method org.freedesktop.DBus.Peer.Ping >/dev/null 2>&1; then
   printf 'Cinnamon D-Bus service did not become ready.\n' >&2
   sed -n '1,200p' "${cinnamon_log}" >&2 || true
   exit 1
 fi
-
-eval_cinnamon() {
-  local script="$1"
-  gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon --method org.Cinnamon.Eval "${script}"
-}
 
 force_cinnamon_gc() {
   eval_cinnamon 'imports.system.gc(); "ok"' >/dev/null
@@ -261,7 +274,7 @@ force_cinnamon_gc() {
 
 reload_applet_instance() {
   if [[ "${reload_mode}" == "module" ]]; then
-    gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon --method org.Cinnamon.ReloadXlet "${uuid}" APPLET >/dev/null
+    run_gdbus --method org.Cinnamon.ReloadXlet "${uuid}" APPLET >/dev/null
     return
   fi
 
@@ -315,7 +328,7 @@ for cycle in $(seq 1 "${cycles}"); do
     printf 'Cinnamon reload stalled at cycle %s (%sms).\n' "${cycle}" "${elapsed_ms}" >&2
     exit 1
   fi
-  gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon --method org.freedesktop.DBus.Peer.Ping >/dev/null
+  run_gdbus --method org.freedesktop.DBus.Peer.Ping >/dev/null
   state="missing"
   for _ in $(seq 1 80); do
     state="$(eval_cinnamon "let xs=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\");xs.length===1?String(xs[0].lifecycleState):\"missing\"" 2>/dev/null || true)"

@@ -118,7 +118,13 @@ version="$(
 import tomllib
 from pathlib import Path
 
-print(tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])
+MAX_PROJECT_METADATA_BYTES = 1 << 20
+with Path("pyproject.toml").open("rb") as handle:
+    payload = handle.read(MAX_PROJECT_METADATA_BYTES + 1)
+if len(payload) > MAX_PROJECT_METADATA_BYTES:
+    raise SystemExit("pyproject.toml is too large")
+data = tomllib.loads(payload.decode("utf-8"))
+print(data["project"]["version"])
 PY
 )"
 expected_tag="v${version}"
@@ -470,7 +476,14 @@ try:
         raise SystemExit(1)
     os.fsync(fd)
 finally:
-    os.close(fd)
+    primary_error = sys.exc_info()[1]
+    try:
+        os.close(fd)
+    except BaseException as cleanup_error:
+        if primary_error is not None:
+            primary_error.add_note("release fsync descriptor cleanup failed")
+        else:
+            raise SystemExit("release fsync descriptor cleanup failed") from cleanup_error
 PY
 }
 
@@ -513,7 +526,14 @@ try:
     os.fchmod(fd, mode)
     os.fsync(fd)
 finally:
-    os.close(fd)
+    primary_error = sys.exc_info()[1]
+    try:
+        os.close(fd)
+    except BaseException as cleanup_error:
+        if primary_error is not None:
+            primary_error.add_note("release chmod descriptor cleanup failed")
+        else:
+            raise SystemExit("release chmod descriptor cleanup failed") from cleanup_error
 PY
 }
 
@@ -716,7 +736,11 @@ import stat
 import sys
 
 path, label, expected_identity = sys.argv[1:4]
-payload = sys.stdin.buffer.read()
+MAX_RELEASE_NOTES_BYTES = 1_000_000
+payload = sys.stdin.buffer.read(MAX_RELEASE_NOTES_BYTES + 1)
+if len(payload) > MAX_RELEASE_NOTES_BYTES:
+    print(f"{label} exceeds {MAX_RELEASE_NOTES_BYTES} bytes: {path}", file=sys.stderr)
+    raise SystemExit(1)
 flags = os.O_WRONLY
 if hasattr(os, "O_NOFOLLOW"):
     flags |= os.O_NOFOLLOW
@@ -747,7 +771,14 @@ try:
         view = view[written:]
     os.fsync(fd)
 finally:
-    os.close(fd)
+    primary_error = sys.exc_info()[1]
+    try:
+        os.close(fd)
+    except BaseException as cleanup_error:
+        if primary_error is not None:
+            primary_error.add_note("release notes descriptor cleanup failed")
+        else:
+            raise SystemExit("release notes descriptor cleanup failed") from cleanup_error
 ' "${path}" "${label}" "${expected_identity}"
 }
 write_regular_file_from_stdin "${notes_file}" "release notes file" "${notes_file_identity}" <<EOF

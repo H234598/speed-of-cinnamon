@@ -22,6 +22,7 @@ from .output import (
     _terminate_output_process_group,
 )
 from .paths import APP_ID, APP_NAME, config_dir
+from .proc_safety import _read_proc_stat, _read_proc_stat_path
 from .path_safety import (
     assert_fd_is_private_directory,
     assert_fd_is_regular_private_file,
@@ -477,7 +478,7 @@ def _write_all(fd: int, payload: bytes) -> None:
 
 def _create_private_temp_passphrase_file(parent_fd: int, final_name: str) -> tuple[int, str]:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise ArtifactCryptoError("secure artifact encryption passphrase temporary file creation is not supported")
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag | getattr(os, "O_CLOEXEC", 0)
     safe_name = final_name.replace("/", "_") or DEFAULT_PASSPHRASE_FILE_NAME
@@ -540,7 +541,7 @@ def _scrub_temp_passphrase_file(
     if not temp_name:
         return
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise ArtifactCryptoError("secure artifact encryption passphrase temporary file scrubbing is not supported")
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     fd = os.open(
@@ -661,7 +662,7 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             raise TypeError(f"{description} secure wipe flag is invalid")
         _assert_expected_file(name, expected_stat, description=description)
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if nofollow_flag is None:
+        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
             raise OSError(f"{description} secure cleanup is not supported")
         for _ in range(100):
             cleanup_name = f"{name}.{secrets.token_hex(8)}.cleanup"
@@ -1568,7 +1569,7 @@ def _secret_tool_same_session_process_group_ids(session_id: int) -> set[int] | N
         if not proc_entry.name.isdecimal():
             continue
         try:
-            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+            raw = _read_proc_stat_path(proc_entry.joinpath("stat"))
         except FileNotFoundError:
             continue
         except (OSError, UnicodeDecodeError):
@@ -1607,7 +1608,7 @@ def _secret_tool_process_group_has_live_descendants(process_group_id: int) -> bo
             continue
         process_id = int(proc_entry.name)
         try:
-            raw = proc_entry.joinpath("stat").read_text(encoding="ascii").strip()
+            raw = _read_proc_stat_path(proc_entry.joinpath("stat"))
         except FileNotFoundError:
             continue
         except (OSError, UnicodeDecodeError):
@@ -1637,7 +1638,7 @@ def _secret_tool_process_group_has_live_descendants(process_group_id: int) -> bo
 
 def _secret_tool_leader_is_gone_or_zombie(process_id: int) -> bool:
     try:
-        raw = Path(f"/proc/{process_id}/stat").read_text(encoding="ascii").strip()
+        raw = _read_proc_stat(process_id)
         close = raw.rindex(")")
         process_state = raw[close + 2 :].split()[0]
     except FileNotFoundError:
@@ -1651,7 +1652,7 @@ def _secret_tool_process_start_time(pid: object) -> str | None:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return None
     try:
-        raw = Path(f"/proc/{pid}/stat").read_text(encoding="ascii").strip()
+        raw = _read_proc_stat(pid)
         close = raw.rindex(")")
         start_time = raw[close + 2 :].split()[19]
     except (FileNotFoundError, OSError, UnicodeDecodeError, IndexError, ValueError):
@@ -1661,28 +1662,45 @@ def _secret_tool_process_start_time(pid: object) -> str | None:
     return start_time
 
 
-def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> None:
+def _stop_secret_tool_process(proc: subprocess.Popen[bytes]) -> bool:
     process_identity = getattr(proc, "_soc_process_identity", None)
     if isinstance(process_identity, str) and process_identity:
         try:
-            _terminate_output_process_group(proc)
+            terminated = _terminate_output_process_group(proc)
         except BaseException:
-            return
-        with suppress(BaseException):
+            return False
+        if terminated is not True:
+            return False
+        try:
             proc.wait(timeout=1)
-        return
+        except BaseException:
+            return False
+        return True
 
     # Without boot-id identity, only signal the exact process through PIDFD.
     # Never infer a process group from a bare, reusable PID.
     pid = getattr(proc, "pid", None)
     start_time = _secret_tool_process_start_time(pid)
     if start_time is None or not isinstance(pid, int) or isinstance(pid, bool):
-        return
+        return False
     try:
-        if _kill_output_process_with_pidfd(pid, start_time) is True:
-            proc.wait(timeout=1)
+        if _kill_output_process_with_pidfd(pid, start_time) is not True:
+            return False
+        proc.wait(timeout=1)
     except BaseException:
-        return
+        return False
+    return True
+
+
+def _stop_secret_tool_process_and_note(
+    proc: subprocess.Popen[bytes],
+    primary_error: BaseException,
+) -> None:
+    if not _stop_secret_tool_process(proc):
+        _note_cleanup_failure(
+            primary_error,
+            ArtifactCryptoError("Secret Service keyring helper process could not be stopped safely"),
+        )
 
 
 def _read_secret_tool_pipes_bounded(
@@ -1697,11 +1715,13 @@ def _read_secret_tool_pipes_bounded(
     except Exception:
         stream_error = True
     if stream_error:
-        _stop_secret_tool_process(proc)
-        raise ArtifactCryptoError("Secret Service keyring helper output could not be captured safely")
+        error = ArtifactCryptoError("Secret Service keyring helper output could not be captured safely")
+        _stop_secret_tool_process_and_note(proc, error)
+        raise error
     if stdout is None or stderr is None:
-        _stop_secret_tool_process(proc)
-        raise ArtifactCryptoError("Secret Service keyring helper output could not be captured safely")
+        error = ArtifactCryptoError("Secret Service keyring helper output could not be captured safely")
+        _stop_secret_tool_process_and_note(proc, error)
+        raise error
     outputs: dict[str, bytearray] = {"stdout": bytearray(), "stderr": bytearray()}
     streams = ((stdout, "stdout"), (stderr, "stderr"))
     active: dict[int, str] = {}
@@ -1711,7 +1731,7 @@ def _read_secret_tool_pipes_bounded(
             "Secret Service keyring helper output could not be captured safely",
         )
         if error is not None:
-            _stop_secret_tool_process(proc)
+            _stop_secret_tool_process_and_note(proc, error)
             raise error
         fd = stream_info[0]
         active[fd] = field_name
@@ -1719,8 +1739,9 @@ def _read_secret_tool_pipes_bounded(
         deadline = time.monotonic() + _SECRET_TOOL_TIMEOUT_SECONDS
     while active:
         if time.monotonic() >= deadline:
-            _stop_secret_tool_process(proc)
-            raise ArtifactCryptoError("Secret Service keyring request timed out")
+            error = ArtifactCryptoError("Secret Service keyring request timed out")
+            _stop_secret_tool_process_and_note(proc, error)
+            raise error
         progressed = False
         for fd, field_name in list(active.items()):
             read_failed = False
@@ -1733,8 +1754,9 @@ def _read_secret_tool_pipes_bounded(
             except Exception:
                 read_failed = True
             if read_failed:
-                _stop_secret_tool_process(proc)
-                raise ArtifactCryptoError("Secret Service keyring helper output could not be captured safely")
+                error = ArtifactCryptoError("Secret Service keyring helper output could not be captured safely")
+                _stop_secret_tool_process_and_note(proc, error)
+                raise error
             if not chunk:
                 active.pop(fd, None)
                 progressed = True
@@ -1746,11 +1768,13 @@ def _read_secret_tool_pipes_bounded(
             except Exception:
                 output_failed = True
             if output_failed:
-                _stop_secret_tool_process(proc)
-                raise ArtifactCryptoError("Secret Service keyring helper output could not be captured safely")
+                error = ArtifactCryptoError("Secret Service keyring helper output could not be captured safely")
+                _stop_secret_tool_process_and_note(proc, error)
+                raise error
             if len(outputs[field_name]) > MAX_SECRET_TOOL_OUTPUT_BYTES:
-                _stop_secret_tool_process(proc)
-                raise ArtifactCryptoError(f"Secret Service keyring {field_name} exceeded safe output limit")
+                error = ArtifactCryptoError(f"Secret Service keyring {field_name} exceeded safe output limit")
+                _stop_secret_tool_process_and_note(proc, error)
+                raise error
         if not progressed:
             time.sleep(0.01)
     return bytes(outputs["stdout"]), bytes(outputs["stderr"])
@@ -1792,17 +1816,18 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
                 "Secret Service keyring helper input could not be sent safely",
             )
             if input_error is not None:
-                _stop_secret_tool_process(proc)
+                _stop_secret_tool_process_and_note(proc, input_error)
                 raise input_error
             if stdin is None:
-                _stop_secret_tool_process(proc)
-                raise ArtifactCryptoError("Secret Service keyring helper input could not be sent safely")
+                error = ArtifactCryptoError("Secret Service keyring helper input could not be sent safely")
+                _stop_secret_tool_process_and_note(proc, error)
+                raise error
             _, input_error = _capture_normal_error(
                 lambda: (stdin.write(input_text.encode("utf-8")), stdin.close()),
                 "Secret Service keyring helper input could not be sent safely",
             )
             if input_error is not None:
-                _stop_secret_tool_process(proc)
+                _stop_secret_tool_process_and_note(proc, input_error)
                 raise input_error
         stdout, stderr = _read_secret_tool_pipes_bounded(proc, deadline=deadline)
         timed_out = False
@@ -1815,11 +1840,11 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
         except Exception:
             wait_failed = True
         if timed_out:
-            _stop_secret_tool_process(proc)
             primary_error = ArtifactCryptoError("Secret Service keyring request timed out")
+            _stop_secret_tool_process_and_note(proc, primary_error)
         elif wait_failed:
-            _stop_secret_tool_process(proc)
             primary_error = ArtifactCryptoError("Secret Service keyring helper could not be reaped safely")
+            _stop_secret_tool_process_and_note(proc, primary_error)
         else:
             stdout = _validate_secret_tool_output(stdout, field_name="stdout")
             stderr = _validate_secret_tool_output(stderr, field_name="stderr")
@@ -1827,7 +1852,7 @@ def _run_secret_tool(args: list[str], *, input_text: str | None = None) -> subpr
     except BaseException as exc:
         primary_error = exc
         if proc is not None and not isinstance(exc, Exception):
-            _stop_secret_tool_process(proc)
+            _stop_secret_tool_process_and_note(proc, primary_error)
     finally:
         if proc is not None:
             for stream in (proc.stdin, proc.stdout, proc.stderr):
@@ -1891,7 +1916,7 @@ def _store_keyring_key(key: bytes) -> None:
 @contextmanager
 def _keyring_initialization_lock():
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if not isinstance(nofollow_flag, int) or isinstance(nofollow_flag, bool) or nofollow_flag <= 0:
         raise ArtifactCryptoError("Secret Service keyring initialization locking is not supported")
     lock_path = config_dir() / KEYRING_INITIALIZATION_LOCK_FILE_NAME
     assert_no_symlink_ancestors(lock_path, field_name="artifact encryption keyring lock")
@@ -2257,7 +2282,7 @@ def read_private_bytes(
         )
     effective_max_bytes = MAX_ENCRYPTED_ARTIFACT_BYTES if max_bytes is None else max_bytes
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if nofollow_flag is None:
+    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
         raise ArtifactCryptoError(f"secure {public_field_name} open is not supported")
     open_failed = False
     try:

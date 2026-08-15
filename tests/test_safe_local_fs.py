@@ -28,6 +28,16 @@ def run_helper(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 class SafeLocalFsTest(unittest.TestCase):
+    def test_close_failures_are_reported_without_masking_primary_error(self) -> None:
+        module = SAFE_LOCAL_FS
+        with mock.patch.object(module.os, "close", side_effect=OSError("close failed")):
+            with self.assertRaisesRegex(OSError, "descriptor cleanup failed"):
+                module._close_fds(123, action="test")
+
+            primary = RuntimeError("primary failure")
+            module._close_fds(123, action="test", primary_error=primary)
+            self.assertIn("test descriptor cleanup failed", getattr(primary, "__notes__", ()))
+
     def test_mkdirs_accepts_concurrent_directory_creation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "nested"
