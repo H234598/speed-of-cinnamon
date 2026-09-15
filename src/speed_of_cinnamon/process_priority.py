@@ -6562,19 +6562,30 @@ def _scope_exec_supervisor_spec(
         return None
     try:
         arguments = tuple(command)
-        token_index = arguments.index(_SCOPE_EXEC_WRAPPER_TOKEN)
     except (TypeError, ValueError):
         return None
-    if token_index < 2 or any(not isinstance(item, str) for item in arguments):
+    if any(not isinstance(item, str) for item in arguments):
+        return None
+    token_indices = tuple(
+        index
+        for index, item in enumerate(arguments)
+        if item == _SCOPE_EXEC_WRAPPER_TOKEN
+    )
+    if len(token_indices) != 1:
+        return None
+    token_index = token_indices[0]
+    if token_index < 3:
         return None
     try:
         runtime, entry = _scope_exec_wrapper_paths()
     except PriorityScopeError:
         return None
     if (
-        arguments[token_index - 2 : token_index] != (runtime, entry)
+        arguments[token_index - 3 : token_index] != (runtime, "-I", entry)
         or token_index + 1 >= len(arguments)
         or arguments[token_index + 1] != _SCOPE_EXEC_LATCH_REQUIRED_TOKEN
+        or arguments.count(_SCOPE_EXEC_LATCH_REQUIRED_TOKEN) != 1
+        or arguments.count(_LOCAL_MODEL_DIRECT_EXEC_TOKEN) != 0
     ):
         return None
     target = _scope_exec_launch_spec_from_arguments(arguments[token_index:])

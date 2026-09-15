@@ -115,15 +115,31 @@ def _scope_manager_unavailable(stderr: bytes) -> bool:
     )
 
 
+_AF_UNIX_LATCH_CAPABILITY_ERRNOS = frozenset(
+    value
+    for value in (
+        errno.EACCES,
+        errno.EAFNOSUPPORT,
+        errno.ENOPROTOOPT,
+        errno.ENOSYS,
+        errno.EOPNOTSUPP,
+        errno.EPERM,
+        errno.EPROTONOSUPPORT,
+    )
+    if isinstance(value, int)
+)
+
+
 def _scope_exec_test_arguments(
     *arguments: str,
     latch_required: bool = False,
 ) -> list[str]:
     target = [os.path.realpath(sys.executable), *arguments]
-    return process_priority._scope_exec_wrapper_command(
+    wrapper = process_priority._scope_exec_wrapper_command(
         target,
         latch_required=latch_required,
-    )[2:]
+    )
+    return wrapper[wrapper.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN) :]
 
 
 def _fake_scope_process(returncode: int | None) -> mock.Mock:
@@ -134,21 +150,48 @@ def _fake_scope_process(returncode: int | None) -> mock.Mock:
     return process
 
 
-def _send_scope_test_datagrams(
-    environment: dict[str, str],
-    payloads: tuple[bytes | None, ...],
-) -> None:
-    address = "\0" + environment[process_priority._SCOPE_EXEC_LATCH_ADDRESS_ENV]
-    nonce = environment[process_priority._SCOPE_EXEC_LATCH_NONCE_ENV]
-    with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as sender:
-        for payload in payloads:
-            message = (
-                process_priority._SCOPE_EXEC_LATCH_MESSAGE_PREFIX
-                + nonce.encode("ascii")
-                if payload is None
-                else payload
+def _scope_latch_datagram(
+    nonce: str,
+    payload: bytes | None = None,
+    *,
+    credentials: bool = True,
+) -> tuple[bytes, list[tuple[int, int, bytes]], int, None]:
+    message = (
+        process_priority._SCOPE_EXEC_LATCH_MESSAGE_PREFIX + nonce.encode("ascii")
+        if payload is None
+        else payload
+    )
+    ancillary: list[tuple[int, int, bytes]] = []
+    if credentials:
+        ancillary.append(
+            (
+                socket.SOL_SOCKET,
+                getattr(socket, "SCM_CREDENTIALS", -1),
+                process_priority.struct.pack(
+                    "3i",
+                    4242,
+                    os.getuid(),
+                    os.getgid(),
+                ),
             )
-            sender.sendto(message, address)
+        )
+    return message, ancillary, 0, None
+
+
+def _scope_latch_listener(
+    *datagrams: tuple[bytes, list[tuple[int, int, bytes]], int, None],
+) -> mock.Mock:
+    listener = mock.Mock()
+
+    pending = list(datagrams)
+
+    def recvmsg(*_args: object) -> tuple[bytes, list[tuple[int, int, bytes]], int, None]:
+        if pending:
+            return pending.pop(0)
+        raise BlockingIOError
+
+    listener.recvmsg.side_effect = recvmsg
+    return listener
 
 
 class ProcessPriorityTests(unittest.TestCase):
@@ -2828,7 +2871,8 @@ class ProcessPriorityTests(unittest.TestCase):
             shutil.copyfile(os.path.realpath(sys.executable), target)
             target.chmod(0o700)
             original_stat = target.stat()
-            arguments = process_priority._scope_exec_wrapper_command([os.fspath(target)])[2:]
+            wrapper = process_priority._scope_exec_wrapper_command([os.fspath(target)])
+            arguments = wrapper[wrapper.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN) :]
             captured: dict[str, object] = {}
 
             def replace_then_fail_exec(
@@ -2968,6 +3012,7 @@ class ProcessPriorityTests(unittest.TestCase):
                 "--speed-of-cinnamon-scope-exec",
                 "--",
                 runtime,
+                "-I",
                 entry,
                 "--speed-of-cinnamon-scope-exec",
                 "--",
@@ -3102,7 +3147,7 @@ class ProcessPriorityTests(unittest.TestCase):
                 f"os.sched_setaffinity(0, {{{target[0]}}}); "
                 "command=p._scope_exec_wrapper_command([sys.executable, '-c', "
                 "os.environ['SOC_TEST_PROBE']]); "
-                "p._run_scope_exec_wrapper(command[2:])"
+            "p._run_scope_exec_wrapper(command[command.index(p._SCOPE_EXEC_WRAPPER_TOKEN):])"
             )
             environment = os.environ.copy()
             environment.update(
@@ -3272,24 +3317,26 @@ class ProcessPriorityTests(unittest.TestCase):
                 self.assertNotIn("--wait", command)
                 delimiter = command.index("--")
                 wrapper = command[delimiter + 1 :]
+                token_index = wrapper.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
                 self.assertEqual(
-                    wrapper[:3],
+                    wrapper[:token_index],
                     [
                         runtime,
+                        "-I",
                         os.path.realpath(process_priority.__file__),
-                        "--speed-of-cinnamon-scope-exec",
                     ],
                 )
-                identity_start = 4 if command_index == 0 else 3
+                self.assertEqual(wrapper[token_index], process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
+                identity_start = token_index + (2 if command_index == 0 else 1)
                 if command_index == 0:
                     self.assertEqual(
-                        wrapper[3],
+                        wrapper[token_index + 1],
                         process_priority._SCOPE_EXEC_LATCH_REQUIRED_TOKEN,
                     )
                 else:
                     self.assertNotIn(
                         process_priority._SCOPE_EXEC_LATCH_REQUIRED_TOKEN,
-                        wrapper[:4],
+                        wrapper[token_index + 1 : identity_start],
                     )
                 self.assertEqual(
                     len(wrapper[identity_start : identity_start + 6]),
@@ -3325,19 +3372,25 @@ class ProcessPriorityTests(unittest.TestCase):
         )
         self.assertEqual(command[command.index("--")], "--")
         wrapper = command[command.index("--") + 1 : -3]
+        token_index = wrapper.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
         self.assertEqual(
-            wrapper[:3],
+            wrapper[:token_index],
             [
                 os.path.realpath(sys.executable),
+                "-I",
                 os.path.realpath(process_priority.__file__),
-                "--speed-of-cinnamon-scope-exec",
             ],
         )
-        self.assertEqual(len(wrapper[3:9]), 6)
+        self.assertEqual(wrapper[token_index], process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
+        identity_start = token_index + 1
+        self.assertEqual(len(wrapper[identity_start : identity_start + 6]), 6)
         self.assertTrue(
-            all(value.isascii() and value.isdecimal() for value in wrapper[3:9])
+            all(
+                value.isascii() and value.isdecimal()
+                for value in wrapper[identity_start : identity_start + 6]
+            )
         )
-        self.assertEqual(wrapper[9], "--")
+        self.assertEqual(wrapper[identity_start + 6], "--")
         self.assertIn("CPUWeight=200", command)
         self.assertIn("IOWeight=200", command)
         self.assertNotIn("CPUAffinity", command)
@@ -3594,6 +3647,7 @@ class ProcessPriorityTests(unittest.TestCase):
 
     def test_soc_scope_bootstrap_sets_marker_and_execs_trusted_command(self) -> None:
         process = _fake_scope_process(1)
+        listener = mock.Mock()
         captured: dict[str, object] = {}
 
         def reject_scope(argv: list[str], **kwargs: object) -> mock.Mock:
@@ -3616,6 +3670,20 @@ class ProcessPriorityTests(unittest.TestCase):
                 "Popen",
                 side_effect=reject_scope,
             ) as popen,
+            mock.patch.object(
+                process_priority,
+                "_create_scope_exec_latch",
+                return_value=(listener, "a" * 32, "b" * 64),
+            ),
+            mock.patch.object(
+                process_priority,
+                "_supervise_scope_attempt",
+                return_value=process_priority._ScopeExecAttemptOutcome(
+                    returncode=1,
+                    latch_state="none",
+                    timed_out=False,
+                ),
+            ) as supervise,
             mock.patch.object(
                 process_priority.os,
                 "execvpe",
@@ -3642,7 +3710,8 @@ class ProcessPriorityTests(unittest.TestCase):
             "-p",
             "IOWeight=200",
         ])
-        self.assertEqual(command[9], "--")
+        scope_delimiter = command.index("--")
+        self.assertEqual(command[scope_delimiter], "--")
         self.assertIn("speed_of_cinnamon.cli", command)
         environment = captured["env"]
         self.assertIsInstance(environment, dict)
@@ -3659,10 +3728,14 @@ class ProcessPriorityTests(unittest.TestCase):
         self.assertNotIn("stdin", captured)
         self.assertNotIn("stdout", captured)
         self.assertNotIn("stderr", captured)
-        process.wait.assert_called_once()
+        supervise.assert_called_once()
+        self.assertIs(supervise.call_args.args[0], process)
+        self.assertIs(supervise.call_args.args[1], listener)
+        self.assertEqual(supervise.call_args.args[2], "b" * 64)
 
     def test_required_latch_missing_never_executes_before_parent_fallback(self) -> None:
         process = _fake_scope_process(1)
+        listener = mock.Mock()
         child_target = mock.Mock(side_effect=SystemExit(7))
         parent_target = mock.Mock()
 
@@ -3673,9 +3746,10 @@ class ProcessPriorityTests(unittest.TestCase):
             environment = dict(kwargs["env"])
             environment.pop(process_priority._SCOPE_EXEC_LATCH_ADDRESS_ENV)
             environment.pop(process_priority._SCOPE_EXEC_LATCH_NONCE_ENV)
-            wrapper = command[command.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN) :]
+            token_index = command.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
+            wrapper = command[token_index:]
             self.assertEqual(
-                wrapper[1],
+                command[token_index + 1],
                 process_priority._SCOPE_EXEC_LATCH_REQUIRED_TOKEN,
             )
             with (
@@ -3714,17 +3788,35 @@ class ProcessPriorityTests(unittest.TestCase):
                 "Popen",
                 side_effect=strip_latch_environment,
             ),
+            mock.patch.object(
+                process_priority,
+                "_create_scope_exec_latch",
+                return_value=(listener, "a" * 32, "b" * 64),
+            ),
+            mock.patch.object(
+                process_priority,
+                "_supervise_scope_attempt",
+                return_value=process_priority._ScopeExecAttemptOutcome(
+                    returncode=1,
+                    latch_state="none",
+                    timed_out=False,
+                ),
+            ) as supervise,
         ):
             if not process_priority.ensure_soc_priority_scope(["status"]):
                 parent_target()
 
         child_target.assert_not_called()
         parent_target.assert_called_once_with()
-        process.wait.assert_called_once()
+        supervise.assert_called_once()
+        self.assertIs(supervise.call_args.args[0], process)
+        self.assertIs(supervise.call_args.args[1], listener)
+        self.assertEqual(supervise.call_args.args[2], "b" * 64)
 
     def test_required_latch_is_sent_before_launch_spec_validation(self) -> None:
         arguments = _scope_exec_test_arguments(latch_required=True)
-        arguments[2] = str(int(arguments[2]) + 1)
+        identity_index = arguments.index(process_priority._SCOPE_EXEC_LATCH_REQUIRED_TOKEN) + 1
+        arguments[identity_index] = str(int(arguments[identity_index]) + 1)
         with (
             mock.patch.dict(
                 process_priority.os.environ,
@@ -5111,6 +5203,7 @@ class ProcessPriorityTests(unittest.TestCase):
 
     def test_soc_scope_supervisor_falls_back_only_before_entered(self) -> None:
         process = _fake_scope_process(1)
+        listener = mock.Mock()
         with (
             mock.patch.dict(
                 process_priority.os.environ,
@@ -5128,6 +5221,20 @@ class ProcessPriorityTests(unittest.TestCase):
                 side_effect=(OSError("spawn failed"), process),
             ) as popen,
             mock.patch.object(
+                process_priority,
+                "_create_scope_exec_latch",
+                return_value=(listener, "a" * 32, "b" * 64),
+            ),
+            mock.patch.object(
+                process_priority,
+                "_supervise_scope_attempt",
+                return_value=process_priority._ScopeExecAttemptOutcome(
+                    returncode=1,
+                    latch_state="none",
+                    timed_out=False,
+                ),
+            ) as supervise,
+            mock.patch.object(
                 process_priority.os,
                 "execvpe",
                 side_effect=AssertionError("legacy process replacement is forbidden"),
@@ -5137,7 +5244,10 @@ class ProcessPriorityTests(unittest.TestCase):
             self.assertFalse(process_priority.ensure_soc_priority_scope(["status"]))
 
         self.assertEqual(popen.call_count, 2)
-        process.wait.assert_called_once()
+        supervise.assert_called_once()
+        self.assertIs(supervise.call_args.args[0], process)
+        self.assertIs(supervise.call_args.args[1], listener)
+        self.assertEqual(supervise.call_args.args[2], "b" * 64)
         execvpe.assert_not_called()
 
         with (
@@ -5158,6 +5268,9 @@ class ProcessPriorityTests(unittest.TestCase):
     def test_soc_scope_supervisor_never_returns_after_entered(self) -> None:
         for returncode in (0, 1, 7):
             process = _fake_scope_process(returncode)
+            nonce = "b" * 64
+            listener = _scope_latch_listener(_scope_latch_datagram(nonce))
+            selector = mock.Mock()
 
             def entered_scope(
                 _argv: list[str],
@@ -5165,7 +5278,6 @@ class ProcessPriorityTests(unittest.TestCase):
             ) -> mock.Mock:
                 environment = kwargs["env"]
                 assert isinstance(environment, dict)
-                _send_scope_test_datagrams(environment, (None,))
                 return process
 
             with (
@@ -5185,61 +5297,100 @@ class ProcessPriorityTests(unittest.TestCase):
                     "Popen",
                     side_effect=entered_scope,
                 ),
+                mock.patch.object(
+                    process_priority,
+                    "_create_scope_exec_latch",
+                    return_value=(listener, "a" * 32, "b" * 64),
+                ),
+                mock.patch.object(
+                    process_priority.selectors,
+                    "DefaultSelector",
+                    return_value=selector,
+                ),
                 mock.patch.object(process_priority.os, "execvpe") as execvpe,
             ):
                 with self.assertRaises(SystemExit) as raised:
                     process_priority.ensure_soc_priority_scope(["status"])
 
             self.assertEqual(raised.exception.code, returncode)
-            process.wait.assert_called_once()
+            selector.register.assert_called_once_with(
+                listener,
+                process_priority.selectors.EVENT_READ,
+            )
+            selector.select.assert_not_called()
+            process.wait.assert_called_once_with(
+                timeout=process_priority._SCOPE_EXEC_REAP_TIMEOUT_SECONDS,
+            )
+            self.assertEqual(listener.recvmsg.call_count, 3)
             execvpe.assert_not_called()
 
     def test_soc_scope_supervisor_never_retries_ambiguous_status(self) -> None:
+        nonce = "b" * 64
         cases = (
-            (0, ()),
-            (1, (b"malformed private payload",)),
-            (1, (None, None)),
+            (
+                "valid",
+                _scope_latch_listener(_scope_latch_datagram(nonce)),
+                "entered",
+            ),
+            (
+                "malformed",
+                _scope_latch_listener(
+                    _scope_latch_datagram(
+                        nonce,
+                        b"malformed private payload",
+                        credentials=False,
+                    )
+                ),
+                "invalid",
+            ),
+            (
+                "duplicate",
+                _scope_latch_listener(
+                    _scope_latch_datagram(nonce),
+                    _scope_latch_datagram(nonce),
+                ),
+                "invalid",
+            ),
         )
-        for returncode, payloads in cases:
-            process = _fake_scope_process(returncode)
+        for case, listener, expected_state in cases:
+            process = _fake_scope_process(1)
+            selector = mock.Mock()
+            with self.subTest(case=case):
+                with mock.patch.object(
+                    process_priority.selectors,
+                    "DefaultSelector",
+                    return_value=selector,
+                ):
+                    outcome = process_priority._supervise_scope_attempt(
+                        process,
+                        listener,
+                        nonce,
+                    )
 
-            def ambiguous_scope(
-                _argv: list[str],
-                **kwargs: object,
-            ) -> mock.Mock:
-                environment = kwargs["env"]
-                assert isinstance(environment, dict)
-                _send_scope_test_datagrams(environment, payloads)
-                return process
-
-            with (
-                self.subTest(returncode=returncode, messages=len(payloads)),
-                mock.patch.dict(
-                    process_priority.os.environ,
-                    {process_priority.SOC_PRIORITY_SCOPE_MARKER: ""},
-                    clear=False,
+            self.assertEqual(
+                outcome,
+                process_priority._ScopeExecAttemptOutcome(
+                    returncode=1,
+                    latch_state=expected_state,
+                    timed_out=False,
                 ),
-                mock.patch.object(
-                    process_priority.shutil,
-                    "which",
-                    return_value="/usr/bin/systemd-run",
-                ),
-                mock.patch.object(
-                    process_priority.subprocess,
-                    "Popen",
-                    side_effect=ambiguous_scope,
-                ),
-                mock.patch.object(process_priority.os, "execvpe") as execvpe,
-            ):
-                with self.assertRaises(SystemExit) as raised:
-                    process_priority.ensure_soc_priority_scope(["status"])
-
-            self.assertEqual(raised.exception.code, returncode)
-            process.wait.assert_called_once()
-            execvpe.assert_not_called()
+            )
+            selector.register.assert_called_once_with(
+                listener,
+                process_priority.selectors.EVENT_READ,
+            )
+            selector.select.assert_not_called()
+            selector.close.assert_called_once_with()
+            self.assertEqual(listener.recvmsg.call_count, 3)
+            process.wait.assert_called_once_with(
+                timeout=process_priority._SCOPE_EXEC_REAP_TIMEOUT_SECONDS,
+            )
 
     def test_soc_scope_supervisor_timeout_is_reaped_without_retry(self) -> None:
         process = _fake_scope_process(None)
+        process.wait.return_value = 1
+        listener = _scope_latch_listener()
+        selector = mock.Mock()
 
         class SignalAfterTimeoutTransition(
             process_priority._ScopeExecSignalForwarder
@@ -5264,19 +5415,29 @@ class ProcessPriorityTests(unittest.TestCase):
             mock.patch.object(process_priority.subprocess, "Popen", return_value=process),
             mock.patch.object(
                 process_priority,
+                "_create_scope_exec_latch",
+                return_value=(listener, "a" * 32, "b" * 64),
+            ),
+            mock.patch.object(
+                process_priority,
                 "_ScopeExecSignalForwarder",
                 return_value=forwarder,
             ),
             mock.patch.object(
                 process_priority,
                 "_SCOPE_EXEC_ENTER_TIMEOUT_SECONDS",
-                0.0,
+                1.0,
             ),
             mock.patch.object(
-                process_priority,
-                "_terminate_scope_attempt",
-                return_value=1,
-            ) as terminate,
+                process_priority.selectors,
+                "DefaultSelector",
+                return_value=selector,
+            ),
+            mock.patch.object(
+                process_priority.time,
+                "monotonic",
+                side_effect=(0.0, 0.5, 1.0, 1.0),
+            ) as monotonic,
             mock.patch.object(process_priority.os, "getpgid", return_value=4242),
             mock.patch.object(
                 process_priority,
@@ -5289,20 +5450,29 @@ class ProcessPriorityTests(unittest.TestCase):
                 process_priority.ensure_soc_priority_scope(["status"])
 
         self.assertIsNone(forwarder.primary_signal)
-        forward_signal.assert_called_once_with(
-            process,
-            signal.SIGHUP,
-            process_group_id=4242,
+        self.assertEqual(
+            forward_signal.call_args_list,
+            [
+                mock.call(process, signal.SIGHUP, process_group_id=4242),
+                mock.call(process, signal.SIGTERM, process_group_id=4242),
+            ],
         )
-        terminate.assert_called_once_with(
-            process,
-            process_group_id=4242,
-            forwarded_signal=None,
+        selector.register.assert_called_once_with(
+            listener,
+            process_priority.selectors.EVENT_READ,
         )
+        selector.select.assert_called_once_with(process_priority._SCOPE_EXEC_POLL_SECONDS)
+        selector.close.assert_called_once_with()
+        self.assertEqual(listener.recvmsg.call_count, 3)
+        process.wait.assert_called_once_with(
+            timeout=process_priority._SCOPE_EXEC_REAP_TIMEOUT_SECONDS,
+        )
+        self.assertEqual(monotonic.call_count, 4)
         execvpe.assert_not_called()
 
     def test_soc_scope_supervisor_propagates_signal_after_reaping(self) -> None:
         process = _fake_scope_process(-signal.SIGTERM)
+        listener = mock.Mock()
         with (
             mock.patch.dict(
                 process_priority.os.environ,
@@ -5315,6 +5485,20 @@ class ProcessPriorityTests(unittest.TestCase):
                 return_value="/usr/bin/systemd-run",
             ),
             mock.patch.object(process_priority.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                process_priority,
+                "_create_scope_exec_latch",
+                return_value=(listener, "a" * 32, "b" * 64),
+            ),
+            mock.patch.object(
+                process_priority,
+                "_supervise_scope_attempt",
+                return_value=process_priority._ScopeExecAttemptOutcome(
+                    returncode=-signal.SIGTERM,
+                    latch_state="entered",
+                    timed_out=False,
+                ),
+            ) as supervise,
             mock.patch.object(process_priority.os, "getpid", return_value=4343),
             mock.patch.object(process_priority.signal, "signal") as set_signal,
             mock.patch.object(process_priority.os, "kill") as kill,
@@ -5324,7 +5508,7 @@ class ProcessPriorityTests(unittest.TestCase):
                 process_priority.ensure_soc_priority_scope(["status"])
 
         self.assertEqual(raised.exception.code, 128 + signal.SIGTERM)
-        process.wait.assert_called_once()
+        supervise.assert_called_once()
         self.assertEqual(
             set_signal.call_args_list[-1],
             mock.call(signal.SIGTERM, signal.SIG_DFL),
@@ -5334,6 +5518,7 @@ class ProcessPriorityTests(unittest.TestCase):
 
     def test_soc_scope_supervisor_rejects_launch_spec_drift_before_fallback(self) -> None:
         process = _fake_scope_process(1)
+        listener = mock.Mock()
         with (
             mock.patch.dict(
                 process_priority.os.environ,
@@ -5346,6 +5531,20 @@ class ProcessPriorityTests(unittest.TestCase):
                 return_value="/usr/bin/systemd-run",
             ),
             mock.patch.object(process_priority.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                process_priority,
+                "_create_scope_exec_latch",
+                return_value=(listener, "a" * 32, "b" * 64),
+            ),
+            mock.patch.object(
+                process_priority,
+                "_supervise_scope_attempt",
+                return_value=process_priority._ScopeExecAttemptOutcome(
+                    returncode=1,
+                    latch_state="none",
+                    timed_out=False,
+                ),
+            ) as supervise,
             mock.patch.object(
                 process_priority,
                 "_scope_exec_supervisor_spec_is_unchanged",
@@ -5359,7 +5558,7 @@ class ProcessPriorityTests(unittest.TestCase):
             ):
                 process_priority.ensure_soc_priority_scope(["status"])
 
-        process.wait.assert_called_once()
+        supervise.assert_called_once()
         execvpe.assert_not_called()
 
     def test_scope_exec_wrapper_sends_entered_once_and_scrubs_status_environment(self) -> None:
@@ -5446,7 +5645,8 @@ class ProcessPriorityTests(unittest.TestCase):
 
     def test_scope_exec_wrapper_rejects_target_identity_drift(self) -> None:
         arguments = _scope_exec_test_arguments()
-        arguments[1] = str(int(arguments[1]) + 1)
+        identity_index = arguments.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN) + 1
+        arguments[identity_index] = str(int(arguments[identity_index]) + 1)
         with (
             mock.patch.object(
                 process_priority,
@@ -5496,6 +5696,9 @@ class ProcessPriorityTests(unittest.TestCase):
     def test_soc_scope_supervisor_rejects_unclear_wait_status(self) -> None:
         process = _fake_scope_process(1)
         process.wait.return_value = None
+        listener = mock.Mock()
+        listener.recvmsg.side_effect = BlockingIOError
+        selector = mock.Mock()
         with (
             mock.patch.dict(
                 process_priority.os.environ,
@@ -5506,6 +5709,16 @@ class ProcessPriorityTests(unittest.TestCase):
                 process_priority.shutil,
                 "which",
                 return_value="/usr/bin/systemd-run",
+            ),
+            mock.patch.object(
+                process_priority,
+                "_create_scope_exec_latch",
+                return_value=(listener, "a" * 32, "b" * 64),
+            ),
+            mock.patch.object(
+                process_priority.selectors,
+                "DefaultSelector",
+                return_value=selector,
             ),
             mock.patch.object(process_priority.subprocess, "Popen", return_value=process),
             mock.patch.object(process_priority.os, "execvpe") as execvpe,
@@ -5768,7 +5981,7 @@ class ProcessPriorityTests(unittest.TestCase):
             mock.patch.object(
                 process_priority,
                 "_required_priority_tool",
-                side_effect=("/usr/bin/ionice", "/usr/bin/nice"),
+                side_effect=("/usr/bin/true", "/usr/bin/ionice", "/usr/bin/nice"),
             ),
             mock.patch.object(
                 process_priority,
@@ -6061,7 +6274,19 @@ class ProcessPriorityTests(unittest.TestCase):
                 if process.returncode != 0 and _scope_manager_unavailable(stderr):
                     self.skipTest(f"user systemd scope unavailable: {stderr.decode(errors='replace')}")
                 self.fail(f"scope persistence probe produced no output: {stdout!r}")
-            payload = json.loads(process.stdout.readline().decode("utf-8"))
+            line = process.stdout.readline()
+            try:
+                payload = json.loads(line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                stdout, stderr = process.communicate(timeout=3.0)
+                if process.returncode != 0 and _scope_manager_unavailable(stderr):
+                    self.skipTest(
+                        f"user systemd scope unavailable: {stderr.decode(errors='replace')}"
+                    )
+                self.fail(
+                    "scope persistence probe produced invalid output: "
+                    f"stdout={stdout!r}, stderr={stderr!r}"
+                )
             child_pid = int(payload["child"])
             process.wait(timeout=3.0)
             self.assertEqual(process.returncode, 0)
@@ -6101,6 +6326,32 @@ class ProcessPriorityTests(unittest.TestCase):
         systemd_run = shutil.which("systemd-run", path=process_priority._TRUSTED_COMMAND_PATH)
         if not systemd_run:
             self.skipTest("trusted systemd-run is unavailable")
+        capability_probe: socket.socket | None = None
+        try:
+            capability_probe = socket.socket(
+                socket.AF_UNIX,
+                socket.SOCK_DGRAM | getattr(socket, "SOCK_CLOEXEC", 0),
+            )
+            capability_probe.setsockopt(
+                socket.SOL_SOCKET,
+                getattr(socket, "SO_PASSCRED"),
+                1,
+            )
+            capability_probe.bind(
+                f"\0soc-process-priority-latch-{os.getpid()}-{id(self)}"
+            )
+        except AttributeError as error:
+            self.skipTest(f"AF_UNIX credential capability is unavailable: {error}")
+        except OSError as error:
+            if error.errno not in _AF_UNIX_LATCH_CAPABILITY_ERRNOS:
+                raise
+            self.skipTest(
+                "AF_UNIX credential capability is unavailable: "
+                f"errno={error.errno}"
+            )
+        finally:
+            if capability_probe is not None:
+                capability_probe.close()
         command = process_priority.build_soc_priority_scope_command(
             [
                 sys.executable,
@@ -6653,6 +6904,7 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
 
     def test_resource_gate_bootstrap_binds_resource_gate_module(self) -> None:
         process = _fake_scope_process(1)
+        listener = mock.Mock()
         captured: dict[str, object] = {}
 
         def reject_scope(argv: list[str], **kwargs: object) -> mock.Mock:
@@ -6675,6 +6927,20 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
                 "build_soc_priority_scope_command",
                 wraps=process_priority.build_soc_priority_scope_command,
             ) as build,
+            mock.patch.object(
+                process_priority,
+                "_create_scope_exec_latch",
+                return_value=(listener, "a" * 32, "b" * 64),
+            ),
+            mock.patch.object(
+                process_priority,
+                "_supervise_scope_attempt",
+                return_value=process_priority._ScopeExecAttemptOutcome(
+                    returncode=1,
+                    latch_state="none",
+                    timed_out=False,
+                ),
+            ) as supervise,
             mock.patch.object(
                 process_priority.subprocess,
                 "Popen",
@@ -6701,7 +6967,10 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
         assert isinstance(command, list)
         self.assertNotIn("--wait", command)
         token_index = command.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
-        self.assertEqual(command[token_index - 2 : token_index], [runtime, entry])
+        self.assertEqual(
+            command[token_index - 3 : token_index],
+            [runtime, "-I", entry],
+        )
         self.assertEqual(
             command[token_index + 1],
             process_priority._SCOPE_EXEC_LATCH_REQUIRED_TOKEN,
@@ -6725,7 +6994,10 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
             environment[process_priority._SCOPE_EXEC_LATCH_NONCE_ENV],
             process_priority._SCOPE_EXEC_LATCH_NONCE_RE,
         )
-        process.wait.assert_called_once()
+        supervise.assert_called_once()
+        self.assertIs(supervise.call_args.args[0], process)
+        self.assertIs(supervise.call_args.args[1], listener)
+        self.assertEqual(supervise.call_args.args[2], "b" * 64)
 
     def test_verified_resource_gate_scope_does_not_mutate_affinity(self) -> None:
         identity = process_priority.PriorityScopeIdentity(

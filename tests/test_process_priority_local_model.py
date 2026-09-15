@@ -286,6 +286,61 @@ class LocalModelPriorityTests(unittest.TestCase):
             ],
         )
 
+    def test_soc_priority_scope_builder_round_trips_only_exact_python_wrapper_layout(
+        self,
+    ) -> None:
+        runtime = os.path.realpath(sys.executable)
+        entry = os.path.realpath(process_priority.__file__)
+        with mock.patch.object(
+            process_priority,
+            "_required_scope_tool",
+            return_value=runtime,
+        ):
+            command = process_priority.build_soc_priority_scope_command([runtime])
+
+        token_index = command.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
+        self.assertEqual(
+            command[token_index - 3 : token_index],
+            [runtime, "-I", entry],
+        )
+        parsed = process_priority._scope_exec_supervisor_spec(command)
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed.target.argv, (runtime,))
+
+        invalid_commands = []
+        missing_i = command.copy()
+        missing_i.pop(token_index - 2)
+        invalid_commands.append(missing_i)
+
+        duplicate_i = command.copy()
+        duplicate_i.insert(token_index - 2, "-I")
+        invalid_commands.append(duplicate_i)
+
+        replaced_i = command.copy()
+        replaced_i[token_index - 2] = "--"
+        invalid_commands.append(replaced_i)
+
+        wrong_runtime = command.copy()
+        wrong_runtime[token_index - 3] = entry
+        invalid_commands.append(wrong_runtime)
+
+        wrong_entry = command.copy()
+        wrong_entry[token_index - 1] = runtime
+        invalid_commands.append(wrong_entry)
+
+        prepended_token_decoy = command.copy()
+        prepended_token_decoy.insert(0, process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
+        invalid_commands.append(prepended_token_decoy)
+
+        target_token_decoy = command.copy()
+        target_token_decoy.append(process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
+        invalid_commands.append(target_token_decoy)
+
+        for invalid in invalid_commands:
+            with self.subTest(command=invalid):
+                self.assertIsNone(process_priority._scope_exec_supervisor_spec(invalid))
+
     def test_local_model_command_passes_valid_named_scope_without_reordering(
         self,
     ) -> None:
