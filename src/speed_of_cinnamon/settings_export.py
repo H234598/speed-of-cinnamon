@@ -15,6 +15,7 @@ from .alarms import MAX_ALARM_COUNT, MAX_ALARM_TRIGGER_CHARS, STORE_VERSION as A
 from .alarms import _dedupe_alarm_ids
 from .alarms import normalize_alarm
 from .http_safety import is_loopback_hostname
+from .insert_methods import normalize_insert_method
 from .paths import APP_ID
 from .postprocessor import MAX_OLLAMA_MODEL_CHARS, MAX_OPENAI_COMPATIBLE_MODEL_CHARS
 from .recorder import MAX_RECORDING_INPUT_DEVICE_CHARS, MAX_RECORDING_SECONDS
@@ -39,7 +40,7 @@ MAX_SETTINGS_EXPORT_JSON_DEPTH = 24
 MAX_SETTINGS_EXPORT_JSON_TOKENS = 20_000
 MAX_SETTINGS_EXPORT_JSON_NODES = 10_000
 MAX_TYPING_DELAY_MS = 10_000
-DEFAULT_MAX_SECONDS = 30
+DEFAULT_MAX_SECONDS = 60
 DEFAULT_TYPING_DELAY_MS = 8
 DEFAULT_MAX_TRANSCRIPT_FILES = 500
 MAX_TRANSCRIPT_FILES = 1_000
@@ -80,20 +81,22 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "primary-language-keybinding": (str, ""),
     "secondary-language-keybinding": (str, ""),
     "cancel-keybinding": (str, ""),
-    "show-panel-label": (bool, True),
+    "show-panel-label": (bool, False),
     "show-transcript-text": (bool, True),
-    "language": (str, "en"),
-    "secondary-language": (str, "de"),
+    "language": (str, "de"),
+    "secondary-language": (str, "en"),
     "max-seconds": (int, DEFAULT_MAX_SECONDS),
-    "auto-transcribe-timeout": (bool, True),
+    "auto-transcribe-timeout": (bool, False),
     "auto-relisten": (bool, False),
     "keep-recording-artifacts": (bool, False),
     "recorder": (str, "auto"),
     "input-device": (str, ""),
     "personal-context": (str, ""),
     "vocabulary": (str, ""),
-    "notify-recording": (bool, False),
-    "notify-complete": (bool, False),
+    "notify-recording-start": (bool, False),
+    "notify-recording-limit": (bool, False),
+    "notify-recording-longer": (bool, False),
+    "notify-complete": (bool, True),
     "notify-error": (bool, True),
     "status-icon-ready": (str, "soc-original"),
     "status-icon-recording": (str, "soc-original"),
@@ -105,7 +108,7 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "insert-method-semantics-version": (int, 0),
     "append-space": (bool, True),
     "sanitize-special-chars": (bool, False),
-    "soften-profanity": (bool, False),
+    "soften-profanity": (bool, True),
     "typing-delay-ms": (int, DEFAULT_TYPING_DELAY_MS),
     "max-transcript-files": (int, DEFAULT_MAX_TRANSCRIPT_FILES),
     "auto-backup-enabled": (bool, False),
@@ -123,15 +126,15 @@ EXPORTABLE_SETTINGS: dict[str, tuple[type, Any]] = {
     "auto-backup-retention-mode": (str, "manual"),
     "auto-backup-format-version": (int, 1),
     "artifact-encryption": (str, "keyring"),
-    "auto-paste-window-title": (str, "codex"),
-    "transcriber": (str, "auto"),
+    "auto-paste-window-title": (str, "codex, Terminal, Telegram, Ghostty, Kitty"),
+    "transcriber": (str, "openai-compatible"),
     "whisper-model": (str, ""),
-    "post-process-backend": (str, "none"),
+    "post-process-backend": (str, "openai-compatible"),
     "ollama-url": (str, "http://127.0.0.1:11434"),
     "ollama-model": (str, ""),
     "openai-compatible-url": (str, "https://api.openai.com/v1"),
-    "openai-compatible-model": (str, "gpt-4o-transcribe"),
-    "openai-compatible-text-model": (str, "gpt-4o-mini"),
+    "openai-compatible-model": (str, "gpt-transcribe"),
+    "openai-compatible-text-model": (str, "gpt-5.6-luna"),
     "openai-compatible-flex-processing": (bool, True),
     "post-process-preset": (str, "minimal"),
     "post-process-preserve-code": (bool, True),
@@ -321,6 +324,15 @@ def _assert_json_value_budget(value: Any) -> None:
 
 def _reject_non_finite_json_number(_value: str) -> object:
     raise ValueError("settings export contains non-finite numbers")
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key is not allowed")
+        result[key] = value
+    return result
 
 
 def _create_private_temp_file(parent_fd: int, final_name: str) -> tuple[int, str]:
@@ -570,6 +582,8 @@ def normalize_setting(key: str, value: Any) -> Any:
     )
     if key == "transcriber":
         text = normalize_backend(text)
+    if key == "insert-method":
+        text = normalize_insert_method(text)
     _reject_secret_bearing_url_setting(key, text)
     allowed_values = _ALLOWED_SETTING_TEXT_VALUES.get(key)
     if allowed_values is not None and text not in allowed_values:
@@ -1465,7 +1479,11 @@ def read_export(path: Path) -> dict[str, Any]:
         if _contains_escaped_null(text):
             raise SettingsExportError("settings export contains invalid null byte")
         _assert_json_text_budget(text)
-        payload = json.loads(text, parse_constant=_reject_non_finite_json_number)
+        payload = json.loads(
+            text,
+            parse_constant=_reject_non_finite_json_number,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
         _assert_json_value_budget(payload)
     except FileNotFoundError as exc:
         raise SettingsExportError(f"settings export not found: {path}") from exc

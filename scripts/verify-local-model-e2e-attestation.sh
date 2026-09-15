@@ -2,6 +2,16 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
+readonly GIT_TIMEOUT_SECONDS=30
+
+for tool in git python3 timeout; do
+  command -v -- "${tool}" >/dev/null 2>&1 || {
+    printf 'local-model-e2e verifier: required tool missing: %s\n' "${tool}" >&2
+    exit 1
+  }
+done
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/speed-of-cinnamon"
@@ -11,7 +21,7 @@ attestation="${state_dir}/local-model-e2e-attestation.json"
   printf 'local-model-e2e attestation missing. Run make local-model-e2e-acceptance after committing.\n' >&2
   exit 1
 }
-PYTHONPATH="${repo_dir}/src" python3 - "${attestation}" "${repo_dir}" "$(git -C "${repo_dir}" rev-parse HEAD)" <<'PY'
+PYTHONPATH="${repo_dir}/src" python3 - "${attestation}" "${repo_dir}" "$(timeout --signal=TERM --kill-after=2s "${GIT_TIMEOUT_SECONDS}s" git -C "${repo_dir}" rev-parse HEAD)" <<'PY'
 import json
 import os
 import stat

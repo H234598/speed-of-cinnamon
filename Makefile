@@ -11,26 +11,50 @@ endif
 PROJECT_VERSION := $(shell $(PYTHON) -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"])')
 SNAP_BUILD ?= 1
 BUILD_GENERIC_RPM ?= 1
+ACTIONLINT_PATH ?= $(shell command -v actionlint 2>/dev/null)
+export ACTIONLINT_PATH
 
 check: verify-version-consistency test lint lint-workflows-check verify-authorship smoke-doctor security-scan
 
 check-fast: verify-version-consistency lint
-	PYTHONPATH=src $(PYTHON) -m unittest tests.test_process_priority tests.test_process_priority_local_model
-	node --test tests/test_applet_keyboard.mjs
+	@set -euo pipefail; \
+	 test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-check-fast.XXXXXX")"; \
+	 state_home="$$test_root/state"; \
+	 tmp_dir="$$test_root/tmp"; \
+	 mkdir -p -- "$$state_home" "$$tmp_dir"; \
+	 trap 'rm -rf -- "$$test_root"' EXIT; \
+	 TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m unittest tests.test_process_priority tests.test_process_priority_local_model; \
+	 TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" node --test tests/test_applet_keyboard.mjs
 
 test:
-	PYTHONPATH=src $(PYTHON) -m unittest discover -s tests
-	node --test tests/test_applet_keyboard.mjs
-	node --test tests/test_applet_menu_retention.mjs
-	node --test tests/test_applet_recording.mjs
+	@set -euo pipefail; \
+	test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-test.XXXXXX")"; \
+	state_home="$$test_root/state"; \
+	tmp_dir="$$test_root/tmp"; \
+	mkdir -p -- "$$state_home" "$$tmp_dir"; \
+	trap 'rm -rf -- "$$test_root"' EXIT; \
+	SOC_RUN_GUI_LIVE_TESTS=0 TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m unittest discover -s tests; \
+	TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" node --test tests/test_applet_keyboard.mjs; \
+	TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" node --test tests/test_applet_menu_retention.mjs; \
+	TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" node --test tests/test_applet_recording.mjs
 
 coverage:
-	mkdir -p reports
-	PYTHONPATH=src $(PYTHON) -m coverage run --source=src/speed_of_cinnamon -m unittest discover -s tests
+	@set -euo pipefail; \
+	test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-coverage.XXXXXX")"; \
+	state_home="$$test_root/state"; \
+	tmp_dir="$$test_root/tmp"; \
+	mkdir -p -- "$$state_home" "$$tmp_dir"; \
+	trap 'rm -rf -- "$$test_root"' EXIT; \
+	mkdir -p reports; \
+	SOC_RUN_GUI_LIVE_TESTS=0 TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m coverage run --source=src/speed_of_cinnamon -m unittest discover -s tests; \
 	$(PYTHON) -m coverage lcov -o reports/lcov.info
 
 lint:
-	find src tests -name '*.py' -print0 | xargs -0 $(PYTHON) -m py_compile
+	@set -euo pipefail; \
+		umask 077; \
+		pycache_root="$$(mktemp -d /tmp/speed-of-cinnamon-lint-pycache.XXXXXX)"; \
+		trap 'rm -rf -- "$$pycache_root"' EXIT; \
+		find src tests -name '*.py' -print0 | PYTHONPYCACHEPREFIX="$$pycache_root" xargs -0 $(PYTHON) -m py_compile
 	$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/metadata.json >/dev/null
 	$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/settings-schema.json >/dev/null
 	node --check files/speed-of-cinnamon@H234598/applet.js >/dev/null
@@ -65,7 +89,13 @@ verify-authorship:
 	./scripts/verify-authorship.sh
 
 smoke-doctor:
-	PYTHONPATH=src $(PYTHON) -m speed_of_cinnamon.cli doctor --json
+	@set -euo pipefail; \
+	 test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-smoke-doctor.XXXXXX")"; \
+	 state_home="$$test_root/state"; \
+	 tmp_dir="$$test_root/tmp"; \
+	 mkdir -p -- "$$state_home" "$$tmp_dir"; \
+	 trap 'rm -rf -- "$$test_root"' EXIT; \
+	 TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m speed_of_cinnamon.cli doctor --json
 
 smoke-backend:
 	./scripts/smoke-backend.sh ./scripts/dev-backend.sh
@@ -86,8 +116,8 @@ export-release-attestations:
 	./scripts/export-release-attestations.sh "v$(PROJECT_VERSION)"
 
 verify-release-attestations:
-	@expected_parent="$$(git rev-parse HEAD^ 2>/dev/null)" && \
-		./scripts/verify-release-attestation.py "release-attestations/v$(PROJECT_VERSION)" "$$(pwd -P)" "$${expected_parent}"
+	@expected_parent="$$(timeout --signal=TERM --kill-after=2s 30s git rev-parse HEAD^ 2>/dev/null)" && \
+		$(PYTHON) ./scripts/verify-release-attestation.py "release-attestations/v$(PROJECT_VERSION)" "$$(pwd -P)" "$${expected_parent}"
 
 applet-safety-check:
 	node --check files/speed-of-cinnamon@H234598/applet.js

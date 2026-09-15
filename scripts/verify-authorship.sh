@@ -22,9 +22,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import selectors
 import stat
 import subprocess
 import sys
+import time
 import tomllib
 from pathlib import Path
 
@@ -84,10 +86,91 @@ forbidden = re.compile("staff" + r"[-_ ]?" + "control", re.IGNORECASE)
 FORBIDDEN_SCAN_CHUNK_BYTES = 1 << 20
 FORBIDDEN_SCAN_OVERLAP_CHARS = 64
 MAX_PROJECT_METADATA_BYTES = 1 << 20
+MAX_TRACKED_ENTRIES = 100_000
+MAX_TRACKED_FILE_LIST_BYTES = 16 * 1024 * 1024
+TRACKED_FILE_LIST_CHUNK_BYTES = 64 * 1024
+MAX_COMMIT_LOG_BYTES = 16 * 1024 * 1024
+COMMIT_LOG_CHUNK_BYTES = 64 * 1024
+MAX_GIT_SCALAR_OUTPUT_BYTES = 4 * 1024
+GIT_SCALAR_OUTPUT_CHUNK_BYTES = 1024
+GIT_TIMEOUT_SECONDS = 30.0
 
 
 def fail(message: str) -> None:
     raise SystemExit(message)
+
+
+def reject_duplicate_json_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            fail("metadata.json contains duplicate JSON key: {}".format(key))
+        result[key] = value
+    return result
+
+
+def reject_non_finite_json_number(value):
+    fail("metadata.json contains non-finite JSON value: {}".format(value))
+
+
+def reap_process(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        try:
+            process.kill()
+        except (OSError, ValueError):
+            pass
+    try:
+        process.wait(timeout=1)
+    except (OSError, subprocess.TimeoutExpired):
+        pass
+
+
+def iter_git_output_chunks(
+    process: subprocess.Popen[bytes],
+    stream,
+    *,
+    chunk_bytes: int,
+    max_bytes: int,
+    too_large_message: str,
+    failure_message: str,
+):
+    total_bytes = 0
+    deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+    selector = None
+    try:
+        selector = selectors.DefaultSelector()
+        selector.register(stream, selectors.EVENT_READ)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                fail("git command timed out")
+            events = selector.select(remaining)
+            if not events:
+                fail("git command timed out")
+            for key, _ in events:
+                chunk = os.read(key.fileobj.fileno(), chunk_bytes)
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                total_bytes += len(chunk)
+                if total_bytes > max_bytes:
+                    fail(too_large_message)
+                yield chunk
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            fail("git command timed out")
+        if process.wait(timeout=remaining) != 0:
+            fail(failure_message)
+    except BaseException:
+        reap_process(process)
+        raise
+    finally:
+        if selector is not None:
+            selector.close()
+        try:
+            stream.close()
+        except OSError:
+            pass
 
 
 def read_project_text(path: Path, label: str) -> str:
@@ -121,13 +204,70 @@ if not Path(git_bin).is_absolute():
 
 
 def run_git(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        [git_bin, "-C", str(repo_dir), *args],
-        check=check,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
+    argv = [git_bin, "-C", str(repo_dir), *args]
+    try:
+        process = subprocess.Popen(
+            argv,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+    except OSError as exc:
+        fail(f"could not run git: {exc}")
+    if process.stdout is None or process.stderr is None:
+        reap_process(process)
+        fail("could not run git: missing output pipe")
+
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    streams = (("stdout", process.stdout), ("stderr", process.stderr))
+    deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+    selector = None
+    try:
+        selector = selectors.DefaultSelector()
+        for name, stream in streams:
+            selector.register(stream, selectors.EVENT_READ, name)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                fail("git command timed out")
+            events = selector.select(remaining)
+            if not events:
+                fail("git command timed out")
+            for key, _ in events:
+                stream = key.fileobj
+                chunk = os.read(stream.fileno(), GIT_SCALAR_OUTPUT_CHUNK_BYTES)
+                if not chunk:
+                    selector.unregister(stream)
+                    stream.close()
+                    continue
+                total_bytes = sum(len(value) for value in output.values()) + len(chunk)
+                if total_bytes > MAX_GIT_SCALAR_OUTPUT_BYTES:
+                    fail("git scalar output exceeds byte budget")
+                output[key.data].extend(chunk)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            fail("git command timed out")
+        returncode = process.wait(timeout=remaining)
+    except BaseException:
+        reap_process(process)
+        raise
+    finally:
+        if selector is not None:
+            selector.close()
+        for _, stream in streams:
+            stream.close()
+
+    stdout = bytes(output["stdout"]).decode("utf-8", errors="replace")
+    stderr = bytes(output["stderr"]).decode("utf-8", errors="replace")
+    result = subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr=stderr)
+    if check and returncode != 0:
+        raise subprocess.CalledProcessError(
+            returncode,
+            argv,
+            output=stdout,
+            stderr=stderr,
+        )
+    return result
 
 
 def in_git_worktree() -> bool:
@@ -154,7 +294,11 @@ def check_project_metadata() -> None:
         fail(f"pyproject authors must be {expected_name!r}, got {authors!r}")
 
     applet_metadata_path = repo_dir / "files" / "speed-of-cinnamon@H234598" / "metadata.json"
-    applet_metadata = json.loads(read_project_text(applet_metadata_path, "metadata.json"))
+    applet_metadata = json.loads(
+        read_project_text(applet_metadata_path, "metadata.json"),
+        object_pairs_hook=reject_duplicate_json_keys,
+        parse_constant=reject_non_finite_json_number,
+    )
     if applet_metadata.get("author") != expected_name:
         fail(f"{applet_metadata_path.relative_to(repo_dir)} author must be {expected_name!r}")
 
@@ -169,14 +313,70 @@ def check_project_metadata() -> None:
 
 def tracked_files() -> list[Path]:
     if in_git_worktree():
-        output = run_git("ls-files", "-z").stdout
-        return [path for item in output.split("\0") if item and (path := repo_dir / item).exists()]
+        try:
+            process = subprocess.Popen(
+                [git_bin, "-C", str(repo_dir), "ls-files", "-z"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError as exc:
+            fail(f"could not enumerate tracked files: {exc}")
+        if process.stdout is None:
+            reap_process(process)
+            fail("could not enumerate tracked files: missing output pipe")
+        files: list[Path] = []
+        pending = b""
+        total_bytes = 0
+        for chunk in iter_git_output_chunks(
+            process,
+            process.stdout,
+            chunk_bytes=TRACKED_FILE_LIST_CHUNK_BYTES,
+            max_bytes=MAX_TRACKED_FILE_LIST_BYTES,
+            too_large_message="tracked file list exceeds byte budget",
+            failure_message="git ls-files failed",
+        ):
+            pending += chunk
+            while b"\0" in pending:
+                raw_item, pending = pending.split(b"\0", 1)
+                if not raw_item:
+                    continue
+                if len(files) >= MAX_TRACKED_ENTRIES:
+                    fail(f"tracked file list exceeds {MAX_TRACKED_ENTRIES} entries")
+                try:
+                    item = raw_item.decode("utf-8")
+                except UnicodeDecodeError:
+                    fail("tracked file list is not UTF-8")
+                item_path = Path(item)
+                if item_path.is_absolute() or ".." in item_path.parts:
+                    fail("tracked file list contains an unsafe path")
+                path = repo_dir / item_path
+                if path.exists():
+                    files.append(path)
+        if pending:
+            fail("tracked file list is not NUL-terminated")
+        return files
 
     ignored_dirs = {".git", "dist", "__pycache__", ".pytest_cache", ".mypy_cache"}
     files: list[Path] = []
-    for root, dirs, names in os.walk(repo_dir):
-        dirs[:] = [name for name in dirs if name not in ignored_dirs]
-        files.extend(Path(root) / name for name in names)
+    pending_directories = [repo_dir]
+    scanned_entries = 0
+    while pending_directories:
+        current_directory = pending_directories.pop()
+        try:
+            with os.scandir(current_directory) as entries:
+                for entry in entries:
+                    scanned_entries += 1
+                    if scanned_entries > MAX_TRACKED_ENTRIES:
+                        fail(f"tracked file scan exceeds {MAX_TRACKED_ENTRIES} entries")
+                    entry_path = Path(entry.path)
+                    if entry.is_dir(follow_symlinks=False):
+                        if entry.name not in ignored_dirs:
+                            pending_directories.append(entry_path)
+                        continue
+                    files.append(entry_path)
+        except OSError as exc:
+            fail(f"could not enumerate repository entries: {exc}")
     return files
 
 
@@ -226,6 +426,49 @@ def contains_forbidden_marker(path: Path) -> bool:
                     raise SystemExit("authorship scan descriptor cleanup failed") from cleanup_error
 
 
+def iter_git_log_records():
+    try:
+        process = subprocess.Popen(
+            [
+                git_bin,
+                "-C",
+                str(repo_dir),
+                "--no-pager",
+                "log",
+                "--no-color",
+                "--no-show-signature",
+                "HEAD",
+                "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1e",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+    except OSError as exc:
+        fail(f"could not enumerate commit history: {exc}")
+    if process.stdout is None:
+        reap_process(process)
+        fail("could not enumerate commit history: missing output pipe")
+    pending = b""
+    for chunk in iter_git_output_chunks(
+        process,
+        process.stdout,
+        chunk_bytes=COMMIT_LOG_CHUNK_BYTES,
+        max_bytes=MAX_COMMIT_LOG_BYTES,
+        too_large_message="commit history exceeds byte budget",
+        failure_message="git log failed",
+    ):
+        pending += chunk
+        while b"\x1e" in pending:
+            raw_record, pending = pending.split(b"\x1e", 1)
+            try:
+                yield raw_record.decode("utf-8")
+            except UnicodeDecodeError:
+                fail("commit history is not UTF-8")
+    if pending.strip():
+        fail("commit history is not record-terminated")
+
+
 def check_git_identity() -> None:
     if not in_git_worktree():
         return
@@ -245,16 +488,8 @@ def check_git_identity() -> None:
     if shallow_state == "true":
         fail("cannot verify full commit history in shallow clone; use fetch-depth: 0")
 
-    log = run_git(
-        "--no-pager",
-        "log",
-        "--no-color",
-        "--no-show-signature",
-        "HEAD",
-        "--format=%H%x1f%an%x1f%ae%x1f%cn%x1f%ce%x1e",
-    ).stdout
     bad_commits: list[str] = []
-    for record in log.strip("\x1e").split("\x1e"):
+    for record in iter_git_log_records():
         record = record.strip()
         if not record:
             continue

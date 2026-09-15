@@ -2,10 +2,17 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
+readonly GIT_TIMEOUT_SECONDS=30
 
 # Real applet acceptance test. It never writes clipboard or sends keystrokes.
 if [[ "${SOC_REAL_E2E:-0}" != "1" ]]; then
   printf 'Refusing live API test. Set SOC_REAL_E2E=1. This consumes API quota.\n' >&2
+  exit 2
+fi
+if [[ "${SOC_RUN_GUI_LIVE_TESTS:-0}" != "1" ]]; then
+  printf 'Refusing desktop acceptance test. Set SOC_RUN_GUI_LIVE_TESTS=1 explicitly.\n' >&2
   exit 2
 fi
 
@@ -16,6 +23,7 @@ state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/speed-of-cinnamon"
 attestation="${state_dir}/real-e2e-attestation.json"
 tmp_root=""
 tmp_identity=""
+test_state_home_json=""
 sink_name="soc-real-e2e-$$"
 sink_module=""
 old_source=""
@@ -45,7 +53,7 @@ eval_cinnamon() {
 cleanup() {
   set +e
   if (( snapshot_set )); then
-    eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; if(i&&i._socRealE2eSnapshot){Object.assign(i,i._socRealE2eSnapshot);delete i._socRealE2eSnapshot;} \"restored\";" >/dev/null
+    eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; if(i&&i._socRealE2eSnapshot){const G=imports.gi.GLib; const old=String(i._socRealE2eSnapshot.xdgStateHome||\"\"); if(old){G.setenv(\"XDG_STATE_HOME\",old,true);}else{G.unsetenv(\"XDG_STATE_HOME\");} Object.assign(i,i._socRealE2eSnapshot);delete i._socRealE2eSnapshot;} \"restored\";" >/dev/null
   fi
   if [[ -n "${old_source}" ]]; then
     pactl set-default-source "${old_source}" >/dev/null 2>&1 || true
@@ -62,6 +70,8 @@ trap cleanup EXIT INT TERM
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/speed-of-cinnamon-real-e2e.XXXXXX")"
 tmp_identity="$(python3 "${safe_fs}" identity real-e2e "${tmp_root}" --kind dir)"
+mkdir -m 700 -- "${tmp_root}/state"
+test_state_home_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "${tmp_root}/state")"
 
 active="$(eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i ? (i.transcriber===\"openai-compatible\" && i.openaiCompatibleUrl && i.openaiCompatibleModel && i.openaiCompatibleTextModel ? \"ready\" : \"misconfigured\") : \"missing\";")"
 if [[ "${active}" != *ready* ]]; then
@@ -78,7 +88,7 @@ espeak-ng -v de -s 145 -w "${tmp_root}/source.wav" \
 ffmpeg -nostdin -loglevel error -y -i "${tmp_root}/source.wav" -ac 1 -ar 16000 "${tmp_root}/speech.wav"
 
 snapshot_set=1
-eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; if(!i) throw new Error(\"applet missing\"); i._socRealE2eSnapshot={insertMethod:i.insertMethod,autoRelisten:i.autoRelisten,showTranscriptionNotifications:i.showTranscriptionNotifications,openaiCompatibleFlexProcessing:i.openaiCompatibleFlexProcessing,inputDevice:i.inputDevice}; if(i.recorder===\"arecord\") i.inputDevice=\"pipewire\"; i.insertMethod=\"none\"; i.autoRelisten=false; i.showTranscriptionNotifications=false; \"prepared\";" >/dev/null
+eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; const G=imports.gi.GLib; if(!i) throw new Error(\"applet missing\"); i._socRealE2eSnapshot={xdgStateHome:G.getenv(\"XDG_STATE_HOME\")||\"\",insertMethod:i.insertMethod,autoRelisten:i.autoRelisten,showTranscriptionNotifications:i.showTranscriptionNotifications,openaiCompatibleFlexProcessing:i.openaiCompatibleFlexProcessing,inputDevice:i.inputDevice}; G.setenv(\"XDG_STATE_HOME\",${test_state_home_json},true); if(i.recorder===\"arecord\") i.inputDevice=\"pipewire\"; i.insertMethod=\"none\"; i.autoRelisten=false; i.showTranscriptionNotifications=false; \"prepared\";" >/dev/null
 
 run_case() {
   local flex="$1"
@@ -112,7 +122,7 @@ run_case false
 
 mkdir -p -- "${state_dir}"
 chmod 700 "${state_dir}"
-git_head="$(git -C "${repo_dir}" rev-parse HEAD)"
+git_head="$(timeout --signal=TERM --kill-after=2s "${GIT_TIMEOUT_SECONDS}s" git -C "${repo_dir}" rev-parse HEAD)"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PYTHONPATH="${repo_dir}/src" python3 - "${attestation}" "${git_head}" "${created_at}" "${repo_dir}" <<'PY'
 import json

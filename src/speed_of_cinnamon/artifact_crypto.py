@@ -22,7 +22,7 @@ from .output import (
     _terminate_output_process_group,
 )
 from .paths import APP_ID, APP_NAME, config_dir
-from .proc_safety import _read_proc_stat, _read_proc_stat_path
+from .proc_safety import _bounded_proc_entries, _read_proc_stat, _read_proc_stat_path
 from .path_safety import (
     assert_fd_is_private_directory,
     assert_fd_is_regular_private_file,
@@ -91,6 +91,15 @@ _ACL_XATTR = "system.posix_acl_access"
 
 def _reject_non_finite_json_number(value: str) -> object:
     raise ValueError("non-finite JSON number is not allowed")
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key is not allowed")
+        result[key] = value
+    return result
 
 
 def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
@@ -230,7 +239,11 @@ def is_encrypted_payload(payload: bytes) -> bool:
     if not stripped.startswith(b"{"):
         return False
     try:
-        envelope = json.loads(stripped.decode("utf-8"), parse_constant=_reject_non_finite_json_number)
+        envelope = json.loads(
+            stripped.decode("utf-8"),
+            parse_constant=_reject_non_finite_json_number,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except (UnicodeDecodeError, ValueError, RecursionError, MemoryError):
         return False
     return _is_encrypted_envelope(envelope)
@@ -388,7 +401,11 @@ def _read_default_passphrase_history(path: Path) -> list[str]:
         raise _PassphraseHistoryError("artifact encryption passphrase history could not be read")
     parse_failed = False
     try:
-        document = json.loads(raw.decode("utf-8"), parse_constant=_reject_non_finite_json_number)
+        document = json.loads(
+            raw.decode("utf-8"),
+            parse_constant=_reject_non_finite_json_number,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except (UnicodeDecodeError, ValueError, RecursionError, MemoryError):
         parse_failed = True
     if parse_failed:
@@ -1213,8 +1230,6 @@ def _read_private_passphrase_file(
     path = resolved_path
     default_path = default_passphrase_file()
     is_default_path = path == default_path
-    if is_default_path and allow_default_generation and not path.exists() and not path.is_symlink():
-        return _generate_default_passphrase_file(path)
     def open_passphrase_file() -> int:
         assert_no_symlink_ancestors(path, field_name="artifact encryption passphrase file")
         _stat_private_passphrase_parent(path)
@@ -1225,12 +1240,14 @@ def _read_private_passphrase_file(
             field_name="artifact encryption passphrase file",
         )
 
-    fd, open_error = _capture_normal_error(
-        open_passphrase_file,
-        "artifact encryption passphrase file could not be read",
-    )
-    if open_error is not None:
-        raise open_error
+    try:
+        fd = open_passphrase_file()
+    except FileNotFoundError:
+        if is_default_path and allow_default_generation:
+            return _generate_default_passphrase_file(path)
+        raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from None
+    except Exception:
+        raise ArtifactCryptoError("artifact encryption passphrase file could not be read") from None
     handle: Any | None = None
     payload: bytes | None = None
     primary_error: BaseException | None = None
@@ -1358,11 +1375,12 @@ def _configured_passphrase_file(*, include_default: bool = True) -> Path | None:
         return None
     path = default_passphrase_file()
     try:
-        if path.exists() or path.is_symlink():
-            return path
+        path.lstat()
+    except FileNotFoundError:
+        return None
     except OSError:
         return path
-    return None
+    return path
 
 
 def _passphrase_from_sources(
@@ -1559,9 +1577,8 @@ def _validate_secret_tool_args(args: object) -> list[str]:
 def _secret_tool_same_session_process_group_ids(session_id: int) -> set[int] | None:
     if not isinstance(session_id, int) or isinstance(session_id, bool) or session_id <= 0:
         return None
-    try:
-        proc_entries = tuple(Path("/proc").iterdir())
-    except OSError:
+    proc_entries = _bounded_proc_entries()
+    if proc_entries is None:
         return None
     process_group_ids: set[int] = set()
     scan_incomplete = False
@@ -1597,9 +1614,8 @@ def _secret_tool_same_session_process_group_ids(session_id: int) -> set[int] | N
 def _secret_tool_process_group_has_live_descendants(process_group_id: int) -> bool | None:
     if not isinstance(process_group_id, int) or isinstance(process_group_id, bool) or process_group_id <= 0:
         return None
-    try:
-        proc_entries = tuple(Path("/proc").iterdir())
-    except OSError:
+    proc_entries = _bounded_proc_entries()
+    if proc_entries is None:
         return None
     scan_incomplete = False
     group_live = False
@@ -2143,7 +2159,11 @@ def decrypt_bytes(payload: bytes, *, kind: str, require_encrypted: bool = True) 
         return payload
     parse_failed = False
     try:
-        envelope = json.loads(payload.decode("utf-8"), parse_constant=_reject_non_finite_json_number)
+        envelope = json.loads(
+            payload.decode("utf-8"),
+            parse_constant=_reject_non_finite_json_number,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except (UnicodeDecodeError, ValueError, RecursionError, MemoryError):
         parse_failed = True
     if parse_failed:

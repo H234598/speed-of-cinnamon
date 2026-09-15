@@ -5,6 +5,8 @@ import fcntl
 import os
 import re
 import stat
+import math
+import time
 import unicodedata
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -24,6 +26,7 @@ _MAX_BLACKLIST_ENTRIES = 1_000
 _MAX_BLACKLIST_FILE_BYTES = 1_000_000
 _MAX_BLACKLIST_PATTERN_BYTES = _MAX_BLACKLIST_ENTRY_CHARS * _MAX_BLACKLIST_ENTRIES
 _MAX_SECURITY_TEXT_CHARS = 65_535
+_BLACKLIST_LOCK_TIMEOUT_SECONDS = 5.0
 _MATCH_IGNORE_CATEGORIES = frozenset({"Mn", "Mc", "Me", "Cf"})
 _NORMALIZED_CARD_CANDIDATE_RE = re.compile(r"(?<!\d)(?:\d[\d\s-]{11,40}\d)(?!\d)")
 
@@ -32,13 +35,35 @@ def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseExcept
     primary.add_note("blacklist lock cleanup failed")
 
 
-def _flock_retry(fd: int, operation: int) -> None:
+def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
+    if timeout_seconds is None:
+        raise RuntimeError("blacklist lock timeout is required")
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+        raise RuntimeError("blacklist lock timeout is invalid")
+    try:
+        timeout = float(timeout_seconds)
+    except (OverflowError, ValueError) as exc:
+        raise RuntimeError("blacklist lock timeout is invalid") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise RuntimeError("blacklist lock timeout is invalid")
+    if timeout > _BLACKLIST_LOCK_TIMEOUT_SECONDS:
+        raise RuntimeError("blacklist lock timeout exceeds safe limit")
+    if operation & fcntl.LOCK_UN:
+        fcntl.flock(fd, operation)
+        return
+    deadline = time.monotonic() + timeout
+    nonblocking_operation = operation | fcntl.LOCK_NB
     while True:
         try:
-            fcntl.flock(fd, operation)
+            fcntl.flock(fd, nonblocking_operation)
             return
         except InterruptedError:
             continue
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("blacklist lock acquisition timed out")
+            time.sleep(min(0.05, remaining))
 
 
 _BLACKLIST_SHOW_RE = re.compile(
@@ -670,7 +695,7 @@ def _acquire_blacklist_lock(path: Path) -> int:
             os.fchmod(fd, 0o600)
         except OSError:
             pass
-        _flock_retry(fd, fcntl.LOCK_EX)
+        _flock_retry(fd, fcntl.LOCK_EX, timeout_seconds=_BLACKLIST_LOCK_TIMEOUT_SECONDS)
         assert_fd_is_regular_private_file(fd, field_name="blacklist lock file", require_private_mode=True)
     except (MemoryError, RecursionError) as exc:
         error = ValueError("failed to lock blacklist file")
@@ -727,7 +752,7 @@ def _acquire_blacklist_lock(path: Path) -> int:
 def _release_blacklist_lock(fd: int) -> None:
     primary_error: BaseException | None = None
     try:
-        _flock_retry(fd, fcntl.LOCK_UN)
+        _flock_retry(fd, fcntl.LOCK_UN, timeout_seconds=_BLACKLIST_LOCK_TIMEOUT_SECONDS)
     except (MemoryError, RecursionError) as exc:
         primary_error = OSError("blacklist lock could not be released")
         raise primary_error from exc

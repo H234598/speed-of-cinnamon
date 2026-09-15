@@ -38,11 +38,142 @@ from .path_safety import (
     ensure_directory_without_following_symlinks,
     open_directory_without_following_symlinks,
 )
+from .process_priority import (
+    SOC_CPU_WEIGHT,
+    SOC_IO_WEIGHT,
+    SOC_PRIORITY_SCOPE_MARKER,
+    PriorityScopeError,
+    build_recorder_priority_scope_command,
+    parse_priority_scope_identity,
+    priority_scope_identity_for_control_group,
+    priority_scope_identity_for_pid,
+    priority_scope_process_ids,
+    serialize_priority_scope_identity,
+    verify_priority_scope_identity,
+)
 from .secure_delete import secure_wipe_regular_file_at
 
 
 class RecorderError(RuntimeError):
     pass
+
+
+class _SignalPhaseExpired(Exception):
+    pass
+
+
+@dataclass(frozen=True)
+class RecorderStartupOwnership:
+    """Ownership metadata that survives transport of any BaseException."""
+
+    pid: int | None
+    process_identity: str | None
+    recorder_scope: str | None
+    cleanup_incomplete: bool
+    recorder_scope_unit: str | None = None
+
+
+class RecorderStartupError(RecorderError):
+    """A recorder failed after spawn and still carries cleanup ownership."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        pid: int | None,
+        process_identity: str | None,
+        recorder_scope: str | None,
+        cleanup_incomplete: bool,
+        recorder_scope_unit: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.pid = pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else None
+        self.process_identity = (
+            process_identity
+            if isinstance(process_identity, str) and not isinstance(process_identity, bool) and process_identity
+            else None
+        )
+        self.recorder_scope = (
+            recorder_scope
+            if isinstance(recorder_scope, str) and not isinstance(recorder_scope, bool) and recorder_scope
+            else None
+        )
+        self.cleanup_incomplete = cleanup_incomplete is True
+        self.recorder_scope_unit = (
+            recorder_scope_unit
+            if _recorder_scope_unit_is_soc_recorder_unit(recorder_scope_unit)
+            else None
+        )
+        self.ownership = RecorderStartupOwnership(
+            pid=self.pid,
+            process_identity=self.process_identity,
+            recorder_scope=self.recorder_scope,
+            cleanup_incomplete=self.cleanup_incomplete,
+            recorder_scope_unit=self.recorder_scope_unit,
+        )
+        self._soc_recorder_startup_ownership = self.ownership
+
+
+def recorder_startup_ownership(error: BaseException) -> RecorderStartupOwnership | None:
+    try:
+        ownership = getattr(error, "_soc_recorder_startup_ownership", None)
+    except BaseException:
+        return None
+    if isinstance(ownership, RecorderStartupOwnership):
+        return ownership
+    if isinstance(error, RecorderStartupError):
+        return error.ownership
+    return None
+
+
+def _attach_recorder_startup_ownership(
+    error: BaseException,
+    *,
+    pid: int | None,
+    process_identity: str | None,
+    recorder_scope: str | None,
+    cleanup_incomplete: bool,
+    recorder_scope_unit: str | None = None,
+) -> RecorderStartupOwnership:
+    ownership = RecorderStartupOwnership(
+        pid=pid,
+        process_identity=process_identity,
+        recorder_scope=recorder_scope,
+        cleanup_incomplete=cleanup_incomplete,
+        recorder_scope_unit=(
+            recorder_scope_unit
+            if _recorder_scope_unit_is_soc_recorder_unit(recorder_scope_unit)
+            else None
+        ),
+    )
+    try:
+        setattr(error, "_soc_recorder_startup_ownership", ownership)
+    except BaseException:
+        try:
+            error.add_note("recorder startup ownership could not be attached")
+        except BaseException:
+            pass
+    return ownership
+
+
+@dataclass(frozen=True)
+class _RecorderScopeScan:
+    status: str
+    identities: dict[int, str]
+
+
+_RECORDER_SCOPE_SCAN_OK = "ok"
+_RECORDER_SCOPE_SCAN_VANISHED = "vanished"
+_RECORDER_SCOPE_SCAN_UNKNOWN = "unknown"
+_RECORDER_SCOPE_UNIT_RE = re.compile(
+    r"speed-of-cinnamon-recorder-[0-9a-f]{32}\.scope\Z"
+)
+_RECORDER_SCOPE_UNIT_ABSENT = "absent"
+_RECORDER_SCOPE_UNIT_PRESENT = "present"
+_RECORDER_SCOPE_UNIT_UNKNOWN = "unknown"
+MAX_RECORDER_SCOPE_UNIT_OUTPUT_BYTES = 4096
+RECORDER_SCOPE_UNIT_QUERY_TIMEOUT_SECONDS = 1.0
+RECORDER_SCOPE_UNIT_ABSENCE_DELAY_SECONDS = 1.0
 
 
 _TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
@@ -284,6 +415,7 @@ MAX_PACTL_TIMEOUT_SECONDS = 10
 MAX_PROCESS_STOP_TIMEOUT_SECONDS = 60
 RECORDER_STARTUP_CHECK_SECONDS = 0.1
 RECORDER_STARTUP_POLL_SECONDS = 0.01
+RECORDER_SCOPE_STARTUP_CHECK_SECONDS = 1.0
 MAX_FFMPEG_OUTPUT_BYTES = 256 * 1024
 MAX_FFMPEG_ARTIFACT_BYTES = 256 * 1024 * 1024
 MAX_RECORDING_LEVEL_BYTES = 128_000
@@ -310,6 +442,13 @@ _SILENCE_TRIM_NOISE_RE = re.compile(
     r"-?(?:\d+(?:\.\d*)?|\.\d+)(?:dB|dBFS)?\Z",
     re.IGNORECASE,
 )
+_PROCESS_BOOT_ID_RE = re.compile(
+    r"[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-"
+    r"[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}\Z"
+)
+_PROCESS_IDENTITY_SAME = "same"
+_PROCESS_IDENTITY_REUSED = "reused"
+_PROCESS_IDENTITY_UNKNOWN = "unknown"
 _BOOT_ID_CACHE: str | None = None
 
 
@@ -426,6 +565,56 @@ def _decode_ffmpeg_output(payload: object) -> str:
 
 
 def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
+    expected_scope = vars(process).get("_soc_recorder_scope")
+    if expected_scope is not None and (
+        not isinstance(expected_scope, str) or isinstance(expected_scope, bool) or not expected_scope
+    ):
+        return False
+    expected_unit = _recorder_scope_unit_for_process(process)
+    if expected_scope is None and expected_unit is not None:
+        # Unit names are reusable.  Without the scope inode captured from the
+        # live child, the name is only a quarantine/absence proof, never a
+        # signal target.
+        try:
+            if process.poll() is None or not _recording_process_identity_is_current(process):
+                return False
+            descendant_scan = _process_tree_descendant_identities(process.pid)
+            if descendant_scan is None or descendant_scan:
+                return False
+            if process_group_has_live_processes(process.pid) is not False:
+                return False
+            pipe_holders = _process_pipe_holder_identities(process)
+            if pipe_holders is None or pipe_holders:
+                return False
+        except (OSError, ValueError):
+            return False
+        if _recorder_scope_unit_is_stably_gone(expected_unit) is not True:
+            return False
+        setattr(process, "_soc_recorder_scope_unit_absent", True)
+        return True
+    if expected_scope is not None:
+        expected_identity = vars(process).get("_soc_process_identity")
+        if (
+            not isinstance(expected_identity, str)
+            or not expected_identity
+            or not _recorder_scope_is_soc_recorder_unit(expected_scope)
+            or not _recorder_scope_matches_unit(expected_scope, expected_unit)
+        ):
+            return False
+        try:
+            if stop_process(
+                process.pid,
+                timeout_seconds=1.0,
+                expected_process_identity=expected_identity,
+                expected_recorder_scope=expected_scope,
+            ):
+                return True
+        except (OSError, RecorderError, RuntimeError, TypeError, ValueError):
+            return False
+        return (
+            process.poll() is not None
+            and _recorder_scope_has_live_processes(expected_scope) is False
+        )
     try:
         descendant_scan = _process_tree_descendant_identities(process.pid)
         descendant_identities = descendant_scan or {}
@@ -469,7 +658,16 @@ def _terminate_recorder_process_group(process: subprocess.Popen[bytes]) -> bool:
     leader_cleanup = (
         True
         if process_finished
-        else _send_process_signal_with_pidfd(process.pid, expected_identity, "-KILL") is True
+        else (
+            _send_process_signal_with_pidfd(
+                process.pid,
+                expected_identity,
+                "-KILL",
+                expected_recorder_scope=expected_scope,
+            )
+            if expected_scope is not None
+            else _send_process_signal_with_pidfd(process.pid, expected_identity, "-KILL")
+        ) is True
     )
     session_stopped = _wait_for_recorder_session_stop(process.pid)
     process_tree_stopped = _wait_for_output_process_tree_stop(process_tree)
@@ -697,15 +895,256 @@ def _recording_process_stat_fields(pid: int) -> list[str] | None:
         return None
 
 
+def _recorder_scope_for_pid(pid: int) -> str | None:
+    return serialize_priority_scope_identity(priority_scope_identity_for_pid(pid))
+
+
+def _recorder_scope_matches_unit(scope: object, unit_name: object) -> bool:
+    identity = parse_priority_scope_identity(scope)
+    return (
+        identity is not None
+        and isinstance(unit_name, str)
+        and not isinstance(unit_name, bool)
+        and bool(unit_name)
+        and Path(identity.path).name == unit_name
+    )
+
+
+def _recorder_scope_unit_is_soc_recorder_unit(unit_name: object) -> bool:
+    return (
+        isinstance(unit_name, str)
+        and not isinstance(unit_name, bool)
+        and _RECORDER_SCOPE_UNIT_RE.fullmatch(unit_name) is not None
+    )
+
+
+def _recorder_scope_is_soc_recorder_unit(scope: object) -> bool:
+    identity = parse_priority_scope_identity(scope)
+    return identity is not None and _recorder_scope_unit_is_soc_recorder_unit(
+        Path(identity.path).name
+    )
+
+
+def _recorder_scope_unit_for_process(process: object) -> str | None:
+    value = vars(process).get("_soc_recorder_scope_unit") if hasattr(process, "__dict__") else None
+    if _recorder_scope_unit_is_soc_recorder_unit(value):
+        return value
+    return None
+
+
+def _recorder_scope_for_unit(unit_name: object) -> tuple[str, str | None]:
+    if not _recorder_scope_unit_is_soc_recorder_unit(unit_name):
+        return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+    try:
+        systemctl = _command_path("systemctl")
+        with tempfile.TemporaryFile(mode="w+b") as stdout_file:
+            completed = subprocess.run(  # nosec B603
+                [
+                    systemctl,
+                    "--user",
+                    "show",
+                    "--no-pager",
+                    "--property=LoadState",
+                    "--property=ActiveState",
+                    "--property=ControlGroup",
+                    unit_name,
+                ],
+                check=False,
+                stdout=stdout_file,
+                stderr=subprocess.DEVNULL,
+                timeout=RECORDER_SCOPE_UNIT_QUERY_TIMEOUT_SECONDS,
+                shell=False,
+                env=_filtered_environment(),
+            )
+            if completed.returncode != 0:
+                return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+            stdout_file.seek(0, os.SEEK_END)
+            if stdout_file.tell() > MAX_RECORDER_SCOPE_UNIT_OUTPUT_BYTES:
+                return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+            stdout_file.seek(0)
+            raw = stdout_file.read(MAX_RECORDER_SCOPE_UNIT_OUTPUT_BYTES + 1)
+    except (OSError, RecorderError, RuntimeError, TypeError, ValueError, subprocess.TimeoutExpired):
+        return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+    try:
+        output = raw.decode("ascii")
+    except UnicodeDecodeError:
+        return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+    properties: dict[str, str] = {}
+    expected_properties = {"LoadState", "ActiveState", "ControlGroup"}
+    for line in output.splitlines():
+        key, separator, value = line.partition("=")
+        if not separator or key not in expected_properties or key in properties:
+            return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+        properties[key] = value
+    if properties.keys() != expected_properties:
+        return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+    load_state = properties["LoadState"]
+    active_state = properties["ActiveState"]
+    control_group = properties["ControlGroup"]
+    if (
+        load_state in {"loaded", "not-found"}
+        and active_state == "inactive"
+        and not control_group
+    ):
+        return _RECORDER_SCOPE_UNIT_ABSENT, None
+    if (
+        not control_group
+        or not control_group.startswith("/")
+        or control_group != os.path.normpath(control_group)
+    ):
+        return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+    try:
+        identity = priority_scope_identity_for_control_group(
+            control_group,
+            cpu_weight=SOC_CPU_WEIGHT,
+            io_weight=SOC_IO_WEIGHT,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+    if identity is None or Path(identity.path).name != unit_name:
+        return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+    serialized = serialize_priority_scope_identity(identity)
+    if serialized is None or not _recorder_scope_matches_unit(serialized, unit_name):
+        return _RECORDER_SCOPE_UNIT_UNKNOWN, None
+    return _RECORDER_SCOPE_UNIT_PRESENT, serialized
+
+
+def _recorder_scope_unit_is_stably_gone(
+    unit_name: object,
+    *,
+    expected_scope: str | None = None,
+) -> bool | None:
+    if not _recorder_scope_unit_is_soc_recorder_unit(unit_name):
+        return None
+    if expected_scope is not None and not _recorder_scope_matches_unit(
+        expected_scope,
+        unit_name,
+    ):
+        return None
+    for attempt in range(2):
+        unit_state, current_scope = _recorder_scope_for_unit(unit_name)
+        if unit_state == _RECORDER_SCOPE_UNIT_UNKNOWN:
+            return None
+        if unit_state == _RECORDER_SCOPE_UNIT_PRESENT:
+            if current_scope is None or (
+                expected_scope is not None and current_scope != expected_scope
+            ):
+                return None
+            live = _recorder_scope_has_live_processes(current_scope)
+            if live is None:
+                return None
+            if live:
+                return False
+            return None
+        if unit_state != _RECORDER_SCOPE_UNIT_ABSENT or current_scope is not None:
+            return None
+        if attempt == 0:
+            time.sleep(RECORDER_SCOPE_UNIT_ABSENCE_DELAY_SECONDS)
+    return True
+
+
+def _recorder_scope_scan(scope: object) -> _RecorderScopeScan:
+    try:
+        caller_pid = os.getpid()
+    except (OSError, OverflowError, ValueError):
+        return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+    if isinstance(caller_pid, bool) or not isinstance(caller_pid, int) or caller_pid <= 0:
+        return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+    identity = parse_priority_scope_identity(scope)
+    if identity is None:
+        return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+    try:
+        verified = verify_priority_scope_identity(
+            identity,
+            cpu_weight=SOC_CPU_WEIGHT,
+            io_weight=SOC_IO_WEIGHT,
+        )
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+    if not verified:
+        try:
+            Path(identity.path).lstat()
+        except FileNotFoundError:
+            return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_VANISHED, {})
+        except OSError:
+            return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+        return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+    try:
+        process_ids = priority_scope_process_ids(identity)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        process_ids = None
+    if process_ids is None:
+        try:
+            Path(identity.path).lstat()
+        except FileNotFoundError:
+            return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_VANISHED, {})
+        except OSError:
+            return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+        return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+    if caller_pid in process_ids:
+        return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+    live_identities: dict[int, str] = {}
+    for process_id in process_ids:
+        stat_fields = _recording_process_stat_fields(process_id)
+        if stat_fields is None:
+            try:
+                Path(f"/proc/{process_id}").lstat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+            return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+        if len(stat_fields) < 20:
+            return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+        if stat_fields[0] in {"Z", "X", "x"}:
+            continue
+        start_time = stat_fields[19]
+        if not start_time.isdecimal():
+            return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_UNKNOWN, {})
+        live_identities[process_id] = start_time
+    return _RecorderScopeScan(_RECORDER_SCOPE_SCAN_OK, live_identities)
+
+
+def _recorder_scope_process_identities(scope: object) -> dict[int, str] | None:
+    scan = _recorder_scope_scan(scope)
+    if scan.status != _RECORDER_SCOPE_SCAN_OK:
+        return None
+    return scan.identities
+
+
+def _recorder_scope_is_current(pid: int, scope: object) -> bool:
+    try:
+        caller_pid = os.getpid()
+    except (OSError, OverflowError, ValueError):
+        return False
+    if pid == caller_pid:
+        return False
+    identity = parse_priority_scope_identity(scope)
+    return identity is not None and verify_priority_scope_identity(
+        identity,
+        pid=pid,
+        cpu_weight=SOC_CPU_WEIGHT,
+        io_weight=SOC_IO_WEIGHT,
+    )
+
+
+def _recorder_scope_has_live_processes(scope: object) -> bool | None:
+    scan = _recorder_scope_scan(scope)
+    if scan.status == _RECORDER_SCOPE_SCAN_UNKNOWN:
+        return None
+    return bool(scan.identities)
+
+
 def _bounded_proc_entries() -> tuple[Path, ...] | None:
     entries: list[Path] = []
     try:
-        for proc_entry in Path("/proc").iterdir():
-            if not proc_entry.name.isdecimal():
-                continue
-            if len(entries) >= MAX_PROC_DIRECTORY_ENTRIES:
-                return None
-            entries.append(proc_entry)
+        with os.scandir("/proc") as proc_entries:
+            for proc_entry in proc_entries:
+                if not proc_entry.name.isdecimal():
+                    continue
+                if len(entries) >= MAX_PROC_DIRECTORY_ENTRIES:
+                    return None
+                entries.append(Path(proc_entry.path))
     except OSError:
         return None
     return tuple(entries)
@@ -774,6 +1213,16 @@ def _same_session_has_live_processes(session_id: int) -> bool | None:
 
 
 def _wait_for_recorder_session_stop(session_id: int, timeout_seconds: float = 1.0) -> bool:
+    if not isinstance(timeout_seconds, (int, float)) or isinstance(timeout_seconds, bool):
+        raise RecorderError("timeout_seconds must be numeric")
+    if not _is_finite_number(timeout_seconds):
+        raise RecorderError("timeout_seconds must be finite")
+    if timeout_seconds <= 0:
+        raise RecorderError("timeout_seconds must be positive")
+    if timeout_seconds > MAX_PROCESS_STOP_TIMEOUT_SECONDS:
+        raise RecorderError(
+            f"timeout_seconds exceeds safe limit of {MAX_PROCESS_STOP_TIMEOUT_SECONDS}s"
+        )
     deadline = time.monotonic() + timeout_seconds
     while True:
         session_live = _same_session_has_live_processes(session_id)
@@ -805,13 +1254,59 @@ def _recording_process_identity_for_pid(pid: int) -> str | None:
         return None
     boot_id = _kernel_boot_id()
     start_time = rest[19]
-    if not start_time:
+    if (
+        not start_time
+        or not start_time.isascii()
+        or not start_time.isdecimal()
+        or not boot_id
+        or _PROCESS_BOOT_ID_RE.fullmatch(boot_id) is None
+    ):
         return None
-    if boot_id:
-        return f"{boot_id}:{start_time}"
-    # ponytail: retain start-time protection when boot_id is unreadable; upgrade
-    # to boot_id once runtime exposes it again.
-    return f"pid:{pid}:{start_time}"
+    return f"{boot_id.lower()}:{start_time}"
+
+
+def _recording_process_identity_relation(
+    pid: int,
+    expected_identity: object,
+    current_identity: object,
+) -> str:
+    def parse(identity: object) -> tuple[str | None, str] | None:
+        if not isinstance(identity, str) or isinstance(identity, bool) or not identity:
+            return None
+        fallback = identity.split(":")
+        if len(fallback) == 3 and fallback[0] == "pid":
+            if (
+                fallback[1] != str(pid)
+                or not fallback[2].isascii()
+                or not fallback[2].isdecimal()
+            ):
+                return None
+            return None, fallback[2]
+        boot_id, separator, start_time = identity.rpartition(":")
+        if (
+            not separator
+            or _PROCESS_BOOT_ID_RE.fullmatch(boot_id) is None
+            or not start_time.isascii()
+            or not start_time.isdecimal()
+        ):
+            return None
+        return boot_id.lower(), start_time
+
+    if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+        return _PROCESS_IDENTITY_UNKNOWN
+    expected = parse(expected_identity)
+    current = parse(current_identity)
+    if expected is None or current is None:
+        return _PROCESS_IDENTITY_UNKNOWN
+    expected_boot_id, expected_start_time = expected
+    current_boot_id, current_start_time = current
+    if expected_boot_id is None or current_boot_id is None:
+        return _PROCESS_IDENTITY_UNKNOWN
+    if expected_start_time != current_start_time:
+        return _PROCESS_IDENTITY_REUSED
+    if expected_boot_id != current_boot_id:
+        return _PROCESS_IDENTITY_REUSED
+    return _PROCESS_IDENTITY_SAME
 
 
 def _recording_process_identity_matches(pid: int, expected_process_identity: str | None) -> bool:
@@ -821,28 +1316,121 @@ def _recording_process_identity_matches(pid: int, expected_process_identity: str
         raise RecorderError("expected_process_identity must be text")
     if not expected_process_identity:
         return False
-    if expected_process_identity.startswith("pid:"):
-        fallback_parts = expected_process_identity.split(":")
-        if len(fallback_parts) != 3 or fallback_parts[0] != "pid":
-            return False
-        expected_pid, expected_start_time = fallback_parts[1:]
-        if expected_pid != str(pid) or not expected_start_time.isdigit():
-            return False
-        stat_fields = _recording_process_stat_fields(pid)
-        return stat_fields is not None and len(stat_fields) >= 20 and stat_fields[19] == expected_start_time
     current_identity = _recording_process_identity_for_pid(pid)
-    if current_identity is None:
+    return (
+        _recording_process_identity_relation(
+            pid,
+            expected_process_identity,
+            current_identity,
+        )
+        == _PROCESS_IDENTITY_SAME
+    )
+
+
+def _signal_deadline_has_time(
+    deadline: float | None,
+    *,
+    distinguish_expiry: bool = False,
+) -> bool:
+    if deadline is None:
+        return True
+    if (
+        isinstance(deadline, bool)
+        or not isinstance(deadline, (int, float))
+        or not _is_finite_number(deadline)
+    ):
         return False
-    return current_identity == expected_process_identity
+    if time.monotonic() < deadline:
+        return True
+    if distinguish_expiry:
+        raise _SignalPhaseExpired
+    return False
+
+
+def _recorder_scope_is_safe_for_pidfd_signal(
+    pid: int,
+    expected_process_identity: str,
+    expected_recorder_scope: str,
+    *,
+    deadline: float | None = None,
+    distinguish_deadline_expiry: bool = False,
+) -> bool:
+    if not _signal_deadline_has_time(
+        deadline,
+        distinguish_expiry=distinguish_deadline_expiry,
+    ):
+        return False
+    try:
+        caller_pid = os.getpid()
+    except (OSError, OverflowError, ValueError):
+        return False
+    if (
+        isinstance(caller_pid, bool)
+        or not isinstance(caller_pid, int)
+        or caller_pid <= 0
+        or pid == caller_pid
+    ):
+        return False
+    if not _signal_deadline_has_time(
+        deadline,
+        distinguish_expiry=distinguish_deadline_expiry,
+    ):
+        return False
+    try:
+        caller_scope = _recorder_scope_for_pid(caller_pid)
+    except (OSError, RuntimeError, TypeError, ValueError):
+        return False
+    if caller_scope is not None and caller_scope == expected_recorder_scope:
+        return False
+    if not _signal_deadline_has_time(
+        deadline,
+        distinguish_expiry=distinguish_deadline_expiry,
+    ):
+        return False
+    scan = _recorder_scope_scan(expected_recorder_scope)
+    if scan.status != _RECORDER_SCOPE_SCAN_OK:
+        return False
+    if caller_pid in scan.identities:
+        return False
+    expected_start_time = expected_process_identity.rpartition(":")[2]
+    if not expected_start_time.isdecimal() or scan.identities.get(pid) != expected_start_time:
+        return False
+    if not _signal_deadline_has_time(
+        deadline,
+        distinguish_expiry=distinguish_deadline_expiry,
+    ):
+        return False
+    identity_matches = _recording_process_identity_matches(pid, expected_process_identity)
+    if not identity_matches:
+        return False
+    return _signal_deadline_has_time(
+        deadline,
+        distinguish_expiry=distinguish_deadline_expiry,
+    )
 
 
 def _send_process_signal_with_pidfd(
     pid: int,
     expected_process_identity: str | None,
     signal_name: str,
+    *,
+    expected_recorder_scope: str | None = None,
+    deadline: float | None = None,
+    distinguish_deadline_expiry: bool = False,
 ) -> bool | None:
     if expected_process_identity is None:
         return None
+    if not _signal_deadline_has_time(
+        deadline,
+        distinguish_expiry=distinguish_deadline_expiry,
+    ):
+        return False
+    try:
+        caller_pid = os.getpid()
+    except (OSError, OverflowError, ValueError):
+        return False
+    if isinstance(caller_pid, bool) or not isinstance(caller_pid, int) or caller_pid <= 0 or pid == caller_pid:
+        return False
     pidfd_open = getattr(os, "pidfd_open", None)
     pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
     if not callable(pidfd_open) or not callable(pidfd_send_signal):
@@ -850,6 +1438,11 @@ def _send_process_signal_with_pidfd(
     signal_number = getattr(signal, "SIG" + signal_name.lstrip("-"), None)
     if not isinstance(signal_number, int) or isinstance(signal_number, bool):
         return None
+    if not _signal_deadline_has_time(
+        deadline,
+        distinguish_expiry=distinguish_deadline_expiry,
+    ):
+        return False
     try:
         pidfd = pidfd_open(pid, 0)
     except (AttributeError, NotImplementedError, TypeError):
@@ -862,9 +1455,44 @@ def _send_process_signal_with_pidfd(
         _close_fd_quietly(pidfd if isinstance(pidfd, int) and not isinstance(pidfd, bool) else None)
         return False
     try:
-        if not _recording_process_identity_matches(pid, expected_process_identity):
+        if not _signal_deadline_has_time(
+            deadline,
+            distinguish_expiry=distinguish_deadline_expiry,
+        ):
+            return False
+        if expected_recorder_scope is not None:
+            if not _recorder_scope_is_safe_for_pidfd_signal(
+                pid,
+                expected_process_identity,
+                expected_recorder_scope,
+                deadline=deadline,
+                distinguish_deadline_expiry=distinguish_deadline_expiry,
+            ):
+                return False
+        else:
+            identity_matches = _recording_process_identity_matches(
+                pid,
+                expected_process_identity,
+            )
+            if not identity_matches:
+                return False
+        if not _signal_deadline_has_time(
+            deadline,
+            distinguish_expiry=distinguish_deadline_expiry,
+        ):
             return False
         try:
+            try:
+                caller_pid = os.getpid()
+            except (OSError, OverflowError, ValueError):
+                return False
+            if isinstance(caller_pid, bool) or not isinstance(caller_pid, int) or caller_pid <= 0 or pid == caller_pid:
+                return False
+            if not _signal_deadline_has_time(
+                deadline,
+                distinguish_expiry=distinguish_deadline_expiry,
+            ):
+                return False
             pidfd_send_signal(pidfd, signal_number, None, 0)
         except (AttributeError, NotImplementedError, TypeError):
             return None
@@ -883,6 +1511,10 @@ def _send_process_signal_with_start_time(
     pid: int,
     expected_start_time: str,
     signal_name: str,
+    *,
+    expected_recorder_scope: str | None = None,
+    deadline: float | None = None,
+    distinguish_deadline_expiry: bool = False,
 ) -> bool:
     if (
         not isinstance(pid, int)
@@ -893,13 +1525,58 @@ def _send_process_signal_with_start_time(
         or not expected_start_time.isdigit()
     ):
         return False
+    if not _signal_deadline_has_time(
+        deadline,
+        distinguish_expiry=distinguish_deadline_expiry,
+    ):
+        return False
+    try:
+        caller_pid = os.getpid()
+    except (OSError, OverflowError, ValueError):
+        return False
+    if isinstance(caller_pid, bool) or not isinstance(caller_pid, int) or caller_pid <= 0 or pid == caller_pid:
+        return False
+    if not _signal_deadline_has_time(
+        deadline,
+        distinguish_expiry=distinguish_deadline_expiry,
+    ):
+        return False
     current_identity = _recording_process_identity_for_pid(pid)
     if current_identity is None:
-        return _recording_process_is_absent(pid)
+        process_absent = _recording_process_is_absent(pid)
+        if not process_absent:
+            return False
+        return _signal_deadline_has_time(
+            deadline,
+            distinguish_expiry=distinguish_deadline_expiry,
+        )
     _identity_prefix, separator, current_start_time = current_identity.rpartition(":")
     if not separator or current_start_time != expected_start_time:
         return False
-    return _send_process_signal_with_pidfd(pid, current_identity, signal_name) is True
+    if not _signal_deadline_has_time(
+        deadline,
+        distinguish_expiry=distinguish_deadline_expiry,
+    ):
+        return False
+    if expected_recorder_scope is None:
+        return (
+            _send_process_signal_with_pidfd(
+                pid,
+                current_identity,
+                signal_name,
+                deadline=deadline,
+                distinguish_deadline_expiry=distinguish_deadline_expiry,
+            )
+            is True
+        )
+    return _send_process_signal_with_pidfd(
+        pid,
+        current_identity,
+        signal_name,
+        expected_recorder_scope=expected_recorder_scope,
+        deadline=deadline,
+        distinguish_deadline_expiry=distinguish_deadline_expiry,
+    ) is True
 
 
 def _recording_process_identity_is_current(process: subprocess.Popen[bytes]) -> bool:
@@ -913,7 +1590,14 @@ def _recording_process_identity_is_current(process: subprocess.Popen[bytes]) -> 
         return False
     current_identity = _recording_process_identity_for_pid(pid)
     if current_identity is not None:
-        return current_identity == expected_identity
+        return (
+            _recording_process_identity_relation(
+                pid,
+                expected_identity,
+                current_identity,
+            )
+            == _PROCESS_IDENTITY_SAME
+        )
     try:
         os.stat(f"/proc/{pid}")
     except FileNotFoundError:
@@ -2627,21 +3311,69 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
     ):
         raise RecorderError("recorder command contains invalid control character")
     log_path = validate_recording_path(log_path, suffix=".log")
+    try:
+        parent_scope = _recorder_scope_for_pid(os.getpid())
+    except (OSError, ValueError, TypeError) as exc:
+        raise RecorderError("recorder caller priority scope could not be verified") from exc
+    if os.environ.get(SOC_PRIORITY_SCOPE_MARKER) == "1" and parent_scope is None:
+        raise RecorderError("recorder requires a verified SOC priority scope")
+    recorder_scope_unit = (
+        f"speed-of-cinnamon-recorder-{secrets.token_hex(16)}.scope"
+        if parent_scope is not None
+        else None
+    )
     log_file, created_log = _open_recorder_log_file(log_path)
     log_capture: _RecorderLogCapture | None = None
     process: subprocess.Popen[bytes] | None = None
+    process_pid: int | None = None
     opened_stat: os.stat_result | None = None
+    process_identity: str | None = None
+    verified_recorder_scope: str | None = None
+    cleanup_incomplete = False
+
+    def startup_error(message: str, primary: BaseException) -> RecorderStartupError:
+        wrapped = RecorderStartupError(
+            message,
+            pid=process_pid,
+            process_identity=process_identity,
+            recorder_scope=verified_recorder_scope,
+            cleanup_incomplete=cleanup_incomplete,
+            recorder_scope_unit=recorder_scope_unit,
+        )
+        for note in getattr(primary, "__notes__", ()):
+            wrapped.add_note(note)
+        return wrapped
 
     def cleanup_started_process(primary: BaseException) -> None:
+        nonlocal cleanup_incomplete, verified_recorder_scope
         if process is None:
             return
         try:
             terminated = _reap_timed_out_recorder_process(process)
         except BaseException:
+            cleanup_incomplete = True
             primary.add_note("recorder process cleanup failed")
+            primary.add_note("recorder process cleanup was incomplete")
         else:
             if not terminated:
+                cleanup_incomplete = True
                 primary.add_note("recorder process cleanup was incomplete")
+        discovered_scope = vars(process).get("_soc_recorder_scope")
+        if (
+            verified_recorder_scope is None
+            and _recorder_scope_matches_unit(discovered_scope, recorder_scope_unit)
+            and _recorder_scope_is_soc_recorder_unit(discovered_scope)
+        ):
+            verified_recorder_scope = discovered_scope
+        scope_unit_absent = vars(process).get("_soc_recorder_scope_unit_absent") is True
+        if (
+            parent_scope is not None
+            and verified_recorder_scope is None
+            and not scope_unit_absent
+        ):
+            cleanup_incomplete = True
+            primary.add_note("recorder priority scope cleanup could not be verified")
+            primary.add_note("recorder process cleanup was incomplete")
 
     try:
         try:
@@ -2657,24 +3389,82 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             initial_size=opened_stat.st_size if opened_stat is not None else 0,
             max_bytes=MAX_RECORDER_LOG_BYTES,
         )
-        runtime_command = [_command_path(command.argv[0]), *command.argv[1:]]
-        process = subprocess.Popen(  # type: ignore[call-overload]
+        recorder_command = [_command_path(command.argv[0]), *command.argv[1:]]
+        if recorder_scope_unit is not None:
+            try:
+                runtime_command = build_recorder_priority_scope_command(
+                    recorder_command,
+                    unit_name=recorder_scope_unit,
+                )
+            except PriorityScopeError as exc:
+                raise RecorderError("recorder priority scope could not be built") from exc
+        else:
+            runtime_command = recorder_command
+        process = subprocess.Popen(  # type: ignore[call-overload]  # nosec B603
             runtime_command,
             stdout=log_capture,
             stderr=subprocess.STDOUT,
             start_new_session=True,
             shell=False,
-            env=_filtered_environment(),  # nosec B603
+            env=_filtered_environment(),
         )
         process_pid = getattr(process, "pid", None)
         if not isinstance(process_pid, int) or isinstance(process_pid, bool) or process_pid <= 0:
             raise RecorderError("recorder process pid is invalid")
+        if recorder_scope_unit is not None:
+            setattr(process, "_soc_recorder_scope_unit", recorder_scope_unit)
+        # Capture ownership before any scope polling.  A scope transition can
+        # race with startup failure; cleanup must never have to guess a reused
+        # PID while deciding whether it may try the next backend.
+        process_identity = _recording_process_identity_for_pid(process_pid)
+        if process_identity:
+            setattr(process, "_soc_process_identity", process_identity)
+        child_scope: str | None = None
+        if parent_scope is not None:
+            scope_deadline = time.monotonic() + RECORDER_SCOPE_STARTUP_CHECK_SECONDS
+            while True:
+                child_scope = _recorder_scope_for_pid(process_pid)
+                scope_bound = False
+                if (
+                    child_scope is not None
+                    and child_scope != parent_scope
+                    and _recorder_scope_is_current(process_pid, child_scope)
+                    and _recorder_scope_matches_unit(child_scope, recorder_scope_unit)
+                ):
+                    verified_recorder_scope = child_scope
+                    setattr(process, "_soc_recorder_scope", child_scope)
+                    setattr(process, "_soc_recorder_scope_unit", recorder_scope_unit)
+                    scope_bound = True
+                startup_status = process.poll()
+                if startup_status is not None:
+                    if not isinstance(startup_status, int) or isinstance(startup_status, bool):
+                        raise RecorderError("recorder returned an invalid startup status")
+                    raise RecorderError(f"recorder exited during startup with status {startup_status}")
+                current_identity = _recording_process_identity_for_pid(process_pid)
+                if current_identity is None:
+                    raise RecorderError("recorder process identity became unavailable during startup")
+                if process_identity is None:
+                    process_identity = current_identity
+                    setattr(process, "_soc_process_identity", process_identity)
+                elif (
+                    _recording_process_identity_relation(
+                        process_pid,
+                        process_identity,
+                        current_identity,
+                    )
+                    != _PROCESS_IDENTITY_SAME
+                ):
+                    raise RecorderError("recorder process identity changed during startup")
+                if scope_bound:
+                    break
+                if time.monotonic() >= scope_deadline:
+                    raise RecorderError("recorder did not enter a verified dedicated SOC priority scope")
+                time.sleep(RECORDER_STARTUP_POLL_SECONDS)
         try:
             setattr(process, "_soc_output_pipe_targets", _pipe_targets_for_process(process, log_capture))
         except (AttributeError, TypeError):
             pass
         startup_deadline = time.monotonic() + RECORDER_STARTUP_CHECK_SECONDS
-        process_identity = None
         while True:
             startup_status = process.poll()
             if startup_status is not None:
@@ -2702,11 +3492,15 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
         cleanup_started_process(exc)
         _finish_recorder_log_capture(log_capture, exc)
         _cleanup_created_recorder_log(log_path, log_file, created_log, expected_stat=opened_stat)
+        if process is not None:
+            raise startup_error(f"failed to start {command.name}: {exc}", exc) from exc
         raise RecorderError(f"failed to start {command.name}: {exc}") from exc
     except RecorderError as exc:
         cleanup_started_process(exc)
         _finish_recorder_log_capture(log_capture, exc)
         _cleanup_created_recorder_log(log_path, log_file, created_log, expected_stat=opened_stat)
+        if process is not None and not isinstance(exc, RecorderStartupError):
+            raise startup_error(str(exc), exc) from exc
         raise
     except BaseException as exc:
         cleanup_started_process(exc)
@@ -2715,6 +3509,15 @@ def start_recorder(command: RecorderCommand, log_path: Path) -> subprocess.Popen
             _cleanup_created_recorder_log(log_path, log_file, created_log, expected_stat=opened_stat)
         except BaseException:
             exc.add_note("recorder log cleanup failed")
+        if process is not None:
+            _attach_recorder_startup_ownership(
+                exc,
+                pid=process_pid,
+                process_identity=process_identity,
+                recorder_scope=verified_recorder_scope,
+                cleanup_incomplete=cleanup_incomplete,
+                recorder_scope_unit=recorder_scope_unit,
+            )
         raise
     finally:
         if log_capture is None:
@@ -2729,6 +3532,7 @@ def stop_process(
     timeout_seconds: float = 5.0,
     *,
     expected_process_identity: str | None = None,
+    expected_recorder_scope: str | None = None,
     allow_unverified_process: bool = False,
 ) -> bool:
     _assert_positive_pid(pid)
@@ -2748,18 +3552,127 @@ def stop_process(
         raise RecorderError(
             f"timeout_seconds exceeds safe limit of {MAX_PROCESS_STOP_TIMEOUT_SECONDS}s"
         )
+    if expected_recorder_scope is not None and (
+        not isinstance(expected_recorder_scope, str) or isinstance(expected_recorder_scope, bool)
+    ):
+        raise RecorderError("expected_recorder_scope must be text")
     if expected_process_identity is None:
         raise RecorderError("expected_process_identity is required to stop recorder process")
+    if (
+        _recording_process_identity_relation(
+            pid,
+            expected_process_identity,
+            expected_process_identity,
+        )
+        != _PROCESS_IDENTITY_SAME
+    ):
+        return False
+    deadline = time.monotonic() + timeout_seconds
+
+    def has_time_remaining() -> bool:
+        return time.monotonic() < deadline
+
+    if not has_time_remaining():
+        return False
+    try:
+        caller_pid_at_entry = os.getpid()
+    except (OSError, OverflowError, ValueError):
+        return False
+    if (
+        isinstance(caller_pid_at_entry, bool)
+        or not isinstance(caller_pid_at_entry, int)
+        or caller_pid_at_entry <= 0
+        or pid == caller_pid_at_entry
+    ):
+        return False
+    if expected_recorder_scope:
+        scope_identity = parse_priority_scope_identity(expected_recorder_scope)
+        if (
+            scope_identity is None
+            or not _recorder_scope_is_soc_recorder_unit(expected_recorder_scope)
+            or not has_time_remaining()
+            or not verify_priority_scope_identity(
+                scope_identity,
+                cpu_weight=SOC_CPU_WEIGHT,
+                io_weight=SOC_IO_WEIGHT,
+            )
+        ):
+            return False
+        if not has_time_remaining():
+            return False
+        caller_scope = _recorder_scope_for_pid(os.getpid())
+        if caller_scope is not None and caller_scope == expected_recorder_scope:
+            return False
+    else:
+        scope_identity = None
     process_group_target: bool | None
     process_group_id: int | None = None
     process_session_id: int | None = None
     descendant_identities: dict[int, str] = {}
+    scope_process_identities: dict[int, str] = {}
+    scope_signal_sent = False
+
+    def scope_members_are_gone() -> bool:
+        for scope_pid, expected_start_time in scope_process_identities.items():
+            if not has_time_remaining():
+                return False
+            stat_fields = _recording_process_stat_fields(scope_pid)
+            if stat_fields is None:
+                if not has_time_remaining():
+                    return False
+                try:
+                    Path(f"/proc/{scope_pid}").stat()
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    return False
+                return False
+            if len(stat_fields) < 20 or not stat_fields[19].isdecimal():
+                return False
+            if stat_fields[19] == expected_start_time:
+                return False
+        return True
+
+    def refresh_scope_identities() -> bool:
+        nonlocal scope_process_identities
+        if scope_identity is None or expected_recorder_scope is None:
+            return True
+        if not has_time_remaining():
+            return False
+        scan = _recorder_scope_scan(expected_recorder_scope)
+        if not has_time_remaining():
+            return False
+        if scan.status == _RECORDER_SCOPE_SCAN_UNKNOWN:
+            return False
+        if scan.status == _RECORDER_SCOPE_SCAN_VANISHED:
+            if scope_signal_sent and scope_members_are_gone():
+                scope_process_identities = {}
+                return True
+            return False
+        refreshed = scan.identities
+        if not has_time_remaining():
+            return False
+        if os.getpid() in refreshed:
+            return False
+        if not has_time_remaining():
+            return False
+        if _recording_process_identity_matches(pid, expected_process_identity):
+            expected_start_time = expected_process_identity.rpartition(":")[2]
+            if refreshed.get(pid) != expected_start_time:
+                return False
+        scope_process_identities = refreshed
+        return True
+
+    if not has_time_remaining():
+        return False
     try:
         process_group_id = os.getpgid(pid)
         process_group_target = process_group_id == pid
         if process_group_target:
             process_session_id = pid
         else:
+            if not has_time_remaining():
+                return False
             try:
                 process_session_id = os.getsid(pid)
             except (ProcessLookupError, OSError, OverflowError, ValueError):
@@ -2771,7 +3684,15 @@ def stop_process(
         # start_recorder() creates a new session, so its leader PID is also the
         # process-group ID. The leader can be reaped by another process before
         # a later stop/cancel invocation, while descendants still remain.
-        process_group_target = _process_group_exists(pid)
+        if not has_time_remaining():
+            return False
+        process_group_target = (
+            _recorder_scope_has_live_processes(expected_recorder_scope)
+            if scope_identity is not None
+            else _process_group_exists(pid)
+        )
+        if not has_time_remaining():
+            return False
         if process_group_target is False:
             return False
         if process_group_target is not True:
@@ -2786,56 +3707,117 @@ def stop_process(
         nonlocal descendant_identities
         if not process_group_target:
             return True
+        if not has_time_remaining():
+            return False
+        try:
+            caller_pid = os.getpid()
+        except (OSError, OverflowError, ValueError):
+            return False
+        if isinstance(caller_pid, bool) or not isinstance(caller_pid, int) or caller_pid <= 0 or caller_pid == pid:
+            return False
+        if not has_time_remaining():
+            return False
         descendant_scan = _process_tree_descendant_identities(pid)
+        if not has_time_remaining():
+            return False
         if descendant_scan is None:
             return False
-        descendant_identities.update(descendant_scan)
+        descendant_identities.update(
+            {
+                member_pid: start_time
+                for member_pid, start_time in descendant_scan.items()
+                if member_pid not in {pid, caller_pid}
+            }
+        )
+        if not has_time_remaining():
+            return False
         if _recording_process_identity_matches(pid, expected_process_identity):
             if process_session_id is None:
                 return False
+            if not has_time_remaining():
+                return False
             session_scan = _same_session_process_identities(process_session_id)
+            if not has_time_remaining():
+                return False
             if session_scan is None:
                 return False
             descendant_identities.update(
                 {
                     member_pid: start_time
                     for member_pid, start_time in session_scan.items()
-                    if member_pid != pid
+                    if member_pid not in {pid, caller_pid}
                 }
             )
         return True
 
     def target_identity_still_safe() -> bool:
+        if not has_time_remaining():
+            return False
+        if not refresh_scope_identities():
+            return False
+        if not has_time_remaining():
+            return False
         if _recording_process_identity_matches(pid, expected_process_identity):
             return True
+        if not has_time_remaining():
+            return False
+        if scope_identity is not None and scope_process_identities:
+            leader_absent = _recording_process_is_absent(pid)
+            return leader_absent and has_time_remaining()
+        if not has_time_remaining():
+            return False
         if process_group_target and expected_process_identity and _recording_process_is_absent(pid):
+            if not has_time_remaining():
+                return False
             descendants_live = _process_tree_has_live_processes(descendant_identities)
+            if not has_time_remaining():
+                return False
             if descendants_live is True:
                 return True
+        if not has_time_remaining():
+            return False
         session_present = (
             _process_group_has_recorder_session(process_session_id)
             if process_group_target and process_session_id is not None
             else False
         )
+        if not has_time_remaining():
+            return False
         if session_present is None:
+            if not has_time_remaining():
+                return False
             session_group_ids = (
                 _same_session_process_group_ids(process_session_id)
                 if process_session_id is not None
                 else None
             )
             session_present = bool(session_group_ids) if session_group_ids is not None else None
-        if (
+        if not (
             process_group_target
             and expected_process_identity
-            and _recording_process_is_absent(pid)
             and process_session_id is not None
-            and _process_group_exists(process_session_id)
             and session_present is True
         ):
-            return _recording_process_identity_for_pid(pid) is None
-        return False
+            return False
+        if not has_time_remaining() or not _recording_process_is_absent(pid):
+            return False
+        if not has_time_remaining() or not _process_group_exists(process_session_id):
+            return False
+        if not has_time_remaining():
+            return False
+        current_identity = _recording_process_identity_for_pid(pid)
+        return current_identity is None and has_time_remaining()
 
     def process_target_is_gone() -> bool:
+        if not has_time_remaining():
+            return False
+        if scope_identity is not None:
+            if not refresh_scope_identities():
+                return False
+            if scope_process_identities:
+                return False
+        if not has_time_remaining():
+            return False
         descendants_live = _process_tree_has_live_processes(descendant_identities)
         if descendants_live is not False:
             return False
@@ -2845,100 +3827,333 @@ def stop_process(
             and process_session_id is not None
             and process_group_id != process_session_id
         ):
+            if not has_time_remaining():
+                return False
             if _same_session_has_live_processes(process_session_id) is not False:
                 return False
+        if not has_time_remaining():
+            return False
         if not _reap_recorder_process_if_zombie(pid):
+            return False
+        if not has_time_remaining():
             return False
         return _process_is_gone(process_target)
 
+    if not has_time_remaining():
+        return False
     if not target_identity_still_safe():
+        return False
+    if not has_time_remaining():
         return False
     if not refresh_descendant_identities():
         return False
 
-    def signal_descendant_targets(signal_name: str) -> bool:
+    def signal_phase_has_time(signal_deadline: float) -> bool:
+        return _signal_deadline_has_time(
+            signal_deadline,
+            distinguish_expiry=True,
+        )
+
+    def signal_descendant_targets(signal_name: str, signal_deadline: float) -> bool:
+        if not signal_phase_has_time(signal_deadline):
+            return False
         for descendant_pid, expected_start_time in sorted(descendant_identities.items()):
+            if (
+                not has_time_remaining()
+                or not signal_phase_has_time(signal_deadline)
+            ):
+                return False
+            try:
+                caller_pid = os.getpid()
+            except (OSError, OverflowError, ValueError):
+                return False
+            if (
+                isinstance(caller_pid, bool)
+                or not isinstance(caller_pid, int)
+                or caller_pid <= 0
+                or descendant_pid in {pid, caller_pid}
+            ):
+                return False
+            if scope_identity is not None:
+                if not has_time_remaining():
+                    return False
+                if not refresh_scope_identities():
+                    return False
+                current_start_time = scope_process_identities.get(descendant_pid)
+                if current_start_time is None:
+                    if not has_time_remaining():
+                        return False
+                    descendant_absent = _recording_process_is_absent(descendant_pid)
+                    if descendant_absent and has_time_remaining():
+                        continue
+                    return False
+                if current_start_time != expected_start_time:
+                    return False
+            if not has_time_remaining():
+                return False
             if _recording_process_is_absent(descendant_pid):
                 continue
+            if (
+                not has_time_remaining()
+                or not signal_phase_has_time(signal_deadline)
+            ):
+                return False
             if not _send_process_signal_with_start_time(
                 descendant_pid,
                 expected_start_time,
                 signal_name,
-                ):
-                    return False
+                expected_recorder_scope=expected_recorder_scope,
+                deadline=signal_deadline,
+                distinguish_deadline_expiry=True,
+            ):
+                return False
         return True
 
-    def signal_process_target(signal_name: str) -> bool:
+    def signal_scope_targets(signal_name: str, signal_deadline: float) -> bool:
+        nonlocal scope_signal_sent
+        if scope_identity is None:
+            return True
+        if (
+            not has_time_remaining()
+            or not signal_phase_has_time(signal_deadline)
+        ):
+            return False
+        if not refresh_scope_identities():
+            return False
+        scope_signal_sent = True
+        for scope_pid, expected_start_time in sorted(scope_process_identities.items()):
+            if not has_time_remaining():
+                return False
+            if not refresh_scope_identities():
+                return False
+            current_start_time = scope_process_identities.get(scope_pid)
+            if current_start_time is None:
+                if not has_time_remaining():
+                    return False
+                scope_member_absent = _recording_process_is_absent(scope_pid)
+                if scope_member_absent and has_time_remaining():
+                    continue
+                return False
+            if current_start_time != expected_start_time:
+                return False
+            if not has_time_remaining():
+                return False
+            try:
+                caller_pid = os.getpid()
+            except (OSError, OverflowError, ValueError):
+                return False
+            if (
+                isinstance(caller_pid, bool)
+                or not isinstance(caller_pid, int)
+                or caller_pid <= 0
+                or scope_pid in {pid, caller_pid}
+            ):
+                return False
+            if not has_time_remaining():
+                return False
+            if _recording_process_is_absent(scope_pid):
+                continue
+            if (
+                not has_time_remaining()
+                or not signal_phase_has_time(signal_deadline)
+            ):
+                return False
+            if not _send_process_signal_with_start_time(
+                scope_pid,
+                expected_start_time,
+                signal_name,
+                expected_recorder_scope=expected_recorder_scope,
+                deadline=signal_deadline,
+                distinguish_deadline_expiry=True,
+            ):
+                return False
+        return True
+
+    def signal_process_target(signal_name: str, signal_deadline: float) -> bool:
+        if (
+            not has_time_remaining()
+            or not signal_phase_has_time(signal_deadline)
+        ):
+            return False
         if not target_identity_still_safe():
+            return False
+        if (
+            not has_time_remaining()
+            or not signal_phase_has_time(signal_deadline)
+        ):
             return False
         if not process_group_target:
-            return _send_process_signal_with_pidfd(pid, expected_process_identity, signal_name) is True
-        if _recording_process_identity_matches(pid, expected_process_identity):
-            if _send_process_signal_with_pidfd(pid, expected_process_identity, signal_name) is not True:
+            if scope_identity is not None and not refresh_scope_identities():
                 return False
-            return signal_descendant_targets(signal_name)
-        if not _recording_process_is_absent(pid):
+            if (
+                not has_time_remaining()
+                or not signal_phase_has_time(signal_deadline)
+            ):
+                return False
+            if (
+                _send_process_signal_with_pidfd(
+                    pid,
+                    expected_process_identity,
+                    signal_name,
+                    expected_recorder_scope=expected_recorder_scope,
+                    deadline=signal_deadline,
+                    distinguish_deadline_expiry=True,
+                )
+                if expected_recorder_scope is not None
+                else _send_process_signal_with_pidfd(
+                    pid,
+                    expected_process_identity,
+                    signal_name,
+                    deadline=signal_deadline,
+                    distinguish_deadline_expiry=True,
+                )
+            ) is not True:
+                return False
+            return signal_scope_targets(signal_name, signal_deadline)
+        if _recording_process_identity_matches(pid, expected_process_identity):
+            if scope_identity is not None and not refresh_scope_identities():
+                return False
+            if (
+                not has_time_remaining()
+                or not signal_phase_has_time(signal_deadline)
+            ):
+                return False
+            if (
+                _send_process_signal_with_pidfd(
+                    pid,
+                    expected_process_identity,
+                    signal_name,
+                    expected_recorder_scope=expected_recorder_scope,
+                    deadline=signal_deadline,
+                    distinguish_deadline_expiry=True,
+                )
+                if expected_recorder_scope is not None
+                else _send_process_signal_with_pidfd(
+                    pid,
+                    expected_process_identity,
+                    signal_name,
+                    deadline=signal_deadline,
+                    distinguish_deadline_expiry=True,
+                )
+            ) is not True:
+                return False
+            if (
+                not has_time_remaining()
+                or not signal_phase_has_time(signal_deadline)
+            ):
+                return False
+            if not signal_descendant_targets(signal_name, signal_deadline):
+                return False
+            return signal_scope_targets(signal_name, signal_deadline)
+        if not has_time_remaining() or not _recording_process_is_absent(pid):
             return False
-        if _process_tree_has_live_processes(descendant_identities) is not True:
+        if scope_identity is not None:
+            return signal_scope_targets(signal_name, signal_deadline)
+        if (
+            not has_time_remaining()
+            or not signal_phase_has_time(signal_deadline)
+        ):
             return False
-        return signal_descendant_targets(signal_name)
+        descendants_live = _process_tree_has_live_processes(descendant_identities)
+        if (
+            not has_time_remaining()
+            or not signal_phase_has_time(signal_deadline)
+            or descendants_live is not True
+        ):
+            return False
+        return signal_descendant_targets(signal_name, signal_deadline)
 
-    deadline = time.monotonic() + timeout_seconds
+    def attempt_signal_process_target(
+        signal_name: str,
+        signal_deadline: float,
+    ) -> bool | None:
+        try:
+            return signal_process_target(signal_name, signal_deadline)
+        except _SignalPhaseExpired:
+            return None
+
     # Detached descendants can take longer than one scheduler slice to become
     # observable as dead after SIGKILL, especially while the host is loaded.
-    # Keep the grace bounded and reserve it from the graceful phase.
-    kill_settle_seconds = min(0.2, timeout_seconds / 5) if timeout_seconds > 0.1 else 0.0
-    post_kill_settle_seconds = min(1.0, max(0.2, timeout_seconds / 3)) if timeout_seconds > 0.1 else 0.0
-    graceful_deadline = deadline - kill_settle_seconds
-    if not signal_process_target("-INT"):
-        return False
-    now = time.monotonic()
-    while now < graceful_deadline:
-        if process_target_is_gone():
-            return True
-        if not target_identity_still_safe():
-            return False
-        time.sleep(0.1)
-        now = time.monotonic()
+    # Reserve bounded TERM and post-KILL observation windows inside the one
+    # caller-supplied wall-clock budget.
+    short_int_only = timeout_seconds <= 0.25
+    term_settle_seconds = 0.0 if short_int_only else min(0.2, timeout_seconds / 5)
+    post_kill_settle_seconds = 0.0 if short_int_only else min(1.0, timeout_seconds / 3)
+    int_deadline = deadline - term_settle_seconds - post_kill_settle_seconds
+    term_deadline = deadline - post_kill_settle_seconds
 
-    if process_target_is_gone():
+    def observe_target_until(phase_deadline: float) -> bool | None:
+        while True:
+            now = time.monotonic()
+            if now >= deadline or now >= phase_deadline:
+                return None
+            target_gone = process_target_is_gone()
+            if not has_time_remaining():
+                return None
+            if target_gone:
+                return True
+            if not has_time_remaining():
+                return None
+            if not target_identity_still_safe():
+                return False if has_time_remaining() else None
+            now = time.monotonic()
+            remaining = min(0.1, deadline - now, phase_deadline - now)
+            if remaining <= 0:
+                return None
+            time.sleep(remaining)
+
+    if not has_time_remaining():
+        return False
+    int_signal = attempt_signal_process_target("-INT", int_deadline)
+    if int_signal is False:
+        return False
+    if int_signal is True:
+        observed = observe_target_until(int_deadline)
+        if observed is not None:
+            return observed
+    if not has_time_remaining():
+        return False
+    target_gone = process_target_is_gone()
+    if not has_time_remaining():
+        return False
+    if target_gone:
         return True
     if not target_identity_still_safe():
         return False
-    if time.monotonic() >= deadline:
+    if not has_time_remaining():
         return False
-    if not refresh_descendant_identities():
+    if time.monotonic() < term_deadline:
+        if not refresh_descendant_identities():
+            return False
+        if not has_time_remaining():
+            return False
+        term_signal = attempt_signal_process_target("-TERM", term_deadline)
+        if term_signal is False:
+            return False
+        if term_signal is True:
+            observed = observe_target_until(term_deadline)
+            if observed is not None:
+                return observed
+    if not has_time_remaining():
         return False
-    if not signal_process_target("-TERM"):
-        return False
-
-    while True:
-        now = time.monotonic()
-        if now >= deadline:
-            break
-        if process_target_is_gone():
+    if time.monotonic() < deadline:
+        target_gone = process_target_is_gone()
+        if not has_time_remaining():
+            return False
+        if target_gone:
             return True
         if not target_identity_still_safe():
             return False
-        time.sleep(min(0.1, deadline - now))
-    if process_target_is_gone():
-        return True
-    if not target_identity_still_safe():
+    if not has_time_remaining():
         return False
-
     try:
         if not refresh_descendant_identities():
             return False
-        if not signal_process_target("-KILL"):
+        if not has_time_remaining():
+            return False
+        if attempt_signal_process_target("-KILL", deadline) is not True:
             return False
     except RecorderError as exc:
         raise RecorderError(f"failed to stop recorder process {pid}: {exc}") from exc
-    if not _kill_output_process_tree(descendant_identities):
-        return False
-    if post_kill_settle_seconds:
-        time.sleep(post_kill_settle_seconds)
-    if process_target_is_gone():
-        return True
-    if not target_identity_still_safe():
-        return False
-    return process_target_is_gone()
+    observed = observe_target_until(deadline)
+    return observed is True

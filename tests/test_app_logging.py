@@ -15,10 +15,77 @@ from datetime import date
 from pathlib import Path
 from unittest import mock
 
-from speed_of_cinnamon import app_logging
+try:
+    from tests._test_env import ensure_source_path, isolate_user_state
+except ImportError:
+    from _test_env import ensure_source_path, isolate_user_state
+
+
+isolate_user_state()
+ensure_source_path()
+
+from speed_of_cinnamon import app_logging  # noqa: E402
 
 
 class AppLoggingTest(unittest.TestCase):
+    def setUp(self) -> None:
+        app_logging.configure_logging("off")
+
+    def tearDown(self) -> None:
+        app_logging.configure_logging("off")
+
+    def test_cleanup_closes_and_removes_global_soc_handlers(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            app_logging.configure_logging("error", base_dir=Path(tmp))
+            logger = logging.getLogger(app_logging.LOGGER_NAME)
+            handlers = tuple(logger.handlers)
+            self.assertEqual(len(handlers), 3)
+
+            self.tearDown()
+
+            self.assertEqual(logger.handlers, [])
+            self.assertTrue(all(handler._closed for handler in handlers))
+            self.assertTrue(
+                all(
+                    getattr(handler, "stream", None) is None
+                    for handler in handlers
+                )
+            )
+
+    def test_log_lock_retries_interrupted_exclusive_lock(self) -> None:
+        operations: list[int] = []
+
+        def interrupt_first_lock(_fd: int, operation: int) -> None:
+            operations.append(operation)
+            if len(operations) == 1:
+                raise InterruptedError()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            with mock.patch.object(app_logging.fcntl, "flock", side_effect=interrupt_first_lock):
+                fd = app_logging._acquire_log_lock(log_dir)
+                app_logging._release_log_lock(fd)
+
+        self.assertEqual(
+            operations,
+            [
+                app_logging.fcntl.LOCK_EX | app_logging.fcntl.LOCK_NB,
+                app_logging.fcntl.LOCK_EX | app_logging.fcntl.LOCK_NB,
+                app_logging.fcntl.LOCK_UN,
+            ],
+        )
+
+    def test_log_lock_times_out_without_blocking(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.object(app_logging, "LOG_LOCK_TIMEOUT_SECONDS", 0.01),
+                mock.patch.object(app_logging.fcntl, "flock", side_effect=BlockingIOError),
+                mock.patch.object(app_logging.time, "monotonic", side_effect=(0.0, 0.02)),
+                mock.patch.object(app_logging.time, "sleep"),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "log lock acquisition timed out"):
+                    app_logging._acquire_log_lock(Path(tmp))
+
     def test_fsync_retries_interrupted_calls(self) -> None:
         with mock.patch.object(app_logging.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
             app_logging._fsync_fd(123)
@@ -688,6 +755,832 @@ class AppLoggingTest(unittest.TestCase):
             self.assertNotIn("abc123", json.dumps(payload))
             self.assertNotIn("bare123", json.dumps(payload))
 
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            self.assertTrue(error_file.exists())
+            error_payload = json.loads(error_file.read_text(encoding="utf-8").strip())
+            self.assertEqual(error_payload["level"], "error")
+            self.assertNotIn("sk-secret", json.dumps(error_payload))
+            self.assertEqual(error_file.stat().st_mode & 0o777, 0o600)
+
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            self.assertTrue(markdown_file.exists())
+            markdown = markdown_file.read_text(encoding="utf-8")
+            self.assertIn("- [ ] ", markdown)
+            self.assertIn("api failed", markdown)
+            self.assertNotIn("sk-secret", markdown)
+            self.assertNotIn("abc123", markdown)
+            self.assertEqual(markdown_file.stat().st_mode & 0o777, 0o600)
+
+    def test_error_markdown_keeps_each_error_as_one_checkbox_line(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            app_logging.log_event("error", "first error", group="clipboard", error_message="line one\nline two")
+            app_logging.log_event("error", "second error", group="backend", error_message="safe message")
+
+            lines = (log_dir / app_logging.ERROR_MARKDOWN_FILENAME).read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 2)
+            self.assertTrue(all(line.startswith("- [ ] ") for line in lines))
+            self.assertIn("line one line two", lines[0])
+            self.assertIn("backend", lines[1])
+
+    def test_configure_logging_creates_empty_error_journals_for_discoverability(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            self.assertTrue(error_file.exists())
+            self.assertTrue(markdown_file.exists())
+            self.assertEqual(error_file.read_text(encoding="utf-8"), "")
+            self.assertEqual(markdown_file.read_text(encoding="utf-8"), "")
+            self.assertEqual(error_file.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(markdown_file.stat().st_mode & 0o777, 0o600)
+
+    def test_configure_logging_backfills_markdown_from_existing_error_log(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            error_file.write_text(
+                "\n".join(
+                    json.dumps(
+                        {
+                            "ts": "2026-08-16T10:00:00+00:00",
+                            "level": "error",
+                            "event": "old_error",
+                            "group": "backend",
+                            "error_message": "old message",
+                        }
+                    )
+                    for _ in range(2)
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+
+            app_logging.configure_logging("error", base_dir=log_dir)
+
+            lines = (log_dir / app_logging.ERROR_MARKDOWN_FILENAME).read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 2)
+            self.assertTrue(all("old_error" in line and "old message" in line for line in lines))
+
+    def test_markdown_rebuild_does_not_rewrite_identical_content(self) -> None:
+        for populated in (False, True):
+            with self.subTest(populated=populated), tempfile.TemporaryDirectory() as tmp:
+                log_dir = Path(tmp)
+                app_logging.configure_logging("error", base_dir=log_dir)
+                error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+                markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+                if populated:
+                    error_file.write_text(
+                        json.dumps(
+                            {
+                                "ts": "2026-09-05T10:00:00+00:00",
+                                "level": "error",
+                                "event": "current_error",
+                                "group": "test",
+                                "error_message": "current message",
+                            }
+                        )
+                        + "\n",
+                        encoding="utf-8",
+                    )
+                    os.chmod(error_file, 0o600)
+                    app_logging._rebuild_error_markdown(log_dir)
+                before = markdown_file.stat()
+
+                with mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate:
+                    app_logging._rebuild_error_markdown(log_dir)
+
+                after = markdown_file.stat()
+                mocked_truncate.assert_not_called()
+                self.assertEqual((after.st_dev, after.st_ino), (before.st_dev, before.st_ino))
+                self.assertEqual(after.st_mtime_ns, before.st_mtime_ns)
+
+    def test_markdown_rebuild_does_not_chmod_identical_private_content(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-09-05T10:00:00+00:00",
+                        "level": "error",
+                        "event": "current_error",
+                        "group": "test",
+                        "error_message": "current message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            app_logging._rebuild_error_markdown(log_dir)
+            self.assertEqual(markdown_file.stat().st_mode & 0o777, 0o600)
+            before = markdown_file.stat()
+
+            with (
+                mock.patch.object(app_logging.os, "fchmod", wraps=os.fchmod) as mocked_chmod,
+                mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate,
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            after = markdown_file.stat()
+            mocked_chmod.assert_not_called()
+            mocked_truncate.assert_not_called()
+            self.assertEqual(after.st_ino, before.st_ino)
+            self.assertEqual(after.st_mtime_ns, before.st_mtime_ns)
+            self.assertEqual(after.st_ctime_ns, before.st_ctime_ns)
+
+            expected = markdown_file.read_bytes()
+            markdown_file.chmod(0o640)
+            with (
+                mock.patch.object(app_logging.os, "fchmod", wraps=os.fchmod) as mocked_chmod,
+                mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate,
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertEqual(mocked_chmod.call_args_list, [mock.call(mock.ANY, 0o600)])
+            mocked_truncate.assert_not_called()
+            self.assertEqual(markdown_file.stat().st_mode & 0o777, 0o600)
+            self.assertEqual(markdown_file.read_bytes(), expected)
+
+    def test_markdown_rebuild_identical_hotpath_uses_noatime_without_metadata_changes(self) -> None:
+        noatime_flag = getattr(os, "O_NOATIME", None)
+        if isinstance(noatime_flag, bool) or not isinstance(noatime_flag, int) or noatime_flag <= 0:
+            self.skipTest("O_NOATIME is unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-09-05T10:00:00+00:00",
+                        "level": "error",
+                        "event": "current_error",
+                        "group": "test",
+                        "error_message": "current message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            app_logging._rebuild_error_markdown(log_dir)
+            paths = (error_file, markdown_file)
+            before = tuple(path.stat() for path in paths)
+            opened_flags: dict[str, int] = {}
+            real_open = app_logging.open_file_without_following_symlinks
+
+            def record_flags(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+                field_name = kwargs.get("field_name")
+                if isinstance(field_name, str):
+                    opened_flags[field_name] = flags
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(
+                app_logging,
+                "open_file_without_following_symlinks",
+                side_effect=record_flags,
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            after = tuple(path.stat() for path in paths)
+            self.assertEqual(set(opened_flags), {"error log", "error Markdown file"})
+            self.assertTrue(all(flags & noatime_flag for flags in opened_flags.values()))
+            self.assertEqual(
+                tuple((value.st_ino, value.st_atime_ns, value.st_mtime_ns, value.st_ctime_ns) for value in after),
+                tuple((value.st_ino, value.st_atime_ns, value.st_mtime_ns, value.st_ctime_ns) for value in before),
+            )
+
+    def test_markdown_rebuild_fails_closed_when_noatime_is_unavailable_or_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-09-05T10:00:00+00:00",
+                        "level": "error",
+                        "event": "current_error",
+                        "group": "test",
+                        "error_message": "current message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            markdown_file.write_text("preserve target\n", encoding="utf-8")
+            os.chmod(markdown_file, 0o600)
+            expected = markdown_file.read_bytes()
+
+            with (
+                mock.patch.object(app_logging.os, "O_NOATIME", None, create=True),
+                mock.patch.object(app_logging, "open_file_without_following_symlinks") as mocked_open,
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            mocked_open.assert_not_called()
+            self.assertEqual(markdown_file.read_bytes(), expected)
+
+            noatime_flag = getattr(os, "O_NOATIME", None)
+            if isinstance(noatime_flag, bool) or not isinstance(noatime_flag, int) or noatime_flag <= 0:
+                return
+            real_open = app_logging.open_file_without_following_symlinks
+            for denied_field in ("error log", "error Markdown file"):
+                with self.subTest(denied_field=denied_field):
+                    opened_fields: list[str] = []
+
+                    def reject_noatime(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+                        field_name = kwargs.get("field_name")
+                        self.assertIsInstance(field_name, str)
+                        opened_fields.append(field_name)
+                        self.assertTrue(flags & noatime_flag)
+                        if field_name == denied_field:
+                            raise PermissionError("O_NOATIME denied")
+                        return real_open(path, flags, *args, **kwargs)
+
+                    with mock.patch.object(
+                        app_logging,
+                        "open_file_without_following_symlinks",
+                        side_effect=reject_noatime,
+                    ):
+                        app_logging._rebuild_error_markdown(log_dir)
+
+                    expected_fields = ["error log"]
+                    if denied_field == "error Markdown file":
+                        expected_fields.append("error Markdown file")
+                    self.assertEqual(opened_fields, expected_fields)
+                    self.assertEqual(markdown_file.read_bytes(), expected)
+
+    def test_markdown_rebuild_replaces_equal_size_invalid_utf8_without_reopening(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-09-05T10:00:00+00:00",
+                        "level": "error",
+                        "event": "current_error",
+                        "group": "test",
+                        "error_message": "current message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            app_logging._rebuild_error_markdown(log_dir)
+            expected = markdown_file.read_bytes()
+            markdown_file.write_bytes(b"\xff" + b"x" * (len(expected) - 1))
+            os.chmod(markdown_file, 0o600)
+            target_opens = 0
+            real_open = app_logging.open_file_without_following_symlinks
+
+            def count_target_open(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+                nonlocal target_opens
+                if kwargs.get("field_name") == "error Markdown file":
+                    target_opens += 1
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(
+                app_logging,
+                "open_file_without_following_symlinks",
+                side_effect=count_target_open,
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertEqual(target_opens, 1)
+            self.assertEqual(markdown_file.read_bytes(), expected)
+
+    def test_markdown_rebuild_compares_identical_content_in_bounded_blocks(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            error_file.write_text(
+                "".join(
+                    json.dumps(
+                        {
+                            "ts": "2026-09-05T10:00:00+00:00",
+                            "level": "error",
+                            "event": f"current_error_{index}",
+                            "group": "test",
+                            "error_message": "current message",
+                        }
+                    )
+                    + "\n"
+                    for index in range(1_000)
+                ),
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            app_logging._rebuild_error_markdown(log_dir)
+            target_inode = markdown_file.stat().st_ino
+            target_read_sizes: list[int] = []
+            real_read = os.read
+
+            def record_target_reads(fd: int, size: int) -> bytes:
+                if os.fstat(fd).st_ino == target_inode:
+                    target_read_sizes.append(size)
+                return real_read(fd, size)
+
+            with mock.patch.object(app_logging.os, "read", side_effect=record_target_reads):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertGreater(len(target_read_sizes), 1)
+            self.assertLessEqual(max(target_read_sizes), 65_536)
+
+    def test_markdown_rebuild_does_not_truncate_after_in_place_comparison_race(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-09-05T10:00:00+00:00",
+                        "level": "error",
+                        "event": "current_error",
+                        "group": "test",
+                        "error_message": "current message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            app_logging._rebuild_error_markdown(log_dir)
+            target_stat = markdown_file.stat()
+            target_inode = target_stat.st_ino
+            mutated = False
+            real_read = os.read
+
+            def mutate_after_target_read(fd: int, size: int) -> bytes:
+                nonlocal mutated
+                chunk = real_read(fd, size)
+                if os.fstat(fd).st_ino == target_inode and not mutated:
+                    mutated = True
+                    with markdown_file.open("r+b") as stream:
+                        stream.write(b"X")
+                        stream.flush()
+                    os.utime(
+                        markdown_file,
+                        ns=(target_stat.st_atime_ns, target_stat.st_mtime_ns),
+                    )
+                return chunk
+
+            with (
+                mock.patch.object(app_logging.os, "read", side_effect=mutate_after_target_read),
+                mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate,
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertTrue(mutated)
+            mocked_truncate.assert_not_called()
+            self.assertTrue(markdown_file.read_bytes().startswith(b"X"))
+
+    def test_markdown_rebuild_does_not_truncate_when_comparison_read_fails(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-09-05T10:00:00+00:00",
+                        "level": "error",
+                        "event": "current_error",
+                        "group": "test",
+                        "error_message": "current message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            app_logging._rebuild_error_markdown(log_dir)
+            expected = markdown_file.read_bytes()
+            target_inode = markdown_file.stat().st_ino
+            real_read = os.read
+
+            def fail_target_read(fd: int, size: int) -> bytes:
+                if os.fstat(fd).st_ino == target_inode:
+                    raise OSError("simulated comparison failure")
+                return real_read(fd, size)
+
+            with (
+                mock.patch.object(app_logging.os, "read", side_effect=fail_target_read),
+                mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate,
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            mocked_truncate.assert_not_called()
+            self.assertEqual(markdown_file.read_bytes(), expected)
+
+    def test_markdown_rebuild_clears_stale_content_when_error_log_is_empty(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            app_logging.log_event("error", "stale error", group="test", error_message="stale message")
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            markdown_file.write_text("- [ ] stale entry\n", encoding="utf-8")
+            os.chmod(markdown_file, 0o600)
+            error_file.write_text("", encoding="utf-8")
+            os.chmod(error_file, 0o600)
+            error_stat = error_file.stat()
+            os.utime(markdown_file, ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)))
+
+            app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertEqual(markdown_file.read_text(encoding="utf-8"), "")
+            self.assertEqual(markdown_file.stat().st_mode & 0o777, 0o600)
+
+    def test_markdown_rebuild_clears_stale_content_without_valid_error_records(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            markdown_file.write_text("- [ ] stale entry\n", encoding="utf-8")
+            os.chmod(markdown_file, 0o600)
+            error_file.write_text("not-json\n", encoding="utf-8")
+            os.chmod(error_file, 0o600)
+            error_stat = error_file.stat()
+            os.utime(markdown_file, ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)))
+
+            app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertEqual(markdown_file.read_text(encoding="utf-8"), "")
+
+    def test_markdown_rebuild_ignores_duplicate_json_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            error_file.write_text(
+                '{"level":"error","event":"safe","event":"shadowed","group":"test","error_message":"message"}\n',
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+
+            app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertEqual((log_dir / app_logging.ERROR_MARKDOWN_FILENAME).read_text(encoding="utf-8"), "")
+
+    def test_markdown_rebuild_does_not_truncate_hardlinked_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            external_file = log_dir / "external.txt"
+            external_file.write_text("keep this content\n", encoding="utf-8")
+            markdown_file.unlink()
+            markdown_file.hardlink_to(external_file)
+            error_file.write_text("", encoding="utf-8")
+            os.chmod(error_file, 0o600)
+            error_stat = error_file.stat()
+            os.utime(external_file, ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)))
+
+            app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertEqual(external_file.read_text(encoding="utf-8"), "keep this content\n")
+
+    def test_markdown_rebuild_does_not_truncate_hardlinked_target_with_errors(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            external_file = log_dir / "external.txt"
+            external_file.write_text("keep this content\n", encoding="utf-8")
+            markdown_file.unlink()
+            markdown_file.hardlink_to(external_file)
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-08-17T10:00:00+00:00",
+                        "level": "error",
+                        "event": "stale_error",
+                        "group": "test",
+                        "error_message": "stale message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            error_stat = error_file.stat()
+            os.utime(external_file, ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)))
+
+            app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertEqual(external_file.read_text(encoding="utf-8"), "keep this content\n")
+
+    def test_markdown_rebuild_rejects_hardlink_created_after_private_check(self) -> None:
+        noatime_flag = getattr(os, "O_NOATIME", None)
+        if isinstance(noatime_flag, bool) or not isinstance(noatime_flag, int) or noatime_flag <= 0:
+            self.skipTest("O_NOATIME is unavailable")
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            raced_link = log_dir / "raced-link.md"
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-09-05T10:00:00+00:00",
+                        "level": "error",
+                        "event": "current_error",
+                        "group": "test",
+                        "error_message": "current message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            markdown_file.write_text("preserve target\n", encoding="utf-8")
+            os.chmod(markdown_file, 0o600)
+            expected = markdown_file.read_bytes()
+            real_assert = app_logging.assert_fd_is_regular_private_file
+
+            def link_after_private_check(fd: int, **kwargs: object) -> None:
+                real_assert(fd, **kwargs)
+                if kwargs.get("field_name") == "error Markdown file" and kwargs.get("require_private_mode"):
+                    raced_link.hardlink_to(markdown_file)
+
+            with (
+                mock.patch.object(
+                    app_logging,
+                    "assert_fd_is_regular_private_file",
+                    side_effect=link_after_private_check,
+                ),
+                mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate,
+                mock.patch.object(app_logging.os, "write", wraps=os.write) as mocked_write,
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertTrue(raced_link.exists())
+            mocked_truncate.assert_not_called()
+            mocked_write.assert_not_called()
+            self.assertEqual(markdown_file.read_bytes(), expected)
+            self.assertEqual(raced_link.read_bytes(), expected)
+
+    def test_markdown_rebuild_does_not_skip_current_hardlinked_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            external_file = log_dir / "external.txt"
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-08-17T10:00:00+00:00",
+                        "level": "error",
+                        "event": "current_error",
+                        "group": "test",
+                        "error_message": "current message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            external_file.write_text("foreign content\n", encoding="utf-8")
+            os.chmod(external_file, 0o600)
+            markdown_file.unlink()
+            markdown_file.hardlink_to(external_file)
+            source_stat = error_file.stat()
+            os.utime(external_file, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns + 1_000_000))
+
+            app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertEqual(external_file.read_text(encoding="utf-8"), "foreign content\n")
+
+    def test_markdown_rebuild_preserves_existing_content_when_error_log_is_replaced(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            replacement = log_dir / "replacement.log"
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-08-17T10:00:00+00:00",
+                        "level": "error",
+                        "event": "original_error",
+                        "group": "test",
+                        "error_message": "original message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            markdown_file.write_text("- [ ] preserve this\n", encoding="utf-8")
+            os.chmod(markdown_file, 0o600)
+            source_stat = error_file.stat()
+            os.utime(markdown_file, ns=(source_stat.st_atime_ns, max(0, source_stat.st_mtime_ns - 1_000_000)))
+            replacement.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-08-17T10:00:01+00:00",
+                        "level": "error",
+                        "event": "replacement_error",
+                        "group": "test",
+                        "error_message": "replacement message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(replacement, 0o600)
+            real_open = app_logging.open_file_without_following_symlinks
+            swapped = False
+
+            def open_after_swap(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+                nonlocal swapped
+                if kwargs.get("field_name") == "error log" and not swapped:
+                    swapped = True
+                    replacement.replace(error_file)
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(
+                app_logging,
+                "open_file_without_following_symlinks",
+                side_effect=open_after_swap,
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertTrue(swapped)
+            self.assertEqual(markdown_file.read_text(encoding="utf-8"), "- [ ] preserve this\n")
+            self.assertNotIn("replacement_error", markdown_file.read_text(encoding="utf-8"))
+
+    def test_markdown_rebuild_does_not_truncate_replaced_target(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            replacement = log_dir / "replacement.txt"
+            error_file.write_text(
+                json.dumps(
+                    {
+                        "ts": "2026-08-17T10:00:00+00:00",
+                        "level": "error",
+                        "event": "source_error",
+                        "group": "test",
+                        "error_message": "source message",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            markdown_file.write_text("keep target content\n", encoding="utf-8")
+            os.chmod(markdown_file, 0o600)
+            source_stat = error_file.stat()
+            os.utime(markdown_file, ns=(source_stat.st_atime_ns, max(0, source_stat.st_mtime_ns - 1_000_000)))
+            replacement.write_text("keep replacement content\n", encoding="utf-8")
+            os.chmod(replacement, 0o600)
+            real_open = app_logging.open_file_without_following_symlinks
+            swapped = False
+
+            def open_after_target_swap(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+                nonlocal swapped
+                if kwargs.get("field_name") == "error Markdown file" and not swapped:
+                    swapped = True
+                    replacement.replace(markdown_file)
+                return real_open(path, flags, *args, **kwargs)
+
+            with mock.patch.object(
+                app_logging,
+                "open_file_without_following_symlinks",
+                side_effect=open_after_target_swap,
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            self.assertTrue(swapped)
+            self.assertEqual(markdown_file.read_text(encoding="utf-8"), "keep replacement content\n")
+
+    def test_markdown_rebuild_repairs_stale_content_even_when_target_is_newer(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            app_logging.log_event("error", "current error", group="test", error_message="current message")
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            markdown_file.write_text("- [ ] stale content\n", encoding="utf-8")
+            os.chmod(markdown_file, 0o600)
+            error_stat = error_file.stat()
+            os.utime(markdown_file, ns=(error_stat.st_atime_ns, error_stat.st_mtime_ns + 1_000_000))
+
+            app_logging._rebuild_error_markdown(log_dir)
+
+            rendered = markdown_file.read_text(encoding="utf-8")
+            self.assertIn("current error", rendered)
+            self.assertNotIn("stale content", rendered)
+
+    def test_markdown_rebuild_keeps_newest_lines_with_size_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            records = [
+                {
+                    "ts": f"2026-08-17T10:00:0{index}+00:00",
+                    "level": "error",
+                    "event": f"error_{index}",
+                    "group": "test",
+                    "error_message": f"message_{index}",
+                }
+                for index in range(3)
+            ]
+            raw = "\n".join(json.dumps(record) for record in records) + "\n"
+            error_file.write_text(raw, encoding="utf-8")
+            os.chmod(error_file, 0o600)
+            with (
+                mock.patch.object(app_logging, "MAX_ERROR_LOG_BYTES", 100),
+                mock.patch.object(app_logging, "_read_private_error_log", return_value=raw),
+            ):
+                app_logging._rebuild_error_markdown(log_dir)
+
+            rendered = (log_dir / app_logging.ERROR_MARKDOWN_FILENAME).read_text(encoding="utf-8")
+            self.assertLessEqual(len(rendered.encode("utf-8")), 100)
+            self.assertIn("error_2", rendered)
+            self.assertNotIn("error_0", rendered)
+
+    def test_markdown_rebuild_ignores_json_resource_exhaustion(self) -> None:
+        for parser_error in (RecursionError("too deep"), MemoryError("too large")):
+            with self.subTest(parser_error=type(parser_error).__name__):
+                with tempfile.TemporaryDirectory() as tmp:
+                    log_dir = Path(tmp)
+                    app_logging.configure_logging("error", base_dir=log_dir)
+                    error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+                    error_file.write_text("{}\n", encoding="utf-8")
+                    os.chmod(error_file, 0o600)
+                    with mock.patch.object(app_logging.json, "loads", side_effect=parser_error):
+                        app_logging._rebuild_error_markdown(log_dir)
+
+    def test_error_journals_recheck_size_after_open(self) -> None:
+        for handler_type in (app_logging.ErrorJsonFileHandler, app_logging.ErrorMarkdownFileHandler):
+            with self.subTest(handler_type=handler_type.__name__), tempfile.TemporaryDirectory() as tmp:
+                log_dir = Path(tmp)
+                journal_path = log_dir / (
+                    app_logging.ERROR_LOG_FILENAME
+                    if handler_type is app_logging.ErrorJsonFileHandler
+                    else app_logging.ERROR_MARKDOWN_FILENAME
+                )
+                journal_path.write_bytes(b"x")
+                journal_path.chmod(0o600)
+                handler = handler_type(journal_path, log_dir)
+                if handler_type is app_logging.ErrorJsonFileHandler:
+                    handler.setFormatter(app_logging.JsonLogFormatter())
+                record = logging.LogRecord(
+                    app_logging.LOGGER_NAME,
+                    logging.ERROR,
+                    __file__,
+                    1,
+                    "growth race",
+                    (),
+                    None,
+                )
+
+                real_open = handler._open
+
+                def grow_before_open() -> None:
+                    journal_path.write_bytes(b"x" * 201)
+                    journal_path.chmod(0o600)
+                    real_open()
+
+                with mock.patch.object(handler, "_open", side_effect=grow_before_open):
+                    with mock.patch.object(app_logging, "MAX_ERROR_LOG_BYTES", 200):
+                        handler.emit(record)
+                handler.close()
+
+                self.assertLessEqual(journal_path.stat().st_size, 200)
+
     def test_formatter_redacts_exception_field_with_error_rules(self) -> None:
         record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
         record.fields = {"error": RuntimeError("backend output: TOP_SECRET_VALUE")}
@@ -738,6 +1631,37 @@ class AppLoggingTest(unittest.TestCase):
                 handler.close()
 
         mocked_maintain.assert_called_once_with(log_dir)
+
+    def test_file_handler_rechecks_size_after_open(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
+            active.write_bytes(b"x")
+            active.chmod(0o600)
+            handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
+            handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "growth race", (), None)
+            real_open = handler._open
+            grown = False
+
+            def grow_before_open() -> None:
+                nonlocal grown
+                if not grown:
+                    active.write_bytes(b"x" * 201)
+                    active.chmod(0o600)
+                    grown = True
+                real_open()
+
+            with (
+                mock.patch.object(app_logging, "MAX_DAILY_LOG_BYTES", 200),
+                mock.patch.object(handler, "_open", side_effect=grow_before_open),
+                mock.patch.object(app_logging, "maintain_logs"),
+            ):
+                handler.emit(record)
+            handler.close()
+
+            self.assertLessEqual(active.stat().st_size, 200)
+            self.assertTrue(active.with_name(f"{active.stem}.1{active.suffix}").exists())
 
     def test_file_handler_reopens_after_external_active_rotation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1532,6 +2456,86 @@ class AppLoggingTest(unittest.TestCase):
             payload = json.loads(log_file.read_text(encoding="utf-8").strip())
             self.assertEqual(payload["event"], "event")
 
+    def _assert_error_handler_retry_restarts_after_success(
+        self,
+        handler_type: type[app_logging.SizeCappedJsonFileHandler],
+        filename: str,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            journal_path = log_dir / filename
+            handler = handler_type(journal_path, log_dir)
+            if handler_type is app_logging.ErrorJsonFileHandler:
+                handler.setFormatter(app_logging.JsonLogFormatter())
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME,
+                logging.ERROR,
+                __file__,
+                1,
+                "retry event",
+                (),
+                None,
+            )
+            record.fields = {
+                "group": "retry-test",
+                "error_message": "retry failure",
+            }
+            original_emit_locked = handler._emit_locked
+            emit_attempts = 0
+
+            def fail_then_succeed_then_fail(current: logging.LogRecord) -> None:
+                nonlocal emit_attempts
+                emit_attempts += 1
+                if emit_attempts in {1, 3}:
+                    raise OSError("temporary write failure")
+                original_emit_locked(current)
+
+            with (
+                mock.patch.object(
+                    handler,
+                    "_emit_locked",
+                    side_effect=fail_then_succeed_then_fail,
+                ),
+                mock.patch.object(handler, "handleError") as mocked_handle_error,
+                mock.patch.object(app_logging, "_acquire_log_lock", return_value=123),
+                mock.patch.object(app_logging, "_release_log_lock"),
+                mock.patch.object(
+                    app_logging.time,
+                    "monotonic",
+                    side_effect=[0.0, 1.0, 2.0],
+                ),
+            ):
+                handler.emit(record)
+                self.assertEqual(handler._retry_count, 1)
+                self.assertEqual(handler._retry_until, 1.0)
+
+                handler.emit(record)
+                self.assertEqual(handler._retry_count, 0)
+                self.assertEqual(handler._retry_until, 0.0)
+
+                handler.emit(record)
+                self.assertEqual(handler._retry_count, 1)
+                self.assertEqual(handler._retry_until, 3.0)
+
+            handler.close()
+            rendered = journal_path.read_text(encoding="utf-8")
+
+        self.assertEqual(emit_attempts, 3)
+        self.assertIn("retry event", rendered)
+        mocked_handle_error.assert_not_called()
+
+    def test_error_json_handler_retry_restarts_after_success(self) -> None:
+        self._assert_error_handler_retry_restarts_after_success(
+            app_logging.ErrorJsonFileHandler,
+            app_logging.ERROR_LOG_FILENAME,
+        )
+
+    def test_error_markdown_handler_retry_restarts_after_success(self) -> None:
+        self._assert_error_handler_retry_restarts_after_success(
+            app_logging.ErrorMarkdownFileHandler,
+            app_logging.ERROR_MARKDOWN_FILENAME,
+        )
+
     def test_file_handler_disables_permanently_on_insecure_path(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -1911,7 +2915,7 @@ class AppLoggingTest(unittest.TestCase):
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
             logger = logging.getLogger(app_logging.LOGGER_NAME)
-            self.assertEqual(len(logger.handlers), 1)
+            self.assertEqual(len(logger.handlers), 3)
             handler = logger.handlers[0]
             completed = threading.Event()
             errors: list[BaseException] = []
@@ -3198,6 +4202,29 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(oldest.exists())
             self.assertEqual(oldest.read_bytes(), b"attacker")
             self.assertTrue(active.exists())
+
+    def test_bounded_log_paths_scans_lazily_from_private_directory_fd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            matching = log_dir / "speed-of-cinnamon-2026-06-01.log"
+            unrelated = log_dir / "unrelated.log"
+            matching.write_text("log\n", encoding="utf-8")
+            unrelated.write_text("ignore\n", encoding="utf-8")
+
+            with mock.patch.object(app_logging.Path, "glob", side_effect=AssertionError("glob must not run")):
+                paths = app_logging._bounded_log_paths(log_dir, "speed-of-cinnamon-*.log")
+
+            self.assertEqual(paths, (matching,))
+
+    def test_bounded_log_paths_rejects_match_overflow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            for index in range(2):
+                (log_dir / f"speed-of-cinnamon-2026-06-0{index + 1}.log").write_text("log\n", encoding="utf-8")
+
+            with mock.patch.object(app_logging, "MAX_LOG_MAINTENANCE_SCAN_ENTRIES", 1):
+                with self.assertRaisesRegex(RuntimeError, "log directory exceeds scan budget"):
+                    app_logging._bounded_log_paths(log_dir, "speed-of-cinnamon-*.log")
 
 
 if __name__ == "__main__":

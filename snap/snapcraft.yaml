@@ -20,7 +20,8 @@ donation: https://github.com/sponsors/H234598
 parts:
   app:
     plugin: dump
-    source: .
+    # Generated only by scripts/build-snap.sh inside its private workspace.
+    source: .snap-source
     build-packages:
       - python3-pip
     stage-packages:
@@ -33,7 +34,11 @@ parts:
         --no-cache-dir \
         --target="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages" \
         --require-hashes \
-        -r "${CRAFT_PROJECT_DIR}/snap/requirements.txt"
+        -r "${CRAFT_PROJECT_DIR}/snap/local/requirements.txt"
+    override-prime: |
+      craftctl default
+      find "${CRAFT_PRIME}" -type d -name "__pycache__" -prune -exec rm -rf -- {} +
+      find "${CRAFT_PRIME}" -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete
     organize:
       snap/local/bin/speed-of-cinnamon: bin/speed-of-cinnamon
 

@@ -21,7 +21,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install dependencies
         run: |
-          python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-pylint.txt
+          python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-pylint.txt --timeout 30 --retries 3
       - name: Analyse Python errors with pylint
         run: |
           mapfile -d '' py_files < <(git ls-files -z -- '*.py')

@@ -13,9 +13,18 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from speed_of_cinnamon import alarms as alarm_module
-from speed_of_cinnamon import cli
-from speed_of_cinnamon.alarms import (
+try:
+    from tests._test_env import ensure_source_path, isolate_user_state
+except ImportError:
+    from _test_env import ensure_source_path, isolate_user_state
+
+
+isolate_user_state()
+ensure_source_path()
+
+from speed_of_cinnamon import alarms as alarm_module  # noqa: E402
+from speed_of_cinnamon import cli  # noqa: E402
+from speed_of_cinnamon.alarms import (  # noqa: E402
     add_alarm,
     remove_alarm,
     load_alarm_store,
@@ -40,6 +49,22 @@ from speed_of_cinnamon.alarms import (
 
 
 class AlarmTest(unittest.TestCase):
+    def test_alarm_lock_requires_bounded_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "alarm lock timeout is required"):
+            alarm_module._flock_retry(1, fcntl.LOCK_EX)
+
+    def test_alarm_lock_rejects_non_finite_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "alarm lock timeout is invalid"):
+            alarm_module._flock_retry(1, fcntl.LOCK_EX, timeout_seconds=float("inf"))
+
+    def test_alarm_lock_rejects_oversized_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "alarm lock timeout exceeds safe limit"):
+            alarm_module._flock_retry(
+                1,
+                fcntl.LOCK_EX,
+                timeout_seconds=alarm_module.ALARM_LOCK_TIMEOUT_SECONDS + 1,
+            )
+
     def test_alarm_store_lock_retries_interrupted_exclusive_lock(self) -> None:
         operations: list[int] = []
 
@@ -790,7 +815,7 @@ class AlarmTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
             with (
-                mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp}),
+                mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp, "XDG_STATE_HOME": tmp}),
                 mock.patch("sys.stdin", io.StringIO('{"version":1,"alarms":[],"last_checked_at":"", "marker":NaN}')),
                 redirect_stdout(stdout),
             ):
@@ -800,6 +825,50 @@ class AlarmTest(unittest.TestCase):
         payload = json.loads(stdout.getvalue())
         self.assertEqual(payload["status"], "error")
         self.assertEqual(payload["error"], "alarm JSON could not be parsed")
+
+    def test_cli_alarm_import_error_uses_module_bootstrap_environment(self) -> None:
+        stdout = io.StringIO()
+        with (
+            mock.patch(
+                "sys.stdin",
+                io.StringIO(
+                    '{"version":1,"alarms":[],"last_checked_at":"", "marker":NaN}'
+                ),
+            ),
+            redirect_stdout(stdout),
+        ):
+            code = cli.run(["alarms-import", "--json"])
+
+        self.assertEqual(code, 1)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["error"], "alarm JSON could not be parsed")
+
+    def test_cli_alarm_import_rejects_duplicate_json_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp, "XDG_STATE_HOME": tmp}),
+                mock.patch("sys.stdin", io.StringIO('{"version":1,"version":1,"alarms":[],"last_checked_at":""}')),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(["alarms-import", "--json"])
+
+        self.assertEqual(code, 1)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["status"], "error")
+        self.assertEqual(payload["error"], "alarm JSON could not be parsed")
+
+    def test_alarm_store_rejects_duplicate_json_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            path.write_text(
+                '{"version":1,"version":1,"alarms":[],"last_checked_at":""}',
+                encoding="utf-8",
+            )
+            path.chmod(0o600)
+            with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
+                load_alarm_store(path)
 
     def test_list_payload_uses_empty_store_when_no_alarms_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

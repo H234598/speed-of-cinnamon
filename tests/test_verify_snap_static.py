@@ -42,6 +42,10 @@ class VerifySnapStaticTest(unittest.TestCase):
         source = VERIFY_SNAP.read_text(encoding="utf-8")
 
         self.assertIn("readonly MAX_SNAP_LISTING_BYTES=$((16 * 1024 * 1024))", source)
+        self.assertIn('"O_NOFOLLOW"', source)
+        self.assertIn("os.fstat(fd)", source)
+        self.assertIn("before.st_nlink != 1", source)
+        self.assertIn("changed during read", source)
         self.assertIn("payload = handle.read(MAX_SNAP_LISTING_BYTES + 1)", source)
         self.assertIn('read_bounded_utf8(Path(sys.argv[1]), "snap listing")', source)
         self.assertNotIn("Path(sys.argv[1]).read_text(encoding=\"utf-8\")", source)
@@ -50,9 +54,19 @@ class VerifySnapStaticTest(unittest.TestCase):
         source = VERIFY_SNAP.read_text(encoding="utf-8")
 
         self.assertIn("MAX_SNAP_METADATA_BYTES = 1 << 20", source)
+        self.assertIn("snap cryptography metadata cannot be opened without symlink protection", source)
+        self.assertIn("snap metadata cannot be opened without symlink protection", source)
         self.assertIn("handle.read(MAX_SNAP_METADATA_BYTES + 1)", source)
         self.assertNotIn("about_path.read_text(encoding=\"utf-8\")", source)
         self.assertNotIn("Path(snap_yaml_path).read_text(encoding=\"utf-8\")", source)
+
+    def test_unsquashfs_operations_are_time_bounded(self) -> None:
+        source = VERIFY_SNAP.read_text(encoding="utf-8")
+
+        self.assertIn("readonly SNAP_VERIFY_TIMEOUT_SECONDS=120", source)
+        self.assertIn("require_cmd timeout", source)
+        self.assertIn("run_unsquashfs_bounded()", source)
+        self.assertIn('timeout --signal=TERM --kill-after=10s "${SNAP_VERIFY_TIMEOUT_SECONDS}s" unsquashfs "$@"', source)
 
 
 if __name__ == "__main__":

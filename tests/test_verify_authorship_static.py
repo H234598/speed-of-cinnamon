@@ -32,6 +32,38 @@ class VerifyAuthorshipStaticTest(unittest.TestCase):
         self.assertIn('getattr(os, "O_NOFOLLOW", None)', source)
         self.assertIn("os.read(fd, MAX_PROJECT_METADATA_BYTES + 1)", source)
         self.assertIn("project metadata changed while reading", source)
+        self.assertIn("object_pairs_hook=reject_duplicate_json_keys", source)
+        self.assertIn("parse_constant=reject_non_finite_json_number", source)
+
+    def test_repository_file_enumeration_is_bounded(self) -> None:
+        source = VERIFY_AUTHORSHIP.read_text(encoding="utf-8")
+
+        self.assertIn("MAX_TRACKED_ENTRIES = 100_000", source)
+        self.assertIn("MAX_TRACKED_FILE_LIST_BYTES = 16 * 1024 * 1024", source)
+        self.assertIn("subprocess.Popen(", source)
+        self.assertIn("TRACKED_FILE_LIST_CHUNK_BYTES", source)
+        self.assertIn('pending.split(b"\\0", 1)', source)
+        self.assertIn("tracked file list exceeds byte budget", source)
+        self.assertIn("MAX_COMMIT_LOG_BYTES = 16 * 1024 * 1024", source)
+        self.assertIn("COMMIT_LOG_CHUNK_BYTES", source)
+        self.assertIn("def iter_git_log_records", source)
+        self.assertIn('pending.split(b"\\x1e", 1)', source)
+        self.assertIn("commit history exceeds byte budget", source)
+        self.assertIn("MAX_GIT_SCALAR_OUTPUT_BYTES = 4 * 1024", source)
+        self.assertIn("GIT_SCALAR_OUTPUT_CHUNK_BYTES", source)
+        self.assertIn("GIT_TIMEOUT_SECONDS = 30.0", source)
+        self.assertIn("def iter_git_output_chunks", source)
+        self.assertIn("git command timed out", source)
+        self.assertIn("selector.select(remaining)", source)
+        self.assertIn("git scalar output exceeds byte budget", source)
+        self.assertIn("reap_process(process)", source)
+        self.assertNotIn("process.wait()", source)
+        self.assertIn("selector = None", source)
+        self.assertIn("if selector is not None:", source)
+        self.assertIn("os.scandir(current_directory)", source)
+        self.assertIn("tracked file scan exceeds", source)
+        self.assertNotIn('run_git("ls-files", "-z")', source)
+        self.assertNotIn("os.walk(", source)
 
 
 if __name__ == "__main__":

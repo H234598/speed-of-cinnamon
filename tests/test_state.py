@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import fcntl
+import errno
 import json
 import os
 import tempfile
@@ -25,6 +26,22 @@ from speed_of_cinnamon import state as state_module
 
 
 class StateStoreTest(unittest.TestCase):
+    def test_state_lock_requires_bounded_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "state lock timeout is required"):
+            state_module._flock_retry(1, fcntl.LOCK_EX)
+
+    def test_state_lock_rejects_non_finite_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "state lock timeout is invalid"):
+            state_module._flock_retry(1, fcntl.LOCK_EX, timeout_seconds=float("inf"))
+
+    def test_state_lock_rejects_oversized_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "state lock timeout exceeds safe limit"):
+            state_module._flock_retry(
+                1,
+                fcntl.LOCK_EX,
+                timeout_seconds=state_module.STATE_LOCK_TIMEOUT_SECONDS + 1,
+            )
+
     def test_state_lock_retries_interrupted_exclusive_lock(self) -> None:
         operations: list[int] = []
 
@@ -54,6 +71,215 @@ class StateStoreTest(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "state lock acquisition timed out"):
                     with store._locked():
                         pass
+
+    def test_state_lock_eintr_retries_are_backed_off_until_deadline(
+        self,
+    ) -> None:
+        now = [10.0]
+        sleeps: list[float] = []
+        flock_calls = 0
+
+        def monotonic() -> float:
+            return now[0]
+
+        def controlled_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            now[0] += delay
+
+        def interrupted_flock(_fd: int, _operation: int) -> None:
+            nonlocal flock_calls
+            flock_calls += 1
+            if flock_calls > 4:
+                raise AssertionError("lock retry was not bounded")
+            raise InterruptedError
+
+        with (
+            mock.patch.object(
+                state_module,
+                "STATE_LOCK_RETRY_SECONDS",
+                0.05,
+            ),
+            mock.patch.object(state_module.time, "monotonic", side_effect=monotonic),
+            mock.patch.object(
+                state_module.fcntl,
+                "flock",
+                side_effect=interrupted_flock,
+            ),
+            mock.patch.object(
+                state_module.time,
+                "sleep",
+                side_effect=controlled_sleep,
+            ),
+        ):
+            with self.assertRaisesRegex(
+                RuntimeError,
+                "^state lock acquisition timed out$",
+            ):
+                state_module._flock_retry(
+                    1,
+                    fcntl.LOCK_EX,
+                    timeout_seconds=0.1,
+                )
+
+        self.assertEqual(flock_calls, 2)
+        self.assertEqual(len(sleeps), 2)
+        self.assertAlmostEqual(sum(sleeps), 0.1)
+
+    def test_state_lock_intermittent_eintr_succeeds_before_deadline(
+        self,
+    ) -> None:
+        now = [20.0]
+        sleeps: list[float] = []
+
+        def controlled_sleep(delay: float) -> None:
+            sleeps.append(delay)
+            now[0] += delay
+
+        with (
+            mock.patch.object(
+                state_module.time,
+                "monotonic",
+                side_effect=lambda: now[0],
+            ),
+            mock.patch.object(
+                state_module.fcntl,
+                "flock",
+                side_effect=(InterruptedError(), None),
+            ) as flock,
+            mock.patch.object(
+                state_module.time,
+                "sleep",
+                side_effect=controlled_sleep,
+            ),
+        ):
+            state_module._flock_retry(
+                1,
+                fcntl.LOCK_EX,
+                timeout_seconds=0.2,
+            )
+
+        self.assertEqual(flock.call_count, 2)
+        self.assertEqual(sleeps, [state_module.STATE_LOCK_RETRY_SECONDS])
+
+    def test_state_lock_does_not_retry_after_blocking_sleep_reaches_deadline(
+        self,
+    ) -> None:
+        for overshoot in (0.0, 0.01):
+            with self.subTest(overshoot=overshoot):
+                now = [30.0]
+                sleeps: list[float] = []
+
+                def controlled_sleep(delay: float) -> None:
+                    sleeps.append(delay)
+                    now[0] += delay + overshoot
+
+                with (
+                    mock.patch.object(
+                        state_module,
+                        "STATE_LOCK_RETRY_SECONDS",
+                        0.05,
+                    ),
+                    mock.patch.object(
+                        state_module.time,
+                        "monotonic",
+                        side_effect=lambda: now[0],
+                    ),
+                    mock.patch.object(
+                        state_module.fcntl,
+                        "flock",
+                        side_effect=(BlockingIOError(), None),
+                    ) as flock,
+                    mock.patch.object(
+                        state_module.time,
+                        "sleep",
+                        side_effect=controlled_sleep,
+                    ),
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "^state lock acquisition timed out$",
+                    ):
+                        state_module._flock_retry(
+                            1,
+                            fcntl.LOCK_EX,
+                            timeout_seconds=0.05,
+                        )
+
+                self.assertEqual(flock.call_count, 1)
+                self.assertEqual(sleeps, [0.05])
+
+    def test_state_lock_rejects_zero_and_negative_timeout_before_flock(
+        self,
+    ) -> None:
+        for timeout_seconds in (0, -0.1):
+            with self.subTest(timeout_seconds=timeout_seconds), mock.patch.object(
+                state_module.fcntl,
+                "flock",
+            ) as flock:
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    "^state lock timeout is invalid$",
+                ):
+                    state_module._flock_retry(
+                        1,
+                        fcntl.LOCK_EX,
+                        timeout_seconds=timeout_seconds,
+                    )
+                flock.assert_not_called()
+
+    def test_state_lock_propagates_clock_and_backoff_failures(
+        self,
+    ) -> None:
+        for source in ("monotonic", "sleep"):
+            for failure in (
+                OSError("private clock detail"),
+                KeyboardInterrupt(),
+                SystemExit(15),
+            ):
+                with self.subTest(source=source, failure=type(failure).__name__):
+                    flock = mock.Mock(
+                        side_effect=(
+                            BlockingIOError()
+                            if source == "sleep"
+                            else None
+                        )
+                    )
+                    monotonic = mock.Mock(
+                        side_effect=(
+                            failure
+                            if source == "monotonic"
+                            else (40.0, 40.0)
+                        )
+                    )
+                    sleep = mock.Mock(
+                        side_effect=(failure if source == "sleep" else None)
+                    )
+                    observed: BaseException | None = None
+                    with (
+                        mock.patch.object(
+                            state_module.time,
+                            "monotonic",
+                            monotonic,
+                        ),
+                        mock.patch.object(state_module.time, "sleep", sleep),
+                        mock.patch.object(state_module.fcntl, "flock", flock),
+                    ):
+                        try:
+                            state_module._flock_retry(
+                                1,
+                                fcntl.LOCK_EX,
+                                timeout_seconds=1.0,
+                            )
+                        except BaseException as exc:
+                            observed = exc
+
+                    self.assertIs(observed, failure)
+                    if source == "monotonic":
+                        flock.assert_not_called()
+                        sleep.assert_not_called()
+                    else:
+                        self.assertEqual(flock.call_count, 1)
+                        sleep.assert_called_once()
 
     def test_contains_escaped_null_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be text"):
@@ -132,6 +358,35 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(loaded.pending_cleanup_owner_paths, owners)
         self.assertIsInstance(loaded.pending_cleanup_owner_paths, tuple)
 
+    def test_recorder_scope_round_trips_with_active_process_state(self) -> None:
+        scope = "/sys/fs/cgroup/user.slice/recording.scope|1|2"
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            store.write(
+                RecordingState(
+                    status="recording",
+                    pid=123,
+                    process_identity="owner-identity",
+                    recorder_scope=scope,
+                )
+            )
+            loaded = store.read()
+
+        self.assertEqual(loaded.recorder_scope, scope)
+
+    def test_recorder_scope_is_not_retained_without_a_pid(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            store.write(
+                RecordingState(
+                    status="recorded",
+                    recorder_scope="/sys/fs/cgroup/user.slice/recording.scope|1|2",
+                )
+            )
+            loaded = store.read()
+
+        self.assertEqual(loaded.recorder_scope, "")
+
     def test_read_rejects_malformed_pending_cleanup_owner_paths(self) -> None:
         oversized_text = "/" + ("a" * MAX_PENDING_CLEANUP_OWNER_PATH_CHARS)
         oversized_bytes = "/" + (
@@ -205,6 +460,13 @@ class StateStoreTest(unittest.TestCase):
             "00112233445566778899aabbccddeeff.bak"
             "|9|10|33152|1|11|12|13"
         )
+        v3_entry = (
+            ".cleanup.v3."
+            f"{'1' * 32}.{'2' * 32}.wiping.{'3' * 64}.{'4' * 32}.bak"
+            "|14|15|33152|1|16|17|18"
+        )
+        v3_prepared_entry = v3_entry.replace(".wiping.", ".prepared.")
+        v3_armed_entry = v3_entry.replace(".wiping.", ".armed.")
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             store = StateStore(path)
@@ -212,7 +474,13 @@ class StateStoreTest(unittest.TestCase):
             store.write(
                 RecordingState(
                     status="error",
-                    pending_cleanup_backup_entries=(entry, v2_entry),
+                    pending_cleanup_backup_entries=(
+                        entry,
+                        v2_entry,
+                        v3_entry,
+                        v3_prepared_entry,
+                        v3_armed_entry,
+                    ),
                     cleanup_backup_journal_overflow=True,
                 )
             )
@@ -221,12 +489,12 @@ class StateStoreTest(unittest.TestCase):
 
         self.assertEqual(
             rendered["pending_cleanup_backup_entries"],
-            [entry, v2_entry],
+            [entry, v2_entry, v3_entry, v3_prepared_entry, v3_armed_entry],
         )
         self.assertIs(rendered["cleanup_backup_journal_overflow"], True)
         self.assertEqual(
             loaded.pending_cleanup_backup_entries,
-            (entry, v2_entry),
+            (entry, v2_entry, v3_entry, v3_prepared_entry, v3_armed_entry),
         )
         self.assertIsInstance(loaded.pending_cleanup_backup_entries, tuple)
         self.assertIs(loaded.cleanup_backup_journal_overflow, True)
@@ -518,6 +786,16 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(state.error, "state file could not be read")
         self.assertEqual(state.status, "idle")
 
+    def test_read_rejects_duplicate_json_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            path.write_text('{"status":"idle","status":"recording"}', encoding="utf-8")
+            path.chmod(0o600)
+            state = StateStore(path).read()
+
+        self.assertEqual(state.error, "state file could not be read")
+        self.assertEqual(state.status, "idle")
+
     def test_read_wraps_json_recursion_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
@@ -669,6 +947,403 @@ class StateStoreTest(unittest.TestCase):
                         pass
 
         self.assertEqual(close_calls, [456, 123])
+
+    def test_state_lock_preserves_control_exception_cleanup_precedence(
+        self,
+    ) -> None:
+        primary_factories = {
+            "normal": lambda: None,
+            "runtime-error": lambda: RuntimeError("private primary detail"),
+            "keyboard-interrupt": KeyboardInterrupt,
+            "system-exit": lambda: SystemExit(7),
+        }
+        close_factories = {
+            "normal": lambda: None,
+            "oserror": lambda: OSError("private cleanup detail"),
+            "keyboard-interrupt": KeyboardInterrupt,
+            "system-exit": lambda: SystemExit(8),
+        }
+        for primary_name, primary_factory in primary_factories.items():
+            for close_name, close_factory in close_factories.items():
+                with self.subTest(primary=primary_name, close=close_name):
+                    primary_error = primary_factory()
+                    close_error = close_factory()
+                    close_calls: list[int] = []
+
+                    def controlled_close(descriptor: int) -> None:
+                        close_calls.append(descriptor)
+                        if descriptor == 456 and close_error is not None:
+                            raise close_error
+
+                    if isinstance(
+                        primary_error,
+                        (KeyboardInterrupt, SystemExit),
+                    ):
+                        expected_error = primary_error
+                    elif isinstance(
+                        close_error,
+                        (KeyboardInterrupt, SystemExit),
+                    ):
+                        expected_error = close_error
+                    elif primary_error is not None:
+                        expected_error = primary_error
+                    else:
+                        expected_error = close_error
+                    observed_error: BaseException | None = None
+                    with tempfile.TemporaryDirectory() as tmp:
+                        store = StateStore(Path(tmp) / "state.json")
+                        with (
+                            mock.patch(
+                                "speed_of_cinnamon.state."
+                                "ensure_directory_without_following_symlinks",
+                                return_value=123,
+                            ),
+                            mock.patch(
+                                "speed_of_cinnamon.state."
+                                "assert_fd_is_private_directory"
+                            ),
+                            mock.patch(
+                                "speed_of_cinnamon.state."
+                                "assert_fd_is_regular_private_file"
+                            ),
+                            mock.patch(
+                                "speed_of_cinnamon.state.os.open",
+                                return_value=456,
+                            ),
+                            mock.patch(
+                                "speed_of_cinnamon.state.fcntl.flock"
+                            ),
+                            mock.patch(
+                                "speed_of_cinnamon.state.os.close",
+                                side_effect=controlled_close,
+                            ),
+                        ):
+                            try:
+                                with store._locked():
+                                    if primary_error is not None:
+                                        raise primary_error
+                            except BaseException as exc:
+                                observed_error = exc
+
+                    self.assertIs(observed_error, expected_error)
+                    self.assertEqual(close_calls, [456, 123])
+
+    def test_state_lock_selects_control_across_multiple_cleanup_errors(
+        self,
+    ) -> None:
+        cases = (
+            ("unlock-normal-file-ki", None, "oserror", "ki", None, "file"),
+            ("file-normal-parent-se", None, None, "oserror", "se", "parent"),
+            (
+                "ordinary-primary-first-cleanup-control",
+                "runtime",
+                "oserror",
+                "ki",
+                "se",
+                "file",
+            ),
+            ("primary-ki", "ki", "se", "se", "se", "body"),
+            ("primary-se", "se", "ki", "ki", "ki", "body"),
+            ("first-cleanup-control", None, "ki", "se", None, "unlock"),
+        )
+        factories = {
+            None: lambda: None,
+            "runtime": lambda: RuntimeError("private primary detail"),
+            "oserror": lambda: OSError("private cleanup detail"),
+            "ki": KeyboardInterrupt,
+            "se": lambda: SystemExit(9),
+        }
+        for name, body_kind, unlock_kind, file_kind, parent_kind, winner in cases:
+            with self.subTest(case=name), tempfile.TemporaryDirectory() as tmp:
+                errors = {
+                    "body": factories[body_kind](),
+                    "unlock": factories[unlock_kind](),
+                    "file": factories[file_kind](),
+                    "parent": factories[parent_kind](),
+                }
+                close_calls: list[int] = []
+
+                def controlled_lock(
+                    _descriptor: int,
+                    operation: int,
+                    *,
+                    timeout_seconds: float | None = None,
+                ) -> None:
+                    del timeout_seconds
+                    if operation & fcntl.LOCK_UN:
+                        error = errors["unlock"]
+                        if error is not None:
+                            raise error
+
+                def controlled_close(descriptor: int) -> None:
+                    close_calls.append(descriptor)
+                    error = errors["file" if descriptor == 456 else "parent"]
+                    if error is not None:
+                        raise error
+
+                observed: BaseException | None = None
+                store = StateStore(Path(tmp) / "state.json")
+                with (
+                    mock.patch(
+                        "speed_of_cinnamon.state."
+                        "ensure_directory_without_following_symlinks",
+                        return_value=123,
+                    ),
+                    mock.patch(
+                        "speed_of_cinnamon.state.assert_fd_is_private_directory"
+                    ),
+                    mock.patch(
+                        "speed_of_cinnamon.state."
+                        "assert_fd_is_regular_private_file"
+                    ),
+                    mock.patch(
+                        "speed_of_cinnamon.state.os.open",
+                        return_value=456,
+                    ),
+                    mock.patch.object(
+                        state_module,
+                        "_flock_retry",
+                        side_effect=controlled_lock,
+                    ),
+                    mock.patch(
+                        "speed_of_cinnamon.state.os.close",
+                        side_effect=controlled_close,
+                    ),
+                ):
+                    try:
+                        with store._locked():
+                            if errors["body"] is not None:
+                                raise errors["body"]
+                    except BaseException as exc:
+                        observed = exc
+
+                self.assertIs(observed, errors[winner])
+                self.assertEqual(close_calls, [456, 123])
+
+    def test_state_lock_setup_error_yields_to_parent_close_control(
+        self,
+    ) -> None:
+        for setup_kind in ("validation", "open"):
+            for close_kind in ("ki", "se"):
+                with (
+                    self.subTest(setup=setup_kind, close=close_kind),
+                    tempfile.TemporaryDirectory() as tmp,
+                ):
+                    setup_error = (
+                        RuntimeError("private setup detail")
+                        if setup_kind == "validation"
+                        else OSError("private open detail")
+                    )
+                    close_error = (
+                        KeyboardInterrupt()
+                        if close_kind == "ki"
+                        else SystemExit(10)
+                    )
+                    close_calls: list[int] = []
+
+                    def controlled_close(descriptor: int) -> None:
+                        close_calls.append(descriptor)
+                        raise close_error
+
+                    store = StateStore(Path(tmp) / "state.json")
+                    observed: BaseException | None = None
+                    with (
+                        mock.patch(
+                            "speed_of_cinnamon.state."
+                            "ensure_directory_without_following_symlinks",
+                            return_value=123,
+                        ),
+                        mock.patch(
+                            "speed_of_cinnamon.state."
+                            "assert_fd_is_private_directory",
+                            side_effect=(
+                                setup_error
+                                if setup_kind == "validation"
+                                else None
+                            ),
+                        ),
+                        mock.patch(
+                            "speed_of_cinnamon.state.os.open",
+                            side_effect=(
+                                setup_error
+                                if setup_kind == "open"
+                                else None
+                            ),
+                        ),
+                        mock.patch(
+                            "speed_of_cinnamon.state.os.close",
+                            side_effect=controlled_close,
+                        ),
+                    ):
+                        try:
+                            with store._locked():
+                                pass
+                        except BaseException as exc:
+                            observed = exc
+
+                    self.assertIs(observed, close_error)
+                    self.assertEqual(close_calls, [123])
+
+    def test_state_lock_wrapped_setup_error_preserves_internal_cause(
+        self,
+    ) -> None:
+        for setup_step in ("directory-validation", "file-open"):
+            with (
+                self.subTest(setup_step=setup_step),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                setup_error = OSError("/private/setup-secret")
+                store = StateStore(Path(tmp) / "state.json")
+                with (
+                    mock.patch(
+                        "speed_of_cinnamon.state."
+                        "ensure_directory_without_following_symlinks",
+                        return_value=123,
+                    ),
+                    mock.patch(
+                        "speed_of_cinnamon.state."
+                        "assert_fd_is_private_directory",
+                        side_effect=(
+                            setup_error
+                            if setup_step == "directory-validation"
+                            else None
+                        ),
+                    ),
+                    mock.patch(
+                        "speed_of_cinnamon.state.os.open",
+                        side_effect=(
+                            setup_error
+                            if setup_step == "file-open"
+                            else None
+                        ),
+                    ),
+                    mock.patch("speed_of_cinnamon.state.os.close"),
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError,
+                        "^failed to open state lock file$",
+                    ) as caught:
+                        with store._locked():
+                            pass
+
+                self.assertIs(caught.exception.__cause__, setup_error)
+                public_text = "\n".join(
+                    (
+                        str(caught.exception),
+                        *getattr(caught.exception, "__notes__", ()),
+                    )
+                )
+                self.assertNotIn("setup-secret", public_text)
+
+    def test_state_lock_cleanup_control_notes_lost_setup_error_safely(
+        self,
+    ) -> None:
+        for control_error in (KeyboardInterrupt(), SystemExit(12)):
+            with (
+                self.subTest(control=type(control_error).__name__),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
+                setup_error = OSError("/private/setup-secret")
+                close_calls: list[int] = []
+
+                def controlled_close(descriptor: int) -> None:
+                    close_calls.append(descriptor)
+                    raise control_error
+
+                store = StateStore(Path(tmp) / "state.json")
+                observed: BaseException | None = None
+                with (
+                    mock.patch(
+                        "speed_of_cinnamon.state."
+                        "ensure_directory_without_following_symlinks",
+                        return_value=123,
+                    ),
+                    mock.patch(
+                        "speed_of_cinnamon.state."
+                        "assert_fd_is_private_directory"
+                    ),
+                    mock.patch(
+                        "speed_of_cinnamon.state.os.open",
+                        side_effect=setup_error,
+                    ),
+                    mock.patch(
+                        "speed_of_cinnamon.state.os.close",
+                        side_effect=controlled_close,
+                    ),
+                ):
+                    try:
+                        with store._locked():
+                            pass
+                    except BaseException as exc:
+                        observed = exc
+
+                self.assertIs(observed, control_error)
+                assert observed is not None
+                notes = "\n".join(observed.__notes__)
+                self.assertIn("state lock primary operation failed", notes)
+                self.assertNotIn("setup-secret", notes)
+                self.assertEqual(close_calls, [123])
+
+    def test_state_lock_closes_real_fds_once_across_cleanup_failures(
+        self,
+    ) -> None:
+        real_close = os.close
+        with tempfile.TemporaryDirectory(dir="/dev/shm") as tmp:
+            parent_fd = os.open(tmp, os.O_RDONLY | os.O_DIRECTORY)
+            lock_fd = os.open(
+                Path(tmp) / "real.lock",
+                os.O_RDWR | os.O_CREAT,
+                0o600,
+            )
+            file_close_error = OSError("private file close detail")
+            parent_close_error = SystemExit(16)
+            close_calls: list[int] = []
+
+            def controlled_close(descriptor: int) -> None:
+                close_calls.append(descriptor)
+                real_close(descriptor)
+                if descriptor == lock_fd:
+                    raise file_close_error
+                if descriptor == parent_fd:
+                    raise parent_close_error
+
+            observed: BaseException | None = None
+            store = StateStore(Path(tmp) / "state.json")
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.state."
+                    "ensure_directory_without_following_symlinks",
+                    return_value=parent_fd,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.state.assert_fd_is_private_directory"
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.state."
+                    "assert_fd_is_regular_private_file"
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.state.os.open",
+                    return_value=lock_fd,
+                ),
+                mock.patch.object(state_module, "_flock_retry"),
+                mock.patch(
+                    "speed_of_cinnamon.state.os.close",
+                    side_effect=controlled_close,
+                ),
+            ):
+                try:
+                    with store._locked():
+                        pass
+                except BaseException as exc:
+                    observed = exc
+
+            self.assertIs(observed, parent_close_error)
+            self.assertEqual(close_calls, [lock_fd, parent_fd])
+            for descriptor in (lock_fd, parent_fd):
+                with self.assertRaises(OSError) as closed:
+                    os.fstat(descriptor)
+                self.assertEqual(closed.exception.errno, errno.EBADF)
 
     @mock.patch("speed_of_cinnamon.state.os.open", wraps=os.open)
     def test_state_lock_opens_nonblocking(self, mocked_open: mock.Mock) -> None:
@@ -1097,6 +1772,16 @@ class StateStoreTest(unittest.TestCase):
             state.transcript = long_value
             with self.assertRaisesRegex(ValueError, "is too large"):
                 store.update(transcript=long_value)
+
+    def test_write_would_fit_renders_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "state.json"
+            candidate = RecordingState(status="finalizing")
+
+            self.assertTrue(StateStore.write_would_fit(candidate))
+            with mock.patch("speed_of_cinnamon.state.MAX_STATE_FILE_BYTES", 1):
+                self.assertFalse(StateStore.write_would_fit(candidate))
+            self.assertFalse(path.exists())
 
     def test_sanitize_text_field_rejects_oversized_text_bytes(self) -> None:
         with mock.patch("speed_of_cinnamon.state.MAX_STATE_STRING_CHARS", 4):

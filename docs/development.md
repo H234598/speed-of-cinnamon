@@ -260,7 +260,7 @@ Flag values are validated locally before any artifacts are built:
 To run the manual release workflow from CLI:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2
+gh workflow run release.yml -f tag=vX.Y.Z
 ```
 
 The release runner must have a working Snap build environment. Use

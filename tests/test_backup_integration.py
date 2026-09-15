@@ -26,6 +26,22 @@ from speed_of_cinnamon.backup_state import BackupStateError, BackupStateStore
 
 
 class BackupIntegrationTests(unittest.TestCase):
+    def test_backup_state_lock_requires_bounded_timeout(self):
+        with self.assertRaisesRegex(BackupStateError, "backup state lock timeout is required"):
+            backup_state_module._flock_retry(1, backup_state_module.fcntl.LOCK_EX)
+
+    def test_backup_state_lock_rejects_non_finite_timeout(self):
+        with self.assertRaisesRegex(BackupStateError, "backup state lock timeout is invalid"):
+            backup_state_module._flock_retry(1, backup_state_module.fcntl.LOCK_EX, timeout_seconds=float("inf"))
+
+    def test_backup_state_lock_rejects_oversized_timeout(self):
+        with self.assertRaisesRegex(BackupStateError, "backup state lock timeout exceeds safe limit"):
+            backup_state_module._flock_retry(
+                1,
+                backup_state_module.fcntl.LOCK_EX,
+                timeout_seconds=backup_state_module.BACKUP_STATE_LOCK_TIMEOUT_SECONDS + 1,
+            )
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
@@ -633,6 +649,109 @@ class BackupIntegrationTests(unittest.TestCase):
         self.assertEqual(list(self.target.glob("*.socbackup*")), [])
         self.assertEqual(self.ledger.load()["jobs"][-1]["status"], "failed")
 
+    def test_post_publish_interrupt_reconciles_success_before_reraising(self) -> None:
+        real_record_job = self.ledger.record_job
+        success_attempts = 0
+
+        def record_job(**kwargs: object) -> dict[str, object]:
+            nonlocal success_attempts
+            if kwargs.get("status") == "success":
+                success_attempts += 1
+                if success_attempts == 1:
+                    raise KeyboardInterrupt("post-publish interrupt")
+            return real_record_job(**kwargs)
+
+        with mock.patch.object(self.ledger, "record_job", side_effect=record_job):
+            with self.assertRaises(KeyboardInterrupt):
+                create_backup(
+                    self.target,
+                    sources=self._inputs(),
+                    source_roots=(self.source,),
+                    selection=self._selection(config=False),
+                    app_version="0.2.5",
+                    job_id="post-publish-interrupt",
+                    state_store=self.ledger,
+                )
+
+        archives = list(self.target.glob("*.socbackup"))
+        self.assertEqual(len(archives), 1)
+        self.assertTrue(verify_backup(archives[0]).artifacts)
+        self.assertEqual(self.ledger.load()["jobs"][-1]["status"], "success")
+        self.assertEqual(success_attempts, 2)
+
+    def test_reacquiring_target_lease_reconciles_verified_running_archive(self) -> None:
+        first = create_backup(
+            self.target,
+            sources=self._inputs(),
+            source_roots=(self.source,),
+            selection=self._selection(config=False),
+            app_version="0.2.5",
+            job_id="interrupted-archive",
+            created_at_utc="2026-08-14T00:00:00Z",
+            state_store=self.ledger,
+        )
+        assert first.archive_path is not None
+        self.ledger.record_job(
+            job_id=first.job_id,
+            status="running",
+            created_at_utc="2026-08-14T00:00:00Z",
+            archive_name=first.archive_path.name,
+        )
+
+        second = create_backup(
+            self.target,
+            sources=self._inputs(),
+            source_roots=(self.source,),
+            selection=self._selection(config=False),
+            app_version="0.2.5",
+            job_id="after-recovery",
+            created_at_utc="2026-08-14T00:01:00Z",
+            state_store=self.ledger,
+        )
+
+        self.assertIsNotNone(second.archive_path)
+        jobs = {job["job_id"]: job for job in self.ledger.load()["jobs"]}
+        self.assertEqual(jobs[first.job_id]["status"], "success")
+        self.assertEqual(jobs[second.job_id]["status"], "success")
+
+    def test_active_target_lease_blocks_second_backup(self) -> None:
+        target_fd = backup_module.ensure_directory_without_following_symlinks(
+            self.target,
+            field_name="backup target directory",
+        )
+        lock_fd = backup_module._acquire_backup_lock(target_fd)
+        try:
+            with mock.patch.object(backup_module, "BACKUP_LOCK_TIMEOUT_SECONDS", 0.01):
+                with self.assertRaisesRegex(BackupError, "backup target is busy"):
+                    create_backup(
+                        self.target,
+                        sources=self._inputs(),
+                        source_roots=(self.source,),
+                        selection=self._selection(config=False),
+                        app_version="0.2.5",
+                        job_id="blocked-by-lease",
+                        state_store=self.ledger,
+                    )
+        finally:
+            backup_module._release_backup_lock(lock_fd)
+            backup_module._close_fd(target_fd)
+
+    def test_backup_lock_rejects_non_finite_or_oversized_timeout(self) -> None:
+        target_fd = backup_module.ensure_directory_without_following_symlinks(
+            self.target,
+            field_name="backup target directory",
+        )
+        try:
+            with self.assertRaisesRegex(BackupError, "timeout is invalid"):
+                backup_module._acquire_backup_lock(target_fd, timeout_seconds=float("inf"))
+            with self.assertRaisesRegex(BackupError, "exceeds safe limit"):
+                backup_module._acquire_backup_lock(
+                    target_fd,
+                    timeout_seconds=backup_module.BACKUP_LOCK_TIMEOUT_SECONDS + 1,
+                )
+        finally:
+            backup_module._close_fd(target_fd)
+
     def test_keyring_encrypted_bundle_uses_existing_crypto_contract(self) -> None:
         key = bytes(range(32))
         with (
@@ -781,6 +900,24 @@ class BackupIntegrationTests(unittest.TestCase):
                     pass
         mocked_open.assert_not_called()
 
+    def test_backup_state_json_resource_exhaustion_is_controlled(self):
+        self.ledger.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.ledger.path.write_text("{}\n", encoding="utf-8")
+        for failure in (RecursionError("nested"), MemoryError("budget")):
+            with self.subTest(failure=type(failure).__name__), mock.patch.object(
+                backup_state_module.json, "loads", side_effect=failure
+            ):
+                with self.assertRaisesRegex(BackupStateError, "backup state is invalid"):
+                    self.ledger.load()
+
+    def test_backup_state_read_does_not_probe_through_symlink(self):
+        target = self.root / "outside-state.json"
+        target.write_text('{"schema_version":1,"jobs":[]}\n', encoding="utf-8")
+        self.ledger.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self.ledger.path.symlink_to(target)
+        with self.assertRaises(BackupStateError):
+            self.ledger.load()
+
     def test_backup_state_read_retries_interrupted_read(self):
         self.ledger.record_job(
             job_id="eintr-read",
@@ -799,8 +936,23 @@ class BackupIntegrationTests(unittest.TestCase):
 
         with mock.patch.object(backup_state_module.os, "read", side_effect=interrupted_once):
             state = self.ledger.load()
-        self.assertEqual(attempts, 2)
+        self.assertEqual(attempts, 3)
         self.assertEqual(state["jobs"][0]["job_id"], "eintr-read")
+
+    def test_backup_state_read_handles_short_reads(self):
+        self.ledger.record_job(
+            job_id="short-read",
+            status="success",
+            created_at_utc="2026-08-15T00:00:00Z",
+        )
+        real_read = backup_state_module.os.read
+
+        def short_read(fd, size):
+            return real_read(fd, min(size, 1))
+
+        with mock.patch.object(backup_state_module.os, "read", side_effect=short_read):
+            state = self.ledger.load()
+        self.assertEqual(state["jobs"][0]["job_id"], "short-read")
 
     def test_backup_state_lock_closes_parent_after_lock_close_failure(self):
         close_calls = []

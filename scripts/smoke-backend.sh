@@ -2,10 +2,14 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 safe_fs_cmd=(python3 "${safe_fs}")
+readonly MAX_SMOKE_OUTPUT_BYTES=$((1 * 1024 * 1024))
+readonly MAX_SMOKE_RUNTIME_SECONDS=30
 
 if [[ -z "${HOME:-}" ]]; then
   printf 'HOME must be set.\n' >&2
@@ -114,25 +118,144 @@ if command -v -- "${backend}" >/dev/null 2>&1; then
   backend="$(command -v -- "${backend}")"
 fi
 
+run_backend_bounded() {
+  python3 - "${backend}" "${MAX_SMOKE_OUTPUT_BYTES}" "${MAX_SMOKE_RUNTIME_SECONDS}" "$@" <<'PY'
+import os
+import selectors
+import signal
+import subprocess
+import sys
+import time
+
+backend, limit_text, timeout_text, *arguments = sys.argv[1:]
+limit = int(limit_text)
+timeout_seconds = float(timeout_text)
+reap_timeout_seconds = 1.0
+command = [backend, *arguments]
+process = subprocess.Popen(
+    command,
+    stdout=subprocess.PIPE,
+    stderr=subprocess.STDOUT,
+    start_new_session=True,
+)
+captured = bytearray()
+selector = None
+
+def terminate_process_group() -> None:
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except (OSError, ValueError):
+            pass
+    try:
+        process.wait(timeout=reap_timeout_seconds)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+
+try:
+    assert process.stdout is not None
+    deadline = time.monotonic() + timeout_seconds
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            terminate_process_group()
+            sys.stdout.buffer.write(captured)
+            print("smoke backend timed out", file=sys.stderr)
+            raise SystemExit(124)
+        if not selector.select(remaining):
+            terminate_process_group()
+            sys.stdout.buffer.write(captured)
+            print("smoke backend timed out", file=sys.stderr)
+            raise SystemExit(124)
+        chunk = os.read(process.stdout.fileno(), min(65_536, limit + 1 - len(captured)))
+        if not chunk:
+            selector.unregister(process.stdout)
+            break
+        captured.extend(chunk)
+        if len(captured) > limit:
+            terminate_process_group()
+            sys.stdout.buffer.write(captured[:limit])
+            print("smoke backend output is too large", file=sys.stderr)
+            raise SystemExit(125)
+    try:
+        return_code = process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        terminate_process_group()
+        print("smoke backend did not exit after output closed", file=sys.stderr)
+        raise SystemExit(124)
+finally:
+    terminate_process_group()
+    if selector is not None:
+        selector.close()
+    if process.stdout is not None:
+        process.stdout.close()
+sys.stdout.buffer.write(captured)
+raise SystemExit(return_code)
+PY
+}
+
 start_or_skip_audio_smoke() {
   local output
-  if output="$("${backend}" start "$@" 2>&1)"; then
+  if output="$(run_backend_bounded start "$@" 2>&1)"; then
     printf '%s\n' "${output}"
     return 0
   fi
   printf '%s\n' "${output}"
   if grep -Fq 'no recorder backend started successfully' <<<"${output}"; then
     printf 'Skipping live recorder smoke because no recorder backend can start in this session.\n' >&2
-    "${backend}" cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
+    run_backend_bounded cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
     exit 0
   fi
   return 1
 }
 
-"${backend}" doctor --json
-"${backend}" models --json
-"${backend}" alarms list --json
-"${backend}" alarms check --json
+assert_smoke_transcript() {
+  local output="$1"
+  local expected="$2"
+  python3 -c '
+import json
+import sys
+
+MAX_SMOKE_JSON_BYTES = 1 * 1024 * 1024
+raw = sys.stdin.buffer.read(MAX_SMOKE_JSON_BYTES + 1)
+if len(raw) > MAX_SMOKE_JSON_BYTES:
+    raise SystemExit("smoke backend JSON payload is too large")
+
+
+def reject_duplicate_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON key: {}".format(key))
+        result[key] = value
+    return result
+
+
+def reject_constant(value):
+    raise ValueError("non-finite JSON value: {}".format(value))
+
+
+payload = json.loads(
+    raw.decode("utf-8"),
+    object_pairs_hook=reject_duplicate_keys,
+    parse_constant=reject_constant,
+)
+expected = sys.argv[1]
+if payload.get("status") != "done":
+    raise SystemExit("smoke recording did not finish: {!r}".format(payload.get("status")))
+if payload.get("transcript") != expected:
+    raise SystemExit("smoke transcript does not match expected command output")
+if payload.get("transcript_output_redacted"):
+    raise SystemExit("smoke transcript unexpectedly remained redacted")
+' "${expected}" <<<"${output}"
+}
+
+run_backend_bounded doctor --json
+run_backend_bounded models --json
+run_backend_bounded alarms list --json
+run_backend_bounded alarms check --json
 start_or_skip_audio_smoke \
   --max-seconds 1 \
   --insert-method none \
@@ -140,11 +263,14 @@ start_or_skip_audio_smoke \
   --transcriber-command "printf speed-of-cinnamon-smoke" \
   --json
 sleep 1
-"${backend}" stop \
+stop_output="$(run_backend_bounded stop \
   --insert-method none \
   --transcriber command \
   --transcriber-command "printf speed-of-cinnamon-smoke" \
-  --json
+  --confirm-plaintext-output \
+  --json)"
+printf '%s\n' "${stop_output}"
+assert_smoke_transcript "${stop_output}" "speed-of-cinnamon-smoke"
 
 start_or_skip_audio_smoke \
   --max-seconds 1 \
@@ -153,17 +279,20 @@ start_or_skip_audio_smoke \
   --transcriber-command "printf speed-of-cinnamon-expired-smoke" \
   --json
 sleep 2
-"${backend}" status --json
-"${backend}" toggle \
+run_backend_bounded status --json
+toggle_output="$(run_backend_bounded toggle \
   --insert-method none \
   --transcriber command \
   --transcriber-command "printf speed-of-cinnamon-expired-smoke" \
-  --json
+  --confirm-plaintext-output \
+  --json)"
+printf '%s\n' "${toggle_output}"
+assert_smoke_transcript "${toggle_output}" "speed-of-cinnamon-expired-smoke"
 
 start_or_skip_audio_smoke \
   --max-seconds 10 \
   --insert-method none \
   --json
 sleep 1
-"${backend}" cancel --json
-"${backend}" cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json
+run_backend_bounded cancel --json
+run_backend_bounded cleanup --keep-transcripts 100 --keep-recordings 25 --dry-run --json

@@ -218,6 +218,16 @@ class ReleaseAttestationTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("matrix is incomplete", result.stderr)
 
+    def test_bundle_rejects_directory_entry_overflow(self) -> None:
+        verifier = self._load_verifier()
+        head = "9" * 40
+        self._write_bundle(head=head)
+        (self.bundle / "unexpected-entry").write_text("reject\n", encoding="utf-8")
+
+        with mock.patch.object(verifier, "MAX_BUNDLE_DIRECTORY_ENTRIES", 2):
+            with self.assertRaisesRegex(verifier.AttestationError, "contains too many entries"):
+                verifier.verify_bundle(self.bundle, REPO_ROOT, head)
+
     def test_bundle_rejects_symlinked_bundle_directory(self) -> None:
         head = "e" * 40
         self._write_bundle(head=head)

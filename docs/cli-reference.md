@@ -21,6 +21,7 @@ speed-of-cinnamon diagnostics \
   --applet \
   --settings-json '{"transcriber":"command","transcriber-command":"printf ok"}' \
   --json
+printf '%s\n' '{"group":"manual","message":"example error"}' | speed-of-cinnamon record-error --json
 ```
 
 `doctor` is configuration-aware. With `--applet`, missing ASR is a readiness failure, while missing `xdotool` in
@@ -28,6 +29,10 @@ speed-of-cinnamon diagnostics \
 
 Diagnostics include derived doctor status and runtime metadata. They omit transcript contents, command template
 contents, personal context, and vocabulary.
+
+`record-error` accepts one JSON object on standard input with `group` and `message` fields. It appends a redacted
+entry to the private error journal and its checkbox-friendly Markdown companion under
+`$XDG_STATE_HOME/speed-of-cinnamon/logs/` (or `~/.local/state/speed-of-cinnamon/logs/`).
 
 ## Recording
 

@@ -2,6 +2,9 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
+readonly GIT_TIMEOUT_SECONDS=30
 
 # Local release-gate runs must not contact Hugging Face or send implicit
 # credentials. Model inventory and model loading use only verified local paths.
@@ -27,7 +30,7 @@ attestation="${state_dir}/local-model-e2e-attestation.json"
 tmp_root=""
 tmp_identity=""
 
-for tool in espeak-ng ffmpeg python3 mktemp git; do
+for tool in espeak-ng ffmpeg python3 mktemp git timeout; do
   command -v -- "${tool}" >/dev/null 2>&1 || {
     printf 'local-model-e2e: required tool missing: %s\n' "${tool}" >&2
     exit 2
@@ -53,6 +56,10 @@ trap cleanup EXIT INT TERM
 
 tmp_root="$(mktemp -d "${TMPDIR:-/tmp}/speed-of-cinnamon-local-model-e2e.XXXXXX")"
 tmp_identity="$(python3 "${safe_fs}" identity local-model-e2e "${tmp_root}" --kind dir)"
+mkdir -m 700 -- "${tmp_root}/state"
+# Keep backend state and error journals out of the user's production state.
+# The attestation is written explicitly to the saved release-state path below.
+export XDG_STATE_HOME="${tmp_root}/state"
 models_json="${tmp_root}/models.json"
 cases_file="${tmp_root}/cases.tsv"
 models_manifest="${tmp_root}/models-manifest.json"
@@ -78,6 +85,19 @@ models_json_path, models_manifest_path = sys.argv[1:]
 MAX_LOCAL_MODEL_JSON_BYTES = 4 * 1024 * 1024
 
 
+def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def reject_constant(value: str) -> object:
+    raise ValueError(f"non-finite JSON value: {value}")
+
+
 def load_json(path: Path, label: str) -> object:
     try:
         with path.open("rb") as handle:
@@ -87,7 +107,11 @@ def load_json(path: Path, label: str) -> object:
     if len(raw) > MAX_LOCAL_MODEL_JSON_BYTES:
         raise SystemExit(f"local-model-e2e: {label} exceeds {MAX_LOCAL_MODEL_JSON_BYTES} bytes")
     try:
-        return json.loads(raw.decode("utf-8"))
+        return json.loads(
+            raw.decode("utf-8"),
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_constant,
+        )
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, MemoryError) as exc:
         raise SystemExit(f"local-model-e2e: {label} is invalid JSON") from exc
 
@@ -104,7 +128,10 @@ seen_backends = set()
 unverified_installed = []
 selected_names = set()
 selected_languages = {}
-limit_per_backend = int(os.environ.get("SOC_LOCAL_MODEL_E2E_LIMIT_PER_BACKEND", "0"))
+raw_limit_per_backend = os.environ.get("SOC_LOCAL_MODEL_E2E_LIMIT_PER_BACKEND", "0")
+if not isinstance(raw_limit_per_backend, str) or re.fullmatch(r"[0-9]{1,9}", raw_limit_per_backend) is None:
+    raise SystemExit("local-model-e2e: model limit must be a non-negative decimal integer")
+limit_per_backend = int(raw_limit_per_backend)
 if limit_per_backend < 0:
     raise SystemExit("local-model-e2e: model limit must not be negative")
 selected_per_backend = {}
@@ -211,6 +238,21 @@ from pathlib import Path
 
 MAX_LOCAL_MODEL_JSON_BYTES = 4 * 1024 * 1024
 result_path = Path(sys.argv[1])
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def reject_constant(value: str) -> object:
+    raise ValueError(f"non-finite JSON value: {value}")
+
+
 try:
     with result_path.open("rb") as handle:
         raw = handle.read(MAX_LOCAL_MODEL_JSON_BYTES + 1)
@@ -219,7 +261,11 @@ except OSError as exc:
 if len(raw) > MAX_LOCAL_MODEL_JSON_BYTES:
     raise SystemExit(f"local-model-e2e: transcription result exceeds {MAX_LOCAL_MODEL_JSON_BYTES} bytes")
 try:
-    payload = json.loads(raw.decode("utf-8"))
+    payload = json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_constant,
+    )
 except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, MemoryError) as exc:
     raise SystemExit("local-model-e2e: transcription result is invalid JSON") from exc
 if not isinstance(payload, dict):
@@ -242,7 +288,7 @@ done <"${cases_file}"
   exit 1
 }
 
-git_head="$(git -C "${repo_dir}" rev-parse HEAD)"
+git_head="$(timeout --signal=TERM --kill-after=2s "${GIT_TIMEOUT_SECONDS}s" git -C "${repo_dir}" rev-parse HEAD)"
 created_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 PYTHONPATH="${repo_dir}/src" python3 - "${attestation}" "${git_head}" "${created_at}" "${case_count}" "${ggml_case_count}" "${ct2_case_count}" "${models_manifest}" "${repo_dir}" <<'PY'
 import json
@@ -260,6 +306,21 @@ head, created_at, total, ggml, ct2, models_manifest, repo_dir = sys.argv[2:]
 created = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
 expires_at = (created + timedelta(hours=24)).isoformat().replace("+00:00", "Z")
 MAX_LOCAL_MODEL_JSON_BYTES = 4 * 1024 * 1024
+
+
+def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate JSON key: {key}")
+        result[key] = value
+    return result
+
+
+def reject_constant(value: str) -> object:
+    raise ValueError(f"non-finite JSON value: {value}")
+
+
 try:
     with Path(models_manifest).open("rb") as handle:
         raw = handle.read(MAX_LOCAL_MODEL_JSON_BYTES + 1)
@@ -268,7 +329,11 @@ except OSError as exc:
 if len(raw) > MAX_LOCAL_MODEL_JSON_BYTES:
     raise SystemExit(f"local-model-e2e: model manifest exceeds {MAX_LOCAL_MODEL_JSON_BYTES} bytes")
 try:
-    models = json.loads(raw.decode("utf-8"))
+    models = json.loads(
+        raw.decode("utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+        parse_constant=reject_constant,
+    )
 except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, MemoryError) as exc:
     raise SystemExit("local-model-e2e: model manifest is invalid JSON") from exc
 try:

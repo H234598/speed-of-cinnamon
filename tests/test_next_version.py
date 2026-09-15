@@ -189,16 +189,17 @@ class NextVersionTest(unittest.TestCase):
     def test_from_tag_with_whitespace_is_accepted(self) -> None:
         self.assertEqual(next_version.normalize_tag("  0.1.20  "), next_version.normalize_tag("v0.1.20"))
 
-    def test_from_tag_matching_current_version_without_git_tag_still_fails(self) -> None:
+    def test_from_tag_matching_current_version_without_git_tag_uses_zero_commits(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "pyproject.toml").write_text(
                 "[project]\nname = \"example\"\nversion = \"0.1.20\"\n",
                 encoding="utf-8",
             )
-            code, stderr = run_version_fail_stdout_stderr("--from-tag", "0.1.20", cwd=Path(tmpdir))
+            result = _run_version("--from-tag", "0.1.20", expect_ok=True, cwd=Path(tmpdir))
 
-        self.assertEqual(code, 3)
-        self.assertIn("failed to inspect git tags", stderr)
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.stdout.strip(), "0.1.20")
+        self.assertEqual(result.stderr, "")
 
     def test_from_tag_with_only_whitespace_is_rejected(self) -> None:
         code, stderr = run_version_fail_stdout_stderr("--from-tag", "   ")
@@ -462,8 +463,8 @@ class NextVersionTest(unittest.TestCase):
 
     def test_commits_since_ref_parses_git_output(self) -> None:
         with mock.patch.object(
-            next_version.subprocess,
-            "run",
+            next_version,
+            "_run_git_bounded",
             return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="7\n", stderr=""),
         ) as run:
             self.assertEqual(next_version.commits_since_ref("v0.1.20"), 7)
@@ -471,22 +472,19 @@ class NextVersionTest(unittest.TestCase):
 
     def test_commits_since_ref_trims_ref(self) -> None:
         with mock.patch.object(
-            next_version.subprocess,
-            "run",
+            next_version,
+            "_run_git_bounded",
             return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="8\n", stderr=""),
         ) as run:
             self.assertEqual(next_version.commits_since_ref("  0.1.20  "), 8)
             run.assert_called_once_with(
                 ["git", "rev-list", "--count", "--end-of-options", "0.1.20..HEAD"],
-                check=True,
-                text=True,
-                capture_output=True,
             )
 
     def test_commits_since_ref_terminates_git_options(self) -> None:
         with mock.patch.object(
-            next_version.subprocess,
-            "run",
+            next_version,
+            "_run_git_bounded",
             return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="8\n", stderr=""),
         ) as run:
             self.assertEqual(next_version.commits_since_ref("--all"), 8)
@@ -501,8 +499,8 @@ class NextVersionTest(unittest.TestCase):
 
     def test_commits_since_ref_missing_git_is_git_error(self) -> None:
         with mock.patch.object(
-            next_version.subprocess,
-            "run",
+            next_version,
+            "_run_git_bounded",
             side_effect=FileNotFoundError("git"),
         ):
             with self.assertRaises(next_version.GitEnvironmentError):
@@ -510,14 +508,14 @@ class NextVersionTest(unittest.TestCase):
 
     def test_commits_since_ref_calledprocesserror_without_stderr_is_handled(self) -> None:
         called = subprocess.CalledProcessError(1, ["git", "rev-list", "--count", "v0.1.20..HEAD"], stderr=None)
-        with mock.patch.object(next_version.subprocess, "run", side_effect=called):
+        with mock.patch.object(next_version, "_run_git_bounded", side_effect=called):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.commits_since_ref("v0.1.20")
 
     def test_commits_since_ref_rejects_negative_count(self) -> None:
         with mock.patch.object(
-            next_version.subprocess,
-            "run",
+            next_version,
+            "_run_git_bounded",
             return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="-1\n", stderr=""),
         ):
             with self.assertRaises(next_version.GitEnvironmentError):
@@ -525,12 +523,44 @@ class NextVersionTest(unittest.TestCase):
 
     def test_commits_since_ref_rejects_empty_output(self) -> None:
         with mock.patch.object(
-            next_version.subprocess,
-            "run",
+            next_version,
+            "_run_git_bounded",
             return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="   \n", stderr=""),
         ):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.commits_since_ref("v0.1.20")
+
+    def test_run_git_bounded_rejects_oversized_output(self) -> None:
+        command = [
+            sys.executable,
+            "-c",
+            "import sys; sys.stdout.write('x' * 4097)",
+        ]
+        with self.assertRaisesRegex(next_version.GitEnvironmentError, "output is too large"):
+            next_version._run_git_bounded(command)
+
+    def test_run_git_bounded_times_out_and_reaps(self) -> None:
+        command = [sys.executable, "-c", "import time; time.sleep(1)"]
+        with mock.patch.object(next_version, "GIT_TIMEOUT_SECONDS", 0.01):
+            with self.assertRaisesRegex(next_version.GitEnvironmentError, "git command timed out"):
+                next_version._run_git_bounded(command)
+
+    def test_run_git_bounded_reaps_when_selector_setup_fails(self) -> None:
+        process = mock.Mock()
+        process.stdout = mock.Mock()
+        process.stderr = mock.Mock()
+        process.poll.return_value = None
+        process.wait.side_effect = subprocess.TimeoutExpired("git", 1)
+
+        with (
+            mock.patch.object(next_version.subprocess, "Popen", return_value=process),
+            mock.patch.object(next_version.selectors, "DefaultSelector", side_effect=OSError("selector unavailable")),
+        ):
+            with self.assertRaisesRegex(OSError, "selector unavailable"):
+                next_version._run_git_bounded(["git", "status"])
+
+        process.kill.assert_called_once_with()
+        process.wait.assert_called_once_with(timeout=next_version.GIT_REAP_TIMEOUT_SECONDS)
 
     def test_commits_since_ref_rejects_empty_ref(self) -> None:
         with self.assertRaises(next_version.UserInputError):
@@ -546,16 +576,13 @@ class NextVersionTest(unittest.TestCase):
 
     def test_commits_since_tag_normalizes_input(self) -> None:
         with mock.patch.object(
-            next_version.subprocess,
-            "run",
+            next_version,
+            "_run_git_bounded",
             return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="4\n", stderr=""),
         ) as run:
             self.assertEqual(next_version.commits_since_tag("  0.1.20  "), 4)
             run.assert_called_once_with(
                 ["git", "rev-list", "--count", "--end-of-options", "v0.1.20..HEAD"],
-                check=True,
-                text=True,
-                capture_output=True,
             )
 
     def test_commits_since_tag_rejects_non_string_input(self) -> None:
@@ -566,8 +593,8 @@ class NextVersionTest(unittest.TestCase):
 
     def test_tag_exists_checks_normalized_tag(self) -> None:
         with mock.patch.object(
-            next_version.subprocess,
-            "run",
+            next_version,
+            "_run_git_bounded",
             return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="v0.1.20\n", stderr=""),
         ) as run:
             self.assertTrue(next_version.tag_exists("0.1.20"))
@@ -576,8 +603,8 @@ class NextVersionTest(unittest.TestCase):
 
     def test_tag_exists_without_tag_is_false(self) -> None:
         with mock.patch.object(
-            next_version.subprocess,
-            "run",
+            next_version,
+            "_run_git_bounded",
             return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="v0.1.19\n", stderr=""),
         ):
             self.assertFalse(next_version.tag_exists("0.1.20"))
@@ -625,8 +652,8 @@ class NextVersionTest(unittest.TestCase):
 
     def test_tag_exists_missing_git_is_git_error(self) -> None:
         with mock.patch.object(
-            next_version.subprocess,
-            "run",
+            next_version,
+            "_run_git_bounded",
             side_effect=FileNotFoundError("git"),
         ):
             with self.assertRaises(next_version.GitEnvironmentError):
@@ -634,7 +661,7 @@ class NextVersionTest(unittest.TestCase):
 
     def test_tag_exists_calledprocesserror_is_git_error(self) -> None:
         called = subprocess.CalledProcessError(1, ["git", "tag", "-l", "v0.1.20"], stderr="boom")
-        with mock.patch.object(next_version.subprocess, "run", side_effect=called):
+        with mock.patch.object(next_version, "_run_git_bounded", side_effect=called):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.tag_exists("0.1.20")
 

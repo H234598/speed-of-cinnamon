@@ -315,6 +315,8 @@ def serialize_manifest(manifest: BackupManifest) -> bytes:
 
 def parse_manifest(payload: bytes | str) -> BackupManifest:
     if isinstance(payload, str):
+        if not payload or len(payload) > MAX_MANIFEST_BYTES:
+            raise BackupManifestError("manifest payload is too large or empty")
         raw = payload.encode("utf-8")
     elif isinstance(payload, bytes):
         raw = payload
@@ -330,7 +332,14 @@ def parse_manifest(payload: bytes | str) -> BackupManifest:
         )
     except BackupManifestError:
         raise
-    except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        TypeError,
+        ValueError,
+        RecursionError,
+        MemoryError,
+    ) as exc:
         raise BackupManifestError("manifest JSON is invalid") from exc
     return BackupManifest.from_mapping(document)
 

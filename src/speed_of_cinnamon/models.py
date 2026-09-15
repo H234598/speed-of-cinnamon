@@ -57,8 +57,10 @@ ENGLISH_LANGUAGE_CODES = {"", "en", "eng", "english"}
 MODEL_DOWNLOAD_REDIRECT_CODES = {301, 302, 303, 307, 308}
 MAX_MODEL_DOWNLOAD_REDIRECTS = 5
 MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS = 60 * 60
+MAX_MODEL_ORPHAN_DIRECTORY_ENTRIES = 100_000
 _MODEL_OPERATION_LOCK_SUFFIX = "model-operation.lock"
 _MODEL_CHECKSUM_CACHE_LOCK_SUFFIX = "model-checksum-cache.lock"
+MODEL_OPERATION_LOCK_TIMEOUT_SECONDS = 5.0
 _LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS = (
     "Makefile",
     "pyproject.toml",
@@ -70,6 +72,7 @@ _LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS = (
 _LOCAL_MODEL_ATTESTATION_IGNORED_DIRS = {"__pycache__", ".pytest_cache"}
 MAX_SOURCE_ATTESTATION_FILES = 10_000
 MAX_SOURCE_ATTESTATION_BYTES = 512 * 1024 * 1024
+MAX_SOURCE_ATTESTATION_DIRECTORY_ENTRIES = 100_000
 
 
 def _note_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
@@ -85,13 +88,35 @@ def _fsync_fd(fd: int) -> None:
             continue
 
 
-def _flock_retry(fd: int, operation: int) -> None:
+def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
+    if timeout_seconds is None:
+        raise RuntimeError("model lock timeout is required")
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+        raise RuntimeError("model lock timeout is invalid")
+    try:
+        timeout = float(timeout_seconds)
+    except (OverflowError, ValueError) as exc:
+        raise RuntimeError("model lock timeout is invalid") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise RuntimeError("model lock timeout is invalid")
+    if timeout > MODEL_OPERATION_LOCK_TIMEOUT_SECONDS:
+        raise RuntimeError("model lock timeout exceeds safe limit")
+    if operation & fcntl.LOCK_UN:
+        fcntl.flock(fd, operation)
+        return
+    deadline = time.monotonic() + timeout
+    nonblocking_operation = operation | fcntl.LOCK_NB
     while True:
         try:
-            fcntl.flock(fd, operation)
+            fcntl.flock(fd, nonblocking_operation)
             return
         except InterruptedError:
             continue
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("model lock acquisition timed out")
+            time.sleep(min(0.05, remaining))
 
 
 @contextmanager
@@ -138,7 +163,11 @@ def _locked_model_operation(
                 field_name=f"{lock_label} lock file",
                 require_private_mode=True,
             )
-            _flock_retry(lock_fd, fcntl.LOCK_EX)
+            _flock_retry(
+                lock_fd,
+                fcntl.LOCK_EX,
+                timeout_seconds=MODEL_OPERATION_LOCK_TIMEOUT_SECONDS,
+            )
             assert_fd_is_regular_private_file(
                 lock_fd,
                 field_name=f"{lock_label} lock file",
@@ -154,7 +183,11 @@ def _locked_model_operation(
         cleanup_errors: list[BaseException] = []
         if lock_fd is not None:
             try:
-                _flock_retry(lock_fd, fcntl.LOCK_UN)
+                _flock_retry(
+                    lock_fd,
+                    fcntl.LOCK_UN,
+                    timeout_seconds=MODEL_OPERATION_LOCK_TIMEOUT_SECONDS,
+                )
             except BaseException as cleanup_error:
                 cleanup_errors.append(cleanup_error)
             try:
@@ -227,6 +260,15 @@ def _is_valid_checksum(value: object) -> bool:
 
 def _reject_non_finite_json_number(value: str) -> object:
     raise ValueError(f"non-finite JSON number is not allowed: {value}")
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key is not allowed")
+        result[key] = value
+    return result
 
 
 def _is_valid_cache_entry(entry: Any) -> bool:
@@ -347,7 +389,11 @@ def _read_model_checksum_cache() -> dict[str, dict[str, int | str]]:
         _remove_model_checksum_cache_file(cache_path)
         return {}
     try:
-        payload = json.loads(text, parse_constant=_reject_non_finite_json_number)
+        payload = json.loads(
+            text,
+            parse_constant=_reject_non_finite_json_number,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except (json.JSONDecodeError, ValueError, RecursionError, MemoryError):
         _remove_model_checksum_cache_file(cache_path)
         return {}
@@ -1351,14 +1397,25 @@ def _assert_path_within_model_root(path: Path, root: Path, *, field_name: str = 
 
 
 def _assert_model_path_for_atomic_replace(path: Path, root: Path, *, field_name: str = "model path") -> None:
-    if path.is_symlink():
-        raise ModelError(f"{field_name} must not be a symlink: {path}")
     try:
         assert_no_symlink_ancestors(path, field_name=field_name)
+        path_stat = path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        path_stat = None
+    except OSError as exc:
+        raise ModelError(f"{field_name} could not be inspected safely: {path}") from exc
     except RuntimeError as exc:
         raise ModelError(str(exc)) from exc
+    if path_stat is not None and stat_module.S_ISLNK(path_stat.st_mode):
+        raise ModelError(f"{field_name} must not be a symlink: {path}")
     _assert_path_within_model_root(path, root, field_name=field_name)
-    if not path.parent.exists() or not path.parent.is_dir():
+    try:
+        parent_stat = path.parent.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        parent_stat = None
+    except OSError as exc:
+        raise ModelError(f"{field_name} parent could not be inspected safely: {path.parent}") from exc
+    if parent_stat is None or not stat_module.S_ISDIR(parent_stat.st_mode):
         raise ModelError(f"{field_name} parent is not a directory: {path.parent}")
 
 
@@ -1368,7 +1425,13 @@ def _assert_model_parent_for_atomic_replace(path: Path, root: Path, *, field_nam
     except RuntimeError as exc:
         raise ModelError(str(exc)) from exc
     _assert_path_within_model_root(path, root, field_name=field_name)
-    if path.parent.exists() and not path.parent.is_dir():
+    try:
+        parent_stat = path.parent.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        parent_stat = None
+    except OSError as exc:
+        raise ModelError(f"{field_name} parent could not be inspected safely: {path.parent}") from exc
+    if parent_stat is not None and not stat_module.S_ISDIR(parent_stat.st_mode):
         raise ModelError(f"{field_name} parent is not a directory: {path.parent}")
 
 
@@ -1974,6 +2037,7 @@ def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
         paths.append((relative_path, path))
         path_bytes += entry.st_size
 
+    scanned_directory_entries = 0
     for relative_root in _LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS:
         path = root / relative_root
         try:
@@ -1987,21 +2051,33 @@ def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
             continue
         if not stat_module.S_ISDIR(entry.st_mode):
             raise ModelError(f"source attestation root is not a directory or file: {relative_root}")
-        for current_root, directory_names, file_names in os.walk(path, topdown=True, followlinks=False):
-            current = Path(current_root)
-            kept_directories: list[str] = []
-            for name in sorted(directory_names):
-                if name in _LOCAL_MODEL_ATTESTATION_IGNORED_DIRS:
-                    continue
-                child = current / name
+        pending_directories = [path]
+        while pending_directories:
+            current = pending_directories.pop()
+            children: list[Path] = []
+            try:
+                with os.scandir(current) as directory_entries:
+                    for directory_entry in directory_entries:
+                        scanned_directory_entries += 1
+                        if scanned_directory_entries > MAX_SOURCE_ATTESTATION_DIRECTORY_ENTRIES:
+                            raise ModelError(
+                                "source attestation exceeds "
+                                f"{MAX_SOURCE_ATTESTATION_DIRECTORY_ENTRIES} directory entries"
+                            )
+                        children.append(Path(directory_entry.path))
+            except ModelError:
+                raise
+            except OSError as exc:
+                raise ModelError(f"source attestation directory is unreadable: {current}") from exc
+            for child in sorted(children, key=lambda item: item.name, reverse=True):
                 child_entry = os.lstat(child)
-                if stat_module.S_ISLNK(child_entry.st_mode) or not stat_module.S_ISDIR(child_entry.st_mode):
-                    raise ModelError(f"source attestation directory is unsafe: {child}")
-                kept_directories.append(name)
-            directory_names[:] = kept_directories
-            for name in sorted(file_names):
-                relative_path = (current / name).relative_to(root).as_posix()
-                add_file(relative_path, current / name)
+                if stat_module.S_ISDIR(child_entry.st_mode):
+                    if child.name in _LOCAL_MODEL_ATTESTATION_IGNORED_DIRS:
+                        continue
+                    pending_directories.append(child)
+                    continue
+                relative_path = child.relative_to(root).as_posix()
+                add_file(relative_path, child)
 
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
     if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
@@ -2409,7 +2485,7 @@ def _download_url_to_file_with_fd(
 def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict[str, object]:
     root = _model_root(model)
     _assert_model_parent_for_atomic_replace(path, root, field_name="model path")
-    if path.exists() and not force:
+    if not force and (not model.files or model.repo_id):
         status = model_status(model, verify=True)
         if status["verified"]:
             return {**status, "status": "done", "message": f"model already downloaded: {model.name}"}
@@ -2705,6 +2781,22 @@ def _is_model_orphan_name(model_name: str, candidate_name: str, *, allow_suffixl
     return False
 
 
+def _bounded_model_orphan_names(parent_fd: int, parent: Path) -> list[str]:
+    names: list[str] = []
+    try:
+        with os.scandir(parent_fd) as directory_entries:
+            for directory_entry in directory_entries:
+                if len(names) >= MAX_MODEL_ORPHAN_DIRECTORY_ENTRIES:
+                    raise OSError("model orphan parent contains too many entries")
+                name = directory_entry.name
+                if not isinstance(name, str) or not name:
+                    raise OSError("model orphan parent contains an invalid entry")
+                names.append(name)
+    except OSError as exc:
+        raise ModelError(f"failed to scan model orphan parent: {parent}") from exc
+    return names
+
+
 def _remove_model_orphan_paths(path: Path, root: Path, *, allow_suffixless: bool = False, preflight: bool = False) -> int:
     _assert_path_within_model_root(path, root, field_name="model orphan path")
     parent = path.parent
@@ -2719,10 +2811,7 @@ def _remove_model_orphan_paths(path: Path, root: Path, *, allow_suffixless: bool
     scan_started_at = time.time()
     primary_error: BaseException | None = None
     try:
-        try:
-            names = os.listdir(parent_fd)
-        except OSError as exc:
-            raise ModelError(f"failed to scan model orphan parent: {parent}") from exc
+        names = _bounded_model_orphan_names(parent_fd, parent)
         for name in names:
             if not _is_model_orphan_name(path.name, str(name), allow_suffixless=allow_suffixless):
                 continue
@@ -2785,7 +2874,7 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
     _assert_model_parent_for_atomic_replace(path, root, field_name="model path")
     _ensure_model_parent_directory(path, root, field_name="model path")
     _assert_model_path_for_atomic_replace(path, root, field_name="model path")
-    if path.exists() and not force:
+    if not force:
         status = model_status(model, verify=True)
         if status["verified"]:
             return {**status, "status": "done", "message": f"model already downloaded: {model.name}"}

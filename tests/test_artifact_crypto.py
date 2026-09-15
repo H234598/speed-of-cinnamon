@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import inspect
 import json
 import os
 import socket
@@ -203,6 +204,18 @@ class ArtifactCryptoTest(unittest.TestCase):
                 self.assertEqual(path.stat().st_mode & 0o777, 0o600)
                 self.assertEqual(artifact_crypto.decrypt_bytes(encrypted, kind="transcript"), b"payload")
                 self.assertGreaterEqual(mocked_fsync.call_count, 2)
+
+    def test_passphrase_read_uses_no_follow_open_before_default_generation(self) -> None:
+        source = inspect.getsource(artifact_crypto._read_private_passphrase_file)
+        self.assertNotIn("not path.exists()", source)
+        self.assertNotIn("not path.is_symlink()", source)
+        self.assertIn("except FileNotFoundError:", source)
+
+    def test_configured_default_passphrase_probe_uses_no_follow_lstat(self) -> None:
+        source = inspect.getsource(artifact_crypto._configured_passphrase_file)
+        self.assertIn("path.lstat()", source)
+        self.assertNotIn("path.exists()", source)
+        self.assertNotIn("path.is_symlink()", source)
 
     def test_weak_default_passphrase_file_is_regenerated_securely(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1675,7 +1688,7 @@ class ArtifactCryptoTest(unittest.TestCase):
         stat_entry.open.side_effect = decode_error
         proc_entry.joinpath.return_value = stat_entry
 
-        with mock.patch.object(artifact_crypto.Path, "iterdir", return_value=(proc_entry,)):
+        with mock.patch.object(artifact_crypto, "_bounded_proc_entries", return_value=(proc_entry,)):
             self.assertIsNone(artifact_crypto._secret_tool_process_group_has_live_descendants(1234))
         with mock.patch.object(artifact_crypto, "_read_proc_stat", side_effect=decode_error):
             self.assertFalse(artifact_crypto._secret_tool_leader_is_gone_or_zombie(1234))
@@ -2048,6 +2061,15 @@ class ArtifactCryptoTest(unittest.TestCase):
                 )
 
         self.assertEqual(loads.call_count, 1)
+
+    def test_is_encrypted_payload_rejects_duplicate_json_keys(self) -> None:
+        payload = b'{"magic":"SOCENC1","magic":"SOCENC1"}'
+        self.assertFalse(artifact_crypto.is_encrypted_payload(payload))
+
+    def test_decrypt_bytes_rejects_duplicate_json_keys(self) -> None:
+        payload = b'{"magic":"SOCENC1","magic":"SOCENC1"}'
+        with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "envelope is missing"):
+            artifact_crypto.decrypt_bytes(payload, kind="transcript")
 
     def test_decryption_can_require_encrypted_payload(self) -> None:
         with self.assertRaisesRegex(artifact_crypto.ArtifactCryptoError, "envelope is missing"):

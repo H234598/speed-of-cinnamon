@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import fcntl
 import time
@@ -32,7 +33,7 @@ MAX_STATE_PATH_CHARS = 4_096
 MAX_PENDING_CLEANUP_OWNER_PATHS = 128
 MAX_PENDING_CLEANUP_OWNER_PATH_CHARS = 240
 MAX_PENDING_CLEANUP_BACKUP_ENTRIES = 4_096
-MAX_PENDING_CLEANUP_BACKUP_ENTRY_CHARS = 256
+MAX_PENDING_CLEANUP_BACKUP_ENTRY_CHARS = 384
 MAX_CLEANUP_BACKUP_IDENTITY_VALUE = 18_446_744_073_709_551_615
 MAX_STATE_INT = 2_147_483_647
 STATE_LOCK_TIMEOUT_SECONDS = 5.0
@@ -43,12 +44,28 @@ _CLEANUP_BACKUP_BASENAME_PATTERN = re.compile(
     r"\.cleanup\.[0-9a-f]{16}\.[0-9a-f]{16}"
     r"|"
     r"\.cleanup\.v2\.[0-9a-f]{32}\.[0-9a-f]{32}\.[0-9a-f]{32}"
+    r"|"
+    r"\.cleanup\.v3\.[0-9a-f]{32}\.[0-9a-f]{32}\."
+    r"(?:intent|staged|wiping)\.[0-9a-f]{64}"
+    r"|"
+    r"\.cleanup\.v3\.[0-9a-f]{32}\.[0-9a-f]{32}\."
+    r"(?:intent|claimed|prepared|armed|wiping)\.[0-9a-f]{64}\.[0-9a-f]{32}"
     r")\.bak"
 )
 
 
 def _reject_non_finite_json_number(value: str) -> object:
     raise ValueError(f"non-finite JSON number is not allowed: {value}")
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key is not allowed")
+        result[key] = value
+    return result
+
 _STATE_READ_ERRORS = frozenset(
     {
         "state file could not be read",
@@ -66,23 +83,47 @@ def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseExcept
     primary.add_note("state lock cleanup failed")
 
 
+def _preferred_lock_error(
+    primary_error: BaseException | None,
+    cleanup_errors: list[BaseException],
+) -> BaseException | None:
+    if isinstance(primary_error, (KeyboardInterrupt, SystemExit)):
+        return primary_error
+    for cleanup_error in cleanup_errors:
+        if isinstance(cleanup_error, (KeyboardInterrupt, SystemExit)):
+            return cleanup_error
+    if primary_error is not None:
+        return primary_error
+    return cleanup_errors[0] if cleanup_errors else None
+
+
 def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
     if timeout_seconds is None:
-        while True:
-            try:
-                fcntl.flock(fd, operation)
-                return
-            except InterruptedError:
-                continue
+        raise RuntimeError("state lock timeout is required")
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+        raise RuntimeError("state lock timeout is invalid")
+    try:
+        finite_timeout = math.isfinite(timeout_seconds)
+    except OverflowError:
+        finite_timeout = False
+    if not finite_timeout or timeout_seconds <= 0:
+        raise RuntimeError("state lock timeout is invalid")
+    if timeout_seconds > STATE_LOCK_TIMEOUT_SECONDS:
+        raise RuntimeError("state lock timeout exceeds safe limit")
+    if operation & fcntl.LOCK_UN:
+        fcntl.flock(fd, operation)
+        return
     deadline = time.monotonic() + timeout_seconds
     nonblocking_operation = operation | fcntl.LOCK_NB
+    first_attempt = True
     while True:
+        if not first_attempt and deadline - time.monotonic() <= 0:
+            raise RuntimeError("state lock acquisition timed out") from None
+        first_attempt = False
         try:
             fcntl.flock(fd, nonblocking_operation)
             return
-        except InterruptedError:
-            continue
-        except BlockingIOError:
+        except (BlockingIOError, InterruptedError):
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise RuntimeError("state lock acquisition timed out") from None
@@ -154,6 +195,7 @@ class RecordingState:
     pending_cleanup_backup_entries: tuple[str, ...] = ()
     cleanup_backup_journal_overflow: bool = False
     cleanup_backup_journal_restore: bool = False
+    recorder_scope: str = ""
 
 
 class StateStore:
@@ -187,77 +229,104 @@ class StateStore:
         if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
             raise RuntimeError("secure state lock open is not supported on this platform")
         nonblock_flag = getattr(os, "O_NONBLOCK", 0)
-        parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="state lock directory")
-        try:
-            assert_fd_is_private_directory(parent_fd, field_name="state lock directory")
-            fd = os.open(
-                lock_path.name,
-                os.O_RDWR
-                | os.O_CREAT
-                | nofollow_flag
-                | nonblock_flag
-                | getattr(os, "O_CLOEXEC", 0),
-                0o600,
-                dir_fd=parent_fd,
-            )
-        except RuntimeError as exc:
-            try:
-                os.close(parent_fd)
-            except OSError as cleanup_error:
-                _note_lock_cleanup_failure(exc, cleanup_error)
-            except BaseException as cleanup_error:
-                _note_lock_cleanup_failure(exc, cleanup_error)
-            raise
-        except Exception as exc:
-            error = RuntimeError("failed to open state lock file")
-            try:
-                os.close(parent_fd)
-            except OSError as cleanup_error:
-                _note_lock_cleanup_failure(error, cleanup_error)
-            except BaseException as cleanup_error:
-                _note_lock_cleanup_failure(error, cleanup_error)
-            raise error from exc
-        except BaseException as exc:
-            try:
-                os.close(parent_fd)
-            except OSError as cleanup_error:
-                _note_lock_cleanup_failure(exc, cleanup_error)
-            except BaseException as cleanup_error:
-                _note_lock_cleanup_failure(exc, cleanup_error)
-            raise
+        parent_fd = ensure_directory_without_following_symlinks(
+            lock_path.parent,
+            field_name="state lock directory",
+        )
+        fd: int | None = None
         primary_error: BaseException | None = None
+        primary_cause: BaseException | None = None
+        cleanup_errors: list[BaseException] = []
         try:
-            assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
-            _flock_retry(
-                fd,
-                fcntl.LOCK_SH if shared else fcntl.LOCK_EX,
-                timeout_seconds=STATE_LOCK_TIMEOUT_SECONDS,
-            )
-            assert_fd_is_regular_private_file(fd, field_name="state lock file", require_private_mode=True)
-            yield
-        except BaseException as exc:
-            primary_error = exc
-            raise
+            try:
+                assert_fd_is_private_directory(
+                    parent_fd,
+                    field_name="state lock directory",
+                )
+                fd = os.open(
+                    lock_path.name,
+                    os.O_RDWR
+                    | os.O_CREAT
+                    | nofollow_flag
+                    | nonblock_flag
+                    | getattr(os, "O_CLOEXEC", 0),
+                    0o600,
+                    dir_fd=parent_fd,
+                )
+            except BaseException as exc:
+                if isinstance(exc, RuntimeError) or not isinstance(
+                    exc,
+                    Exception,
+                ):
+                    primary_error = exc
+                else:
+                    primary_error = RuntimeError(
+                        "failed to open state lock file"
+                    )
+                    primary_cause = exc
+            if primary_error is None:
+                try:
+                    assert fd is not None
+                    assert_fd_is_regular_private_file(
+                        fd,
+                        field_name="state lock file",
+                        require_private_mode=True,
+                    )
+                    _flock_retry(
+                        fd,
+                        fcntl.LOCK_SH if shared else fcntl.LOCK_EX,
+                        timeout_seconds=STATE_LOCK_TIMEOUT_SECONDS,
+                    )
+                    assert_fd_is_regular_private_file(
+                        fd,
+                        field_name="state lock file",
+                        require_private_mode=True,
+                    )
+                    yield
+                except BaseException as exc:
+                    primary_error = exc
         finally:
-            cleanup_errors: list[BaseException] = []
-            try:
-                _flock_retry(fd, fcntl.LOCK_UN)
-            except BaseException as cleanup_error:
-                cleanup_errors.append(cleanup_error)
-            try:
-                os.close(fd)
-            except BaseException as cleanup_error:
-                cleanup_errors.append(cleanup_error)
+            if fd is not None:
+                try:
+                    _flock_retry(
+                        fd,
+                        fcntl.LOCK_UN,
+                        timeout_seconds=STATE_LOCK_TIMEOUT_SECONDS,
+                    )
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
+                try:
+                    os.close(fd)
+                except BaseException as cleanup_error:
+                    cleanup_errors.append(cleanup_error)
             try:
                 os.close(parent_fd)
             except BaseException as cleanup_error:
                 cleanup_errors.append(cleanup_error)
-            if cleanup_errors:
-                if primary_error is not None:
-                    for additional_error in cleanup_errors:
-                        _note_lock_cleanup_failure(primary_error, additional_error)
-                else:
-                    raise cleanup_errors[0]
+            selected_error = _preferred_lock_error(
+                primary_error,
+                cleanup_errors,
+            )
+            if selected_error is not None:
+                if (
+                    primary_error is not None
+                    and selected_error is not primary_error
+                ):
+                    selected_error.add_note(
+                        "state lock primary operation failed"
+                    )
+                for additional_error in cleanup_errors:
+                    if additional_error is not selected_error:
+                        _note_lock_cleanup_failure(
+                            selected_error,
+                            additional_error,
+                        )
+                if (
+                    selected_error is primary_error
+                    and primary_cause is not None
+                ):
+                    raise selected_error from primary_cause
+                raise selected_error from None
 
     @staticmethod
     def _sanitize_text_field(
@@ -504,6 +573,7 @@ class StateStore:
                 "input_device",
                 "error",
                 "updated_at",
+                "recorder_scope",
             }:
                 normalized[field_name] = StateStore._sanitize_text_field(value, field_name=field_name)
             elif field_name == "transcript":
@@ -549,6 +619,10 @@ class StateStore:
                     value,
                     field_name=field_name,
                 )
+        if normalized.get("pid") is None:
+            # A cgroup scope is meaningful only while its leader identity is
+            # persisted; never carry an ownership token into terminal state.
+            normalized["recorder_scope"] = ""
         pending_entries = normalized.get(
             "pending_cleanup_backup_entries",
             (),
@@ -632,7 +706,11 @@ class StateStore:
             )
             if _contains_escaped_null(data_text):
                 return RecordingState(error="state file could not be read")
-            data = json.loads(data_text, parse_constant=_reject_non_finite_json_number)
+            data = json.loads(
+                data_text,
+                parse_constant=_reject_non_finite_json_number,
+                object_pairs_hook=_reject_duplicate_json_keys,
+            )
             if not isinstance(data, dict):
                 return RecordingState(error="state file is malformed")
             normalized = StateStore._normalize_state_data(data)
@@ -648,7 +726,10 @@ class StateStore:
         with self._locked():
             self._write_unlocked(state)
 
-    def _write_unlocked(self, state: RecordingState) -> RecordingState:
+    @staticmethod
+    def _render_state_for_write(
+        state: RecordingState,
+    ) -> tuple[dict[str, Any], str, int]:
         payload = asdict(state)
         payload["updated_at"] = now_iso()
         normalized_payload = StateStore._normalize_state_data(payload)
@@ -660,6 +741,22 @@ class StateStore:
             rendered_size = _utf8_byte_count(rendered, field_name="state payload")
         except ValueError as exc:
             raise RuntimeError("state payload is not valid UTF-8") from exc
+        return normalized_payload, rendered, rendered_size
+
+    @staticmethod
+    def write_would_fit(state: RecordingState) -> bool:
+        try:
+            _payload, _rendered, rendered_size = (
+                StateStore._render_state_for_write(state)
+            )
+        except (RuntimeError, TypeError, ValueError, MemoryError, RecursionError):
+            return False
+        return rendered_size <= MAX_STATE_FILE_BYTES
+
+    def _write_unlocked(self, state: RecordingState) -> RecordingState:
+        normalized_payload, rendered, rendered_size = (
+            StateStore._render_state_for_write(state)
+        )
         if rendered_size > MAX_STATE_FILE_BYTES:
             raise RuntimeError("state file is too large")
         try:

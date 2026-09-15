@@ -41,13 +41,17 @@ class PathsTest(unittest.TestCase):
             with (
                 mock.patch.object(Path, "home", return_value=Path("relative-home")),
                 mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)),
+                mock.patch.dict(paths.os.environ, {"XDG_STATE_HOME": ""}, clear=False),
             ):
                 self.assertEqual(paths.xdg_state_home(), private_root / ".local" / "state")
 
             self.assertTrue(private_root.is_dir())
 
     def test_xdg_path_rejects_non_text_environment_values(self) -> None:
-        with mock.patch("speed_of_cinnamon.paths.os.environ.__getitem__", return_value=123):
+        with (
+            mock.patch.dict(paths.os.environ, {"XDG_STATE_HOME": ""}, clear=False),
+            mock.patch("speed_of_cinnamon.paths.os.environ.__getitem__", return_value=123),
+        ):
             self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
             self.assertEqual(paths.xdg_state_home(), Path.home() / ".local" / "state")
             self.assertEqual(paths.xdg_cache_home(), Path.home() / ".cache")
@@ -151,8 +155,10 @@ class PathsTest(unittest.TestCase):
             temp_root.mkdir()
             private_root = temp_root / f"{paths.APP_ID}-{os.getuid()}"
 
-            with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=symlink_home), mock.patch(
-                "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)
+            with (
+                mock.patch("speed_of_cinnamon.paths.Path.home", return_value=symlink_home),
+                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)),
+                mock.patch.dict(paths.os.environ, {"XDG_STATE_HOME": ""}, clear=False),
             ):
                 self.assertEqual(paths.xdg_data_home(), private_root / ".local" / "share")
                 self.assertEqual(paths.xdg_state_home(), private_root / ".local" / "state")

@@ -18,6 +18,7 @@ from speed_of_cinnamon.models import CATALOG, ModelError, source_attestation_sna
 
 MAX_ATTESTATION_BYTES = 4 * 1024 * 1024
 EXPECTED_FILES = ("local-model-e2e-attestation.json", "real-e2e-attestation.json")
+MAX_BUNDLE_DIRECTORY_ENTRIES = 64
 COMMON_ATTESTATION_FIELDS = frozenset(
     {"schema_version", "git_head", "created_at", "expires_at", "matrix", "source"}
 )
@@ -265,7 +266,21 @@ def verify_bundle(bundle_dir: Path, repo_root: Path, expected_head: str) -> None
     bundle_stat = os.lstat(bundle)
     if stat.S_ISLNK(bundle_stat.st_mode) or not stat.S_ISDIR(bundle_stat.st_mode) or bundle_stat.st_mode & 0o022:
         raise AttestationError("release attestation bundle directory is unsafe")
-    entries = sorted(path.name for path in bundle.iterdir())
+    entries: list[str] = []
+    try:
+        with os.scandir(bundle) as bundle_entries:
+            for bundle_entry in bundle_entries:
+                if len(entries) >= MAX_BUNDLE_DIRECTORY_ENTRIES:
+                    raise AttestationError("release attestation bundle contains too many entries")
+                name = bundle_entry.name
+                if not isinstance(name, str):
+                    raise AttestationError("release attestation bundle entry name is invalid")
+                entries.append(name)
+    except AttestationError:
+        raise
+    except OSError as exc:
+        raise AttestationError("release attestation bundle could not be scanned") from exc
+    entries.sort()
     if entries != sorted(EXPECTED_FILES):
         raise AttestationError("release attestation bundle contains unexpected files")
     try:

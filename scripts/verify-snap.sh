@@ -11,6 +11,7 @@ readonly MAX_SNAP_PATH_DEPTH=40
 readonly MAX_SNAP_FILE_BYTES=$((128 * 1024 * 1024))
 readonly MAX_SNAP_TOTAL_FILE_BYTES=$((1024 * 1024 * 1024))
 readonly MAX_SNAP_LISTING_BYTES=$((16 * 1024 * 1024))
+readonly SNAP_VERIFY_TIMEOUT_SECONDS=120
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
@@ -41,6 +42,7 @@ require_cmd mkdir
 require_cmd mktemp
 require_cmd python3
 require_cmd unsquashfs
+require_cmd timeout
 
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 if [[ -L "${safe_fs}" || ! -f "${safe_fs}" || "$(stat -c '%F' "${safe_fs}")" != "regular file" ]]; then
@@ -52,6 +54,10 @@ if [[ "$(stat -c '%h' "${safe_fs}")" -ne 1 ]]; then
   exit 1
 fi
 safe_fs_cmd=(python3 "${safe_fs}")
+
+run_unsquashfs_bounded() {
+  timeout --signal=TERM --kill-after=10s "${SNAP_VERIFY_TIMEOUT_SECONDS}s" unsquashfs "$@"
+}
 
 if [[ $# -lt 1 ]]; then
   printf 'usage: %s <snap-path>\n' "$0" >&2
@@ -197,7 +203,7 @@ fi
 size="${snapshot_size}"
 
 snap_listing="${tmp_dir}/snap-listing.txt"
-unsquashfs -lln -no-progress "${snap_snapshot}" > "${snap_listing}"
+run_unsquashfs_bounded -lln -no-progress "${snap_snapshot}" > "${snap_listing}"
 python3 - <<'PY' "${snap_listing}" "${MAX_SNAP_ENTRIES}" "${MAX_SNAP_PATH_CHARS}" "${MAX_SNAP_PATH_DEPTH}" "${MAX_SNAP_FILE_BYTES}" "${MAX_SNAP_TOTAL_FILE_BYTES}" "${MAX_SNAP_LISTING_BYTES}"
 from pathlib import PurePosixPath
 from pathlib import Path
@@ -343,8 +349,34 @@ def validate_symlink_target(path: PurePosixPath, target_text: str) -> None:
 
 
 def read_bounded_utf8(path: Path, label: str) -> str:
-    with path.open("rb") as handle:
-        payload = handle.read(MAX_SNAP_LISTING_BYTES + 1)
+    import os
+    import stat
+
+    no_follow = getattr(os, "O_NOFOLLOW", None)
+    if no_follow is None:
+        raise SystemExit(f"{label} cannot be opened without symlink protection")
+    try:
+        fd = os.open(path, os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0))
+    except OSError as exc:
+        raise SystemExit(f"{label} could not be opened safely") from exc
+    try:
+        before = os.fstat(fd)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise SystemExit(f"{label} must be a private regular file")
+        if before.st_size > MAX_SNAP_LISTING_BYTES:
+            raise SystemExit(f"{label} exceeds {MAX_SNAP_LISTING_BYTES} bytes")
+        with os.fdopen(fd, "rb", closefd=False) as handle:
+            payload = handle.read(MAX_SNAP_LISTING_BYTES + 1)
+        after = os.fstat(fd)
+        if (
+            (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+        ):
+            raise SystemExit(f"{label} changed during read")
+    except OSError as exc:
+        raise SystemExit(f"{label} could not be read safely") from exc
+    finally:
+        os.close(fd)
     if len(payload) > MAX_SNAP_LISTING_BYTES:
         raise SystemExit(f"{label} exceeds {MAX_SNAP_LISTING_BYTES} bytes")
     try:
@@ -424,9 +456,9 @@ PY
 snap_yaml="${tmp_dir}/snap.yaml"
 snap_backend="${tmp_dir}/speed-of-cinnamon"
 snap_cryptography_about="${tmp_dir}/cryptography-about.py"
-unsquashfs -cat "${snap_snapshot}" meta/snap.yaml > "${snap_yaml}"
-unsquashfs -cat "${snap_snapshot}" bin/speed-of-cinnamon > "${snap_backend}"
-unsquashfs -cat "${snap_snapshot}" usr/lib/python3/dist-packages/cryptography/__about__.py > "${snap_cryptography_about}"
+run_unsquashfs_bounded -cat "${snap_snapshot}" meta/snap.yaml > "${snap_yaml}"
+run_unsquashfs_bounded -cat "${snap_snapshot}" bin/speed-of-cinnamon > "${snap_backend}"
+run_unsquashfs_bounded -cat "${snap_snapshot}" usr/lib/python3/dist-packages/cryptography/__about__.py > "${snap_cryptography_about}"
 python3 - "${snap_cryptography_about}" <<'PY'
 from pathlib import Path
 import re
@@ -435,8 +467,34 @@ import sys
 MAX_SNAP_METADATA_BYTES = 1 << 20
 about_path = Path(sys.argv[1])
 version = None
-with about_path.open("rb") as handle:
-    payload = handle.read(MAX_SNAP_METADATA_BYTES + 1)
+import os
+import stat
+
+no_follow = getattr(os, "O_NOFOLLOW", None)
+if no_follow is None:
+    raise SystemExit("snap cryptography metadata cannot be opened without symlink protection")
+try:
+    fd = os.open(about_path, os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0))
+except OSError as exc:
+    raise SystemExit("snap cryptography metadata could not be opened safely") from exc
+try:
+    before = os.fstat(fd)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise SystemExit("snap cryptography metadata must be a private regular file")
+    if before.st_size > MAX_SNAP_METADATA_BYTES:
+        raise SystemExit("snap cryptography metadata is too large")
+    with os.fdopen(fd, "rb", closefd=False) as handle:
+        payload = handle.read(MAX_SNAP_METADATA_BYTES + 1)
+    after = os.fstat(fd)
+    if (
+        (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+        != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    ):
+        raise SystemExit("snap cryptography metadata changed during read")
+except OSError as exc:
+    raise SystemExit("snap cryptography metadata could not be read safely") from exc
+finally:
+    os.close(fd)
 if len(payload) > MAX_SNAP_METADATA_BYTES:
     raise SystemExit("snap cryptography metadata is too large")
 try:
@@ -461,8 +519,35 @@ import sys
 MAX_SNAP_METADATA_BYTES = 1 << 20
 snap_yaml_path, expected_version = sys.argv[1:]
 fields: dict[str, str] = {}
-with Path(snap_yaml_path).open("rb") as handle:
-    payload = handle.read(MAX_SNAP_METADATA_BYTES + 1)
+import os
+import stat
+
+no_follow = getattr(os, "O_NOFOLLOW", None)
+if no_follow is None:
+    raise SystemExit("snap metadata cannot be opened without symlink protection")
+snap_yaml_file = Path(snap_yaml_path)
+try:
+    fd = os.open(snap_yaml_file, os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0))
+except OSError as exc:
+    raise SystemExit("snap metadata could not be opened safely") from exc
+try:
+    before = os.fstat(fd)
+    if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+        raise SystemExit("snap metadata must be a private regular file")
+    if before.st_size > MAX_SNAP_METADATA_BYTES:
+        raise SystemExit("snap metadata is too large")
+    with os.fdopen(fd, "rb", closefd=False) as handle:
+        payload = handle.read(MAX_SNAP_METADATA_BYTES + 1)
+    after = os.fstat(fd)
+    if (
+        (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+        != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+    ):
+        raise SystemExit("snap metadata changed during read")
+except OSError as exc:
+    raise SystemExit("snap metadata could not be read safely") from exc
+finally:
+    os.close(fd)
 if len(payload) > MAX_SNAP_METADATA_BYTES:
     raise SystemExit("snap metadata is too large")
 try:

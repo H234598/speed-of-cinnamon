@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import re
 import fcntl
@@ -53,18 +54,35 @@ def _reject_non_finite_json_number(value: str) -> object:
     raise ValueError(f"non-finite JSON number is not allowed: {value}")
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key is not allowed")
+        result[key] = value
+    return result
+
+
 def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
     primary.add_note("alarm store lock cleanup failed")
 
 
 def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
     if timeout_seconds is None:
-        while True:
-            try:
-                fcntl.flock(fd, operation)
-                return
-            except InterruptedError:
-                continue
+        raise RuntimeError("alarm lock timeout is required")
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+        raise RuntimeError("alarm lock timeout is invalid")
+    try:
+        finite_timeout = math.isfinite(timeout_seconds)
+    except OverflowError:
+        finite_timeout = False
+    if not finite_timeout or timeout_seconds <= 0:
+        raise RuntimeError("alarm lock timeout is invalid")
+    if timeout_seconds > ALARM_LOCK_TIMEOUT_SECONDS:
+        raise RuntimeError("alarm lock timeout exceeds safe limit")
+    if operation & fcntl.LOCK_UN:
+        fcntl.flock(fd, operation)
+        return
     deadline = time_module.monotonic() + timeout_seconds
     nonblocking_operation = operation | fcntl.LOCK_NB
     while True:
@@ -156,7 +174,7 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
     finally:
         cleanup_errors: list[BaseException] = []
         try:
-            _flock_retry(fd, fcntl.LOCK_UN)
+            _flock_retry(fd, fcntl.LOCK_UN, timeout_seconds=ALARM_LOCK_TIMEOUT_SECONDS)
         except BaseException as cleanup_error:
             cleanup_errors.append(cleanup_error)
         try:
@@ -426,7 +444,11 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
     if _contains_escaped_null(text):
         raise RuntimeError("alarm store contains invalid null byte")
     try:
-        raw = json.loads(text, parse_constant=_reject_non_finite_json_number)
+        raw = json.loads(
+            text,
+            parse_constant=_reject_non_finite_json_number,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except (json.JSONDecodeError, ValueError, RecursionError, MemoryError) as exc:
         raise RuntimeError("alarm store could not be parsed") from exc
     if not isinstance(raw, dict):

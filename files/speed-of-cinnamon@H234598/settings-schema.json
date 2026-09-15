@@ -91,7 +91,9 @@
       "type": "section",
       "title": "Notifications",
       "keys": [
-        "notify-recording",
+        "notify-recording-start",
+        "notify-recording-limit",
+        "notify-recording-longer",
         "notify-complete",
         "notify-error"
       ]
@@ -385,9 +387,20 @@
     "height": 120,
     "default": ""
   },
-  "notify-recording": {
+  "notify-recording-start": {
     "type": "switch",
-    "description": "Notify when recording starts or reaches the time limit",
+    "description": "Notify when recording starts",
+    "default": false
+  },
+  "notify-recording-limit": {
+    "type": "switch",
+    "description": "Notify when recording reaches the time limit",
+    "default": false
+  },
+  "notify-recording-longer": {
+    "type": "switch",
+    "description": "Notify me when recording is running for longer",
+    "tooltip": "Warn once when recording has been running for 5 minutes.",
     "default": false
   },
   "notify-complete": {
@@ -434,7 +447,7 @@
   "soften-profanity": {
     "type": "switch",
     "description": "Replace profanity with harmless words",
-    "tooltip": "When enabled, common German and English profanity is replaced locally with harmless equivalents before transcripts are saved, copied, pasted, or auto-submitted. Disabled by default to avoid changing dictated code, commands, or exact quotes.",
+    "tooltip": "When enabled, common German and English profanity is replaced locally with harmless equivalents before transcripts are saved, copied, pasted, or auto-submitted. Enabled by default; disable it to preserve dictated code, commands, or exact quotes.",
     "default": true
   },
   "show-profanity-filter-list": {
@@ -475,7 +488,7 @@
   "auto-paste-window-title": {
     "type": "entry",
     "description": "Auto-Submit target markers",
-    "tooltip": "Built-in marker names match the full window title or known window classes/app IDs; custom strings match the full window title case-insensitively. Matching targets receive Enter only after Clipboard and paste, not after Clipboard only. Empty disables Auto-Submit. Max 4096 chars.",
+    "tooltip": "Built-in marker names match known window classes/app IDs; Codex additionally requires an explicit Codex marker. Custom strings match the full window title case-insensitively. Matching targets receive Enter only after Clipboard and paste, not after Clipboard only. Empty disables Auto-Submit. Max 4096 chars.",
     "default": "codex, Terminal, Telegram, Ghostty, Kitty"
   },
   "codex-terminal-submit-key": {
@@ -485,14 +498,16 @@
     "options": {
       "Enter": "enter",
       "Tab": "tab",
-      "Custom": "custom"
+      "Custom": "custom-key",
+      "Custom (legacy)": "custom"
     },
-    "default": "enter"
+    "default": "tab"
   },
   "codex-terminal-custom-key": {
     "type": "entry",
     "description": "Custom Codex terminal submit key",
     "tooltip": "One key name for xdotool/wtype, for example F6, Escape, Space, Page_Up, or Return. Invalid values fail closed to F6. Used only when Codex terminal submit key is Custom.",
+    "dependency": "codex-terminal-submit-key=custom-key",
     "default": "F6"
   },
   "auto-backup-enabled": {

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -40,6 +41,53 @@ class BackupManifestTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 backup._close_fd(42, strict=True)
 
+    def test_tar_member_restore_read_uses_bounded_chunks(self) -> None:
+        payload = b"x" * (backup.HASH_CHUNK_BYTES * 2 + 7)
+
+        class ChunkedStream:
+            def __init__(self, data: bytes) -> None:
+                self.data = data
+                self.offset = 0
+                self.requests: list[int] = []
+
+            def read(self, size: int) -> bytes:
+                self.requests.append(size)
+                end = min(self.offset + size, len(self.data))
+                chunk = self.data[self.offset : end]
+                self.offset = end
+                return chunk
+
+        stream = ChunkedStream(payload)
+        self.assertEqual(backup._read_tar_member_exact(stream, len(payload)), payload)
+        self.assertLessEqual(max(stream.requests), backup.HASH_CHUNK_BYTES)
+
+    def test_archive_reader_never_reads_or_seeks_past_limit(self) -> None:
+        reader = backup._BoundedArchiveReader(io.BytesIO(b"abcdef"), 4)
+        self.assertEqual(reader.read(), b"abcd")
+        self.assertEqual(reader.read(1), b"")
+        with self.assertRaisesRegex(backup.BackupError, "seek exceeded"):
+            reader.seek(5)
+
+    def test_restore_dry_run_reports_conflicts_without_writing(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            archive = root / "backup.socbackup"
+            archive.write_bytes(b"placeholder")
+            destination = root / "restore"
+            manifest = self._manifest()
+            with mock.patch.object(backup, "verify_backup", return_value=manifest):
+                plan = backup.restore_dry_run(archive, destination)
+            self.assertEqual(plan.conflicts, ())
+            self.assertFalse(destination.exists())
+
+            artifact = destination / "transcripts" / "001.txt"
+            artifact.parent.mkdir(parents=True)
+            artifact.write_bytes(b"existing")
+            with mock.patch.object(backup, "verify_backup", return_value=manifest):
+                conflict_plan = backup.restore_dry_run(archive, destination)
+            self.assertEqual(conflict_plan.conflicts, ("transcripts/001.txt",))
+            self.assertEqual(artifact.read_bytes(), b"existing")
+
     def test_manifest_roundtrip_is_canonical(self) -> None:
         manifest = self._manifest()
         rendered = backup_manifest.serialize_manifest(manifest)
@@ -58,6 +106,14 @@ class BackupManifestTest(unittest.TestCase):
             backup_manifest.parse_manifest(duplicate)
         with self.assertRaisesRegex(backup_manifest.BackupManifestError, "non-finite"):
             backup_manifest.parse_manifest(b'{"schema_version":NaN}')
+
+    def test_manifest_json_resource_exhaustion_is_controlled(self) -> None:
+        for failure in (RecursionError("nested"), MemoryError("budget")):
+            with self.subTest(failure=type(failure).__name__), mock.patch.object(
+                backup_manifest.json, "loads", side_effect=failure
+            ):
+                with self.assertRaisesRegex(backup_manifest.BackupManifestError, "manifest JSON is invalid"):
+                    backup_manifest.parse_manifest(b"{}")
 
     def test_manifest_rejects_wrong_json_field_types_without_leaking_type_errors(self) -> None:
         document = self._manifest().to_dict()
@@ -156,6 +212,8 @@ class BackupManifestTest(unittest.TestCase):
                 backup_manifest.hash_regular_file(source, max_bytes=1)
         with self.assertRaisesRegex(backup_manifest.BackupManifestError, "too large"):
             backup_manifest.parse_manifest(b"{}" + b" " * backup_manifest.MAX_MANIFEST_BYTES)
+        with self.assertRaisesRegex(backup_manifest.BackupManifestError, "too large"):
+            backup_manifest.parse_manifest("x" * (backup_manifest.MAX_MANIFEST_BYTES + 1))
 
 
 if __name__ == "__main__":

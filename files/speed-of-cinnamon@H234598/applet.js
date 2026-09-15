@@ -22,7 +22,11 @@ const LIFECYCLE_REMOVING = "REMOVING";
 const LIFECYCLE_REMOVED = "REMOVED";
 const LIFECYCLE_ERROR_WINDOW_MS = 60000;
 const LIFECYCLE_ERROR_THRESHOLD = 3;
+const MAX_ERROR_JOURNAL_QUEUE = 128;
+const ERROR_JOURNAL_RETRY_BASE_MS = 250;
+const ERROR_JOURNAL_RETRY_MAX_MS = 4000;
 const PAYLOAD_STATUSES = ["idle", "recording", "recorded", "processing", "done", "error", "setup"];
+const BACKEND_PAYLOAD_STATUSES = ["idle", "recording", "recorded", "processing", "finalizing", "done", "error", "skipped", "warning"];
 const HOTKEY_ID = "speed-of-cinnamon-toggle";
 const PRIMARY_HOTKEY_ID = "speed-of-cinnamon-primary-language";
 const SECONDARY_HOTKEY_ID = "speed-of-cinnamon-secondary-language";
@@ -57,10 +61,14 @@ const CLIPBOARD_MAX_TARGETS = 16;
 const MAX_CLIPBOARD_TARGET_OUTPUT_BYTES = 65536;
 const MAX_XDOTOOL_TARGET_OUTPUT_BYTES = 4096;
 const X11_COMMAND_TIMEOUT_MS = 2000;
-const SCREEN_SAVER_QUERY_TIMEOUT_MS = 500;
+// cinnamon-screensaver-command may cross 1 s on a busy desktop. Keep the
+// keyboard path fail-closed, but do not classify normal D-Bus latency as an
+// unavailable lock state.
+const SCREEN_SAVER_QUERY_TIMEOUT_MS = 2500;
 const MAX_KEYBOARD_COMMAND_TIMEOUT_MS = 300000;
 const MAX_CANCEL_RECOVERY_ATTEMPTS = 3;
 const ALARM_CHECK_SECONDS = 60;
+const AUTO_RELISTEN_RETRY_DELAY_MS = 250;
 const MAX_ALARM_MENU_ENTRIES = 128;
 const MAX_ALARM_NOTIFICATIONS = 32;
 const MAX_INPUT_SOURCE_MENU_ENTRIES = 128;
@@ -161,8 +169,8 @@ function utf8ByteLength(value) {
 const MIN_TRANSCRIPT_FILES = 1;
 const MAX_TRANSCRIPT_FILES = 1000;
 const DEFAULT_AUTO_PASTE_TITLE = "codex, Terminal, Telegram, Ghostty, Kitty";
-const CODEX_TERMINAL_SUBMIT_KEY_MODES = ["enter", "tab", "custom"];
-const DEFAULT_CODEX_TERMINAL_SUBMIT_KEY = "enter";
+const CODEX_TERMINAL_SUBMIT_KEY_MODES = ["enter", "tab", "custom-key"];
+const DEFAULT_CODEX_TERMINAL_SUBMIT_KEY = "tab";
 const DEFAULT_CODEX_TERMINAL_CUSTOM_KEY = "F6";
 const AUTO_PASTE_TITLE_PRESETS = [
   "codex",
@@ -337,6 +345,9 @@ const OUTPUT_METHODS = [
   "type",
   "none"
 ];
+const OUTPUT_METHOD_ALIASES = {
+  "clipboard-paste.submit": "clipboard-paste-submit"
+};
 const OUTPUT_METHOD_SEMANTICS_VERSION = 2;
 const RECORDER_METHODS = [
   "auto",
@@ -381,7 +392,9 @@ const BOOLEAN_IMPORT_SETTINGS = {
   "auto-transcribe-timeout": true,
   "auto-relisten": true,
   "keep-recording-artifacts": true,
-  "notify-recording": true,
+  "notify-recording-start": true,
+  "notify-recording-limit": true,
+  "notify-recording-longer": true,
   "notify-complete": true,
   "notify-error": true,
   "append-space": true,
@@ -467,7 +480,9 @@ const EXPORTABLE_SETTINGS = [
   ["input-device", "inputDevice"],
   ["personal-context", "personalContext"],
   ["vocabulary", "vocabulary"],
-  ["notify-recording", "notifyRecording"],
+  ["notify-recording-start", "notifyRecordingStart"],
+  ["notify-recording-limit", "notifyRecordingLimit"],
+  ["notify-recording-longer", "notifyRecordingLonger"],
   ["notify-complete", "notifyComplete"],
   ["notify-error", "notifyError"],
   ["status-icon-ready", "statusIconReady"],
@@ -539,7 +554,11 @@ MyApplet.prototype = {
       dialogs: [],
       processes: {},
       cancellables: {},
+      cancellableGroups: {},
+      timerGroups: {},
+      timerOwners: {},
     };
+    this._processCleanupFailureLatch = {};
     this._orphanedSignals = [];
     this._orphanedHotkeys = [];
     this._orphanedProcesses = [];
@@ -558,11 +577,16 @@ MyApplet.prototype = {
       if (this._blockedHotkeyIds && this._blockedHotkeyIds[HOTKEY_ID] === true) {
         return;
       }
+      if (this._recordingStartToken) {
+        this._cancelRecording();
+        return;
+      }
+      if (this.recordingStartPendingAfterCleanup === true || this.recordingStartRetryTimer) {
+        this._cancelRecording();
+        return;
+      }
       if (!this._hasActiveRecordingState() && !this.isCommandRunning) {
-        if (!this._rememberFocusedWindow(false)) {
-          return;
-        }
-        this._toggleRecording();
+        this._startWithLanguage(this._currentLanguage());
         return;
       }
       this._toggleRecording();
@@ -598,7 +622,11 @@ MyApplet.prototype = {
     this.settingsWindowToken = null;
     this._cleanupCommandToken = null;
     this._recordingCommandToken = null;
+    this._recordingStartToken = null;
     this.processCleanupRetryTimer = 0;
+    this.errorJournalRetryTimer = 0;
+    this.errorJournalRetryCount = 0;
+    this.errorJournalRetryScheduling = false;
     this.recordingStartPendingAfterCleanup = false;
     this.recordingStartRetryTimer = 0;
     this._externalApiEnvMonitorCancelSucceeded = false;
@@ -634,9 +662,168 @@ MyApplet.prototype = {
 
   _logLifecycleError: function(group, error) {
     try {
+      this._recordErrorFile(group, error);
       global.logError("Speed of Cinnamon [" + String(group || "unknown") + "]: " + this._lifecycleErrorText(error));
     } catch (ignored) {
       // Logging must never become a second failure during recovery.
+    }
+  },
+
+  _recordErrorFile: function(group, error) {
+    if (this.appletRemoved || typeof this._spawnJson !== "function") {
+      return;
+    }
+    let message = this._lifecycleErrorText(error);
+    if (!message) {
+      return;
+    }
+    try {
+      if (!Array.isArray(this.errorJournalQueue)) {
+        this.errorJournalQueue = [];
+      }
+      if (this.errorJournalQueue.length >= MAX_ERROR_JOURNAL_QUEUE) {
+        this.errorJournalQueue.shift();
+      }
+      this.errorJournalQueue.push({
+        group: String(group || "unknown").slice(0, 128),
+        message: message
+      });
+      this._drainErrorJournalQueue();
+    } catch (ignored) {
+      // Logging must never become a second failure during recovery.
+    }
+  },
+
+  _drainErrorJournalQueue: function() {
+    if (
+      this.errorJournalInFlight === true ||
+      this.errorJournalRetryTimer ||
+      this.errorJournalRetryScheduling === true ||
+      this.appletRemoved ||
+      typeof this._spawnJson !== "function" ||
+      !Array.isArray(this.errorJournalQueue) ||
+      this.errorJournalQueue.length === 0
+    ) {
+      return;
+    }
+    let entry = this.errorJournalQueue.shift();
+    if (!entry || typeof entry.message !== "string" || entry.message === "") {
+      this._drainErrorJournalQueue();
+      return;
+    }
+    let callbackCompleted = false;
+    try {
+      this.errorJournalInFlight = true;
+      let handle = this._spawnJson(
+        [this._cliCommand(), "record-error", "--json"],
+        (payload) => {
+          if (callbackCompleted) {
+            return;
+          }
+          callbackCompleted = true;
+          this.errorJournalInFlight = false;
+          let journalSucceeded = Boolean(
+            payload &&
+            typeof payload === "object" &&
+            !Array.isArray(payload) &&
+            payload.status === "done" &&
+            payload.logged === true
+          );
+          if (!journalSucceeded) {
+            try {
+              this._requeueErrorJournalEntry(entry);
+              this._safeLogError(new Error("Error journal command failed"));
+              this._scheduleErrorJournalRetry();
+            } catch (ignored) {
+              // Journal recovery must remain bounded and non-recursive.
+            }
+            return;
+          }
+          this.errorJournalRetryCount = 0;
+          this._clearErrorJournalRetryTimer();
+          try {
+            this._drainErrorJournalQueue();
+          } catch (ignored) {
+            // Logging must never become a second failure during recovery.
+          }
+        },
+        {
+          inputText: JSON.stringify(entry),
+          invalidatesStatus: false,
+          resourceGroup: "error-journal",
+          timeoutMs: 3000
+        }
+      );
+      if (!handle && !callbackCompleted) {
+        this.errorJournalInFlight = false;
+        this._requeueErrorJournalEntry(entry);
+        this._scheduleErrorJournalRetry();
+      }
+    } catch (ignored) {
+      this.errorJournalInFlight = false;
+      this._requeueErrorJournalEntry(entry);
+      this._safeLogError(new Error("Error journal command failed"));
+      this._scheduleErrorJournalRetry();
+    }
+  },
+
+  _requeueErrorJournalEntry: function(entry) {
+    if (!Array.isArray(this.errorJournalQueue)) {
+      this.errorJournalQueue = [];
+    }
+    while (this.errorJournalQueue.length >= MAX_ERROR_JOURNAL_QUEUE) {
+      this.errorJournalQueue.pop();
+    }
+    this.errorJournalQueue.unshift(entry);
+  },
+
+  _clearErrorJournalRetryTimer: function() {
+    return this._clearTrackedTimer(
+      "error-journal-retry",
+      "errorJournalRetryTimer",
+      undefined,
+      "error-journal"
+    );
+  },
+
+  _scheduleErrorJournalRetry: function() {
+    if (!this._lifecycleAllowsWork() || this.appletRemoved) {
+      return false;
+    }
+    if (this.errorJournalRetryTimer) {
+      return true;
+    }
+    if (this.errorJournalRetryScheduling === true) {
+      return false;
+    }
+    let retryCount = Number.isInteger(this.errorJournalRetryCount)
+      ? Math.max(0, Math.min(16, this.errorJournalRetryCount))
+      : 0;
+    let delay = Math.min(ERROR_JOURNAL_RETRY_MAX_MS, ERROR_JOURNAL_RETRY_BASE_MS * Math.pow(2, retryCount));
+    this.errorJournalRetryScheduling = true;
+    try {
+      let timerId;
+      try {
+        timerId = this._scheduleTrackedTimer("error-journal-retry", delay, () => {
+          this.errorJournalRetryTimer = 0;
+          if (!this._lifecycleAllowsWork() || this.appletRemoved) {
+            return false;
+          }
+          this._drainErrorJournalQueue();
+          return false;
+        }, false, "errorJournalRetryTimer", "error-journal");
+      } catch (error) {
+        this._safeLogError(error);
+        return false;
+      }
+      if (!timerId) {
+        this._safeLogError(new Error("Error journal retry could not be scheduled"));
+        return false;
+      }
+      this.errorJournalRetryCount = Math.min(16, retryCount + 1);
+      return true;
+    } finally {
+      this.errorJournalRetryScheduling = false;
     }
   },
 
@@ -646,6 +833,14 @@ MyApplet.prototype = {
     } catch (ignored) {
       // Best-effort diagnostics must never escape a recovery path.
     }
+  },
+
+  _reportSubprocessError: function(resourceGroup, group, error) {
+    if (resourceGroup === "error-journal") {
+      this._safeLogError(error);
+      return;
+    }
+    this._recordLifecycleError(group, error);
   },
 
   _recordLifecycleError: function(group, error) {
@@ -750,11 +945,24 @@ MyApplet.prototype = {
     return (...args) => this._runGuarded(group, () => callback.apply(this, args), fallback);
   },
 
-  _guardStateCallback: function(group, callback, fallback) {
+  _guardStateCallback: function(group, callback, fallback, resourceGroup) {
     if (typeof callback !== "function") {
       return null;
     }
     let key = String(group || "state-callback");
+    if (resourceGroup === "error-journal") {
+      return (...args) => {
+        try {
+          if (!this._lifecycleAllowsWork()) {
+            return fallback;
+          }
+          return callback.apply(this, args);
+        } catch (error) {
+          this._safeLogError(error);
+          return fallback;
+        }
+      };
+    }
     return (...args) => this._runStateGuarded(key, () => callback.apply(this, args), fallback);
   },
 
@@ -781,12 +989,17 @@ MyApplet.prototype = {
     }
     this.lifecycleState = LIFECYCLE_REMOVING;
     this.appletRemoved = true;
+    this.errorJournalRetryScheduling = false;
     this.spawnGeneration += 1;
+    this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
+    this.targetWindowXPendingGeneration = 0;
+    this.targetWindowWaylandEvidence = null;
     return true;
   },
 
   _finishTeardown: function() {
     this.lifecycleState = LIFECYCLE_REMOVED;
+    this.errorJournalRetryScheduling = false;
     this._teardownComplete = true;
   },
 
@@ -2452,7 +2665,7 @@ MyApplet.prototype = {
     return String(prefix || "resource") + "-" + String(this._resourceTokenSequence);
   },
 
-  _registerCancellable: function(cancellable) {
+  _registerCancellable: function(cancellable, resourceGroup) {
     let token = this._nextResourceToken("cancellable");
     if (!cancellable) {
       return token;
@@ -2466,6 +2679,10 @@ MyApplet.prototype = {
       registry = this._resourceRegistry.cancellables;
       registrationAttempted = true;
       registry[token] = cancellable;
+      if (!this._resourceRegistry.cancellableGroups) {
+        this._resourceRegistry.cancellableGroups = {};
+      }
+      this._resourceRegistry.cancellableGroups[token] = resourceGroup === "error-journal" ? "error-journal" : "";
       if (registry[token] !== cancellable) {
         throw new Error("Cancellable could not be registered");
       }
@@ -2482,28 +2699,32 @@ MyApplet.prototype = {
           }
         } catch (rollbackError) {
           rollbackFailed = true;
-          this._recordLifecycleError("cancellable-registration-rollback", rollbackError);
+          this._reportSubprocessError(resourceGroup, "cancellable-registration-rollback", rollbackError);
+        }
+        if (!rollbackFailed && this._resourceRegistry && this._resourceRegistry.cancellableGroups) {
+          delete this._resourceRegistry.cancellableGroups[token];
         }
       }
       if (rollbackFailed) {
-        this._trackOrphanedCancellable(token, false);
+        this._trackOrphanedCancellable(token, false, resourceGroup);
         try {
           if (!error || (typeof error !== "object" && typeof error !== "function")) {
             error = new Error(String(error || "Cancellable registration failed"));
           }
           error.cancellableToken = token;
         } catch (tokenError) {
-          this._recordLifecycleError("cancellable-registration-token", tokenError);
+          this._reportSubprocessError(resourceGroup, "cancellable-registration-token", tokenError);
         }
       }
       throw error;
     }
   },
 
-  _unregisterCancellable: function(token) {
+  _unregisterCancellable: function(token, resourceGroup) {
     if (!token) {
       return true;
     }
+    let storedResourceGroup = resourceGroup;
     try {
       if (!this._resourceRegistry || !this._resourceRegistry.cancellables) {
         throw new Error("Cancellable registry is unavailable");
@@ -2511,18 +2732,25 @@ MyApplet.prototype = {
       if (!Object.prototype.hasOwnProperty.call(this._resourceRegistry.cancellables, token)) {
         return true;
       }
+      storedResourceGroup = this._resourceRegistry.cancellableGroups &&
+        this._resourceRegistry.cancellableGroups[token] === "error-journal"
+        ? "error-journal"
+        : resourceGroup;
       let deleted = delete this._resourceRegistry.cancellables[token];
       if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.cancellables, token)) {
         throw new Error("Cancellable could not be unregistered");
       }
+      if (this._resourceRegistry.cancellableGroups) {
+        delete this._resourceRegistry.cancellableGroups[token];
+      }
       return true;
     } catch (error) {
-      this._recordLifecycleError("cancellable-unregister", error);
+      this._reportSubprocessError(storedResourceGroup, "cancellable-unregister", error);
       return false;
     }
   },
 
-  _trackOrphanedCancellable: function(token, cancelSucceeded) {
+  _trackOrphanedCancellable: function(token, cancelSucceeded, resourceGroup) {
     try {
       if (!token) {
         throw new Error("Cancellable orphan token is invalid");
@@ -2536,10 +2764,14 @@ MyApplet.prototype = {
         if (cancelSucceeded === true) {
           knownEntry.cancelSucceeded = true;
         }
+        if (resourceGroup === "error-journal") {
+          knownEntry.resourceGroup = "error-journal";
+        }
       } else {
         let entry = {
           token: key,
           cancelSucceeded: cancelSucceeded === true,
+          resourceGroup: resourceGroup === "error-journal" ? "error-journal" : "",
         };
         this._orphanedCancellables.push(entry);
         if (this._orphanedCancellables.indexOf(entry) < 0) {
@@ -2548,12 +2780,12 @@ MyApplet.prototype = {
       }
       return true;
     } catch (error) {
-      this._recordLifecycleError("cancellable-orphan", error);
+      this._reportSubprocessError(resourceGroup, "cancellable-orphan", error);
       return false;
     }
   },
 
-  _untrackOrphanedCancellable: function(token) {
+  _untrackOrphanedCancellable: function(token, resourceGroup) {
     if (!Array.isArray(this._orphanedCancellables)) {
       return true;
     }
@@ -2564,13 +2796,14 @@ MyApplet.prototype = {
       if (!entry || entry.token !== key) {
         continue;
       }
+      let entryResourceGroup = entry.resourceGroup === "error-journal" ? "error-journal" : resourceGroup;
       try {
         let removed = this._orphanedCancellables.splice(index, 1);
         if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedCancellables.indexOf(entry) >= 0) {
           throw new Error("Cancellable orphan entry could not be removed");
         }
       } catch (error) {
-        this._recordLifecycleError("cancellable-orphan", error);
+        this._reportSubprocessError(entryResourceGroup, "cancellable-orphan", error);
         success = false;
       }
     }
@@ -2595,7 +2828,11 @@ MyApplet.prototype = {
           if (!Object.prototype.hasOwnProperty.call(registry, token)) {
             continue;
           }
-          if (!this._trackOrphanedCancellable(token, false)) {
+          let registeredGroup = this._resourceRegistry.cancellableGroups &&
+            this._resourceRegistry.cancellableGroups[token] === "error-journal"
+            ? "error-journal"
+            : undefined;
+          if (!this._trackOrphanedCancellable(token, false, registeredGroup)) {
             success = false;
           }
         }
@@ -2606,25 +2843,26 @@ MyApplet.prototype = {
     }
     for (let index = this._orphanedCancellables.length - 1; index >= 0; index--) {
       let entry = this._orphanedCancellables[index];
+      let entryResourceGroup = entry && entry.resourceGroup === "error-journal" ? "error-journal" : undefined;
       if (!entry || !entry.token) {
-        this._recordLifecycleError("cancellable-orphan", new Error("Cancellable orphan entry is invalid"));
+        this._reportSubprocessError(entryResourceGroup, "cancellable-orphan", new Error("Cancellable orphan entry is invalid"));
         success = false;
         continue;
       }
       let registry = this._resourceRegistry && this._resourceRegistry.cancellables;
       if (!registry) {
-        this._recordLifecycleError("cancellable-state", new Error("Cancellable registry is unavailable"));
+        this._reportSubprocessError(entryResourceGroup, "cancellable-state", new Error("Cancellable registry is unavailable"));
         success = false;
         continue;
       }
       let cancellable = registry[entry.token];
       if (!cancellable) {
         if (entry.cancelSucceeded === true) {
-          if (!this._untrackOrphanedCancellable(entry.token)) {
+          if (!this._untrackOrphanedCancellable(entry.token, entryResourceGroup)) {
             success = false;
           }
         } else {
-          this._recordLifecycleError("cancellable-state", new Error("Orphaned cancellable is missing from registry"));
+          this._reportSubprocessError(entryResourceGroup, "cancellable-state", new Error("Orphaned cancellable is missing from registry"));
           success = false;
         }
         continue;
@@ -2642,16 +2880,16 @@ MyApplet.prototype = {
           entry.cancelSucceeded = true;
           cancelSucceeded = true;
         } catch (error) {
-          this._recordLifecycleError("cancellable-cancel", error);
+          this._reportSubprocessError(entryResourceGroup, "cancellable-cancel", error);
           success = false;
           continue;
         }
       }
-      if (!cancelSucceeded || !this._unregisterCancellable(entry.token)) {
+      if (!cancelSucceeded || !this._unregisterCancellable(entry.token, entryResourceGroup)) {
         success = false;
         continue;
       }
-      if (!this._untrackOrphanedCancellable(entry.token)) {
+        if (!this._untrackOrphanedCancellable(entry.token, entryResourceGroup)) {
         success = false;
       }
     }
@@ -2694,7 +2932,7 @@ MyApplet.prototype = {
           }
         } catch (rollbackError) {
           rollbackFailed = true;
-          this._recordLifecycleError("process-registration-rollback", rollbackError);
+          this._reportSubprocessError(entry.group, "process-registration-rollback", rollbackError);
         }
       }
       if (rollbackFailed) {
@@ -2705,17 +2943,18 @@ MyApplet.prototype = {
           }
           error.processToken = token;
         } catch (tokenError) {
-          this._recordLifecycleError("process-registration-token", tokenError);
+          this._reportSubprocessError(entry.group, "process-registration-token", tokenError);
         }
       }
       throw error;
     }
   },
 
-  _unregisterProcess: function(token) {
+  _unregisterProcess: function(token, resourceGroup) {
     if (!token) {
       return true;
     }
+    let storedResourceGroup = resourceGroup;
     try {
       if (!this._resourceRegistry || !this._resourceRegistry.processes) {
         throw new Error("Process registry is unavailable");
@@ -2723,13 +2962,17 @@ MyApplet.prototype = {
       if (!Object.prototype.hasOwnProperty.call(this._resourceRegistry.processes, token)) {
         return true;
       }
+      let entry = this._resourceRegistry.processes[token];
+      if (entry && entry.group === "error-journal") {
+        storedResourceGroup = "error-journal";
+      }
       let deleted = delete this._resourceRegistry.processes[token];
       if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.processes, token)) {
         throw new Error("Process could not be unregistered");
       }
       return true;
     } catch (error) {
-      this._recordLifecycleError("process-unregister", error);
+      this._reportSubprocessError(storedResourceGroup, "process-unregister", error);
       return false;
     }
   },
@@ -2765,6 +3008,9 @@ MyApplet.prototype = {
         if (!knownEntry.processGroupIdentity && processGroupIdentity) {
           knownEntry.processGroupIdentity = processGroupIdentity;
         }
+        if (group === "error-journal") {
+          knownEntry.group = "error-journal";
+        }
       } else {
         let entry = {
           process: process,
@@ -2781,12 +3027,12 @@ MyApplet.prototype = {
       }
       return true;
     } catch (error) {
-      this._recordLifecycleError("process-orphan", error);
+      this._reportSubprocessError(group, "process-orphan", error);
       return false;
     }
   },
 
-  _untrackOrphanedProcess: function(process) {
+  _untrackOrphanedProcess: function(process, resourceGroup) {
     if (!Array.isArray(this._orphanedProcesses)) {
       return true;
     }
@@ -2796,13 +3042,14 @@ MyApplet.prototype = {
       if (!entry || entry.process !== process) {
         continue;
       }
+      let entryResourceGroup = entry.group === "error-journal" ? "error-journal" : resourceGroup;
       try {
         let removed = this._orphanedProcesses.splice(index, 1);
         if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedProcesses.indexOf(entry) >= 0) {
           throw new Error("Process orphan entry could not be removed");
         }
       } catch (error) {
-        this._recordLifecycleError("process-orphan", error);
+        this._reportSubprocessError(entryResourceGroup, "process-orphan", error);
         success = false;
       }
     }
@@ -2848,11 +3095,12 @@ MyApplet.prototype = {
     }
     for (let index = this._orphanedProcesses.length - 1; index >= 0; index--) {
       let entry = this._orphanedProcesses[index];
+      let entryResourceGroup = entry && entry.group === "error-journal" ? "error-journal" : undefined;
       if (wantedGroup !== null && entry && String(entry.group || "process") !== wantedGroup) {
         continue;
       }
       if (!entry || !entry.process) {
-        this._recordLifecycleError("process-orphan", new Error("Process orphan entry is invalid"));
+        this._reportSubprocessError(entryResourceGroup, "process-orphan", new Error("Process orphan entry is invalid"));
         success = false;
         continue;
       }
@@ -2868,7 +3116,7 @@ MyApplet.prototype = {
         }
       }
       if (!terminationSucceeded) {
-        if (!this._terminateProcess(entry.process)) {
+        if (!this._terminateProcess(entry.process, entryResourceGroup)) {
           success = false;
           continue;
         }
@@ -2878,16 +3126,16 @@ MyApplet.prototype = {
       if (entry.registryToken) {
         let registry = this._resourceRegistry && this._resourceRegistry.processes;
         if (!registry) {
-          this._recordLifecycleError("process-state", new Error("Process registry is unavailable"));
+          this._reportSubprocessError(entryResourceGroup, "process-state", new Error("Process registry is unavailable"));
           success = false;
           continue;
         }
-        if (!this._unregisterProcess(entry.registryToken)) {
+        if (!this._unregisterProcess(entry.registryToken, entryResourceGroup)) {
           success = false;
           continue;
         }
       }
-      if (!this._untrackOrphanedProcess(entry.process)) {
+      if (!this._untrackOrphanedProcess(entry.process, entryResourceGroup)) {
         success = false;
       }
     }
@@ -2946,16 +3194,186 @@ MyApplet.prototype = {
     return true;
   },
 
-  _scheduleProcessCleanupRetry: function() {
+  _scheduleProcessCleanupRetry: function(requestedGroup) {
     if (!this._lifecycleAllowsWork()) {
       return false;
     }
-    if (!this._processCleanupStillPending()) {
+    let retryGroup = requestedGroup ? String(requestedGroup) : "";
+    if (retryGroup !== "") {
+      try {
+        if (!Array.isArray(this._processCleanupRetryGroups)) {
+          this._processCleanupRetryGroups = [];
+        }
+        if (this._processCleanupRetryGroups.indexOf(retryGroup) < 0) {
+          this._processCleanupRetryGroups.push(retryGroup);
+        }
+      } catch (error) {
+        this._recordLifecycleError("process-cleanup-state", error);
+        return false;
+      }
+    }
+    let cleanupPending = false;
+    try {
+      cleanupPending = this._processCleanupStillPending();
+    } catch (error) {
+      this._recordLifecycleError("process-cleanup-state", error);
+      return false;
+    }
+    if (!cleanupPending) {
       return true;
     }
-    if (this.processCleanupRetryTimer) {
-      return true;
+    // Reclaim a stale retry entry before trusting matching numeric property
+    // and registry values. Ambiguous source removal remains failed; it must
+    // never be retried against a possibly reused ID.
+    if (Array.isArray(this._orphanedTimers) && this._orphanedTimers.some((entry) =>
+        entry && String(entry.name || "timer") === "process-cleanup-retry")) {
+      let orphanCleanupSucceeded = false;
+      try {
+        orphanCleanupSucceeded = this._retryOrphanedTimers();
+      } catch (error) {
+        this._recordLifecycleError("process-cleanup-retry", error);
+      }
+      let retryTimerStillOrphaned = this._orphanedTimers.some((entry) =>
+        entry && String(entry.name || "timer") === "process-cleanup-retry"
+      );
+      if (!orphanCleanupSucceeded || retryTimerStillOrphaned) {
+        this._recordLifecycleError(
+          "process-cleanup-retry",
+          new Error("Process cleanup retry timer could not be reclaimed")
+        );
+        return false;
+      }
     }
+    let retryTimerId = this.processCleanupRetryTimer || 0;
+    let registeredRetryTimerId = this._resourceRegistry && this._resourceRegistry.timers
+      ? this._resourceRegistry.timers["process-cleanup-retry"] || 0
+      : 0;
+    // Numeric source IDs are safe only while registry and property agree.
+    // A property-only stale reference can be detached without a syscall;
+    // mismatches fail closed rather than removing a reused source ID.
+    if (retryTimerId || registeredRetryTimerId) {
+      let timerIdentityMatches = Boolean(
+        retryTimerId && registeredRetryTimerId && retryTimerId === registeredRetryTimerId
+      );
+      if (timerIdentityMatches && typeof this._trackedTimerOwnedBy === "function") {
+        try {
+          timerIdentityMatches = this._trackedTimerOwnedBy(
+            "process-cleanup-retry",
+            retryTimerId,
+            "processCleanupRetryTimer"
+          ) === true;
+        } catch (error) {
+          this._recordLifecycleError("process-cleanup-retry", error);
+          return false;
+        }
+      } else if (timerIdentityMatches) {
+        timerIdentityMatches = false;
+      }
+      if (timerIdentityMatches) {
+        return true;
+      }
+      if (retryTimerId && !registeredRetryTimerId) {
+        try {
+          this.processCleanupRetryTimer = 0;
+          this.processCleanupRetryTimerOwner = null;
+        } catch (error) {
+          this._recordLifecycleError("process-cleanup-retry", error);
+          return false;
+        }
+        retryTimerId = 0;
+      }
+      if (retryTimerId || registeredRetryTimerId) {
+        this._recordLifecycleError(
+          "process-cleanup-retry",
+          new Error("Process cleanup retry timer ownership is ambiguous")
+        );
+        return false;
+      }
+    }
+    if (Array.isArray(this._orphanedTimers)) {
+      let orphanedRetryTimer = this._orphanedTimers.some((entry) => {
+        return entry && String(entry.name || "timer") === "process-cleanup-retry";
+      });
+      if (orphanedRetryTimer) {
+        let orphanCleanupSucceeded = false;
+        try {
+          orphanCleanupSucceeded = this._retryOrphanedTimers();
+        } catch (error) {
+          this._recordLifecycleError("process-cleanup-retry", error);
+        }
+        let retryTimerStillOrphaned = this._orphanedTimers.some((entry) => {
+          return entry && String(entry.name || "timer") === "process-cleanup-retry";
+        });
+        if (!orphanCleanupSucceeded || retryTimerStillOrphaned) {
+          this._recordLifecycleError(
+            "process-cleanup-retry",
+            new Error("Process cleanup retry timer could not be reclaimed")
+          );
+          return false;
+        }
+      }
+    }
+    let groupStillPending = (wanted) => {
+      let registeredProcesses = this._resourceRegistry && this._resourceRegistry.processes;
+      if (!registeredProcesses || (typeof registeredProcesses !== "object" && typeof registeredProcesses !== "function")) {
+        throw new Error("Process registry is unavailable");
+      }
+      for (let token in registeredProcesses) {
+        if (!Object.prototype.hasOwnProperty.call(registeredProcesses, token)) {
+          continue;
+        }
+        let entry = registeredProcesses[token];
+        if (entry && typeof entry === "object" && entry.process &&
+            String(entry.group || "process") === wanted) {
+          return true;
+        }
+      }
+      if (!Array.isArray(this._orphanedProcesses)) {
+        throw new Error("Process orphan registry is unavailable");
+      }
+      return this._orphanedProcesses.some((entry) => entry && entry.process &&
+        String(entry.group || "process") === wanted);
+    };
+    let resetCompletedRetryGroups = () => {
+      let groups = Array.isArray(this._processCleanupRetryGroups)
+        ? this._processCleanupRetryGroups.slice()
+        : [];
+      let remainingGroups = [];
+      let allProven = true;
+      for (let retryGroup of groups) {
+        let pendingForGroup;
+        try {
+          pendingForGroup = groupStillPending(retryGroup);
+        } catch (error) {
+          this._recordLifecycleError("process-cleanup-state", error);
+          remainingGroups.push(retryGroup);
+          allProven = false;
+          continue;
+        }
+        if (pendingForGroup) {
+          remainingGroups.push(retryGroup);
+          allProven = false;
+          continue;
+        }
+        try {
+          if (this._processCleanupFailureLatch &&
+              Object.prototype.hasOwnProperty.call(this._processCleanupFailureLatch, retryGroup)) {
+            delete this._processCleanupFailureLatch[retryGroup];
+          }
+          let episodeStates = this._processCleanupEpisodeByGroup;
+          if (episodeStates && episodeStates[retryGroup] &&
+              Array.isArray(episodeStates[retryGroup].processRefs)) {
+            episodeStates[retryGroup].processRefs = [];
+          }
+        } catch (error) {
+          this._recordLifecycleError("process-cleanup-state", error);
+          remainingGroups.push(retryGroup);
+          allProven = false;
+        }
+      }
+      this._processCleanupRetryGroups = remainingGroups;
+      return allProven;
+    };
     let timerId = this._scheduleTrackedTimer("process-cleanup-retry", 1000, () => {
       try {
         let processCleanupSucceeded = this._retryOrphanedProcesses();
@@ -2966,10 +3384,12 @@ MyApplet.prototype = {
         let hotkeyRebindSucceeded = this._retryPendingHotkeyRebinds();
         let timerCleanupSucceeded = this._retryOrphanedTimers();
         let dialogCleanupSucceeded = this._retryOrphanedDialogs();
+        let processCleanupStillPending = this._processCleanupStillPending();
+        let retryGroupsReset = resetCompletedRetryGroups();
         if (!processCleanupSucceeded || !cancellableCleanupSucceeded || !timerCleanupSucceeded ||
             !signalCleanupSucceeded || !monitorCleanupSucceeded || !hotkeyCleanupSucceeded ||
             !hotkeyRebindSucceeded || !dialogCleanupSucceeded ||
-            this._processCleanupStillPending()) {
+            processCleanupStillPending || !retryGroupsReset) {
           return true;
         }
         this._releaseBusyStateAfterProcessCleanup("voice-model", "voiceModelCleanupFailed");
@@ -3001,7 +3421,12 @@ MyApplet.prototype = {
     if (!pending) {
       return false;
     }
-    this.recordingStartPendingAfterCleanup = false;
+    if (this.recordingStartPendingAfterCleanup === true) {
+      this.recordingStartPendingAfterCleanup = false;
+      this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
+      this.targetWindowWaylandEvidence = null;
+      this.targetWindowXPendingGeneration = 0;
+    }
     if (!this._clearRecordingStartRetryTimer()) {
       this._setStatus(
         "error",
@@ -3083,11 +3508,31 @@ MyApplet.prototype = {
     return this._clearTrackedTimer("process-cleanup-retry", "processCleanupRetryTimer");
   },
 
-  _terminateProcess: function(process) {
+  _processHandleIsStopped: function(process) {
+    try {
+      return Boolean(
+        process &&
+        ((typeof process.get_if_exited === "function" && process.get_if_exited() === true) ||
+          (typeof process.get_if_signaled === "function" && process.get_if_signaled() === true))
+      );
+    } catch (_error) {
+      return false;
+    }
+  },
+
+  _terminateProcess: function(process, resourceGroup) {
     if (!process) {
       return false;
     }
     try {
+      // A fast subprocess can exit between registration and cancellation. Gio
+      // already knows this state; no process-group identity is needed anymore.
+      if (typeof process.get_if_exited === "function" && process.get_if_exited() === true) {
+        return true;
+      }
+      if (typeof process.get_if_signaled === "function" && process.get_if_signaled() === true) {
+        return true;
+      }
       let hasIdentifier = typeof process.get_identifier === "function";
       let processIdentifier = hasIdentifier ? String(process.get_identifier() || "").trim() : "";
       let processGroupIdentity = this._findTrackedProcessGroupIdentity(process);
@@ -3113,12 +3558,12 @@ MyApplet.prototype = {
           if (groupState === "stopped") {
             return true;
           }
-          if (groupState === "live" && this._killProcessGroup(process, processGroupIdentity)) {
+          if (groupState === "live" && this._killProcessGroup(process, processGroupIdentity, resourceGroup)) {
             return true;
           }
           return false;
         }
-        if (this._killProcessGroup(process, processGroupIdentity)) {
+        if (this._killProcessGroup(process, processGroupIdentity, resourceGroup)) {
           return true;
         }
         return false;
@@ -3129,7 +3574,7 @@ MyApplet.prototype = {
       process.force_exit();
       return true;
     } catch (error) {
-      this._recordLifecycleError("process-kill", error);
+      this._reportSubprocessError(resourceGroup, "process-kill", error);
       return false;
     }
   },
@@ -3289,7 +3734,7 @@ MyApplet.prototype = {
     }
   },
 
-  _killProcessGroup: function(process, identity) {
+  _killProcessGroup: function(process, identity, resourceGroup) {
     try {
       let groupState = this._processGroupState(identity);
       if (groupState === "stopped") {
@@ -3312,7 +3757,7 @@ MyApplet.prototype = {
       let finalGroupState = this._processGroupState(identity);
       return finalGroupState === "stopped";
     } catch (error) {
-      this._recordLifecycleError("process-group-kill", error);
+      this._reportSubprocessError(resourceGroup, "process-group-kill", error);
       return false;
     }
   },
@@ -3328,24 +3773,42 @@ MyApplet.prototype = {
       for (let token in processes) {
         if (Object.prototype.hasOwnProperty.call(processes, token)) {
           let cleanupSucceeded = false;
+          let processCancellationPending = false;
           let entry = null;
+          let entryResourceGroup;
           try {
             entry = processes[token];
             if (!entry || typeof entry !== "object" || !entry.process) {
               throw new Error("Process registry entry is unavailable");
             }
+            entryResourceGroup = entry.group === "error-journal" ? "error-journal" : undefined;
             if (entry && typeof entry.cancel === "function") {
               let result = entry.cancel();
               if (result === false) {
-                throw new Error("Process cancellation failed");
+                let processGroupIdentity = entry.processGroupIdentity ||
+                  this._findTrackedProcessGroupIdentity(entry.process);
+                let processGroupState = processGroupIdentity
+                  ? this._processGroupState(processGroupIdentity)
+                  : "invalid";
+                if (this._processHandleIsStopped(entry.process) || processGroupState === "stopped") {
+                  processCancellationPending = false;
+                } else if (processGroupState === "live") {
+                  // force_exit() is asynchronous. The process is already
+                  // tracked for bounded retry; do not turn this race into a
+                  // false cancellation failure.
+                  processCancellationPending = true;
+                  allSucceeded = false;
+                } else if (processGroupState !== "stopped") {
+                  throw new Error("Process cancellation failed");
+                }
               }
-            } else if (entry && !this._terminateProcess(entry.process)) {
+            } else if (entry && !this._terminateProcess(entry.process, entryResourceGroup)) {
               throw new Error("Process termination failed");
             }
-            cleanupSucceeded = true;
+            cleanupSucceeded = !processCancellationPending;
           } catch (error) {
             allSucceeded = false;
-            this._recordLifecycleError("process-cancel", error);
+            this._reportSubprocessError(entryResourceGroup, "process-cancel", error);
             if (entry && entry.process) {
               if (!this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false)) {
                 allSucceeded = false;
@@ -3353,15 +3816,15 @@ MyApplet.prototype = {
             }
           }
           if (cleanupSucceeded) {
-            if (!this._unregisterProcess(token)) {
+            if (!this._unregisterProcess(token, entryResourceGroup)) {
               allSucceeded = false;
               if (!this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true)) {
                 allSucceeded = false;
               }
             } else {
-              if (!this._untrackOrphanedProcess(entry.process)) {
+              if (!this._untrackOrphanedProcess(entry.process, entryResourceGroup)) {
                 allSucceeded = false;
-                this._recordLifecycleError("process-cancel", new Error("Process orphan cleanup could not be completed"));
+                this._reportSubprocessError(entryResourceGroup, "process-cancel", new Error("Process orphan cleanup could not be completed"));
               }
             }
           }
@@ -3374,10 +3837,238 @@ MyApplet.prototype = {
     }
   },
 
+  _processCleanupStatus: function(result) {
+    if (result === "stopped" || result === true) {
+      return "stopped";
+    }
+    if (result === "pending") {
+      return "pending";
+    }
+    return "failed";
+  },
+
+  _processCleanupSucceeded: function(result) {
+    return this._processCleanupStatus(result) === "stopped";
+  },
+
   _terminateProcessesByGroup: function(group, notifyCallback) {
     let wanted = String(group || "process");
     let processes = {};
     let allSucceeded = true;
+    let cleanupStatus = "stopped";
+    let groupHasFailure = false;
+    let groupHadProcess = false;
+    let failureReported = false;
+    let cleanupEpisode = 0;
+    let globalCleanupEpisode = 0;
+    let processEpisodeFingerprint = (entry, registrationToken) => {
+      let process = null;
+      let generation = null;
+      let identity = null;
+      let token = null;
+      try {
+        process = entry && entry.process;
+        if (typeof registrationToken === "string") {
+          token = registrationToken;
+        } else if (entry && typeof entry.registryToken === "string") {
+          token = entry.registryToken;
+        }
+        if (entry && Number.isSafeInteger(entry.generation)) {
+          generation = entry.generation;
+        }
+        let processGroupIdentity = entry && entry.processGroupIdentity;
+        if (processGroupIdentity &&
+            (typeof processGroupIdentity === "object" || typeof processGroupIdentity === "function")) {
+          let pid = processGroupIdentity.pid;
+          let startTime = processGroupIdentity.startTime;
+          if (typeof pid === "string" && /^[1-9][0-9]*$/.test(pid) &&
+              typeof startTime === "string" && /^[0-9]+$/.test(startTime)) {
+            identity = pid + ":" + startTime;
+          }
+        }
+      } catch (error) {
+        process = null;
+        generation = null;
+        identity = null;
+      }
+      return {
+        process: process,
+        generation: generation,
+        identity: identity,
+        registrationToken: token,
+      };
+    };
+    let captureGroupProcessRefs = () => {
+      let refs = [];
+      let addRef = (entry, registrationToken) => {
+        let fingerprint = processEpisodeFingerprint(entry, registrationToken);
+        if (!fingerprint.process && !fingerprint.identity && fingerprint.generation === null &&
+            !fingerprint.registrationToken) {
+          return;
+        }
+        if (!refs.some((known) => known.process === fingerprint.process &&
+            known.generation === fingerprint.generation && known.identity === fingerprint.identity &&
+            known.registrationToken === fingerprint.registrationToken)) {
+          refs.push(fingerprint);
+        }
+      };
+      let registeredProcesses = this._resourceRegistry && this._resourceRegistry.processes;
+      if (registeredProcesses && (typeof registeredProcesses === "object" || typeof registeredProcesses === "function")) {
+        for (let token in registeredProcesses) {
+          if (!Object.prototype.hasOwnProperty.call(registeredProcesses, token)) {
+            continue;
+          }
+          let entry = registeredProcesses[token];
+          if (entry && typeof entry === "object" && String(entry.group || "process") === wanted) {
+            addRef(entry, token);
+          }
+        }
+      }
+      if (Array.isArray(this._orphanedProcesses)) {
+        for (let entry of this._orphanedProcesses) {
+          if (entry && String(entry.group || "process") === wanted) {
+            addRef(entry);
+          }
+        }
+      }
+      return refs;
+    };
+    let sameProcessRefs = (left, right) => {
+      if (!Array.isArray(left) || !Array.isArray(right) || left.length !== right.length) {
+        return false;
+      }
+      return left.every((fingerprint) => right.some((candidate) =>
+        candidate && fingerprint &&
+        candidate.process === fingerprint.process &&
+        candidate.generation === fingerprint.generation &&
+        candidate.identity === fingerprint.identity &&
+        candidate.registrationToken === fingerprint.registrationToken
+      ));
+    };
+    let failureLatchActive = false;
+    let globalFailureLatchKey = "__process-cleanup-retry__";
+    let captureGlobalProcessRefs = () => {
+      let refs = [];
+      let addRef = (entry, registrationToken) => {
+        let fingerprint = processEpisodeFingerprint(entry, registrationToken);
+        if (!fingerprint.process && !fingerprint.identity && fingerprint.generation === null &&
+            !fingerprint.registrationToken) {
+          return;
+        }
+        if (!refs.some((known) => known.process === fingerprint.process &&
+            known.generation === fingerprint.generation && known.identity === fingerprint.identity &&
+            known.registrationToken === fingerprint.registrationToken)) {
+          refs.push(fingerprint);
+        }
+      };
+      let registeredProcesses = this._resourceRegistry && this._resourceRegistry.processes;
+      if (registeredProcesses && (typeof registeredProcesses === "object" || typeof registeredProcesses === "function")) {
+        for (let token in registeredProcesses) {
+          if (Object.prototype.hasOwnProperty.call(registeredProcesses, token)) {
+            addRef(registeredProcesses[token], token);
+          }
+        }
+      }
+      if (Array.isArray(this._orphanedProcesses)) {
+        for (let entry of this._orphanedProcesses) {
+          addRef(entry);
+        }
+      }
+      return refs;
+    };
+    let updateGlobalCleanupEpisode = (pending) => {
+      let currentRefs = captureGlobalProcessRefs();
+      let previousState = this._processCleanupGlobalEpisode;
+      let previousEpisode = previousState && previousState.episode;
+      let validPreviousEpisode = Number.isSafeInteger(previousEpisode) && previousEpisode >= 1;
+      let sameRefs = validPreviousEpisode && sameProcessRefs(previousState.processRefs, currentRefs);
+      let nextEpisode = validPreviousEpisode ? previousEpisode : 0;
+      if (pending === true && (!sameRefs || previousState.pending !== true)) {
+        nextEpisode = nextEpisode > 0 && nextEpisode < Number.MAX_SAFE_INTEGER
+          ? nextEpisode + 1
+          : 1;
+      } else if (nextEpisode < 1) {
+        nextEpisode = 1;
+      }
+      this._processCleanupGlobalEpisode = {
+        episode: nextEpisode,
+        processRefs: currentRefs,
+        pending: pending === true,
+      };
+      return nextEpisode;
+    };
+    try {
+      let episodeStates = this._processCleanupEpisodeByGroup;
+      if (!episodeStates || typeof episodeStates !== "object") {
+        episodeStates = {};
+        this._processCleanupEpisodeByGroup = episodeStates;
+      }
+      let currentRefs = captureGroupProcessRefs();
+      let episodeState = episodeStates[wanted];
+      let previousEpisode = episodeState && Number(episodeState.episode);
+      if (!Number.isSafeInteger(previousEpisode) || previousEpisode < 1 ||
+          !sameProcessRefs(episodeState.processRefs, currentRefs)) {
+        previousEpisode = previousEpisode > 0 && previousEpisode < Number.MAX_SAFE_INTEGER
+          ? previousEpisode + 1
+          : 1;
+        episodeState = { episode: previousEpisode, processRefs: currentRefs };
+        episodeStates[wanted] = episodeState;
+      }
+      cleanupEpisode = previousEpisode;
+      if (!this._processCleanupFailureLatch || typeof this._processCleanupFailureLatch !== "object") {
+        this._processCleanupFailureLatch = {};
+      }
+      let previousFailure = this._processCleanupFailureLatch[wanted];
+      if (previousFailure && previousFailure.episode === cleanupEpisode) {
+        failureLatchActive = true;
+      } else if (previousFailure) {
+        delete this._processCleanupFailureLatch[wanted];
+      }
+    } catch (error) {
+      this._recordLifecycleError("process-cleanup-state", error);
+    }
+    let markPending = () => {
+      allSucceeded = false;
+      if (cleanupStatus !== "failed") {
+        cleanupStatus = "pending";
+      }
+    };
+    let markFailed = (error) => {
+      allSucceeded = false;
+      groupHasFailure = true;
+      cleanupStatus = "failed";
+      if (!failureReported) {
+        failureReported = true;
+        if (failureLatchActive) {
+          return;
+        }
+        try {
+          this._processCleanupFailureLatch[wanted] = { episode: cleanupEpisode };
+        } catch (latchError) {
+          this._recordLifecycleError("process-cleanup-state", latchError);
+        }
+        this._recordLifecycleError("process-cancel", error);
+      }
+    };
+    let recordGlobalRetryFailure = (error) => {
+      let alreadyReported = false;
+      try {
+        let previousFailure = this._processCleanupFailureLatch[globalFailureLatchKey];
+        alreadyReported = Boolean(
+          previousFailure && previousFailure.episode === globalCleanupEpisode
+        );
+        if (!alreadyReported) {
+          this._processCleanupFailureLatch[globalFailureLatchKey] = {
+            episode: globalCleanupEpisode,
+          };
+        }
+      } catch (latchError) {
+        this._recordLifecycleError("process-cleanup-state", latchError);
+      }
+      if (!alreadyReported) {
+        this._recordLifecycleError("process-cleanup-retry", error);
+      }
+    };
     try {
       if (!this._resourceRegistry || !this._resourceRegistry.processes) {
         throw new Error("Process registry is unavailable");
@@ -3390,63 +4081,183 @@ MyApplet.prototype = {
         let entry = null;
         let selected = false;
         let cleanupSucceeded = false;
+        let processCancellationPending = false;
         try {
           entry = processes[token];
           if (!entry || typeof entry !== "object" || String(entry.group || "process") !== wanted) {
             continue;
           }
           selected = true;
+          groupHadProcess = true;
           if (typeof entry.cancel === "function") {
             let result = entry.cancel(Boolean(notifyCallback));
-            if (result === false) {
-              allSucceeded = false;
+            if (result === "pending") {
+              processCancellationPending = true;
+              if (this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false)) {
+                markPending();
+              } else {
+                markFailed(new Error("Pending process could not be tracked"));
+              }
+            } else if (result === "failed") {
+              throw new Error("Process cancellation failed");
+            } else if (result === false) {
               let processGroupIdentity = entry.processGroupIdentity ||
                 this._findTrackedProcessGroupIdentity(entry.process);
-              if (!processGroupIdentity || this._processGroupState(processGroupIdentity) !== "stopped") {
+              let processGroupState = processGroupIdentity
+                ? this._processGroupState(processGroupIdentity)
+                : "invalid";
+              if (processGroupState === "live") {
+                // Keep registry/orphan state intact until retry observes a
+                // stopped group; this is a normal asynchronous race.
+                processCancellationPending = true;
+                if (this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false)) {
+                  markPending();
+                } else {
+                  markFailed(new Error("Pending process could not be tracked"));
+                }
+              } else if (!this._processHandleIsStopped(entry.process) && processGroupState !== "stopped") {
                 throw new Error("Process cancellation failed");
               }
             }
           } else if (!this._terminateProcess(entry.process)) {
-            throw new Error("Process termination failed");
+            let processGroupIdentity = entry.processGroupIdentity ||
+              this._findTrackedProcessGroupIdentity(entry.process);
+            let processGroupState = processGroupIdentity
+              ? this._processGroupState(processGroupIdentity)
+              : "invalid";
+            if (processGroupState === "live") {
+              processCancellationPending = true;
+              if (this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false)) {
+                markPending();
+              } else {
+                markFailed(new Error("Pending process could not be tracked"));
+              }
+            } else if (!this._processHandleIsStopped(entry.process) && processGroupState !== "stopped") {
+              throw new Error("Process termination failed");
+            }
           }
-          cleanupSucceeded = true;
+          cleanupSucceeded = !processCancellationPending;
         } catch (error) {
-          allSucceeded = false;
-          this._recordLifecycleError("process-cancel", error);
+          markFailed(error);
           if (selected && entry && entry.process) {
-            this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false);
+            if (!this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, false)) {
+              markFailed(new Error("Process orphan could not be tracked"));
+            }
           }
         }
         if (selected && cleanupSucceeded) {
           if (!this._unregisterProcess(token)) {
             allSucceeded = false;
-            this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true);
-          } else {
-            if (!this._untrackOrphanedProcess(entry.process)) {
-              allSucceeded = false;
+            if (this._trackOrphanedProcess(entry.process, entry.generation, entry.group, token, true)) {
+              markPending();
+            } else {
+              markFailed(new Error("Process orphan cleanup could not be completed"));
             }
+          } else if (!this._untrackOrphanedProcess(entry.process)) {
+            markFailed(new Error("Process orphan cleanup could not be completed"));
           }
         }
       }
     } catch (error) {
-      allSucceeded = false;
-      this._recordLifecycleError("process-cancel", error);
+      markFailed(error);
     }
-    let orphanCleanupSucceeded = this._retryOrphanedProcesses(wanted);
-    if (!orphanCleanupSucceeded) {
-      allSucceeded = false;
+    let orphanCleanupSucceeded = false;
+    try {
+      orphanCleanupSucceeded = this._retryOrphanedProcesses(wanted);
+    } catch (error) {
+      markFailed(error);
     }
-    if (!Array.isArray(this._orphanedProcesses)) {
-      allSucceeded = false;
-    } else if (this._orphanedProcesses.some(
-      (entry) => entry && String(entry.group || "process") === wanted
-    )) {
-      allSucceeded = false;
+    let groupStillPending = false;
+    try {
+      if (!Array.isArray(this._orphanedProcesses)) {
+        markFailed(new Error("Process orphan registry is unavailable"));
+      } else {
+        groupStillPending = this._orphanedProcesses.some(
+          (entry) => entry && String(entry.group || "process") === wanted
+        );
+      }
+      if (!groupStillPending) {
+        for (let token in processes) {
+          if (!Object.prototype.hasOwnProperty.call(processes, token)) {
+            continue;
+          }
+          let entry = processes[token];
+          if (entry && typeof entry === "object" && entry.process &&
+              String(entry.group || "process") === wanted) {
+            groupStillPending = true;
+            break;
+          }
+        }
+      }
+    } catch (error) {
+      markFailed(error);
     }
-    if (!allSucceeded || this._processCleanupStillPending()) {
-      this._scheduleProcessCleanupRetry();
+    if (groupStillPending) {
+      markPending();
+    } else if (groupHadProcess && !orphanCleanupSucceeded && !groupHasFailure) {
+      markFailed(new Error("Process orphan cleanup could not be completed"));
     }
-    return allSucceeded;
+    if (!groupStillPending && !groupHasFailure) {
+      // A pending cancellation can finish during this call. Do not leave the
+      // public result stuck at pending after its own registry entry vanished.
+      cleanupStatus = "stopped";
+      try {
+        if (this._processCleanupFailureLatch &&
+            this._processCleanupFailureLatch[wanted] &&
+            this._processCleanupFailureLatch[wanted].episode === cleanupEpisode) {
+          delete this._processCleanupFailureLatch[wanted];
+        }
+        let episodeStates = this._processCleanupEpisodeByGroup;
+        if (episodeStates && episodeStates[wanted] &&
+            episodeStates[wanted].episode === cleanupEpisode) {
+          episodeStates[wanted].processRefs = [];
+        }
+      } catch (error) {
+        this._recordLifecycleError("process-cleanup-state", error);
+      }
+    }
+    let globalCleanupPending = false;
+    try {
+      globalCleanupPending = this._processCleanupStillPending();
+    } catch (error) {
+      globalCleanupPending = true;
+      this._recordLifecycleError("process-cleanup-state", error);
+    }
+    try {
+      globalCleanupEpisode = updateGlobalCleanupEpisode(globalCleanupPending);
+    } catch (error) {
+      globalCleanupEpisode = 0;
+      this._recordLifecycleError("process-cleanup-state", error);
+    }
+    if (!globalCleanupPending) {
+      try {
+        if (this._processCleanupFailureLatch) {
+          delete this._processCleanupFailureLatch[globalFailureLatchKey];
+        }
+      } catch (error) {
+        this._recordLifecycleError("process-cleanup-state", error);
+      }
+    }
+    if (!allSucceeded || globalCleanupPending) {
+      let retryScheduled = false;
+      let retryError = null;
+      try {
+        retryScheduled = this._scheduleProcessCleanupRetry(wanted) === true;
+      } catch (error) {
+        retryError = error;
+      }
+      if (!retryScheduled) {
+        retryError = retryError || new Error("Process cleanup retry could not be scheduled");
+        if (groupStillPending || cleanupStatus === "pending") {
+          markFailed(retryError);
+        } else {
+          // Foreign/global orphan cleanup must not change requested group's
+          // result. Keep scheduler failure in separate lifecycle scope.
+          recordGlobalRetryFailure(retryError);
+        }
+      }
+    }
+    return cleanupStatus;
   },
 
   _hasTrackedProcessGroup: function(group) {
@@ -3494,6 +4305,10 @@ MyApplet.prototype = {
         if (!Object.prototype.hasOwnProperty.call(cancellables, token)) {
           continue;
         }
+        let entryResourceGroup = this._resourceRegistry.cancellableGroups &&
+          this._resourceRegistry.cancellableGroups[token] === "error-journal"
+          ? "error-journal"
+          : undefined;
         let cleanupSucceeded = false;
         try {
           let cancellable = cancellables[token];
@@ -3507,22 +4322,22 @@ MyApplet.prototype = {
           cleanupSucceeded = true;
         } catch (error) {
           allSucceeded = false;
-          this._recordLifecycleError("teardown-cancellable", error);
+          this._reportSubprocessError(entryResourceGroup, "teardown-cancellable", error);
         }
         if (cleanupSucceeded) {
-          if (!this._unregisterCancellable(token)) {
+          if (!this._unregisterCancellable(token, entryResourceGroup)) {
             allSucceeded = false;
-            if (!this._trackOrphanedCancellable(token, true)) {
+            if (!this._trackOrphanedCancellable(token, true, entryResourceGroup)) {
               allSucceeded = false;
             }
           } else {
-            if (!this._untrackOrphanedCancellable(token)) {
+            if (!this._untrackOrphanedCancellable(token, entryResourceGroup)) {
               allSucceeded = false;
-              this._recordLifecycleError("teardown-cancellable", new Error("Cancellable orphan cleanup could not be completed"));
+              this._reportSubprocessError(entryResourceGroup, "teardown-cancellable", new Error("Cancellable orphan cleanup could not be completed"));
             }
           }
         } else {
-          if (!this._trackOrphanedCancellable(token, false)) {
+          if (!this._trackOrphanedCancellable(token, false, entryResourceGroup)) {
             allSucceeded = false;
           }
         }
@@ -3534,7 +4349,7 @@ MyApplet.prototype = {
     }
   },
 
-  _trackTimer: function(name, sourceId, propertyName) {
+  _trackTimer: function(name, sourceId, propertyName, resourceGroup, timerOwner) {
     if (!sourceId) {
       return sourceId;
     }
@@ -3542,44 +4357,107 @@ MyApplet.prototype = {
       throw new Error("Timer registry is unavailable");
     }
     let key = String(name || propertyName || "timer");
+    for (let existingKey in this._resourceRegistry.timers) {
+      if (Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, existingKey) &&
+          existingKey !== key && this._resourceRegistry.timers[existingKey] === sourceId) {
+        throw new Error("Timer source ID is already owned by another timer");
+      }
+    }
+    if (!this._resourceRegistry.timerOwners) {
+      this._resourceRegistry.timerOwners = {};
+    }
+    let owner = timerOwner && typeof timerOwner === "object" ? timerOwner : {};
+    try {
+      Object.freeze(owner);
+    } catch (error) {
+      throw new Error("Timer owner could not be made immutable");
+    }
+    this._resourceRegistry.timerOwners[key] = owner;
     this._resourceRegistry.timers[key] = sourceId;
+    if (!this._resourceRegistry.timerGroups) {
+      this._resourceRegistry.timerGroups = {};
+    }
+    this._resourceRegistry.timerGroups[key] = resourceGroup === "error-journal" ? "error-journal" : "";
     if (propertyName) {
       this[propertyName] = sourceId;
+      this[propertyName + "Owner"] = owner;
     }
     return sourceId;
   },
 
-  _trackedTimerOwnedBy: function(name, sourceId, propertyName) {
+  _trackedTimerOwnedBy: function(name, sourceId, propertyName, expectedOwner) {
     let key = String(name || propertyName || "timer");
     let timers = this._resourceRegistry && this._resourceRegistry.timers;
+    let owners = this._resourceRegistry && this._resourceRegistry.timerOwners;
+    let owner = owners && owners[key];
+    let propertyOwner = propertyName ? this[propertyName + "Owner"] : owner;
+    if (timers) {
+      for (let existingKey in timers) {
+        if (Object.prototype.hasOwnProperty.call(timers, existingKey) &&
+            existingKey !== key && timers[existingKey] === sourceId) {
+          return false;
+        }
+      }
+    }
     return Boolean(
       sourceId &&
       timers &&
       timers[key] === sourceId &&
-      (!propertyName || this[propertyName] === sourceId)
+      owner &&
+      (!expectedOwner || owner === expectedOwner) &&
+      (!propertyName || (this[propertyName] === sourceId && propertyOwner === owner))
     );
   },
 
-  _untrackTimer: function(name, sourceId, propertyName) {
+  _untrackTimer: function(name, sourceId, propertyName, resourceGroup, expectedOwner) {
     let key = String(name || propertyName || "timer");
+    let storedResourceGroup = this._resourceRegistry && this._resourceRegistry.timerGroups &&
+      this._resourceRegistry.timerGroups[key] === "error-journal"
+      ? "error-journal"
+      : resourceGroup;
     try {
+      let timerOwners = this._resourceRegistry && this._resourceRegistry.timerOwners;
+      let registeredOwner = timerOwners && timerOwners[key];
+      let propertyOwner = propertyName ? this[propertyName + "Owner"] : registeredOwner;
+      if (sourceId && expectedOwner && (!registeredOwner || registeredOwner !== expectedOwner)) {
+        throw new Error("Timer owner does not match current registry entry");
+      }
+      if (sourceId && registeredOwner && propertyName && propertyOwner !== registeredOwner) {
+        throw new Error("Timer ownership is ambiguous");
+      }
+      if (sourceId && this._resourceRegistry && this._resourceRegistry.timers) {
+        for (let existingKey in this._resourceRegistry.timers) {
+          if (Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, existingKey) &&
+              existingKey !== key && this._resourceRegistry.timers[existingKey] === sourceId) {
+            throw new Error("Timer source ID is reused by another timer");
+          }
+        }
+      }
       if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
         let deleted = delete this._resourceRegistry.timers[key];
         if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)) {
           throw new Error("Timer registry entry could not be untracked");
         }
       }
+      if (this._resourceRegistry && this._resourceRegistry.timerGroups) {
+        delete this._resourceRegistry.timerGroups[key];
+      }
+      if (this._resourceRegistry && this._resourceRegistry.timerOwners &&
+          this._resourceRegistry.timerOwners[key] === registeredOwner) {
+        delete this._resourceRegistry.timerOwners[key];
+      }
       if (propertyName && (!sourceId || this[propertyName] === sourceId)) {
         this[propertyName] = 0;
+        this[propertyName + "Owner"] = null;
       }
       return true;
     } catch (error) {
-      this._recordLifecycleError("timer-untrack", error);
+      this._reportSubprocessError(storedResourceGroup, "timer-untrack", error);
       return false;
     }
   },
 
-  _trackOrphanedTimer: function(name, sourceId, propertyName, sourceRemoved) {
+  _trackOrphanedTimer: function(name, sourceId, propertyName, sourceRemoved, resourceGroup, owner, sourceRemovalAmbiguous) {
     try {
       if (!sourceId) {
         throw new Error("Timer orphan source is invalid");
@@ -3588,8 +4466,12 @@ MyApplet.prototype = {
         this._orphanedTimers = [];
       }
       let key = String(name || propertyName || "timer");
+      let timerOwners = this._resourceRegistry && this._resourceRegistry.timerOwners;
+      let trackedOwner = owner || (timerOwners && timerOwners[key]) ||
+        (propertyName && this[propertyName + "Owner"]);
       let knownEntry = this._orphanedTimers.find(
-        (entry) => entry && entry.sourceId === sourceId && entry.name === key
+        (entry) => entry && entry.sourceId === sourceId && entry.name === key &&
+          (!trackedOwner || entry.owner === trackedOwner)
       );
       if (knownEntry) {
         if (sourceRemoved === true) {
@@ -3598,12 +4480,24 @@ MyApplet.prototype = {
         if (propertyName && !knownEntry.propertyName) {
           knownEntry.propertyName = propertyName;
         }
+        if (resourceGroup === "error-journal") {
+          knownEntry.resourceGroup = "error-journal";
+        }
+        if (!knownEntry.owner && trackedOwner) {
+          knownEntry.owner = trackedOwner;
+        }
+        if (sourceRemovalAmbiguous === true) {
+          knownEntry.sourceRemovalAmbiguous = true;
+        }
       } else {
         let entry = {
           name: key,
           sourceId: sourceId,
           propertyName: propertyName || "",
           sourceRemoved: sourceRemoved === true,
+          resourceGroup: resourceGroup === "error-journal" ? "error-journal" : "",
+          owner: trackedOwner || null,
+          sourceRemovalAmbiguous: sourceRemovalAmbiguous === true,
         };
         this._orphanedTimers.push(entry);
         if (this._orphanedTimers.indexOf(entry) < 0) {
@@ -3615,12 +4509,12 @@ MyApplet.prototype = {
       }
       return true;
     } catch (error) {
-      this._recordLifecycleError("timer-orphan", error);
+      this._reportSubprocessError(resourceGroup, "timer-orphan", error);
       return false;
     }
   },
 
-  _untrackOrphanedTimer: function(name, sourceId) {
+  _untrackOrphanedTimer: function(name, sourceId, resourceGroup, expectedOwner) {
     if (!Array.isArray(this._orphanedTimers)) {
       return true;
     }
@@ -3628,16 +4522,18 @@ MyApplet.prototype = {
     let key = String(name || "");
     for (let index = this._orphanedTimers.length - 1; index >= 0; index--) {
       let entry = this._orphanedTimers[index];
-      if (!entry || (sourceId && entry.sourceId !== sourceId) || (key && entry.name !== key)) {
+      if (!entry || (sourceId && entry.sourceId !== sourceId) || (key && entry.name !== key) ||
+          (expectedOwner && entry.owner !== expectedOwner)) {
         continue;
       }
+      let entryResourceGroup = entry.resourceGroup === "error-journal" ? "error-journal" : resourceGroup;
       try {
         let removed = this._orphanedTimers.splice(index, 1);
         if (!Array.isArray(removed) || removed.length !== 1 || removed[0] !== entry || this._orphanedTimers.indexOf(entry) >= 0) {
           throw new Error("Timer orphan entry could not be removed");
         }
       } catch (error) {
-        this._recordLifecycleError("timer-orphan", error);
+        this._reportSubprocessError(entryResourceGroup, "timer-orphan", error);
         success = false;
       }
     }
@@ -3647,6 +4543,21 @@ MyApplet.prototype = {
   _retryOrphanedTimers: function() {
     let pendingTimers = [];
     let timers = this._resourceRegistry && this._resourceRegistry.timers;
+    let timerCleanupBlocks = this._resourceRegistry && this._resourceRegistry.timerCleanupBlocks;
+    let findTimerCleanupBlock = (name, sourceId, owner) => {
+      let blocks = this._resourceRegistry && this._resourceRegistry.timerCleanupBlocks;
+      if (!Array.isArray(blocks)) {
+        return null;
+      }
+      let key = String(name || "");
+      let ownerKey = owner || null;
+      for (let block of blocks) {
+        if (block && block.name === key && block.sourceId === sourceId && block.owner === ownerKey) {
+          return block;
+        }
+      }
+      return null;
+    };
     let sourceIdWasReusedForDifferentTimer = (name, sourceId) => {
       if (!timers || (typeof timers !== "object" && typeof timers !== "function")) {
         return false;
@@ -3662,13 +4573,14 @@ MyApplet.prototype = {
       }
       return false;
     };
-    let addPendingTimer = (name, sourceId, propertyName, sourceRemoved) => {
+    let addPendingTimer = (name, sourceId, propertyName, sourceRemoved, resourceGroup, owner, sourceRemovalAmbiguous, orphanEntry) => {
       if (!sourceId) {
         return;
       }
       let key = String(name || propertyName || "timer");
       let knownEntry = pendingTimers.find(
-        (entry) => entry && entry.sourceId === sourceId && entry.name === key
+        (entry) => entry && entry.sourceId === sourceId && entry.name === key &&
+          ((owner && entry.owner === owner) || (!owner && !entry.owner))
       );
       if (knownEntry) {
         if (propertyName && !knownEntry.propertyName) {
@@ -3677,6 +4589,18 @@ MyApplet.prototype = {
         if (sourceRemoved === true) {
           knownEntry.sourceRemoved = true;
         }
+        if (resourceGroup === "error-journal") {
+          knownEntry.resourceGroup = "error-journal";
+        }
+        if (!knownEntry.owner && owner) {
+          knownEntry.owner = owner;
+        }
+        if (sourceRemovalAmbiguous === true) {
+          knownEntry.sourceRemovalAmbiguous = true;
+        }
+        if (orphanEntry) {
+          knownEntry.orphanEntry = orphanEntry;
+        }
         return;
       }
       pendingTimers.push({
@@ -3684,9 +4608,113 @@ MyApplet.prototype = {
         sourceId: sourceId,
         propertyName: propertyName || "",
         sourceRemoved: sourceRemoved === true,
+        resourceGroup: resourceGroup === "error-journal" ? "error-journal" : "",
+        owner: owner || null,
+        sourceRemovalAmbiguous: sourceRemovalAmbiguous === true,
+        orphanEntry: orphanEntry || null,
       });
     };
+    let persistTimerCleanupBlock = (entry, sourceRemoved, sourceRemovalAmbiguous) => {
+      try {
+        if (!this._resourceRegistry) {
+          return false;
+        }
+        let blocks = this._resourceRegistry.timerCleanupBlocks;
+        if (!Array.isArray(blocks)) {
+          blocks = [];
+          this._resourceRegistry.timerCleanupBlocks = blocks;
+        }
+        let block = findTimerCleanupBlock(entry.name, entry.sourceId, entry.owner);
+        if (!block) {
+          block = {
+            name: String(entry.name || ""),
+            sourceId: entry.sourceId,
+            owner: entry.owner || null,
+            sourceRemoved: false,
+            sourceRemovalAmbiguous: false,
+          };
+          blocks.push(block);
+        }
+        if (sourceRemoved === true) {
+          block.sourceRemoved = true;
+        }
+        if (sourceRemovalAmbiguous === true) {
+          block.sourceRemovalAmbiguous = true;
+        }
+        let verified = findTimerCleanupBlock(entry.name, entry.sourceId, entry.owner);
+        return Boolean(
+          verified &&
+          (sourceRemoved !== true || verified.sourceRemoved === true) &&
+          (sourceRemovalAmbiguous !== true || verified.sourceRemovalAmbiguous === true)
+        );
+      } catch (error) {
+        return false;
+      }
+    };
+    let persistPendingTimerState = (entry, sourceRemoved, sourceRemovalAmbiguous) => {
+      let hasExactOrphanWithState = (candidate) => {
+        return candidate && candidate.name === entry.name &&
+          candidate.sourceId === entry.sourceId && candidate.owner === entry.owner &&
+          (sourceRemoved !== true || candidate.sourceRemoved === true) &&
+          (sourceRemovalAmbiguous !== true || candidate.sourceRemovalAmbiguous === true);
+      };
+      if (entry.orphanEntry && Array.isArray(this._orphanedTimers) &&
+          this._orphanedTimers.indexOf(entry.orphanEntry) >= 0 &&
+          hasExactOrphanWithState(entry.orphanEntry)) {
+        return true;
+      }
+      if (Array.isArray(this._orphanedTimers)) {
+        for (let orphanEntry of this._orphanedTimers) {
+          if (hasExactOrphanWithState(orphanEntry)) {
+            return true;
+          }
+        }
+      }
+      let registeredOwner = this._resourceRegistry &&
+        this._resourceRegistry.timerOwners &&
+        this._resourceRegistry.timerOwners[entry.name];
+      let registeredSourceId = timers && timers[entry.name];
+      let propertyOwner = entry.propertyName ?
+        this[entry.propertyName + "Owner"] : registeredOwner;
+      if (registeredSourceId !== entry.sourceId ||
+          registeredOwner !== entry.owner ||
+          (entry.propertyName && propertyOwner !== entry.owner)) {
+        persistTimerCleanupBlock(entry, sourceRemoved, sourceRemovalAmbiguous);
+        return false;
+      }
+      if (!entry.owner || typeof this._trackOrphanedTimer !== "function") {
+        persistTimerCleanupBlock(entry, sourceRemoved, sourceRemovalAmbiguous);
+        return false;
+      }
+      let trackerReportedSuccess = false;
+      try {
+        trackerReportedSuccess = this._trackOrphanedTimer(
+          entry.name,
+          entry.sourceId,
+          entry.propertyName,
+          sourceRemoved === true,
+          entry.resourceGroup,
+          entry.owner,
+          sourceRemovalAmbiguous === true
+        ) === true;
+      } catch (error) {
+        trackerReportedSuccess = false;
+      }
+      for (let orphanEntry of (Array.isArray(this._orphanedTimers) ? this._orphanedTimers : [])) {
+        if (hasExactOrphanWithState(orphanEntry)) {
+          return true;
+        }
+      }
+      // A failed or mismatching tracker must permanently block numeric retry.
+      if (trackerReportedSuccess !== true) {
+        persistTimerCleanupBlock(entry, sourceRemoved, sourceRemovalAmbiguous);
+        return false;
+      }
+      persistTimerCleanupBlock(entry, sourceRemoved, sourceRemovalAmbiguous);
+      return false;
+    };
     let invalidOrphanEntry = false;
+    let blockedByOwnerConflict = false;
     if (Array.isArray(this._orphanedTimers)) {
       for (let entry of this._orphanedTimers) {
         if (!entry || !entry.sourceId) {
@@ -3698,7 +4726,11 @@ MyApplet.prototype = {
           entry.name,
           entry.sourceId,
           sourceIdWasReused ? "" : entry.propertyName,
-          entry.sourceRemoved === true || sourceIdWasReused
+          entry.sourceRemoved === true || sourceIdWasReused,
+          entry.resourceGroup,
+          entry.owner,
+          entry.sourceRemovalAmbiguous === true,
+          entry
         );
       }
     } else {
@@ -3716,103 +4748,291 @@ MyApplet.prototype = {
           invalidOrphanEntry = true;
           continue;
         }
-        addPendingTimer(name, timers[name], "", false);
+        let registeredGroup = this._resourceRegistry.timerGroups &&
+          this._resourceRegistry.timerGroups[name] === "error-journal"
+          ? "error-journal"
+          : undefined;
+        let registeredOwner = this._resourceRegistry.timerOwners &&
+          this._resourceRegistry.timerOwners[name];
+        let conflictingOrphanOwner = false;
+        if (Array.isArray(this._orphanedTimers)) {
+          for (let orphanEntry of this._orphanedTimers) {
+            if (orphanEntry && orphanEntry.name === String(name) &&
+                orphanEntry.sourceId === timers[name] &&
+                orphanEntry.owner !== registeredOwner) {
+              conflictingOrphanOwner = true;
+              break;
+            }
+          }
+        }
+        if (!conflictingOrphanOwner && Array.isArray(timerCleanupBlocks)) {
+          for (let block of timerCleanupBlocks) {
+            if (block && block.name === String(name) &&
+                block.sourceId === timers[name] &&
+                (!block.owner || block.owner !== registeredOwner)) {
+              conflictingOrphanOwner = true;
+              break;
+            }
+          }
+        }
+        if (conflictingOrphanOwner) {
+          blockedByOwnerConflict = true;
+          continue;
+        }
+        addPendingTimer(name, timers[name], "", false, registeredGroup, registeredOwner, false);
+      }
+    }
+    if (Array.isArray(timerCleanupBlocks)) {
+      for (let block of timerCleanupBlocks) {
+        if (!block || !block.sourceId || !block.owner ||
+            !timers || timers[block.name] !== block.sourceId) {
+          continue;
+        }
+        let currentOwner = this._resourceRegistry && this._resourceRegistry.timerOwners &&
+          this._resourceRegistry.timerOwners[block.name];
+        if (currentOwner !== block.owner) {
+          continue;
+        }
+        let blockedGroup = this._resourceRegistry.timerGroups &&
+          this._resourceRegistry.timerGroups[block.name] === "error-journal"
+          ? "error-journal"
+          : undefined;
+        addPendingTimer(
+          block.name,
+          block.sourceId,
+          "",
+          block.sourceRemoved === true,
+          blockedGroup,
+          block.owner,
+          block.sourceRemovalAmbiguous === true
+        );
       }
     }
     if (pendingTimers.length === 0) {
-      return !invalidOrphanEntry && Array.isArray(this._orphanedTimers);
+      return !invalidOrphanEntry && !blockedByOwnerConflict && Array.isArray(this._orphanedTimers);
     }
-    let success = !invalidOrphanEntry;
+    let success = !invalidOrphanEntry && !blockedByOwnerConflict;
     for (let index = pendingTimers.length - 1; index >= 0; index--) {
       let entry = pendingTimers[index];
+      let entryResourceGroup = entry.resourceGroup === "error-journal" ? "error-journal" : undefined;
       try {
+        if (entry.sourceRemovalAmbiguous === true) {
+          throw new Error("Timer source removal was ambiguous");
+        }
+        let currentSourceId = timers && timers[entry.name];
+        let currentOwner = this._resourceRegistry && this._resourceRegistry.timerOwners &&
+          this._resourceRegistry.timerOwners[entry.name];
+        let currentRegistryOwns = Boolean(
+          currentSourceId === entry.sourceId && entry.owner && currentOwner === entry.owner
+        );
+        let ownerlessRegistryOwns = Boolean(
+          currentSourceId === entry.sourceId && !entry.owner && !currentOwner
+        );
+        if (!currentRegistryOwns && !ownerlessRegistryOwns) {
+          if (entry.sourceRemoved === true) {
+            if (!this._untrackOrphanedTimer(
+              entry.name,
+              entry.sourceId,
+              entryResourceGroup,
+              entry.owner
+            )) {
+              throw new Error("Timer orphan owner cleanup failed");
+            }
+            continue;
+          }
+          throw new Error("Timer orphan owner is no longer current");
+        }
+        if (sourceIdWasReusedForDifferentTimer(entry.name, entry.sourceId)) {
+          if (entry.sourceRemoved === true) {
+            if (!this._untrackOrphanedTimer(
+              entry.name,
+              entry.sourceId,
+              entryResourceGroup,
+              entry.owner
+            )) {
+              throw new Error("Timer orphan owner cleanup failed");
+            }
+            continue;
+          }
+          throw new Error("Timer source ID is reused by another timer");
+        }
         if (entry.sourceRemoved !== true) {
-          let result = Mainloop.source_remove(entry.sourceId);
+          let result;
+          try {
+            result = Mainloop.source_remove(entry.sourceId);
+          } catch (error) {
+            // A throwing source removal is ambiguous. Persist this state so
+            // later retries perform bookkeeping only, never another syscall.
+            entry.sourceRemovalAmbiguous = true;
+            let persisted = persistPendingTimerState(entry, false, true);
+            if (persisted !== true) {
+              this._reportSubprocessError(entryResourceGroup, "timer-orphan", new Error("Timer orphan state could not be persisted"));
+            }
+            throw error;
+          }
           if (result === false) {
+            entry.sourceRemoved = true;
+            let persisted = persistPendingTimerState(entry, true, false);
+            if (persisted !== true) {
+              this._reportSubprocessError(entryResourceGroup, "timer-orphan", new Error("Timer orphan state could not be persisted"));
+            }
             throw new Error("Timer orphan removal failed");
           }
           entry.sourceRemoved = true;
         }
-        let untracked = this._untrackTimer(entry.name, entry.sourceId, entry.propertyName);
+        let untracked = this._untrackTimer(
+          entry.name,
+          entry.sourceId,
+          entry.propertyName,
+          entryResourceGroup,
+          entry.owner
+        );
         if (untracked === false) {
           throw new Error("Timer orphan registry cleanup failed");
         }
-        if (!this._untrackOrphanedTimer(entry.name, entry.sourceId)) {
+        if (!this._untrackOrphanedTimer(
+          entry.name,
+          entry.sourceId,
+          entryResourceGroup,
+          entry.owner
+        )) {
           success = false;
         }
       } catch (error) {
-        this._recordLifecycleError("timer-orphan", error);
+        this._reportSubprocessError(entryResourceGroup, "timer-orphan", error);
         success = false;
       }
     }
     return success;
   },
 
-  _clearTrackedTimer: function(name, propertyName, sourceAlreadyRemoved) {
+  _clearTrackedTimer: function(name, propertyName, sourceAlreadyRemoved, resourceGroup, expectedOwner) {
     let key = "timer";
     let sourceId = 0;
     let sourceRemovalSucceeded = sourceAlreadyRemoved === true;
+    let sourceRemovalAmbiguous = false;
+    let registeredOwner = null;
     try {
       key = String(name || propertyName || "timer");
-      sourceId = this._resourceRegistry && this._resourceRegistry.timers
+      let registeredSourceId = this._resourceRegistry && this._resourceRegistry.timers
         ? this._resourceRegistry.timers[key]
         : 0;
-      if (!sourceId && propertyName) {
-        sourceId = this[propertyName];
+      let propertySourceId = propertyName ? this[propertyName] : 0;
+      if (propertyName && sourceAlreadyRemoved !== true &&
+          ((registeredSourceId && propertySourceId !== registeredSourceId) ||
+           (!registeredSourceId && propertySourceId))) {
+        throw new Error("Timer ownership is ambiguous");
       }
+      let timerOwners = this._resourceRegistry && this._resourceRegistry.timerOwners;
+      registeredOwner = timerOwners && timerOwners[key];
+      let propertyOwner = propertyName ? this[propertyName + "Owner"] : registeredOwner;
+      if (expectedOwner && registeredOwner !== expectedOwner) {
+        throw new Error("Timer owner does not match current registry entry");
+      }
+      if (expectedOwner && propertyName && propertyOwner !== expectedOwner) {
+        throw new Error("Timer owner does not match current property");
+      }
+      sourceId = registeredSourceId || (sourceAlreadyRemoved === true ? propertySourceId : 0);
       if (!sourceId) {
         if (propertyName) {
           this[propertyName] = 0;
+          this[propertyName + "Owner"] = null;
         }
         return true;
+      }
+      if (!registeredOwner || (propertyName && propertyOwner !== registeredOwner)) {
+        throw new Error("Timer ownership is unavailable");
+      }
+      if (this._resourceRegistry && this._resourceRegistry.timers) {
+        for (let existingKey in this._resourceRegistry.timers) {
+          if (Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, existingKey) &&
+              existingKey !== key && this._resourceRegistry.timers[existingKey] === sourceId) {
+            throw new Error("Timer source ID is reused by another timer");
+          }
+        }
       }
       let activeTimer = this._activeTrackedTimer;
       let sourceIsDispatching = Boolean(
         activeTimer &&
         activeTimer.name === key &&
         activeTimer.sourceId === sourceId &&
+        activeTimer.owner === registeredOwner &&
+        (!expectedOwner || activeTimer.owner === expectedOwner) &&
         (!propertyName || activeTimer.propertyName === propertyName)
       );
       if (sourceAlreadyRemoved !== true && !sourceIsDispatching) {
-        let removed = Mainloop.source_remove(sourceId);
-        if (removed === false) {
-          throw new Error("Timer source could not be removed");
+        try {
+          let removed = Mainloop.source_remove(sourceId);
+          if (removed === false) {
+            // Source already disappeared. Never retry this numeric ID.
+            sourceRemovalSucceeded = true;
+            throw new Error("Timer source could not be removed");
+          }
+          sourceRemovalSucceeded = true;
+        } catch (error) {
+          if (sourceRemovalSucceeded !== true) {
+            sourceRemovalAmbiguous = true;
+          }
+          throw error;
         }
-        sourceRemovalSucceeded = true;
       } else if (sourceIsDispatching) {
         // Current callback returns false after replacement; no source_remove on dispatching source.
         sourceRemovalSucceeded = true;
       }
-      let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);
+      let orphanUntracked = this._untrackOrphanedTimer(
+        key,
+        sourceId,
+        resourceGroup,
+        registeredOwner
+      );
       if (orphanUntracked === false) {
         throw new Error("Timer orphan registry entry could not be removed");
       }
-      if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId) {
+      if (this._resourceRegistry && this._resourceRegistry.timers[key] === sourceId &&
+          this._resourceRegistry.timerOwners && this._resourceRegistry.timerOwners[key] === registeredOwner) {
         let deleted = delete this._resourceRegistry.timers[key];
         if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)) {
           throw new Error("Timer registry entry could not be removed");
         }
       }
-      if (propertyName && this[propertyName] === sourceId) {
+      if (this._resourceRegistry && this._resourceRegistry.timerGroups &&
+          (!this._resourceRegistry.timerOwners || this._resourceRegistry.timerOwners[key] === registeredOwner)) {
+        delete this._resourceRegistry.timerGroups[key];
+      }
+      if (this._resourceRegistry && this._resourceRegistry.timerOwners &&
+          this._resourceRegistry.timerOwners[key] === registeredOwner) {
+        delete this._resourceRegistry.timerOwners[key];
+      }
+      if (propertyName && this[propertyName] === sourceId &&
+          this[propertyName + "Owner"] === registeredOwner) {
         this[propertyName] = 0;
+        this[propertyName + "Owner"] = null;
       }
       return true;
     } catch (error) {
       if (sourceId) {
-        this._trackOrphanedTimer(key, sourceId, propertyName, sourceRemovalSucceeded);
+        this._trackOrphanedTimer(
+          key,
+          sourceId,
+          propertyName,
+          sourceRemovalSucceeded,
+          resourceGroup,
+          registeredOwner || expectedOwner,
+          sourceRemovalAmbiguous
+        );
       }
-      this._recordLifecycleError("timer-clear", error);
+      this._reportSubprocessError(resourceGroup, "timer-clear", error);
       return false;
     }
   },
 
-  _scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName) {
+  _scheduleTrackedTimer: function(name, delay, callback, useSeconds, propertyName, resourceGroup) {
     if (!this._lifecycleAllowsWork() || typeof callback !== "function") {
       return 0;
     }
     let key = String(name || propertyName || "timer");
     if (!Array.isArray(this._orphanedTimers)) {
-      this._recordLifecycleError("timer-state", new Error("Timer orphan registry is unavailable"));
+      this._reportSubprocessError(resourceGroup, "timer-state", new Error("Timer orphan registry is unavailable"));
       return 0;
     }
     if (this._orphanedTimers.length > 0 && key !== "process-cleanup-retry") {
@@ -3824,16 +5044,17 @@ MyApplet.prototype = {
         return entry && String(entry.name || "timer") === key;
       });
       if (orphanForRequestedKey && (!orphanCleanupSucceeded || requestedKeyStillOrphaned)) {
-        this._recordLifecycleError("timer-state", new Error("An orphaned timer is still pending"));
+        this._reportSubprocessError(resourceGroup, "timer-state", new Error("An orphaned timer is still pending"));
         return 0;
       }
     }
-    if (this._clearTrackedTimer(key, propertyName) === false) {
+    if (this._clearTrackedTimer(key, propertyName, undefined, resourceGroup) === false) {
       return 0;
     }
     let generation = this.spawnGeneration;
     let sourceId = 0;
     let sourceRemovalSucceeded = false;
+    let sourceRemovalAmbiguous = false;
     let normalizedDelay;
     try {
       normalizedDelay = Number(delay === undefined || delay === null ? 1 : delay);
@@ -3842,13 +5063,25 @@ MyApplet.prototype = {
       }
       normalizedDelay = Math.max(1, normalizedDelay);
     } catch (error) {
-      this._recordLifecycleError("timer-schedule", error);
+      this._reportSubprocessError(resourceGroup, "timer-schedule", error);
       return 0;
     }
-    let retireTimer = (sourceRemovedOnFailure) => {
-      let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);
+    let timerOwner;
+    try {
+      timerOwner = Object.freeze({});
+    } catch (error) {
+      this._reportSubprocessError(resourceGroup, "timer-schedule", error);
+      return 0;
+    }
+    let retireTimer = (sourceRemovedOnFailure, expectedOwner) => {
+      let orphanUntracked = this._untrackOrphanedTimer(
+        key,
+        sourceId,
+        resourceGroup,
+        expectedOwner
+      );
       let registryUntracked = orphanUntracked &&
-        this._untrackTimer(key, sourceId, propertyName);
+        this._untrackTimer(key, sourceId, propertyName, resourceGroup, expectedOwner);
       if (registryUntracked && orphanUntracked) {
         return true;
       }
@@ -3856,25 +5089,31 @@ MyApplet.prototype = {
         key,
         sourceId,
         propertyName,
-        sourceRemovedOnFailure === true
+        sourceRemovedOnFailure === true,
+        resourceGroup,
+        expectedOwner
       )) {
-        this._recordLifecycleError("timer-state", new Error("Expired timer cleanup could not be tracked"));
+        this._reportSubprocessError(resourceGroup, "timer-state", new Error("Expired timer cleanup could not be tracked"));
       }
       return false;
     };
     let timerCallback = () => {
-      if (this.appletRemoved || this.spawnGeneration !== generation) {
-        retireTimer(true);
-        return false;
-      }
       let registryOwnsTimer = Boolean(
         this._resourceRegistry && this._resourceRegistry.timers &&
-        this._resourceRegistry.timers[key] === sourceId
+        this._resourceRegistry.timers[key] === sourceId &&
+        this._resourceRegistry.timerOwners &&
+        this._resourceRegistry.timerOwners[key] === timerOwner
       );
-      let propertyOwnsTimer = Boolean(propertyName && this[propertyName] === sourceId);
-      let timerIsCurrent = registryOwnsTimer && (!propertyName || propertyOwnsTimer);
-      if (!timerIsCurrent) {
-        retireTimer(true);
+      let propertyOwnsTimer = !propertyName || Boolean(
+        this[propertyName] === sourceId && this[propertyName + "Owner"] === timerOwner
+      );
+      if (!registryOwnsTimer || !propertyOwnsTimer) {
+        // Stale callbacks may share numeric IDs with a newer timer. They
+        // cannot retire or remove anything without their immutable owner.
+        return false;
+      }
+      if (this.appletRemoved || this.spawnGeneration !== generation) {
+        retireTimer(true, timerOwner);
         return false;
       }
       let previousActiveTimer = this._activeTrackedTimer;
@@ -3882,20 +5121,31 @@ MyApplet.prototype = {
         name: key,
         sourceId: sourceId,
         propertyName: propertyName || "",
+        owner: timerOwner,
       };
       this._activeTrackedTimer = activeTimer;
       let keepTimer;
       try {
-        keepTimer = this._runStateGuarded("timer-" + key, callback, false) === true;
+        if (resourceGroup === "error-journal") {
+          try {
+            keepTimer = callback() === true;
+          } catch (error) {
+            this._reportSubprocessError(resourceGroup, "timer-" + key, error);
+            keepTimer = false;
+          }
+        } else {
+          keepTimer = this._runStateGuarded("timer-" + key, callback, false) === true;
+        }
       } finally {
         if (this._activeTrackedTimer === activeTimer) {
           this._activeTrackedTimer = previousActiveTimer;
         }
       }
-      let timerWasReplaced = !(
-        this._resourceRegistry && this._resourceRegistry.timers &&
-        this._resourceRegistry.timers[key] === sourceId &&
-        (!propertyName || this[propertyName] === sourceId)
+      let timerWasReplaced = !this._trackedTimerOwnedBy(
+        key,
+        sourceId,
+        propertyName,
+        timerOwner
       );
       if (timerWasReplaced) {
         // Replacement or explicit clear owns next source; retire dispatching source.
@@ -3903,7 +5153,7 @@ MyApplet.prototype = {
       }
       if (!keepTimer) {
         let retryTimerMustRemainActive = key === "process-cleanup-retry";
-        let retired = retireTimer(!retryTimerMustRemainActive);
+        let retired = retireTimer(!retryTimerMustRemainActive, timerOwner);
         if (!retired && retryTimerMustRemainActive) {
           return true;
         }
@@ -3914,43 +5164,103 @@ MyApplet.prototype = {
       sourceId = useSeconds
         ? Mainloop.timeout_add_seconds(normalizedDelay, timerCallback)
         : Mainloop.timeout_add(normalizedDelay, timerCallback);
-      let trackedSourceId = this._trackTimer(key, sourceId, propertyName);
-      let registryHasTimer = !this._resourceRegistry ||
-        (this._resourceRegistry.timers && this._resourceRegistry.timers[key] === sourceId);
-      let propertyHasTimer = !propertyName || this[propertyName] === sourceId;
+      let trackedSourceId = this._trackTimer(
+        key,
+        sourceId,
+        propertyName,
+        resourceGroup,
+        timerOwner
+      );
+      let registryHasTimer = this._trackedTimerOwnedBy(
+        key,
+        sourceId,
+        propertyName,
+        timerOwner
+      );
+      let propertyHasTimer = !propertyName ||
+        (this[propertyName] === sourceId && this[propertyName + "Owner"] === timerOwner);
       if (!sourceId || trackedSourceId !== sourceId || !registryHasTimer || !propertyHasTimer) {
         throw new Error("Timer could not be registered");
       }
       return trackedSourceId;
     } catch (error) {
       if (sourceId) {
+        let currentTimerId = this._resourceRegistry && this._resourceRegistry.timers &&
+          this._resourceRegistry.timers[key];
+        let currentTimerOwner = this._resourceRegistry && this._resourceRegistry.timerOwners &&
+          this._resourceRegistry.timerOwners[key];
+        let sourceIdConflicted = false;
+        if (this._resourceRegistry && this._resourceRegistry.timers) {
+          for (let existingKey in this._resourceRegistry.timers) {
+            if (Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, existingKey) &&
+                this._resourceRegistry.timers[existingKey] === sourceId && existingKey !== key) {
+              sourceIdConflicted = true;
+              break;
+            }
+          }
+        }
+        let sourceBelongsToOwner = currentTimerId === sourceId && currentTimerOwner === timerOwner;
+        let sourceIsUntracked = !currentTimerId && !currentTimerOwner && !sourceIdConflicted;
         try {
-          let removed = Mainloop.source_remove(sourceId);
+          if (!sourceBelongsToOwner && !sourceIsUntracked) {
+            throw new Error("Timer rollback owner is no longer current");
+          }
+          let removed;
+          try {
+            removed = Mainloop.source_remove(sourceId);
+          } catch (error) {
+            sourceRemovalAmbiguous = true;
+            throw error;
+          }
           if (removed === false) {
+            // Source disappeared; bookkeeping may be retired, but numeric
+            // source removal must never be retried.
+            sourceRemovalSucceeded = true;
             throw new Error("Timer rollback could not remove source");
           }
           sourceRemovalSucceeded = true;
-          let orphanUntracked = this._untrackOrphanedTimer(key, sourceId);
+          let orphanUntracked = this._untrackOrphanedTimer(
+            key,
+            sourceId,
+            resourceGroup,
+            timerOwner,
+            sourceRemovalAmbiguous
+          );
           if (orphanUntracked === false) {
             throw new Error("Timer rollback orphan entry could not be removed");
           }
-          if (this._resourceRegistry && this._resourceRegistry.timers && this._resourceRegistry.timers[key] === sourceId) {
+          if (this._resourceRegistry && this._resourceRegistry.timers &&
+              this._resourceRegistry.timers[key] === sourceId &&
+              this._resourceRegistry.timerOwners &&
+              this._resourceRegistry.timerOwners[key] === timerOwner) {
             let deleted = delete this._resourceRegistry.timers[key];
             if (deleted === false || Object.prototype.hasOwnProperty.call(this._resourceRegistry.timers, key)) {
               throw new Error("Timer rollback registry entry could not be removed");
             }
+            if (this._resourceRegistry.timerGroups) {
+              delete this._resourceRegistry.timerGroups[key];
+            }
+            delete this._resourceRegistry.timerOwners[key];
           }
-          if (propertyName && this[propertyName] === sourceId) {
+          if (propertyName && this[propertyName] === sourceId &&
+              this[propertyName + "Owner"] === timerOwner) {
             this[propertyName] = 0;
+            this[propertyName + "Owner"] = null;
           }
         } catch (cleanupError) {
-          if (sourceId) {
-            this._trackOrphanedTimer(key, sourceId, propertyName, sourceRemovalSucceeded);
-          }
-          this._recordLifecycleError("timer-cleanup", cleanupError);
+      this._trackOrphanedTimer(
+        key,
+        sourceId,
+        propertyName,
+        sourceRemovalSucceeded,
+        resourceGroup,
+        timerOwner,
+        sourceRemovalAmbiguous
+      );
+          this._reportSubprocessError(resourceGroup, "timer-cleanup", cleanupError);
         }
       }
-      this._recordLifecycleError("timer-" + key, error);
+      this._reportSubprocessError(resourceGroup, "timer-" + key, error);
       return 0;
     }
   },
@@ -4043,13 +5353,19 @@ MyApplet.prototype = {
     this.postProcessPrompt = "";
     this.personalContext = "";
     this.vocabulary = "";
-    this.notifyRecording = false;
+    this.notifyRecordingStart = false;
+    this.notifyRecordingLimit = false;
+    this.notifyRecordingLonger = false;
     this.notifyComplete = true;
     this.notifyError = true;
     this.status = "idle";
     this.recordingArtifactsPresent = false;
     this.lastTranscript = "";
     this.lastMessage = "";
+    this.lastErrorMessage = "";
+    this.errorJournalInFlight = false;
+    this.errorJournalQueue = [];
+    this.errorJournalRetryScheduling = false;
     this.isCommandRunning = false;
     this.terminalWorkflowRunning = false;
     this.terminalWorkflowToken = null;
@@ -4080,6 +5396,8 @@ MyApplet.prototype = {
     this.autoRelistenPendingLanguage = "";
     this.autoRelistenManualStopRequested = false;
     this.autoRelistenSequence = 0;
+    this.autoRelistenRetryTimer = 0;
+    this._autoRelistenStartBlock = "";
     this.autoInsertFingerprint = "";
     this.autoInsertFingerprints = [];
     this.autoInsertPendingFingerprint = "";
@@ -4090,16 +5408,20 @@ MyApplet.prototype = {
     this.voiceModelActionToken = null;
     this.recordingStartedAtMs = 0;
     this.recordingMaxSeconds = 0;
+    this.recordingReachedTimeLimit = false;
+    this.recordingLongWarningShown = false;
     this.transcriptWindowToken = null;
     this.cleanupPreviewDialogToken = null;
     this.cleanupPreviewDialog = null;
     this.clipboardOverwriteDialog = null;
     this._cleanupCommandToken = null;
     this._recordingCommandToken = null;
+    this._recordingStartToken = null;
     this.targetWindow = null;
     this.targetWindowXid = "";
     this.targetWindowXTitle = "";
     this.targetWindowXClass = "";
+    this.targetWindowWaylandEvidence = null;
     this.clipboard = St.Clipboard.get_default();
     this.statusTimer = 0;
     this.displayTimer = 0;
@@ -4115,6 +5437,7 @@ MyApplet.prototype = {
     this.voiceModelCleanupFailed = false;
     this.benchmarkCleanupFailed = false;
     this.processCleanupRetryTimer = 0;
+    this.processCleanupRetryTimerOwner = null;
     this.textInsertCancellationFailed = false;
     this.externalApiEnvMonitor = null;
     this.externalApiEnvApplyTarget = "voice";
@@ -4208,7 +5531,9 @@ MyApplet.prototype = {
     this._bindSetting(Settings.BindingDirection.IN, "post-process-prompt", "postProcessPrompt", this._onTextModelSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "personal-context", "personalContext", null, null);
     this._bindSetting(Settings.BindingDirection.IN, "vocabulary", "vocabulary", null, null);
-    this._bindSetting(Settings.BindingDirection.IN, "notify-recording", "notifyRecording", this._onNotificationSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "notify-recording-start", "notifyRecordingStart", this._onNotificationSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "notify-recording-limit", "notifyRecordingLimit", this._onNotificationSettingsChanged, null);
+    this._bindSetting(Settings.BindingDirection.IN, "notify-recording-longer", "notifyRecordingLonger", this._onNotificationSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "notify-complete", "notifyComplete", this._onNotificationSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "notify-error", "notifyError", this._onNotificationSettingsChanged, null);
     this._bindSetting(Settings.BindingDirection.IN, "status-icon-ready", "statusIconReady", this._onStatusIconSettingsChanged, null);
@@ -4421,6 +5746,10 @@ MyApplet.prototype = {
     this._connectSafe(basicSetup, "activate", () => this._runBasicSetup());
     this.installMenuItem.menu.addMenuItem(basicSetup);
 
+    let installDoctor = new PopupMenu.PopupIconMenuItem(_("Install Doctor"), "dialog-information-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(installDoctor, "activate", () => this._runDoctor());
+    this.installMenuItem.menu.addMenuItem(installDoctor);
+
     let installOllamaModel = new PopupMenu.PopupIconMenuItem(_("Choose Ollama text model"), "view-list-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(installOllamaModel, "activate", () => this._chooseOllamaTextModel());
     this.installMenuItem.menu.addMenuItem(installOllamaModel);
@@ -4456,6 +5785,23 @@ MyApplet.prototype = {
     let diagnostics = new PopupMenu.PopupIconMenuItem(_("Copy diagnostics"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(diagnostics, "activate", () => this._copyDiagnostics());
     this.diagnosticsMenuItem.menu.addMenuItem(diagnostics);
+
+    this.copyLastErrorItem = new PopupMenu.PopupIconMenuItem(_("Copy last error message"), "edit-copy-symbolic", St.IconType.SYMBOLIC);
+    this.copyLastErrorItem.setSensitive(false);
+    this._connectSafe(this.copyLastErrorItem, "activate", () => this._copyLastErrorMessage());
+    this.diagnosticsMenuItem.menu.addMenuItem(this.copyLastErrorItem);
+
+    let openErrorLog = new PopupMenu.PopupIconMenuItem(_("Open error log"), "text-x-log-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(openErrorLog, "activate", () => this._openErrorJournalFile("errors.log", _("Opened error log")));
+    this.diagnosticsMenuItem.menu.addMenuItem(openErrorLog);
+
+    let openErrorChecklist = new PopupMenu.PopupIconMenuItem(_("Open error checklist"), "text-x-markdown-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(openErrorChecklist, "activate", () => this._openErrorJournalFile("errors.md", _("Opened error checklist")));
+    this.diagnosticsMenuItem.menu.addMenuItem(openErrorChecklist);
+
+    let openErrorFolder = new PopupMenu.PopupIconMenuItem(_("Open error log folder"), "folder-symbolic", St.IconType.SYMBOLIC);
+    this._connectSafe(openErrorFolder, "activate", () => this._openErrorJournalFolder(_("Opened error log folder")));
+    this.diagnosticsMenuItem.menu.addMenuItem(openErrorFolder);
 
     let saveDiagnostics = new PopupMenu.PopupIconMenuItem(_("Save diagnostics"), "document-save-symbolic", St.IconType.SYMBOLIC);
     this._connectSafe(saveDiagnostics, "activate", () => this._saveDiagnostics());
@@ -5429,7 +6775,13 @@ MyApplet.prototype = {
     // text-output changes. Keep its token until its process callback arrives;
     // clearing it here would allow concurrent backup jobs.
     this._historyMenuFingerprint = null;
-    let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
+    let promptCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("settings-prompt"));
+    if (promptCleanupStatus !== "stopped") {
+      if (promptCleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
+      }
+      return;
+    }
     this._cancelTextInsertForSettingsChange();
     this.typingDelayMs = this._normalizeTypingDelayMs(this.typingDelayMs);
     if (typeof this._normalizeCodexTerminalSubmitKey === "function") {
@@ -5444,20 +6796,20 @@ MyApplet.prototype = {
     this._updateAutoPasteItem();
     this._populateAutoPasteMenu();
     this._updatePanel();
-    if (!promptCleanupSucceeded) {
-      this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
-    }
   },
 
   _onTranscriptRetentionSettingsChanged: function() {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
-    let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
+    let promptCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("settings-prompt"));
+    if (promptCleanupStatus !== "stopped") {
+      if (promptCleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
+      }
+      return;
+    }
     this.maxTranscriptFiles = this._normalizeTranscriptLimit(this.maxTranscriptFiles);
     this._updatePanel();
-    if (!promptCleanupSucceeded) {
-      this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
-    }
   },
 
   _onRecorderSettingsChanged: function() {
@@ -5469,13 +6821,16 @@ MyApplet.prototype = {
   _onRecordingLimitSettingsChanged: function() {
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
-    let promptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
+    let promptCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("settings-prompt"));
+    if (promptCleanupStatus !== "stopped") {
+      if (promptCleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
+      }
+      return;
+    }
     this.maxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this._populateRecordingLimitMenu();
     this._updatePanel();
-    if (!promptCleanupSucceeded) {
-      this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
-    }
   },
 
   _onRecordingOptionsChanged: function() {
@@ -5490,21 +6845,25 @@ MyApplet.prototype = {
 
   _onInputSourceSettingsChanged: function() {
     this.inputSourceMenuRefreshToken = null;
-    let inputSourceCleanupSucceeded = this._terminateProcessesByGroup("input-source-refresh") !== false;
+    let inputSourceCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("input-source-refresh"));
+    if (inputSourceCleanupStatus !== "stopped") {
+      if (inputSourceCleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Input source refresh could not be stopped"), this.lastTranscript);
+      }
+      return;
+    }
     this._populateInputSourceMenu([], _("Open menu to load input sources"));
     this._updatePanel();
-    if (!inputSourceCleanupSucceeded) {
-      this._setStatusPreservingRecording("error", _("Input source refresh could not be stopped"), this.lastTranscript);
-    }
   },
 
   _onVoiceBackendSettingsChanged: function() {
     this.modelMenuRefreshToken = null;
-    let modelMenuCleanupSucceeded = this._terminateProcessesByGroup("model-menu-refresh") !== false;
+    let modelMenuCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("model-menu-refresh"));
     let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
     let hadVoiceModelCleanupFailure = this.voiceModelCleanupFailed === true;
     this.voiceModelActionToken = null;
-    let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
+    let voiceModelCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("voice-model"));
+    let voiceModelCleanupSucceeded = voiceModelCleanupStatus === "stopped";
     if (voiceModelCleanupSucceeded) {
       let busyStateReleased = this._releaseBusyStateAfterProcessCleanup(
         "voice-model",
@@ -5518,20 +6877,27 @@ MyApplet.prototype = {
     } else {
       this.voiceModelCleanupFailed = true;
     }
+    if (voiceModelCleanupStatus === "failed") {
+      this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
+    }
+    if (modelMenuCleanupStatus === "failed") {
+      this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
+    }
+    if (modelMenuCleanupStatus !== "stopped" || voiceModelCleanupStatus !== "stopped") {
+      return;
+    }
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._populateModelMenu([], _("Open menu to load voice models"));
     this._updatePanel();
-    if (!voiceModelCleanupSucceeded) {
-      this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
-    }
-    if (!modelMenuCleanupSucceeded) {
-      this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
-    }
   },
 
   _onTextModelSettingsChanged: function() {
     this.textModelMenuRefreshToken = null;
-    let textModelRefreshCleanupSucceeded = this._terminateProcessesByGroup("text-model-refresh") !== false;
+    let textModelRefreshCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("text-model-refresh"));
+    let textModelRefreshCleanupSucceeded = textModelRefreshCleanupStatus === "stopped";
+    if (textModelRefreshCleanupStatus === "failed") {
+      this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+    }
     let hadOllamaOperation = Boolean(
       this.ollamaModelFlowToken ||
       this.ollamaInstallWatchToken ||
@@ -5542,7 +6908,15 @@ MyApplet.prototype = {
     let ollamaWatchCleanupSucceeded = this._cancelOllamaInstallWatch() !== false;
     let ollamaFlowCleanupSucceeded = this._clearOllamaModelFlow();
     if (!ollamaWatchCleanupSucceeded || !ollamaFlowCleanupSucceeded) {
-      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      if (!ollamaWatchCleanupSucceeded || this._ollamaModelCleanupStatus !== "pending") {
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      }
+      return;
+    }
+    // Cleanup of the requested text-model refresh gates every state/UI
+    // follow-up. Other cleanup above still runs, but pending never becomes
+    // success and failed was reported exactly once for this operation.
+    if (!textModelRefreshCleanupSucceeded) {
       return;
     }
     if (hadOllamaOperation && !this.notificationSessionActive && !this._recordingCommandToken &&
@@ -5551,9 +6925,6 @@ MyApplet.prototype = {
     }
     this._populateTextModelMenu([], _("Open menu to load local text models"));
     this._updatePanel();
-    if (!textModelRefreshCleanupSucceeded) {
-      this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
-    }
   },
 
   _onOpenAiFlexProcessingSettingsChanged: function() {
@@ -5583,24 +6954,17 @@ MyApplet.prototype = {
 
   _cancelAutoBackupTimers: function() {
     if (this.autoBackupTimerId) {
-      try {
-        GLib.source_remove(this.autoBackupTimerId);
-      } catch (ignored) {
-      }
-      this.autoBackupTimerId = 0;
+      this._clearTrackedTimer("auto-backup-debounce", "autoBackupTimerId");
     }
     if (this.autoBackupRetryTimerId) {
-      try {
-        GLib.source_remove(this.autoBackupRetryTimerId);
-      } catch (ignored) {
-      }
-      this.autoBackupRetryTimerId = 0;
+      this._clearTrackedTimer("auto-backup-retry", "autoBackupRetryTimerId");
     }
     this.autoBackupPending = false;
   },
 
   _cancelTextInsertForSettingsChange: function() {
     this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
+    this.targetWindowWaylandEvidence = null;
     this._clearClipboardOverwriteApproval();
     let dialogCleanupSucceeded = true;
     if (this.clipboardOverwriteDialog) {
@@ -5628,14 +6992,15 @@ MyApplet.prototype = {
       }
     }
     let cancellationSucceeded = true;
-    if (this._terminateProcessesByGroup("keyboard") === false) {
-      cancellationSucceeded = false;
-    }
-    if (this._terminateProcessesByGroup("clipboard") === false) {
-      cancellationSucceeded = false;
-    }
-    if (this._terminateProcessesByGroup("x11") === false) {
-      cancellationSucceeded = false;
+    let cancellationFailed = false;
+    for (let group of ["keyboard", "clipboard", "x11"]) {
+      let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup(group));
+      if (cleanupStatus !== "stopped") {
+        cancellationSucceeded = false;
+        if (cleanupStatus === "failed") {
+          cancellationFailed = true;
+        }
+      }
     }
     if (!fingerprintCleanupSucceeded) {
       cancellationSucceeded = false;
@@ -5647,11 +7012,20 @@ MyApplet.prototype = {
       cancellationSucceeded = false;
     }
     this.textInsertCancellationFailed = !cancellationSucceeded;
+    if (cancellationFailed) {
+      this._setStatusPreservingRecording("error", _("Previous text insertion could not be stopped"), this.lastTranscript);
+    }
     if (hadInsertToken && this.autoRelistenPending) {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenPendingLanguage = "";
       this.autoRelistenManualStopRequested = true;
+    }
+    if (hadInsertToken && cancellationSucceeded &&
+        (this.status === "recording" || this.status === "processing") &&
+        !this.isCommandRunning && !this._statusCommandRunning &&
+        !this._hasLocalProcessingWorkflow()) {
+      this._scheduleStatusPoll();
     }
     return cancellationSucceeded;
   },
@@ -5667,7 +7041,9 @@ MyApplet.prototype = {
         return;
       }
       this._closeMenuSafely(menu, false, true);
-      this._rememberFocusedWindow();
+      if (!this._isTargetWindowXLookupPending()) {
+        this._rememberFocusedWindow();
+      }
       menu.open(true);
     }, undefined);
   },
@@ -5676,6 +7052,7 @@ MyApplet.prototype = {
     if (!this._beginTeardown()) {
       return;
     }
+    this._runTeardownGuarded("teardown-auto-relisten-retry", () => this._clearAutoRelistenRetryTimer());
     this._statusRefreshToken++;
     this._statusCommandToken = null;
     this._statusCommandRunning = false;
@@ -5722,6 +7099,7 @@ MyApplet.prototype = {
     this._doctorCommandRunning = false;
     this._cleanupCommandToken = null;
     this._recordingCommandToken = null;
+    this._recordingStartToken = null;
     this.isCommandRunning = false;
     this._runTeardownGuarded("teardown-processes", () => this._terminateAllProcesses());
     this._runTeardownGuarded("teardown-orphaned-processes", () => this._retryOrphanedProcesses());
@@ -5736,6 +7114,7 @@ MyApplet.prototype = {
     this._runTeardownGuarded("teardown-clipboard", () => this._clearClipboardOverwriteApproval());
     this._runTeardownGuarded("teardown-timer", () => this._clearAlarmTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearOllamaInstallWatchTimer());
+    this._runTeardownGuarded("teardown-timer", () => this._clearErrorJournalRetryTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearProcessCleanupRetryTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearRecordingStartRetryTimer());
     this._runTeardownGuarded("teardown-timer", () => this._clearExternalApiEnvRefreshTimer());
@@ -6156,11 +7535,10 @@ MyApplet.prototype = {
       return;
     }
     try {
-      this.autoBackupTimerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, delaySeconds, () => {
-        this.autoBackupTimerId = 0;
+      this.autoBackupTimerId = this._scheduleTrackedTimer("auto-backup-debounce", delaySeconds, () => {
         this._runAutoBackup(payload, 0);
         return false;
-      });
+      }, true, "autoBackupTimerId");
     } catch (error) {
       this.autoBackupTimerId = 0;
       this._recordLifecycleError("auto-backup-schedule", error);
@@ -6215,12 +7593,11 @@ MyApplet.prototype = {
         let retryDelay = Math.max(1, Math.min(3600, Number(this.autoBackupRetryDelaySeconds) || 30));
         let retryScheduled = false;
         try {
-          this.autoBackupRetryTimerId = GLib.timeout_add_seconds(GLib.PRIORITY_DEFAULT, retryDelay, () => {
-            this.autoBackupRetryTimerId = 0;
+          this.autoBackupRetryTimerId = this._scheduleTrackedTimer("auto-backup-retry", retryDelay, () => {
             this._runAutoBackup(payload, retryAttempt + 1);
             return false;
-          });
-          retryScheduled = true;
+          }, true, "autoBackupRetryTimerId");
+          retryScheduled = Boolean(this.autoBackupRetryTimerId);
         } catch (error) {
           this.autoBackupRetryTimerId = 0;
           this._recordLifecycleError("auto-backup-retry", error);
@@ -6323,6 +7700,7 @@ MyApplet.prototype = {
 
   _normalizeOutputMethod: function(method) {
     let value = String(method || "").trim();
+    value = OUTPUT_METHOD_ALIASES[value.toLowerCase()] || value;
     return OUTPUT_METHODS.indexOf(value) >= 0 ? value : "none";
   },
 
@@ -6704,9 +8082,17 @@ MyApplet.prototype = {
       return;
     }
 
-    let recording = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyRecording), _("Recording start and limit")));
-    this._connectSafe(recording, "activate", () => this._toggleNotifyRecording());
-    this.notificationOptionsItem.menu.addMenuItem(recording);
+    let recordingStart = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyRecordingStart), _("Recording start")));
+    this._connectSafe(recordingStart, "activate", () => this._toggleNotifyRecordingStart());
+    this.notificationOptionsItem.menu.addMenuItem(recordingStart);
+
+    let recordingLimit = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyRecordingLimit), _("Recording time limit")));
+    this._connectSafe(recordingLimit, "activate", () => this._toggleNotifyRecordingLimit());
+    this.notificationOptionsItem.menu.addMenuItem(recordingLimit);
+
+    let recordingLonger = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyRecordingLonger), _("Recording longer than 5 minutes")));
+    this._connectSafe(recordingLonger, "activate", () => this._toggleNotifyRecordingLonger());
+    this.notificationOptionsItem.menu.addMenuItem(recordingLonger);
 
     let complete = new PopupMenu.PopupMenuItem(this._optionLabel(Boolean(this.notifyComplete), _("Dictation complete")));
     this._connectSafe(complete, "activate", () => this._toggleNotifyComplete());
@@ -6721,15 +8107,42 @@ MyApplet.prototype = {
     this._setStatusPreservingRecording("ready", message, this.lastTranscript);
   },
 
-  _toggleNotifyRecording: function() {
-    let nextValue = !Boolean(this.notifyRecording);
-    if (!this._commitSettingValue("notifyRecording", "notify-recording", nextValue, "settings-notifications", _("Notification option could not be saved"))) {
+  _toggleNotifyRecordingStart: function() {
+    let nextValue = !Boolean(this.notifyRecordingStart);
+    if (!this._commitSettingValue("notifyRecordingStart", "notify-recording-start", nextValue, "settings-notifications", _("Notification option could not be saved"))) {
       return;
     }
     this._populateNotificationOptionsMenu();
     this._setNotificationOptionStatus(
-      this.notifyRecording ? _("Recording notifications enabled") : _("Recording notifications disabled")
+      this.notifyRecordingStart ? _("Recording start notifications enabled") : _("Recording start notifications disabled")
     );
+  },
+
+  _toggleNotifyRecordingLimit: function() {
+    let nextValue = !Boolean(this.notifyRecordingLimit);
+    if (!this._commitSettingValue("notifyRecordingLimit", "notify-recording-limit", nextValue, "settings-notifications", _("Notification option could not be saved"))) {
+      return;
+    }
+    this._populateNotificationOptionsMenu();
+    this._setNotificationOptionStatus(
+      this.notifyRecordingLimit ? _("Recording time-limit notifications enabled") : _("Recording time-limit notifications disabled")
+    );
+  },
+
+  _toggleNotifyRecordingLonger: function() {
+    let nextValue = !Boolean(this.notifyRecordingLonger);
+    if (!this._commitSettingValue("notifyRecordingLonger", "notify-recording-longer", nextValue, "settings-notifications", _("Notification option could not be saved"))) {
+      return;
+    }
+    this._populateNotificationOptionsMenu();
+    this._setNotificationOptionStatus(
+      this.notifyRecordingLonger ? _("Long-recording notifications enabled") : _("Long-recording notifications disabled")
+    );
+    this._maybeWarnLongRecording();
+  },
+
+  _toggleNotifyRecording: function() {
+    return this._toggleNotifyRecordingStart();
   },
 
   _toggleNotifyComplete: function() {
@@ -6899,7 +8312,7 @@ MyApplet.prototype = {
       "zenity",
       "--entry",
       "--title=Auto-Submit",
-      "--text=Built-in marker names match the full window title or known window classes/app IDs. Custom strings match the full window title case-insensitively. Empty disables Auto-Submit.",
+      "--text=Built-in marker names match known window classes/app IDs; Codex additionally requires an explicit Codex marker. Custom strings match the full window title case-insensitively. Empty disables Auto-Submit.",
       "--entry-text=" + current
     ];
   },
@@ -7045,10 +8458,9 @@ MyApplet.prototype = {
         continue;
       }
       if (AUTO_PASTE_IDENTITY_MARKERS[key]) {
-        if (
-          this._windowIdentityMatchesAutoPaste(marker) ||
-          this._windowIdentityValueMatchesMarker(title, key)
-        ) {
+        // Built-in targets require identity evidence. A title substring alone
+        // must never authorize automated keyboard input.
+        if (this._windowIdentityMatchesAutoPaste(marker)) {
           return true;
         }
         continue;
@@ -7058,6 +8470,45 @@ MyApplet.prototype = {
       }
     }
     return false;
+  },
+
+  _windowSnapshotMatchesAutoPaste: function(snapshot) {
+    if (!snapshot || !snapshot.xid) {
+      return this._windowTitleMatchesAutoPaste();
+    }
+    let markers = this._autoPasteTitleValues(this.autoPasteWindowTitle);
+    if (markers.length === 0) {
+      return false;
+    }
+    let snapshotTitle = this._normalizedAutoPasteWindowTitle(snapshot.windowTitle || "");
+    let snapshotClass = String(snapshot.windowClass || "").trim().toLowerCase();
+    if (!snapshotClass) {
+      return this._windowTitleMatchesAutoPaste();
+    }
+    for (let marker of markers) {
+      let key = String(marker || "").trim().toLowerCase();
+      if (!key) {
+        continue;
+      }
+      let allowed = AUTO_PASTE_IDENTITY_MARKERS[key] || null;
+      if (!allowed) {
+        continue;
+      }
+      if (key === "codex") {
+        let terminalClassMatches = allowed.some((value) =>
+          this._windowIdentityValueMatchesMarker(snapshotClass, value)
+        );
+        if (terminalClassMatches && /\bcodex\b/i.test(snapshotTitle)) {
+          // XID plus terminal class is stable; Codex may mutate terminal title.
+          return true;
+        }
+        continue;
+      }
+      if (allowed.some((value) => this._windowIdentityValueMatchesMarker(snapshotClass, value))) {
+        return true;
+      }
+    }
+    return this._windowTitleMatchesAutoPaste();
   },
 
   _updateOpenAiFlexProcessingItem: function() {
@@ -7120,11 +8571,12 @@ MyApplet.prototype = {
     this.activeLanguageExplicit = false;
     this._syncActiveLanguage();
     this.modelMenuRefreshToken = null;
-    let modelMenuCleanupSucceeded = this._terminateProcessesByGroup("model-menu-refresh") !== false;
+    let modelMenuCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("model-menu-refresh"));
     let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
     let hadVoiceModelCleanupFailure = this.voiceModelCleanupFailed === true;
     this.voiceModelActionToken = null;
-    let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
+    let voiceModelCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("voice-model"));
+    let voiceModelCleanupSucceeded = voiceModelCleanupStatus === "stopped";
     if (voiceModelCleanupSucceeded) {
       let busyStateReleased = this._releaseBusyStateAfterProcessCleanup(
         "voice-model",
@@ -7138,16 +8590,19 @@ MyApplet.prototype = {
     } else {
       this.voiceModelCleanupFailed = true;
     }
+    if (voiceModelCleanupStatus === "failed") {
+      this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
+    }
+    if (modelMenuCleanupStatus === "failed") {
+      this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
+    }
+    if (modelMenuCleanupStatus !== "stopped" || voiceModelCleanupStatus !== "stopped") {
+      return;
+    }
     this._ensureVoiceModelCompatibleWithPrimaryLanguage(false);
     this._populateLanguageMenu();
     this._populateModelMenu([], _("Open menu to load voice models"));
     this._updatePanel();
-    if (!voiceModelCleanupSucceeded) {
-      this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
-    }
-    if (!modelMenuCleanupSucceeded) {
-      this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
-    }
   },
 
   _hasActiveRecordingState: function() {
@@ -7258,6 +8713,9 @@ MyApplet.prototype = {
   },
 
   _startWithLanguage: function(language, preserveTargetOnFailure) {
+    if (this._recordingStartToken) {
+      return false;
+    }
     if (this._hasActiveRecordingState() || this.isCommandRunning || this._recordingCommandToken) {
       this._setStatusPreservingRecording(
         this.status,
@@ -7266,20 +8724,54 @@ MyApplet.prototype = {
       );
       return false;
     }
+    let recordingStartToken = {};
+    this._recordingStartToken = recordingStartToken;
     let callbackDelivered = false;
-    let started = true;
+    let started = false;
     let startRecording = (remembered, targetCaptureFailed) => {
-      callbackDelivered = true;
-      if (!remembered && !targetCaptureFailed) {
+      try {
+        if (this._recordingStartToken !== recordingStartToken ||
+            (typeof this._lifecycleAllowsWork === "function" && !this._lifecycleAllowsWork())) {
+          return;
+        }
+        this._recordingStartToken = null;
+        callbackDelivered = true;
+        if (!remembered && !targetCaptureFailed) {
+          return;
+        }
+        this.activeLanguage = this._normalizeLanguage(language, this._primaryLanguage());
+        this.activeLanguageExplicit = true;
+        started = this._toggleRecording("start") === true;
+      } catch (error) {
+        if (this._recordingStartToken === recordingStartToken) {
+          this._recordingStartToken = null;
+        }
         started = false;
-        return;
+        try {
+          this._recordLifecycleError("recording-start", error);
+        } catch (_loggingError) {
+          // Starting must remain fail-closed if lifecycle logging is unavailable.
+        }
       }
-      this.activeLanguage = this._normalizeLanguage(language, this._primaryLanguage());
-      this.activeLanguageExplicit = true;
-      let recordingStarted = this._toggleRecording("start") === true;
-      started = recordingStarted;
     };
-    if (!this._rememberFocusedWindow(Boolean(preserveTargetOnFailure), startRecording)) {
+    let focusRemembered = false;
+    try {
+      focusRemembered = this._rememberFocusedWindow(Boolean(preserveTargetOnFailure), startRecording) === true;
+    } catch (error) {
+      if (this._recordingStartToken === recordingStartToken) {
+        this._recordingStartToken = null;
+      }
+      try {
+        this._recordLifecycleError("recording-focus-start", error);
+      } catch (_loggingError) {
+        // Starting must remain fail-closed if lifecycle logging is unavailable.
+      }
+      return false;
+    }
+    if (!focusRemembered) {
+      if (this._recordingStartToken === recordingStartToken) {
+        this._recordingStartToken = null;
+      }
       return false;
     }
     if (!callbackDelivered) {
@@ -7287,6 +8779,35 @@ MyApplet.prototype = {
     }
     let recordingStarted = started;
     return recordingStarted;
+  },
+
+  _cancelPendingRecordingFocusStart: function() {
+    if (!this._recordingStartToken) {
+      return false;
+    }
+    this._recordingStartToken = null;
+    this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
+    this.targetWindowWaylandEvidence = null;
+    this.targetWindowXPendingGeneration = 0;
+    let cleanupStatus = "stopped";
+    if (typeof this._terminateProcessesByGroup === "function") {
+      cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("x11", true));
+    }
+    if (cleanupStatus !== "stopped") {
+      if (cleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Recording start could not be cancelled"), this.lastTranscript);
+      }
+      if (typeof this._scheduleProcessCleanupRetry === "function") {
+        this._scheduleProcessCleanupRetry();
+      }
+      return false;
+    }
+    this._setStatus(
+      "ready",
+      _("Recording start cancelled"),
+      this.lastTranscript
+    );
+    return true;
   },
 
   _populateLanguageMenu: function() {
@@ -7386,6 +8907,15 @@ MyApplet.prototype = {
 
   _toggleRecording: function() {
     let forcedAction = arguments.length > 0 ? String(arguments[0] || "") : "";
+    if (forcedAction !== "start") {
+      this._clearAutoRelistenRetryTimer();
+    }
+    if (this._recordingStartToken) {
+      if (forcedAction === "start") {
+        return false;
+      }
+      return this._cancelPendingRecordingFocusStart();
+    }
     if (this.ollamaModelFlowToken || this.ollamaInstallWatchToken || this.ollamaModelInstallRunning || this.ollamaModelCleanupFailed) {
       if (!this._cancelOllamaFlowForRecording()) {
         this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
@@ -7409,6 +8939,24 @@ MyApplet.prototype = {
       }
     }
     let hasExistingRecordingWork = this._hasActiveRecordingState();
+    let startWaylandEvidence = null;
+    let startWaylandTarget = null;
+    let rebindStartWaylandEvidence = () => {
+      if (startWaylandEvidence && startWaylandTarget === this.targetWindow) {
+        this.targetWindowWaylandEvidence = Object.assign({}, startWaylandEvidence, {
+          generation: Number(this.targetWindowGeneration || 0),
+          targetWindow: this.targetWindow,
+        });
+      }
+    };
+    if (forcedAction === "start" && !hasExistingRecordingWork && !this.isCommandRunning &&
+        typeof this._waylandTargetEvidenceForCurrentGeneration === "function") {
+      let currentWaylandEvidence = this._waylandTargetEvidenceForCurrentGeneration();
+      if (currentWaylandEvidence && currentWaylandEvidence.targetWindow === this.targetWindow) {
+        startWaylandEvidence = currentWaylandEvidence;
+        startWaylandTarget = this.targetWindow;
+      }
+    }
     if (this.isCommandRunning && this._recordingCommandToken) {
       let activeRecordingCommandAction = String(this._recordingCommandToken.action || "");
       if (forcedAction === "start") {
@@ -7447,6 +8995,9 @@ MyApplet.prototype = {
     }
     let backgroundCleanupSucceeded = this._invalidateBackgroundCallbacksForRecording(true);
     let textInsertCleanupSucceeded = this._cancelTextInsertForSettingsChange();
+    if (forcedAction === "start" && backgroundCleanupSucceeded && textInsertCleanupSucceeded) {
+      rebindStartWaylandEvidence();
+    }
     if (
       (!backgroundCleanupSucceeded || !textInsertCleanupSucceeded) &&
       !hasExistingRecordingWork
@@ -7459,6 +9010,7 @@ MyApplet.prototype = {
         this._recordLifecycleError("process-state", error);
       }
       if (forcedAction === "start" && processCleanupPending) {
+        rebindStartWaylandEvidence();
         return this._queueRecordingStartAfterCleanup();
       }
       return false;
@@ -7509,6 +9061,10 @@ MyApplet.prototype = {
     this.autoRelistenManualStopRequested = manualRelistenStopRequested;
     this.autoInsertFingerprint = "";
     this.autoInsertFingerprints = [];
+    this.recordingReachedTimeLimit = false;
+    if (commandAction === "start") {
+      this.recordingLongWarningShown = false;
+    }
     this.recordingStartedAtMs = commandAction === "start" ? Date.now() : 0;
     this.recordingMaxSeconds = this._normalizeRecordingLimit(this.maxSeconds);
     this.cancelPendingWhileCommandRunning = false;
@@ -7570,8 +9126,11 @@ MyApplet.prototype = {
   },
 
   _restartApplet: function() {
-    if (this._terminateProcessesByGroup("keyboard") === false) {
-      this._setStatusPreservingRecording("error", _("Could not stop keyboard insertion before restarting applet"), this.lastTranscript);
+    let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("keyboard"));
+    if (cleanupStatus !== "stopped") {
+      if (cleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Could not stop keyboard insertion before restarting applet"), this.lastTranscript);
+      }
       return;
     }
     this._setStatusPreservingRecording("processing", _("Restarting applet..."), this.lastTranscript);
@@ -7749,6 +9308,10 @@ MyApplet.prototype = {
   },
 
   _cancelRecording: function(statusOverride) {
+    this._clearAutoRelistenRetryTimer();
+    if (this._cancelPendingRecordingFocusStart()) {
+      return;
+    }
     if (this.recordingStartPendingAfterCleanup === true || this.recordingStartRetryTimer) {
       this._cancelPendingRecordingStart();
       return;
@@ -7844,33 +9407,40 @@ MyApplet.prototype = {
     this._statusRefreshToken++;
     this._statusCommandToken = null;
     this._statusCommandRunning = false;
-    let statusCleanupSucceeded = this._terminateProcessesByGroup("status") !== false;
-    if (!statusCleanupSucceeded) {
+    let statusCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("status"));
+    let statusCleanupSucceeded = statusCleanupStatus === "stopped";
+    if (statusCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("Status refresh could not be stopped"), this.lastTranscript);
     }
     this.historyRefreshToken = null;
     this.historyRefreshQueued = false;
-    let historyRefreshCleanupSucceeded = this._terminateProcessesByGroup("history-refresh") !== false;
-    if (!historyRefreshCleanupSucceeded) {
+    let historyRefreshCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("history-refresh"));
+    let historyRefreshCleanupSucceeded = historyRefreshCleanupStatus === "stopped";
+    if (historyRefreshCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("History refresh could not be stopped"), this.lastTranscript);
     }
     this.inputSourceMenuRefreshToken = null;
-    let inputSourceRefreshCleanupSucceeded = this._terminateProcessesByGroup("input-source-refresh") !== false;
-    if (!inputSourceRefreshCleanupSucceeded) {
+    let inputSourceRefreshCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("input-source-refresh"));
+    let inputSourceRefreshCleanupSucceeded = inputSourceRefreshCleanupStatus === "stopped";
+    if (inputSourceRefreshCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("Input source refresh could not be stopped"), this.lastTranscript);
     }
     this.modelMenuRefreshToken = null;
-    let modelMenuRefreshCleanupSucceeded = this._terminateProcessesByGroup("model-menu-refresh") !== false;
-    if (!modelMenuRefreshCleanupSucceeded) {
+    let modelMenuRefreshCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("model-menu-refresh"));
+    let modelMenuRefreshCleanupSucceeded = modelMenuRefreshCleanupStatus === "stopped";
+    if (modelMenuRefreshCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
     }
     let hadVoiceModelAction = Boolean(this.voiceModelActionToken);
     let hadVoiceModelCleanupFailure = this.voiceModelCleanupFailed === true;
     this.voiceModelActionToken = null;
-    let voiceModelCleanupSucceeded = this._terminateProcessesByGroup("voice-model") !== false;
+    let voiceModelCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("voice-model"));
+    let voiceModelCleanupSucceeded = voiceModelCleanupStatus === "stopped";
     if (!voiceModelCleanupSucceeded) {
       this.voiceModelCleanupFailed = true;
-      this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
+      if (voiceModelCleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Voice model operation could not be stopped"), this.lastTranscript);
+      }
     } else if ((hadVoiceModelAction || hadVoiceModelCleanupFailure) && !this._recordingCommandToken) {
       this._releaseBusyStateAfterProcessCleanup(
         "voice-model",
@@ -7879,33 +9449,40 @@ MyApplet.prototype = {
       );
     }
     this.textModelMenuRefreshToken = null;
-    let textModelRefreshCleanupSucceeded = this._terminateProcessesByGroup("text-model-refresh") !== false;
-    if (!textModelRefreshCleanupSucceeded) {
+    let textModelRefreshCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("text-model-refresh"));
+    let textModelRefreshCleanupSucceeded = textModelRefreshCleanupStatus === "stopped";
+    if (textModelRefreshCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
     }
     this.alarmMenuRefreshToken = null;
     this.alarmMenuRefreshQueued = false;
-    let alarmMenuRefreshCleanupSucceeded = this._terminateProcessesByGroup("alarm-menu-refresh") !== false;
-    if (!alarmMenuRefreshCleanupSucceeded) {
+    let alarmMenuRefreshCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("alarm-menu-refresh"));
+    let alarmMenuRefreshCleanupSucceeded = alarmMenuRefreshCleanupStatus === "stopped";
+    if (alarmMenuRefreshCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("Alarm menu refresh could not be stopped"), this.lastTranscript);
     }
     this.alarmActionToken = null;
-    let alarmActionCleanupSucceeded = this._terminateProcessesByGroup("alarm-action") !== false;
-    if (!alarmActionCleanupSucceeded) {
+    let alarmActionCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("alarm-action"));
+    let alarmActionCleanupSucceeded = alarmActionCleanupStatus === "stopped";
+    if (alarmActionCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("Alarm action could not be stopped"), this.lastTranscript);
     }
     this.alarmCheckToken = null;
-    let alarmCheckCleanupSucceeded = this._terminateProcessesByGroup("alarm-check") !== false;
-    if (!alarmCheckCleanupSucceeded) {
+    let alarmCheckCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("alarm-check"));
+    let alarmCheckCleanupSucceeded = alarmCheckCleanupStatus === "stopped";
+    if (alarmCheckCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("Alarm check could not be stopped"), this.lastTranscript);
     }
     let hadBenchmarkFlow = Boolean(this.benchmarkFlowToken);
     let hadBenchmarkCleanupFailure = this.benchmarkCleanupFailed === true;
     this.benchmarkFlowToken = null;
-    let benchmarkCleanupSucceeded = this._terminateProcessesByGroup("benchmark") !== false;
+    let benchmarkCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("benchmark"));
+    let benchmarkCleanupSucceeded = benchmarkCleanupStatus === "stopped";
     if (!benchmarkCleanupSucceeded) {
       this.benchmarkCleanupFailed = true;
-      this._setStatusPreservingRecording("error", _("Benchmark could not be stopped"), this.lastTranscript);
+      if (benchmarkCleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Benchmark could not be stopped"), this.lastTranscript);
+      }
     } else if ((hadBenchmarkFlow || hadBenchmarkCleanupFailure) && !this._recordingCommandToken) {
       this._releaseBusyStateAfterProcessCleanup(
         "benchmark",
@@ -7914,21 +9491,26 @@ MyApplet.prototype = {
       );
     }
     this.settingsTransferToken = null;
-    let settingsTransferCleanupSucceeded = this._terminateProcessesByGroup("settings-transfer") !== false;
-    if (!settingsTransferCleanupSucceeded) {
+    let settingsTransferCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("settings-transfer"));
+    let settingsTransferCleanupSucceeded = settingsTransferCleanupStatus === "stopped";
+    if (settingsTransferCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("Settings transfer could not be stopped"), this.lastTranscript);
     }
     this.setupDiagnosticsToken = null;
-    let setupDiagnosticsCleanupSucceeded = this._terminateProcessesByGroup("setup-diagnostics") !== false;
-    if (!setupDiagnosticsCleanupSucceeded) {
+    let setupDiagnosticsCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("setup-diagnostics"));
+    let setupDiagnosticsCleanupSucceeded = setupDiagnosticsCleanupStatus === "stopped";
+    if (setupDiagnosticsCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("Setup diagnostics action could not be stopped"), this.lastTranscript);
     }
     this.doctorCommandToken = null;
     this._doctorCommandRunning = false;
-    let doctorCleanupSucceeded = this._terminateProcessesByGroup("doctor") !== false;
-    if (!doctorCleanupSucceeded) {
+    let doctorCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("doctor"));
+    let doctorCleanupSucceeded = doctorCleanupStatus === "stopped";
+    if (doctorCleanupStatus !== "stopped") {
       this._doctorCommandRunning = true;
-      this._setStatusPreservingRecording("error", _("Doctor could not be stopped"), this.lastTranscript);
+      if (doctorCleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Doctor could not be stopped"), this.lastTranscript);
+      }
     }
     this.customLimitPromptToken = null;
     this.autoPastePromptToken = null;
@@ -7976,10 +9558,13 @@ MyApplet.prototype = {
     let hadCleanupCommand = Boolean(this._cleanupCommandToken);
     this._cleanupCommandToken = null;
     this.transcriptWindowToken = null;
-    let maintenanceCleanupSucceeded = this._terminateProcessesByGroup("maintenance") !== false;
+    let maintenanceCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("maintenance"));
+    let maintenanceCleanupSucceeded = maintenanceCleanupStatus === "stopped";
     if (!maintenanceCleanupSucceeded) {
       this.maintenanceCleanupFailed = true;
-      this._setStatusPreservingRecording("error", _("Maintenance operation could not be stopped"), this.lastTranscript);
+      if (maintenanceCleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Maintenance operation could not be stopped"), this.lastTranscript);
+      }
     } else if (hadCleanupCommand || this.maintenanceCleanupFailed) {
       this._releaseBusyStateAfterProcessCleanup(
         "maintenance",
@@ -7988,26 +9573,37 @@ MyApplet.prototype = {
       );
     }
     let textInsertProcessCleanupSucceeded = true;
+    let textInsertProcessCleanupFailed = false;
     if (skipTextInsertProcesses !== true) {
       for (let group of ["keyboard", "clipboard", "x11"]) {
-        if (this._terminateProcessesByGroup(group) === false) {
+        let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup(group));
+        if (cleanupStatus !== "stopped") {
           textInsertProcessCleanupSucceeded = false;
+          if (cleanupStatus === "failed") {
+            textInsertProcessCleanupFailed = true;
+          }
         }
       }
     }
-    if (!textInsertProcessCleanupSucceeded) {
+    if (textInsertProcessCleanupFailed) {
       this.textInsertCancellationFailed = true;
       this._setStatusPreservingRecording("error", _("Previous text insertion could not be stopped"), this.lastTranscript);
+    } else if (!textInsertProcessCleanupSucceeded) {
+      this.textInsertCancellationFailed = true;
     }
-    let settingsPromptCleanupSucceeded = this._terminateProcessesByGroup("settings-prompt") !== false;
-    if (!settingsPromptCleanupSucceeded) {
+    let settingsPromptCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("settings-prompt"));
+    let settingsPromptCleanupSucceeded = settingsPromptCleanupStatus === "stopped";
+    if (settingsPromptCleanupStatus === "failed") {
       this._setStatusPreservingRecording("error", _("Settings prompt could not be stopped"), this.lastTranscript);
     }
     let ollamaWatchTimerCleanupSucceeded = this._clearOllamaInstallWatchTimer() !== false;
-    let ollamaCleanupSucceeded = this._terminateProcessesByGroup("ollama") !== false;
+    let ollamaCleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("ollama"));
+    let ollamaCleanupSucceeded = ollamaCleanupStatus === "stopped";
     if (!ollamaCleanupSucceeded) {
       this.ollamaModelCleanupFailed = true;
-      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      if (ollamaCleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+      }
     } else {
       this.ollamaModelFlowToken = null;
       this.ollamaInstallWatchToken = null;
@@ -8020,6 +9616,89 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
     }
     return statusCleanupSucceeded && historyRefreshCleanupSucceeded && inputSourceRefreshCleanupSucceeded && modelMenuRefreshCleanupSucceeded && voiceModelCleanupSucceeded && textModelRefreshCleanupSucceeded && alarmMenuRefreshCleanupSucceeded && alarmActionCleanupSucceeded && alarmCheckCleanupSucceeded && benchmarkCleanupSucceeded && settingsTransferCleanupSucceeded && setupDiagnosticsCleanupSucceeded && doctorCleanupSucceeded && textInsertProcessCleanupSucceeded && settingsPromptCleanupSucceeded && ollamaWatchTimerCleanupSucceeded && ollamaCleanupSucceeded && maintenanceCleanupSucceeded && cleanupPreviewCleanupSucceeded && transcriptPromptCleanupSucceeded && orphanedDialogCleanupSucceeded;
+  },
+
+  _validatedDoctorPayload: function(payload) {
+    let own = (value, name) => Object.prototype.hasOwnProperty.call(value, name);
+    let objectValue = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+    let exactKeys = (value, expected) => {
+      if (!objectValue(value)) {
+        return false;
+      }
+      let names = Object.getOwnPropertyNames(value);
+      if (names.length !== expected.length ||
+          (Object.getOwnPropertySymbols && Object.getOwnPropertySymbols(value).length !== 0)) {
+        return false;
+      }
+      return expected.every((name) => own(value, name)) &&
+        names.every((name) => expected.indexOf(name) >= 0);
+    };
+    let textList = (value) => Array.isArray(value) &&
+      value.every((item) => typeof item === "string" && item.trim() !== "");
+    let topFields = [
+      "schema_version", "status", "ok", "checks", "desktop", "configured",
+      "warnings", "applet"
+    ];
+    if (!exactKeys(payload, topFields) || payload.schema_version !== 1 ||
+        payload.status !== "done" || typeof payload.ok !== "boolean" ||
+        payload.applet !== true || !Array.isArray(payload.checks) ||
+        payload.checks.length !== 1 || !textList(payload.warnings)) {
+      return null;
+    }
+
+    let safeChecks = [];
+    for (let check of payload.checks) {
+      if (!exactKeys(check, ["name", "ok", "detail"]) ||
+          check.name !== "python3" || typeof check.ok !== "boolean" ||
+          typeof check.detail !== "string") {
+        return null;
+      }
+      let safeCheck = Object.create(null);
+      safeCheck.name = check.name;
+      safeCheck.ok = check.ok;
+      safeCheck.detail = check.detail;
+      safeChecks.push(safeCheck);
+    }
+
+    if (!exactKeys(payload.desktop, ["cinnamon"]) ||
+        typeof payload.desktop.cinnamon !== "boolean") {
+      return null;
+    }
+
+    let configuredFields = ["recorder", "transcriber", "output", "postprocessor"];
+    if (!exactKeys(payload.configured, configuredFields)) {
+      return null;
+    }
+    let safeConfigured = Object.create(null);
+    for (let name of configuredFields) {
+      let section = payload.configured[name];
+      let sectionFields = name === "output" ? ["ok", "paste_ok", "detail"] : ["ok", "detail"];
+      if (!exactKeys(section, sectionFields) ||
+          typeof section.ok !== "boolean" || typeof section.detail !== "string" ||
+          (name === "output" && typeof section.paste_ok !== "boolean")) {
+        return null;
+      }
+      let safeSection = Object.create(null);
+      safeSection.ok = section.ok;
+      if (name === "output") {
+        safeSection.paste_ok = section.paste_ok;
+      }
+      safeSection.detail = section.detail;
+      safeConfigured[name] = safeSection;
+    }
+
+    let safe = Object.create(null);
+    safe.schema_version = 1;
+    safe.status = "done";
+    safe.ok = payload.ok;
+    safe.checks = safeChecks;
+    safe.desktop = Object.assign(Object.create(null), {
+      cinnamon: payload.desktop.cinnamon,
+    });
+    safe.configured = safeConfigured;
+    safe.warnings = payload.warnings.slice();
+    safe.applet = true;
+    return safe;
   },
 
   _runDoctor: function(startupCheck) {
@@ -8068,18 +9747,28 @@ MyApplet.prototype = {
         return;
       }
       try {
-        if (payload.error) {
-          let message = _("Doctor failed: ") + this._sanitizeErrorMessage(payload.error);
+        let doctorError = null;
+        let validatedPayload = null;
+        if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+          doctorError = "Invalid backend response";
+        } else if (Object.prototype.hasOwnProperty.call(payload, "error")) {
+          doctorError = typeof payload.error === "string" && payload.error.trim() !== ""
+            ? payload.error
+            : "Invalid backend response";
+        } else {
+          validatedPayload = this._validatedDoctorPayload(payload);
+          if (!validatedPayload) {
+            doctorError = "Invalid backend response";
+          }
+        }
+        if (doctorError !== null) {
+          let message = _("Doctor failed: ") + this._sanitizeErrorMessage(doctorError);
           this._setDoctorSummary(message);
           this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
           this._presentDoctorResult(message, true, Boolean(startupCheck));
           return;
         }
-        if (payload.configured) {
-          this._applyDoctorPayload(payload, Boolean(startupCheck));
-          return;
-        }
-        this._applyLegacyDoctorPayload(payload, Boolean(startupCheck));
+        this._applyDoctorPayload(validatedPayload, Boolean(startupCheck));
       } catch (err) {
         let safeError = this._sanitizeErrorMessage(err);
         let message = _("Doctor failed: ") + safeError;
@@ -8108,61 +9797,66 @@ MyApplet.prototype = {
   },
 
   _applyDoctorPayload: function(payload, startupCheck) {
-    let configured = payload.configured || {};
+    let configured = Object.prototype.hasOwnProperty.call(payload, "configured")
+      ? payload.configured
+      : {};
     let summary = this._doctorSummary(payload);
     this._setDoctorSummary(summary);
     let missing = [];
+    let outputMethod = typeof this._normalizeOutputMethod === "function"
+      ? this._normalizeOutputMethod(this.insertMethod)
+      : String(this.insertMethod || "clipboard-paste-submit").trim();
+    let pasteRequired = ["clipboard-paste", "clipboard-paste-submit"].indexOf(outputMethod) >= 0;
+    let pasteUnavailable = false;
     for (let name of ["recorder", "transcriber", "output", "postprocessor"]) {
-      let section = configured[name] && typeof configured[name] === "object" ? configured[name] : {};
-      let detail = typeof section.detail === "string" ? section.detail.trim() : "";
+      let section = Object.prototype.hasOwnProperty.call(configured, name) &&
+        configured[name] && typeof configured[name] === "object"
+        ? configured[name]
+        : {};
+      let detail = Object.prototype.hasOwnProperty.call(section, "detail") &&
+        typeof section.detail === "string" ? section.detail.trim() : "";
       if (section.ok !== true) {
         missing.push(name + ": " + (detail || "not ready"));
       }
+      if (name === "output" && section.ok === true &&
+          pasteRequired &&
+          section.paste_ok !== true) {
+        pasteUnavailable = true;
+      }
     }
-    if (payload.ok !== true) {
-      let message = _("Setup needed: ") + missing.join("; ");
+    for (let check of payload.checks) {
+      if (check.name === "python3" && check.ok !== true) {
+        missing.push("python3: " + (check.detail.trim() || "not ready"));
+      }
+    }
+    if (payload.applet === true && payload.desktop.cinnamon !== true) {
+      missing.push("desktop: Cinnamon unavailable");
+    }
+    if (payload.ok !== true || missing.length > 0) {
+      if (missing.length === 0) {
+        missing.push("requirements not ready");
+      }
+      let message = _("Doctor: Setup needed: ") + missing.join("; ");
+      this._setDoctorSummary(message);
       this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
       this._presentDoctorResult(message, true, Boolean(startupCheck));
       return;
     }
-    let warnings = Array.isArray(configured.warnings)
-      ? configured.warnings.filter((warning) => typeof warning === "string" && warning.trim() !== "")
+    let warnings = Object.prototype.hasOwnProperty.call(payload, "warnings") &&
+      Array.isArray(payload.warnings)
+      ? payload.warnings.filter((warning) => typeof warning === "string" && warning.trim() !== "")
       : [];
+    if (pasteUnavailable && warnings.length === 0) {
+      warnings.push(_("automatic paste is unavailable; clipboard copy still works"));
+    }
     if (warnings.length > 0) {
       let message = summary + "; " + warnings.join("; ");
-      this._setStatus("ready", message, this.lastTranscript);
+      this._setStatus(pasteUnavailable ? "warning" : "ready", message, this.lastTranscript);
       this._presentDoctorResult(message, false, Boolean(startupCheck));
       return;
     }
     this._setStatus("ready", summary, this.lastTranscript);
     this._presentDoctorResult(summary, false, Boolean(startupCheck));
-  },
-
-  _applyLegacyDoctorPayload: function(payload, startupCheck) {
-    let missing = [];
-    let checks = Array.isArray(payload.checks) ? payload.checks : [];
-    for (let check of checks) {
-      if (!check || typeof check !== "object") {
-        continue;
-      }
-      if (check.ok !== true) {
-        let name = typeof check.name === "string" ? check.name.trim() : "";
-        if (name !== "") {
-          missing.push(name);
-        }
-      }
-    }
-    if (payload.ok === true) {
-      let message = _("Doctor: core OK; optional missing: ") + missing.join(", ");
-      this._setDoctorSummary(message);
-      this._setStatus("ready", message, this.lastTranscript);
-      this._presentDoctorResult(message, false, Boolean(startupCheck));
-    } else {
-      let message = _("Missing: ") + missing.join(", ");
-      this._setDoctorSummary(message);
-      this._setStatus(startupCheck ? "setup" : "error", message, this.lastTranscript);
-      this._presentDoctorResult(message, true, Boolean(startupCheck));
-    }
   },
 
   _presentDoctorResult: function(message, critical, startupCheck) {
@@ -8182,19 +9876,23 @@ MyApplet.prototype = {
   },
 
   _doctorSummary: function(payload) {
-    let configured = payload.configured || {};
+    let configured = Object.prototype.hasOwnProperty.call(payload, "configured")
+      ? payload.configured
+      : {};
     let rows = [
       this._doctorSectionText("Rec", configured.recorder),
       this._doctorSectionText("ASR", configured.transcriber),
       this._doctorSectionText("Out", configured.output),
       this._doctorSectionText("Text", configured.postprocessor)
     ];
-    return (payload.ok === true ? _("Doctor: ready - ") : _("Doctor: setup needed - ")) + rows.join(", ");
+    return (Object.prototype.hasOwnProperty.call(payload, "ok") && payload.ok === true
+      ? _("Doctor: ready - ")
+      : _("Doctor: setup needed - ")) + rows.join(", ");
   },
 
   _doctorSectionText: function(label, section) {
     section = section || {};
-    return label + " " + (section.ok === true ? "OK" : "FAIL");
+    return label + " " + (Object.prototype.hasOwnProperty.call(section, "ok") && section.ok === true ? "OK" : "FAIL");
   },
 
   _openAppletSettings: function() {
@@ -8295,6 +9993,27 @@ MyApplet.prototype = {
       this._safeLogError(err);
       setStatus("error", _("Could not open file"), this.lastTranscript);
     }
+  },
+
+  _openErrorJournalFile: function(filename, successMessage) {
+    let safeFilename = filename === "errors.md" ? "errors.md" : "errors.log";
+    let path = GLib.build_filenamev([
+      this._errorJournalDirectory(),
+      safeFilename
+    ]);
+    this._openFile(path, successMessage, true);
+  },
+
+  _errorJournalDirectory: function() {
+    return GLib.build_filenamev([
+      GLib.get_user_state_dir(),
+      "speed-of-cinnamon",
+      "logs"
+    ]);
+  },
+
+  _openErrorJournalFolder: function(successMessage) {
+    this._openFolder(this._errorJournalDirectory(), successMessage);
   },
 
   _failSetupDiagnosticsAction: function(actionToken, error, message) {
@@ -8527,6 +10246,25 @@ MyApplet.prototype = {
         _("Could not start diagnostics")
       );
     }
+  },
+
+  _copyLastErrorMessage: function() {
+    if (this.setupDiagnosticsToken) {
+      return;
+    }
+    let message = typeof this.lastErrorMessage === "string" ? this.lastErrorMessage.trim() : "";
+    if (message === "") {
+      this._setStatusPreservingRecording("ready", _("No error message available"), this.lastTranscript);
+      return;
+    }
+    if (!this._setClipboardText(message)) {
+      this._setStatusPreservingRecording("error", _("Could not copy last error message"), this.lastTranscript);
+      // Keep original diagnostic available after a failed copy attempt.
+      this.lastErrorMessage = message;
+      this._setMenuItemSensitiveSafely(this.copyLastErrorItem, true);
+      return;
+    }
+    this._setStatusPreservingRecording("done", _("Copied last error message"), this.lastTranscript);
   },
 
   _saveDiagnostics: function() {
@@ -8952,10 +10690,13 @@ MyApplet.prototype = {
     if (this.alarmActionToken || this.alarmCheckToken) {
       return;
     }
-    if (this._terminateProcessesByGroup("alarm-menu-refresh") === false) {
-      this._populateAlarmMenu([], "", _("Alarm menu refresh could not be stopped"));
-      if (canReportAlarmStatus()) {
-        this._setAlarmErrorStatus(_("Alarm menu refresh could not be stopped"));
+    let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("alarm-menu-refresh"));
+    if (cleanupStatus !== "stopped") {
+      if (cleanupStatus === "failed") {
+        this._populateAlarmMenu([], "", _("Alarm menu refresh could not be stopped"));
+        if (canReportAlarmStatus()) {
+          this._setAlarmErrorStatus(_("Alarm menu refresh could not be stopped"));
+        }
       }
       return;
     }
@@ -9503,8 +11244,9 @@ MyApplet.prototype = {
     if (this.inputSourceMenuRefreshToken) {
       return true;
     }
-    if (this._terminateProcessesByGroup("input-source-refresh") === false) {
-      if (canReportInputSourceStatus()) {
+    let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("input-source-refresh"));
+    if (cleanupStatus !== "stopped") {
+      if (cleanupStatus === "failed" && canReportInputSourceStatus()) {
         this._setStatusPreservingRecording("error", _("Input source refresh could not be stopped"), this.lastTranscript);
       }
       return false;
@@ -9743,8 +11485,9 @@ MyApplet.prototype = {
     if (this.modelMenuRefreshToken || this.voiceModelActionToken || this.voiceModelCleanupFailed === true) {
       return;
     }
-    if (this._terminateProcessesByGroup("model-menu-refresh") === false) {
-      if (canReportModelStatus()) {
+    let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("model-menu-refresh"));
+    if (cleanupStatus !== "stopped") {
+      if (cleanupStatus === "failed" && canReportModelStatus()) {
         this._setStatusPreservingRecording("error", _("Voice model list refresh could not be stopped"), this.lastTranscript);
       }
       return;
@@ -11319,8 +13062,9 @@ MyApplet.prototype = {
       return true;
     }
     this.textModelMenuRefreshToken = null;
-    if (this._terminateProcessesByGroup("text-model-refresh") === false) {
-      if (canReportTextModelStatus()) {
+    let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("text-model-refresh"));
+    if (cleanupStatus !== "stopped") {
+      if (cleanupStatus === "failed" && canReportTextModelStatus()) {
         this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
       }
       return false;
@@ -11814,6 +13558,7 @@ MyApplet.prototype = {
 
   _clearOllamaModelFlow: function(flowToken) {
     if (flowToken && this.ollamaModelFlowToken !== flowToken) {
+      this._ollamaModelCleanupStatus = "failed";
       return false;
     }
     let hadOllamaModelCleanupFailure = this.ollamaModelCleanupFailed === true;
@@ -11823,16 +13568,16 @@ MyApplet.prototype = {
       this.ollamaModelFlowToken &&
       (this.terminalWorkflowToken || this.terminalWorkflowRunning)
     );
-    let terminationSucceeded = true;
+    let terminationStatus = "stopped";
     this.ollamaModelFlowToken = null;
     if (hadOllamaTerminalWorkflow) {
       this.terminalWorkflowToken = null;
     }
     if (hadOllamaModelInstall) {
       // Flow cleanup owns tokens; suppress cancelled callback to avoid fake backend error.
-      terminationSucceeded = this._terminateProcessesByGroup("ollama");
+      terminationStatus = this._processCleanupStatus(this._terminateProcessesByGroup("ollama"));
       if (this.ollamaModelInstallToken === installToken) {
-        if (terminationSucceeded) {
+        if (terminationStatus === "stopped") {
           this.ollamaModelInstallToken = null;
           this.ollamaModelInstallRunning = false;
           this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed", true);
@@ -11842,26 +13587,29 @@ MyApplet.prototype = {
         }
       }
     } else {
-      terminationSucceeded = this._terminateProcessesByGroup("ollama");
+      terminationStatus = this._processCleanupStatus(this._terminateProcessesByGroup("ollama"));
     }
-    if (terminationSucceeded && this._hasTrackedProcessGroup("ollama")) {
-      terminationSucceeded = false;
+    if (terminationStatus === "stopped" && this._hasTrackedProcessGroup("ollama")) {
+      terminationStatus = "failed";
     }
-    if (hadOllamaTerminalWorkflow && terminationSucceeded) {
+    if (hadOllamaTerminalWorkflow && terminationStatus === "stopped") {
       this.terminalWorkflowRunning = false;
     }
-    this.ollamaModelCleanupFailed = !terminationSucceeded;
-    if (terminationSucceeded && hadOllamaModelCleanupFailure) {
+    this._ollamaModelCleanupStatus = terminationStatus;
+    this.ollamaModelCleanupFailed = terminationStatus !== "stopped";
+    if (terminationStatus === "stopped" && hadOllamaModelCleanupFailure) {
       this._releaseBusyStateAfterProcessCleanup("ollama", "ollamaModelCleanupFailed", true);
     }
-    return terminationSucceeded;
+    return terminationStatus === "stopped";
   },
 
   _clearOllamaModelFlowOrReport: function(flowToken) {
     if (this._clearOllamaModelFlow(flowToken)) {
       return true;
     }
-    this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+    if (this._ollamaModelCleanupStatus !== "pending") {
+      this._setStatusPreservingRecording("error", _("Ollama operation could not be stopped"), this.lastTranscript);
+    }
     return false;
   },
 
@@ -11942,8 +13690,11 @@ MyApplet.prototype = {
       return;
     }
     this.textModelMenuRefreshToken = null;
-    if (this._terminateProcessesByGroup("text-model-refresh") === false) {
-      this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+    let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("text-model-refresh"));
+    if (cleanupStatus !== "stopped") {
+      if (cleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+      }
       return;
     }
     if (this._cancelOllamaInstallWatch() === false) {
@@ -12130,8 +13881,11 @@ MyApplet.prototype = {
       return;
     }
     this.textModelMenuRefreshToken = null;
-    if (this._terminateProcessesByGroup("text-model-refresh") === false) {
-      this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+    let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("text-model-refresh"));
+    if (cleanupStatus !== "stopped") {
+      if (cleanupStatus === "failed") {
+        this._setStatusPreservingRecording("error", _("Text model list refresh could not be stopped"), this.lastTranscript);
+      }
       return;
     }
     if (this._cancelOllamaInstallWatch() === false) {
@@ -12483,10 +14237,13 @@ MyApplet.prototype = {
       return;
     }
     this.historyRefreshQueued = false;
-    if (this._terminateProcessesByGroup("history-refresh") === false) {
-      this._populateHistoryMenu([]);
-      if (canReportHistoryStatus()) {
-        this._setStatusPreservingRecording("error", _("History refresh could not be stopped"), this.lastTranscript);
+    let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup("history-refresh"));
+    if (cleanupStatus !== "stopped") {
+      if (cleanupStatus === "failed") {
+        this._populateHistoryMenu([]);
+        if (canReportHistoryStatus()) {
+          this._setStatusPreservingRecording("error", _("History refresh could not be stopped"), this.lastTranscript);
+        }
       }
       return;
     }
@@ -13870,14 +15627,306 @@ MyApplet.prototype = {
 
   _parseSpawnOutput: function(stdout) {
     let output = String(stdout || "");
+    let duplicateObjectKeys = false;
     try {
-      let parsed = JSON.parse(output || "{}");
-      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        return { status: "error", error: "Invalid backend response: expected JSON object", transport_error: true };
+      if (output.length > MAX_SPAWN_JSON_BYTES) {
+        duplicateObjectKeys = true;
+      } else {
+        let index = 0;
+        let stack = [];
+        let rootState = "value";
+        let isWhitespace = (character) =>
+          character === " " || character === "\t" || character === "\n" || character === "\r";
+        let readString = () => {
+          if (output.charAt(index) !== '"') {
+            return null;
+          }
+          index += 1;
+          let chunks = [];
+          while (index < output.length) {
+            let character = output.charAt(index);
+            index += 1;
+            if (character === '"') {
+              return chunks.join("");
+            }
+            if (character === "\\") {
+              if (index >= output.length) {
+                return null;
+              }
+              let escaped = output.charAt(index);
+              index += 1;
+              if (escaped === "u") {
+                if (index + 4 > output.length) {
+                  return null;
+                }
+                let code = 0;
+                for (let offset = 0; offset < 4; offset += 1) {
+                  let digit = output.charCodeAt(index);
+                  index += 1;
+                  if (digit >= 48 && digit <= 57) {
+                    code = code * 16 + digit - 48;
+                  } else if (digit >= 65 && digit <= 70) {
+                    code = code * 16 + digit - 55;
+                  } else if (digit >= 97 && digit <= 102) {
+                    code = code * 16 + digit - 87;
+                  } else {
+                    return null;
+                  }
+                }
+                chunks.push(String.fromCharCode(code));
+              } else if (escaped === '"' || escaped === "\\" || escaped === "/") {
+                chunks.push(escaped);
+              } else if (escaped === "b") {
+                chunks.push("\b");
+              } else if (escaped === "f") {
+                chunks.push("\f");
+              } else if (escaped === "n") {
+                chunks.push("\n");
+              } else if (escaped === "r") {
+                chunks.push("\r");
+              } else if (escaped === "t") {
+                chunks.push("\t");
+              } else {
+                return null;
+              }
+              continue;
+            }
+            if (character.charCodeAt(0) < 0x20) {
+              return null;
+            }
+            chunks.push(character);
+          }
+          return null;
+        };
+        let finishValue = () => {
+          if (stack.length === 0) {
+            if (rootState !== "value") {
+              return false;
+            }
+            rootState = "done";
+            return true;
+          }
+          let parent = stack[stack.length - 1];
+          if (parent.state !== "child") {
+            return false;
+          }
+          parent.state = "commaOrEnd";
+          return true;
+        };
+        let closeFrame = (closing) => {
+          if (stack.length === 0) {
+            return false;
+          }
+          let frame = stack[stack.length - 1];
+          if ((frame.kind === "object" && closing !== "}") ||
+              (frame.kind === "array" && closing !== "]") ||
+              (frame.state !== "keyOrEnd" && frame.state !== "valueOrEnd" && frame.state !== "commaOrEnd")) {
+            return false;
+          }
+          stack.pop();
+          index += 1;
+          if (stack.length === 0) {
+            if (rootState !== "child") {
+              return false;
+            }
+            rootState = "done";
+            return true;
+          }
+          let parent = stack[stack.length - 1];
+          if (parent.state !== "child") {
+            return false;
+          }
+          parent.state = "commaOrEnd";
+          return true;
+        };
+        let startValue = () => {
+          let parent = stack.length > 0 ? stack[stack.length - 1] : null;
+          if (parent) {
+            if ((parent.kind === "object" && parent.state !== "value") ||
+                (parent.kind === "array" && parent.state !== "valueOrEnd")) {
+              return false;
+            }
+            parent.state = "child";
+          } else if (rootState !== "value") {
+            return false;
+          }
+          let character = output.charAt(index);
+          if (character === "{") {
+            if (!parent) {
+              rootState = "child";
+            }
+            index += 1;
+            stack.push({ kind: "object", state: "keyOrEnd", keys: Object.create(null) });
+            return true;
+          }
+          if (character === "[") {
+            if (!parent) {
+              rootState = "child";
+            }
+            index += 1;
+            stack.push({ kind: "array", state: "valueOrEnd" });
+            return true;
+          }
+          if (character === '"') {
+            if (readString() === null) {
+              return false;
+            }
+            return finishValue();
+          }
+          let primitiveStart = index;
+          while (index < output.length) {
+            let next = output.charAt(index);
+            if (isWhitespace(next) || next === "," || next === "}" || next === "]") {
+              break;
+            }
+            index += 1;
+          }
+          if (primitiveStart === index) {
+            return false;
+          }
+          return finishValue();
+        };
+
+        while (!duplicateObjectKeys) {
+          while (index < output.length && isWhitespace(output.charAt(index))) {
+            index += 1;
+          }
+          if (stack.length === 0) {
+            if (rootState === "done") {
+              duplicateObjectKeys = index !== output.length;
+              break;
+            }
+            if (rootState !== "value" || index >= output.length) {
+              duplicateObjectKeys = true;
+              break;
+            }
+            if (!startValue()) {
+              duplicateObjectKeys = true;
+            }
+            continue;
+          }
+          let frame = stack[stack.length - 1];
+          let character = output.charAt(index);
+          if (frame.kind === "object") {
+            if (frame.state === "keyOrEnd") {
+              if (character === "}") {
+                if (!closeFrame("}")) {
+                  duplicateObjectKeys = true;
+                }
+                continue;
+              }
+              let key = readString();
+              if (key === null) {
+                duplicateObjectKeys = true;
+                continue;
+              }
+              if (Object.prototype.hasOwnProperty.call(frame.keys, key)) {
+                duplicateObjectKeys = true;
+                continue;
+              }
+              frame.keys[key] = true;
+              frame.state = "colon";
+              continue;
+            }
+            if (frame.state === "colon") {
+              if (character !== ":") {
+                duplicateObjectKeys = true;
+              } else {
+                index += 1;
+                frame.state = "value";
+              }
+              continue;
+            }
+            if (frame.state === "value") {
+              if (!startValue()) {
+                duplicateObjectKeys = true;
+              }
+              continue;
+            }
+            if (frame.state === "commaOrEnd") {
+              if (character === ",") {
+                index += 1;
+                frame.state = "keyOrEnd";
+              } else if (character === "}") {
+                if (!closeFrame("}")) {
+                  duplicateObjectKeys = true;
+                }
+              } else {
+                duplicateObjectKeys = true;
+              }
+              continue;
+            }
+            duplicateObjectKeys = true;
+            continue;
+          }
+          if (frame.state === "valueOrEnd") {
+            if (character === "]") {
+              if (!closeFrame("]")) {
+                duplicateObjectKeys = true;
+              }
+            } else if (!startValue()) {
+              duplicateObjectKeys = true;
+            }
+            continue;
+          }
+          if (frame.state === "commaOrEnd") {
+            if (character === ",") {
+              index += 1;
+              frame.state = "valueOrEnd";
+            } else if (character === "]") {
+              if (!closeFrame("]")) {
+                duplicateObjectKeys = true;
+              }
+            } else {
+              duplicateObjectKeys = true;
+            }
+            continue;
+          }
+          duplicateObjectKeys = true;
+        }
+        if (!duplicateObjectKeys && (stack.length !== 0 || rootState !== "done")) {
+          duplicateObjectKeys = true;
+        }
+      }
+      if (duplicateObjectKeys) {
+        return { status: "error", error: "Invalid backend response", transport_error: true };
+      }
+      let decoded = JSON.parse(output || "{}");
+      if (!decoded || typeof decoded !== "object" || Array.isArray(decoded)) {
+        return { status: "error", error: "Invalid backend response", transport_error: true };
+      }
+      for (let name of ["__proto__", "constructor", "prototype"]) {
+        if (Object.prototype.hasOwnProperty.call(decoded, name)) {
+          return { status: "error", error: "Invalid backend response", transport_error: true };
+        }
+      }
+      let parsed = Object.create(null);
+      for (let name of Object.keys(decoded)) {
+        parsed[name] = decoded[name];
+      }
+      if (!Object.prototype.hasOwnProperty.call(parsed, "status") ||
+          typeof parsed.status !== "string" ||
+          BACKEND_PAYLOAD_STATUSES.indexOf(parsed.status) < 0) {
+        return { status: "error", error: "Invalid backend response", transport_error: true };
+      }
+      let hasError = Object.prototype.hasOwnProperty.call(parsed, "error");
+      if (hasError &&
+          (typeof parsed.error !== "string" || parsed.error.trim() === "")) {
+        return { status: "error", error: "Invalid backend response", transport_error: true };
+      }
+      if (parsed.status === "error" && !hasError) {
+        if (!Object.prototype.hasOwnProperty.call(parsed, "message") ||
+            typeof parsed.message !== "string" || parsed.message.trim() === "") {
+          return { status: "error", error: "Invalid backend response", transport_error: true };
+        }
+        parsed.error = parsed.message;
+      }
+      if (parsed.status === "error" || hasError) {
+        delete parsed.exit_code;
       }
       return parsed;
-    } catch (err) {
-      return { status: "error", error: "Invalid backend response: " + err, transport_error: true };
+    } catch (_err) {
+      return { status: "error", error: "Invalid backend response", transport_error: true };
     }
   },
 
@@ -13920,39 +15969,40 @@ MyApplet.prototype = {
 
   _runBoundedSubprocess: function(args, env, options, callback) {
     options = options || {};
+    let reportError = (group, error) => this._reportSubprocessError(options.resourceGroup, group, error);
     if (!this._lifecycleAllowsWork()) {
       return null;
     }
     if (!Array.isArray(this._orphanedProcesses)) {
-      this._recordLifecycleError("process-state", new Error("Process orphan registry is unavailable"));
+      reportError("process-state", new Error("Process orphan registry is unavailable"));
       return null;
     }
     if (this._orphanedProcesses.length > 0) {
       let orphanCleanupSucceeded = this._retryOrphanedProcesses();
       if (!orphanCleanupSucceeded || this._orphanedProcesses.length > 0) {
-        this._recordLifecycleError("process-state", new Error("An orphaned process is still pending"));
+        reportError("process-state", new Error("An orphaned process is still pending"));
         return null;
       }
     }
     if (!Array.isArray(this._orphanedCancellables)) {
-      this._recordLifecycleError("cancellable-state", new Error("Cancellable orphan registry is unavailable"));
+      reportError("cancellable-state", new Error("Cancellable orphan registry is unavailable"));
       return null;
     }
     if (this._orphanedCancellables.length > 0) {
       let orphanCancellableCleanupSucceeded = this._retryOrphanedCancellables();
       if (!orphanCancellableCleanupSucceeded || this._orphanedCancellables.length > 0) {
-        this._recordLifecycleError("cancellable-state", new Error("An orphaned cancellable is still pending"));
+        reportError("cancellable-state", new Error("An orphaned cancellable is still pending"));
         return null;
       }
     }
     if (!Array.isArray(this._orphanedTimers)) {
-      this._recordLifecycleError("timer-state", new Error("Timer orphan registry is unavailable"));
+      reportError("timer-state", new Error("Timer orphan registry is unavailable"));
       return null;
     }
     if (this._orphanedTimers.length > 0) {
       let orphanTimerCleanupSucceeded = this._retryOrphanedTimers();
       if (!orphanTimerCleanupSucceeded || this._orphanedTimers.length > 0) {
-        this._recordLifecycleError("timer-state", new Error("An orphaned timer is still pending"));
+        reportError("timer-state", new Error("An orphaned timer is still pending"));
         return null;
       }
     }
@@ -13969,7 +16019,10 @@ MyApplet.prototype = {
     let maxStderrBytes = typeof options.maxStderrBytes === "number" && isFinite(options.maxStderrBytes)
       ? Math.max(1, options.maxStderrBytes)
       : MAX_SPAWN_STDERR_BYTES;
-    let timeoutMs = typeof options.timeoutMs === "number" && isFinite(options.timeoutMs) ? Math.max(0, options.timeoutMs) : 0;
+    let timeoutMs = options.timeoutMs === undefined ? CLI_COMMAND_TIMEOUT_MS : options.timeoutMs;
+    if (typeof timeoutMs !== "number" || !isFinite(timeoutMs) || timeoutMs < 0) {
+      throw new Error("Subprocess timeout is invalid");
+    }
     let minimumTimeoutMs = typeof options.minimumTimeoutMs === "number" && isFinite(options.minimumTimeoutMs)
       ? Math.max(1, options.minimumTimeoutMs)
       : 250;
@@ -13990,7 +16043,7 @@ MyApplet.prototype = {
       process = launcher.spawnv(spawnArgs);
     } catch (error) {
       this._trustedSetsidPath = null;
-      this._recordLifecycleError("process-spawn", error);
+      reportError("process-spawn", error);
       return null;
     }
     let generation = this.spawnGeneration;
@@ -14001,16 +16054,16 @@ MyApplet.prototype = {
       if (!processToken && error && (typeof error === "object" || typeof error === "function") && error.processToken) {
         processToken = error.processToken;
       }
-      let processTerminated = this._terminateProcess(process);
+      let processTerminated = this._terminateProcess(process, options.resourceGroup);
       if (processTerminated) {
-        let processCleanupSucceeded = this._unregisterProcess(processToken);
+        let processCleanupSucceeded = this._unregisterProcess(processToken, options.resourceGroup);
         if (!processCleanupSucceeded) {
           let orphanTracked = this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, true);
           let orphanCleanupSucceeded = orphanTracked && this._retryOrphanedProcesses();
           if (!orphanCleanupSucceeded) {
             this._scheduleProcessCleanupRetry();
           }
-        } else if (!this._untrackOrphanedProcess(process)) {
+        } else if (!this._untrackOrphanedProcess(process, options.resourceGroup)) {
           this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, true);
           this._scheduleProcessCleanupRetry();
         }
@@ -14024,30 +16077,30 @@ MyApplet.prototype = {
     let cancellableToken = null;
     try {
       cancellable = new Gio.Cancellable();
-      cancellableToken = this._registerCancellable(cancellable);
+      cancellableToken = this._registerCancellable(cancellable, options.resourceGroup);
     } catch (error) {
       if (!cancellableToken && error && (typeof error === "object" || typeof error === "function") && error.cancellableToken) {
         cancellableToken = error.cancellableToken;
       }
       let cancellableCleanupSucceeded = false;
       try {
-        cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
+        cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken, options.resourceGroup);
       } catch (cleanupError) {
-        this._recordLifecycleError("cancellable-unregister", cleanupError);
+        reportError("cancellable-unregister", cleanupError);
       }
       if (!cancellableCleanupSucceeded) {
-        this._trackOrphanedCancellable(cancellableToken, false);
-      } else if (!this._untrackOrphanedCancellable(cancellableToken)) {
-        this._recordLifecycleError("cancellable-state", new Error("Cancellable orphan cleanup could not be completed"));
+        this._trackOrphanedCancellable(cancellableToken, false, options.resourceGroup);
+      } else if (!this._untrackOrphanedCancellable(cancellableToken, options.resourceGroup)) {
+        reportError("cancellable-state", new Error("Cancellable orphan cleanup could not be completed"));
       }
       let orphanCancellableCleanupSucceeded = this._retryOrphanedCancellables();
       if (!orphanCancellableCleanupSucceeded ||
           !Array.isArray(this._orphanedCancellables) || this._orphanedCancellables.length > 0) {
         this._scheduleProcessCleanupRetry();
       }
-      let processTerminated = this._terminateProcess(process);
+      let processTerminated = this._terminateProcess(process, options.resourceGroup);
       if (processTerminated) {
-        if (!this._unregisterProcess(processToken)) {
+        if (!this._unregisterProcess(processToken, options.resourceGroup)) {
           this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, true);
           this._scheduleProcessCleanupRetry();
         }
@@ -14080,26 +16133,31 @@ MyApplet.prototype = {
         return true;
       }
       if (timeoutCleanupSucceeded === undefined) {
-        timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey, undefined, timeoutSourceAlreadyRemoved) !== false;
+        timeoutCleanupSucceeded = this._clearTrackedTimer(
+          timeoutKey,
+          undefined,
+          timeoutSourceAlreadyRemoved,
+          options.resourceGroup
+        ) !== false;
       }
       if (!timeoutCleanupSucceeded) {
         let timerRetrySucceeded = this._retryOrphanedTimers();
         timeoutCleanupSucceeded = timerRetrySucceeded &&
           Array.isArray(this._orphanedTimers) && this._orphanedTimers.length === 0;
       }
-      let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken);
+      let cancellableCleanupSucceeded = this._unregisterCancellable(cancellableToken, options.resourceGroup);
       let cancellableOrphanCleanupSucceeded = true;
       if (!cancellableCleanupSucceeded) {
-        this._trackOrphanedCancellable(cancellableToken, true);
+        this._trackOrphanedCancellable(cancellableToken, true, options.resourceGroup);
       } else {
-        cancellableOrphanCleanupSucceeded = this._untrackOrphanedCancellable(cancellableToken);
+        cancellableOrphanCleanupSucceeded = this._untrackOrphanedCancellable(cancellableToken, options.resourceGroup);
       }
-      let processCleanupSucceeded = this._unregisterProcess(processToken);
+      let processCleanupSucceeded = this._unregisterProcess(processToken, options.resourceGroup);
       let processOrphanCleanupSucceeded = true;
       if (!processCleanupSucceeded) {
         this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, true);
       } else {
-        processOrphanCleanupSucceeded = this._untrackOrphanedProcess(process);
+        processOrphanCleanupSucceeded = this._untrackOrphanedProcess(process, options.resourceGroup);
       }
       cleanupComplete = timeoutCleanupSucceeded && cancellableCleanupSucceeded && cancellableOrphanCleanupSucceeded &&
         processCleanupSucceeded && processOrphanCleanupSucceeded;
@@ -14116,10 +16174,15 @@ MyApplet.prototype = {
       if (done) {
         return cleanupResources();
       }
-      let timeoutCleanupSucceeded = this._clearTrackedTimer(timeoutKey, undefined, timeoutSourceAlreadyRemoved) !== false;
+      let timeoutCleanupSucceeded = this._clearTrackedTimer(
+        timeoutKey,
+        undefined,
+        timeoutSourceAlreadyRemoved,
+        options.resourceGroup
+      ) !== false;
       let terminationSucceeded = true;
       if (terminate) {
-        terminationSucceeded = this._terminateProcess(process);
+        terminationSucceeded = this._terminateProcess(process, options.resourceGroup);
         if (!terminationSucceeded) {
           terminationFailed = true;
         }
@@ -14132,11 +16195,11 @@ MyApplet.prototype = {
         }
       } catch (error) {
         cancellationSucceeded = false;
-        this._recordLifecycleError("process-cancel", error);
+        reportError("process-cancel", error);
       }
       if (!terminationSucceeded || !cancellationSucceeded) {
         this._trackOrphanedProcess(process, generation, options.resourceGroup, processToken, terminationSucceeded);
-        this._trackOrphanedCancellable(cancellableToken, cancellationSucceeded);
+        this._trackOrphanedCancellable(cancellableToken, cancellationSucceeded, options.resourceGroup);
         this._scheduleProcessCleanupRetry();
         if (!suppressCallback && !this.appletRemoved && this.spawnGeneration === generation &&
             typeof callback === "function" && !callbackDelivered) {
@@ -14144,7 +16207,7 @@ MyApplet.prototype = {
           try {
             callback("", "", { error: "Subprocess cleanup failed", cleanupFailed: true });
           } catch (error) {
-            this._recordLifecycleError("process-callback", error);
+            reportError("process-callback", error);
           }
         }
         return false;
@@ -14176,7 +16239,7 @@ MyApplet.prototype = {
           }
           callback(stdoutText, stderrText, callbackResult);
         } catch (error) {
-          this._recordLifecycleError("process-callback", error);
+          reportError("process-callback", error);
         }
       }
       return cleanupSucceeded;
@@ -14198,7 +16261,7 @@ MyApplet.prototype = {
         throw new Error("Process cancellation callback could not be registered");
       }
     } catch (error) {
-      this._runTeardownGuarded("process-cancel-registration", () => this._recordLifecycleError("process-cancel-registration", error));
+      this._runTeardownGuarded("process-cancel-registration", () => reportError("process-cancel-registration", error));
       finish({ error: error }, true, true);
       return null;
     }
@@ -14298,7 +16361,7 @@ MyApplet.prototype = {
     if (!done && !setupFailed && timeoutMs > 0 && !this._scheduleTrackedTimer(timeoutKey, Math.max(minimumTimeoutMs, timeoutMs), () => {
       finish({ timedOut: true }, true, false, true);
       return false;
-    }, false)) {
+    }, false, undefined, options.resourceGroup)) {
       finish({ error: "Subprocess timeout could not be scheduled" }, true);
       return null;
     }
@@ -14413,7 +16476,12 @@ MyApplet.prototype = {
   _spawnJson: function(args, callback, options) {
     options = options || {};
     let normalizedArgs;
-    let callbackFn = this._guardStateCallback("backend-json", callback, undefined) || function() {};
+    let callbackFn = this._guardStateCallback(
+      "backend-json",
+      callback,
+      undefined,
+      options.resourceGroup
+    ) || function() {};
 
     try {
       normalizedArgs = this._coerceSpawnArgs(args);
@@ -14451,7 +16519,11 @@ MyApplet.prototype = {
             return;
           }
           if (result && result.error) {
-            if (parsedPayload && parsedPayload.transport_error !== true) {
+            if (parsedPayload &&
+                Object.prototype.hasOwnProperty.call(parsedPayload, "error") &&
+                typeof parsedPayload.error === "string" &&
+                parsedPayload.error.trim() !== "" &&
+                !Object.prototype.hasOwnProperty.call(parsedPayload, "transport_error")) {
               callbackFn(parsedPayload);
               return;
             }
@@ -14472,7 +16544,7 @@ MyApplet.prototype = {
         });
       });
     } catch (error) {
-      this._recordLifecycleError("backend-json-spawn", error);
+      this._reportSubprocessError(options.resourceGroup, "backend-json-spawn", error);
       callbackFn({ status: "error", error: this._lifecycleErrorText(error), transport_error: true });
       return null;
     }
@@ -14556,8 +16628,13 @@ MyApplet.prototype = {
       this.cancelIntentActive = true;
     }
     let cancelIntentActive = this.cancelIntentActive === true;
+    let cameFromStatusPoll = typeof statusRefreshToken === "number";
     let status = this._normalizePayloadStatus(payload.status, Boolean(payload.error));
     let wasActiveRecordingState = this._hasActiveRecordingState();
+    let wasRecording = this.status === "recording";
+    if (status === "recorded" && wasRecording) {
+      this.recordingReachedTimeLimit = this._recordingReachedConfiguredLimit();
+    }
     let hasTerminalCleanupResult = this._updateRecordingArtifactState(payload, status);
     if (payload.error || status === "error") {
       let errorMessage = this._payloadErrorMessage(payload, _("Backend reported an error"));
@@ -14604,7 +16681,7 @@ MyApplet.prototype = {
         this.autoTranscribeRecordingKey = "";
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
-        this._setStatus("error", errorMessage, this.lastTranscript);
+        this._setStatus("error", errorMessage, this.lastTranscript, payload.persisted_error === true);
       }
       this._maybeWarnRejectedArtifactPassphrase(errorMessage);
       return;
@@ -14621,7 +16698,7 @@ MyApplet.prototype = {
     if (!cancelIntentActive && status === "done" && hasTranscript) {
       this.lastTranscript = payload.transcript;
     }
-    if (!cancelIntentActive && status === "done") {
+    if (!cancelIntentActive && !cameFromStatusPoll && status === "done") {
       this._maybeWarnUnencryptedArtifactStorage(payload, status);
       this._maybeWarnAutomaticBackup(payload, status);
       this._maybeStartAutoBackup(payload);
@@ -14658,7 +16735,6 @@ MyApplet.prototype = {
     }
     if (cancelIntentActive) {
       let backendStillActive = status === "recording" || status === "recorded";
-      let cameFromStatusPoll = typeof statusRefreshToken === "number";
       let wasWaitingForCommand = this.cancelPendingWhileCommandRunning;
       this.cancelPendingWhileCommandRunning = false;
       if (backendStillActive &&
@@ -14681,11 +16757,11 @@ MyApplet.prototype = {
       }
       return;
     }
-    if (status === "done" && payload.silence_detected === true) {
+    if (!cameFromStatusPoll && status === "done" && payload.silence_detected === true) {
       this._finishSilentRelistenSkip(payload);
       return;
     }
-    if (status === "done" && hasTranscript) {
+    if (!cameFromStatusPoll && status === "done" && hasTranscript) {
       if (payload.transcript_recovered === true) {
         this.autoRelistenPending = false;
         this.autoRelistenPendingToken = "";
@@ -14701,10 +16777,12 @@ MyApplet.prototype = {
       this._setStatus("error", _("Saved transcript could not be restored; open Transcripts or Diagnostics"), this.lastTranscript);
       return;
     }
-    if (status === "done" && !this.autoRelistenPending) {
-      this._ensureAutoRelistenPendingForDonePayload(payload);
+    if (!cameFromStatusPoll && status === "done" && !this.autoRelistenPending) {
+      if (!this._ensureAutoRelistenPendingForDonePayload(payload)) {
+        return;
+      }
     }
-    if (status === "done" && this.autoRelistenPending) {
+    if (!cameFromStatusPoll && status === "done" && this.autoRelistenPending) {
       this._finishEmptyRelistenDone(payload);
       return;
     }
@@ -14952,6 +17030,9 @@ MyApplet.prototype = {
     } catch (err) {
       let safeError = this._sanitizeErrorMessage(err);
       this._setStatusPreservingRecording("error", _("Could not prepare timed recording command: ") + safeError, this.lastTranscript);
+      return;
+    }
+    if (this.autoRelisten && !this._prepareAutoRelistenReservation()) {
       return;
     }
     this.autoTranscribeRecordingKey = recordingKey;
@@ -15221,6 +17302,10 @@ MyApplet.prototype = {
       if (this.status !== "recording" && this.status !== "processing") {
         return false;
       }
+      if (this.isCommandRunning || this._statusCommandRunning ||
+          (this.status === "processing" && this._hasLocalProcessingWorkflow())) {
+        return false;
+      }
       let statusRefreshContinues = this._refreshStatus(true) === true;
       return statusRefreshContinues || (
         !this._statusCommandRunning &&
@@ -15246,6 +17331,7 @@ MyApplet.prototype = {
     let timerId = this._scheduleTrackedTimer("display", 1, () => {
       if (this.status === "recording") {
         this._updateRecordingDisplay();
+        this._maybeWarnLongRecording();
         return !this.appletRemoved;
       }
       return false;
@@ -15253,6 +17339,21 @@ MyApplet.prototype = {
     if (!timerId && this._lifecycleAllowsWork() && this.status === "recording") {
       this._setStatusPreservingRecording("error", _("Recording display timer could not be scheduled"), this.lastTranscript);
     }
+  },
+
+  _maybeWarnLongRecording: function() {
+    if (!this.notifyRecordingLonger || this.recordingLongWarningShown || this.status !== "recording") {
+      return;
+    }
+    if (this._recordingElapsedSeconds() < 300) {
+      return;
+    }
+    this.recordingLongWarningShown = true;
+    this._notify(
+      _("Speed of Cinnamon"),
+      _("Recording has been running for more than 5 minutes"),
+      false
+    );
   },
 
   _updateRecordingDisplay: function() {
@@ -15343,6 +17444,62 @@ MyApplet.prototype = {
     return this._isUsableTargetWindow(this.targetWindow) || /^[0-9]+$/.test(String(this.targetWindowXid || "").trim());
   },
 
+  _waylandTargetEvidenceForCurrentGeneration: function() {
+    let evidence = this.targetWindowWaylandEvidence;
+    if (!evidence ||
+        !isFinite(Number(evidence.generation)) ||
+        Number(evidence.generation) !== Number(this.targetWindowGeneration || 0)) {
+      return null;
+    }
+    return evidence;
+  },
+
+  _captureWaylandTargetEvidence: function(window, targetGeneration) {
+    let generation = Number(targetGeneration);
+    if (!isFinite(generation) || generation !== Number(this.targetWindowGeneration || 0)) {
+      return false;
+    }
+    let values = [
+      this._windowProbeValue(window, "get_title"),
+      this._windowProbeValue(window, "get_wm_class"),
+      this._windowProbeValue(window, "get_wm_class_instance"),
+      this._windowProbeValue(window, "get_gtk_application_id")
+    ];
+    let identityValues = values.slice(1);
+    let markerMatches = {};
+    for (let marker in AUTO_PASTE_IDENTITY_MARKERS) {
+      if (!Object.prototype.hasOwnProperty.call(AUTO_PASTE_IDENTITY_MARKERS, marker)) {
+        continue;
+      }
+      let allowed = AUTO_PASTE_IDENTITY_MARKERS[marker] || [];
+      markerMatches[marker] = identityValues.some((value) =>
+        allowed.some((identity) => this._windowIdentityValueMatchesMarker(value, identity))
+      );
+    }
+    let capturedTitle = String(values[0] || "");
+    let terminal = markerMatches.terminal === true;
+    let codex = terminal && /\bcodex\b/i.test(capturedTitle);
+    markerMatches.codex = codex;
+    let submitKey = "";
+    if (codex) {
+      try {
+        submitKey = String(this._codexTerminalSubmitKey() || "").trim();
+      } catch (error) {
+        this._recordLifecycleError("wayland-focus-evidence", error);
+      }
+    }
+    this.targetWindowWaylandEvidence = {
+      generation: generation,
+      targetWindow: window,
+      title: capturedTitle,
+      markerMatches: markerMatches,
+      terminal: terminal,
+      codex: codex,
+      submitKey: submitKey
+    };
+    return true;
+  },
+
   _isTargetWindowXLookupPending: function() {
     let pendingGeneration = Number(this.targetWindowXPendingGeneration || 0);
     return pendingGeneration > 0 &&
@@ -15365,14 +17522,20 @@ MyApplet.prototype = {
     };
     this.targetWindowGeneration = Number(this.targetWindowGeneration || 0) + 1;
     let targetGeneration = this.targetWindowGeneration;
+    this.targetWindowWaylandEvidence = null;
     this.targetWindowXPendingGeneration = 0;
     let processCleanupSucceeded = true;
+    let processCleanupFailed = false;
     for (let group of ["keyboard", "x11", "clipboard"]) {
-      if (this._terminateProcessesByGroup(group, true) === false) {
+      let cleanupStatus = this._processCleanupStatus(this._terminateProcessesByGroup(group, true));
+      if (cleanupStatus !== "stopped") {
         processCleanupSucceeded = false;
+        if (cleanupStatus === "failed") {
+          processCleanupFailed = true;
+        }
       }
     }
-    if (!processCleanupSucceeded) {
+    if (processCleanupFailed) {
       this.textInsertCancellationFailed = true;
       this.targetWindow = null;
       this._clearTargetWindowXid();
@@ -15380,10 +17543,53 @@ MyApplet.prototype = {
       deliver(false, false);
       return false;
     }
+    if (!processCleanupSucceeded) {
+      this.textInsertCancellationFailed = true;
+      deliver(false, false);
+      return false;
+    }
     let waylandSession = typeof this._isWaylandSession === "function"
       ? this._isWaylandSession()
       : true;
     let window = global.display ? global.display.focus_window : null;
+    if (waylandSession === false && !preserveOnFailure) {
+      let fallbackWindow = this._isUsableTargetWindow(window) ? window : null;
+      this.targetWindow = null;
+      this._clearTargetWindowXid();
+      this.targetWindowXPendingGeneration = targetGeneration;
+      this._rememberActiveXWindow((remembered) => {
+        if (
+          targetGeneration !== this.targetWindowGeneration ||
+          targetGeneration !== Number(this.targetWindowXPendingGeneration || 0)
+        ) {
+          deliver(false, false);
+          return;
+        }
+        this.targetWindowXPendingGeneration = 0;
+        if (remembered) {
+          deliver(true, false);
+          return;
+        }
+        if (fallbackWindow) {
+          this.targetWindow = fallbackWindow;
+          let fallbackXid = this._windowProbeValue(fallbackWindow, "get_xwindow").trim();
+          if (/^[0-9]+$/.test(fallbackXid)) {
+            this.targetWindowXid = fallbackXid;
+            this.targetWindowXTitle = this._windowProbeValue(fallbackWindow, "get_title");
+            this.targetWindowXClass = this._shortMenuText(
+              this._windowProbeValue(fallbackWindow, "get_wm_class") ||
+                this._windowProbeValue(fallbackWindow, "get_wm_class_instance") ||
+                this._windowProbeValue(fallbackWindow, "get_gtk_application_id"),
+              160
+            );
+          }
+          deliver(true, false);
+          return;
+        }
+        deliver(false, true);
+      }, targetGeneration);
+      return true;
+    }
     if (this._isUsableTargetWindow(window)) {
       if (this._windowLooksLikeSpeedOfCinnamon(window)) {
         this.targetWindow = null;
@@ -15410,6 +17616,12 @@ MyApplet.prototype = {
         );
       } else {
         this._clearTargetWindowXid();
+      }
+      if (waylandSession !== false && !this._captureWaylandTargetEvidence(window, targetGeneration)) {
+        this.targetWindow = null;
+        this._clearTargetWindowXid();
+        deliver(false, false);
+        return false;
       }
       deliver(true);
       return true;
@@ -15939,13 +18151,33 @@ MyApplet.prototype = {
     if (!allowed) {
       return false;
     }
+    // Codex is a terminal application marker, not a window class. Require
+    // both terminal identity and an explicit Codex marker in the title.
+    if (key === "codex") {
+      return this._isCodexTerminalTargetWindow();
+    }
+    let waylandEvidence = typeof this._waylandTargetEvidenceForCurrentGeneration === "function"
+      ? this._waylandTargetEvidenceForCurrentGeneration()
+      : null;
+    if (typeof this._isWaylandSession === "function" && this._isWaylandSession() !== false) {
+      if (!waylandEvidence) {
+        return false;
+      }
+      if (waylandEvidence.markerMatches &&
+          Object.prototype.hasOwnProperty.call(waylandEvidence.markerMatches, key)) {
+        return waylandEvidence.markerMatches[key] === true;
+      }
+      if (key === "terminal") {
+        return waylandEvidence.terminal === true;
+      }
+      return false;
+    }
     let xTargetAvailable = !this._isTargetWindowXLookupPending();
     let values = [
       this._windowProbeValue(this.targetWindow, "get_wm_class"),
       this._windowProbeValue(this.targetWindow, "get_wm_class_instance"),
       this._windowProbeValue(this.targetWindow, "get_gtk_application_id"),
-      xTargetAvailable ? String(this.targetWindowXClass || "").toLowerCase() : "",
-      xTargetAvailable ? String(this.targetWindowXTitle || "").toLowerCase() : ""
+      xTargetAvailable ? String(this.targetWindowXClass || "").toLowerCase() : ""
     ];
     for (let i = 0; i < values.length; i++) {
       let value = values[i];
@@ -15996,22 +18228,27 @@ MyApplet.prototype = {
   },
 
   _isCodexTerminalTargetWindow: function() {
+    if (typeof this._isWaylandSession === "function" && this._isWaylandSession() !== false) {
+      let waylandEvidence = typeof this._waylandTargetEvidenceForCurrentGeneration === "function"
+        ? this._waylandTargetEvidenceForCurrentGeneration()
+        : null;
+      return Boolean(waylandEvidence && waylandEvidence.codex === true);
+    }
     if (!this._isTerminalTargetWindow()) {
       return false;
     }
-    let values = [
+    let titles = [
       this._windowProbeValue(this.targetWindow, "get_title"),
-      this._windowProbeValue(this.targetWindow, "get_wm_class"),
-      this._windowProbeValue(this.targetWindow, "get_wm_class_instance"),
-      this._windowProbeValue(this.targetWindow, "get_gtk_application_id"),
-      String(this.targetWindowXTitle || ""),
-      String(this.targetWindowXClass || "")
+      String(this.targetWindowXTitle || "")
     ];
-    return values.some((value) => /\bcodex\b/i.test(String(value || "")));
+    return titles.some((value) => /\bcodex\b/i.test(String(value || "")));
   },
 
   _normalizeCodexTerminalSubmitKey: function(value) {
     let normalized = String(value || "").trim().toLowerCase();
+    if (normalized === "custom") {
+      return "custom-key";
+    }
     return CODEX_TERMINAL_SUBMIT_KEY_MODES.indexOf(normalized) >= 0
       ? normalized
       : DEFAULT_CODEX_TERMINAL_SUBMIT_KEY;
@@ -16030,24 +18267,29 @@ MyApplet.prototype = {
     if (mode === "tab") {
       return "Tab";
     }
-    if (mode === "custom") {
+    if (mode === "custom-key") {
       return this._normalizeCodexTerminalCustomKey(this.codexTerminalCustomKey);
     }
     return "Return";
   },
 
   _isTerminalTargetWindow: function() {
+    if (typeof this._isWaylandSession === "function" && this._isWaylandSession() !== false) {
+      let waylandEvidence = typeof this._waylandTargetEvidenceForCurrentGeneration === "function"
+        ? this._waylandTargetEvidenceForCurrentGeneration()
+        : null;
+      return Boolean(waylandEvidence && waylandEvidence.terminal === true);
+    }
     let targetWindowUsable = this._isUsableTargetWindow(this.targetWindow);
     let xTargetAvailable = !this._isTargetWindowXLookupPending();
-    if (!targetWindowUsable && (!xTargetAvailable || (!this.targetWindowXClass && !this.targetWindowXTitle))) {
+    if (!targetWindowUsable && (!xTargetAvailable || !this.targetWindowXClass)) {
       return false;
     }
     let values = [
       this._windowProbeValue(this.targetWindow, "get_wm_class"),
       this._windowProbeValue(this.targetWindow, "get_wm_class_instance"),
       this._windowProbeValue(this.targetWindow, "get_gtk_application_id"),
-      xTargetAvailable ? String(this.targetWindowXClass || "").toLowerCase() : "",
-      xTargetAvailable ? String(this.targetWindowXTitle || "").toLowerCase() : ""
+      xTargetAvailable ? String(this.targetWindowXClass || "").toLowerCase() : ""
     ];
     for (let i = 0; i < values.length; i++) {
       let value = values[i];
@@ -16970,9 +19212,20 @@ MyApplet.prototype = {
     let codexTerminal = terminalPaste &&
       typeof this._isCodexTerminalTargetWindow === "function" &&
       this._isCodexTerminalTargetWindow();
-    let submitKey = codexTerminal && typeof this._codexTerminalSubmitKey === "function"
-      ? this._codexTerminalSubmitKey()
-      : "Return";
+    let waylandEvidence = typeof this._waylandTargetEvidenceForCurrentGeneration === "function"
+      ? this._waylandTargetEvidenceForCurrentGeneration()
+      : null;
+    let submitKey = "Return";
+    if (codexTerminal) {
+      submitKey = waylandEvidence && typeof waylandEvidence.submitKey === "string"
+        ? waylandEvidence.submitKey
+        : typeof this._codexTerminalSubmitKey === "function"
+          ? this._codexTerminalSubmitKey()
+          : "";
+      if (!submitKey) {
+        return false;
+      }
+    }
     let expectedTargetWindow = this._targetXWindowSnapshot();
     if (!expectedTargetWindow) {
       this._setStatus("error", _("Target window unavailable for automatic paste"), this.lastTranscript);
@@ -17114,6 +19367,7 @@ MyApplet.prototype = {
     let handle;
     try {
       handle = this._runBoundedSubprocess([screenSaverCommand, "--query"], {}, {
+        env: { LANG: "C", LC_ALL: "C" },
         timeoutMs: SCREEN_SAVER_QUERY_TIMEOUT_MS,
         minimumTimeoutMs: 1,
         maxStdoutBytes: MAX_XDOTOOL_TARGET_OUTPUT_BYTES,
@@ -17125,11 +19379,11 @@ MyApplet.prototype = {
           return;
         }
         let state = String(stdout || "").trim().toLowerCase();
-        if (state.indexOf("not active") >= 0 || state.indexOf("inactive") >= 0) {
+        if (/\bnot\s+active\b/.test(state) || /\binactive\b/.test(state) || /\binaktiv\b/.test(state) || /\bunlocked\b/.test(state) || /\boff\b/.test(state)) {
           complete(true);
           return;
         }
-        if (state.indexOf("active") >= 0) {
+        if (/\bactive\b/.test(state) || /\baktiv\b/.test(state) || /\blocked\b/.test(state) || /\bgesperrt\b/.test(state) || /\bon\b/.test(state)) {
           complete(false, lockedMessage);
           return;
         }
@@ -17218,7 +19472,7 @@ MyApplet.prototype = {
     }
   },
 
-  _spawnKeyboardProcess: function(args, completionCallback, timeoutMs, operationGuard) {
+  _spawnKeyboardProcess: function(args, completionCallback, timeoutMs, operationGuard, expectedTargetWindow, targetMismatchMessage) {
     let isCurrentOperation = typeof operationGuard === "function" ? operationGuard : function() { return true; };
     let complete = typeof completionCallback === "function" ? completionCallback : function() {};
     let completed = false;
@@ -17233,7 +19487,7 @@ MyApplet.prototype = {
       completeOnce(false);
       return false;
     }
-    let spawnKeyboard = () => {
+    let launchKeyboard = () => {
       if (!this._lifecycleAllowsWork() || !isCurrentOperation()) {
         completeOnce(false);
         return false;
@@ -17260,6 +19514,53 @@ MyApplet.prototype = {
         completeOnce(false);
         return false;
       }
+    };
+    let spawnKeyboard = () => {
+      if (!this._lifecycleAllowsWork() || !isCurrentOperation()) {
+        completeOnce(false);
+        return false;
+      }
+      if (!expectedTargetWindow || typeof this._targetXWindowMatchesSnapshot !== "function") {
+        return launchKeyboard();
+      }
+      try {
+        this._targetXWindowMatchesSnapshot(expectedTargetWindow, (targetMatches) => {
+          if (!this._lifecycleAllowsWork() || !isCurrentOperation()) {
+            completeOnce(false);
+            return;
+          }
+          if (!targetMatches) {
+            completeOnce(false, targetMismatchMessage || _("Target window changed before automatic paste"));
+            return;
+          }
+          if (!expectedTargetWindow.xid || typeof this._activateTargetXWindow !== "function") {
+            launchKeyboard();
+            return;
+          }
+          try {
+            this._activateTargetXWindow((activated) => {
+              if (!activated || !this._lifecycleAllowsWork() || !isCurrentOperation()) {
+                completeOnce(false, targetMismatchMessage || _("Target window changed before automatic paste"));
+                return;
+              }
+              this._targetXWindowMatchesSnapshot(expectedTargetWindow, (finalTargetMatches) => {
+                if (!finalTargetMatches) {
+                  completeOnce(false, targetMismatchMessage || _("Target window changed before automatic paste"));
+                  return;
+                }
+                launchKeyboard();
+              });
+            });
+          } catch (error) {
+            this._recordLifecycleError("keyboard-target-activate", error);
+            completeOnce(false, targetMismatchMessage || _("Target window changed before automatic paste"));
+          }
+        });
+      } catch (error) {
+        this._recordLifecycleError("keyboard-target", error);
+        completeOnce(false, _("Keyboard insert failed"));
+      }
+      return true;
     };
     return this._screenSaverAllowsKeyboardInput((allowed, reason) => {
       if (allowed !== true || !this._lifecycleAllowsWork() || !isCurrentOperation()) {
@@ -17442,25 +19743,11 @@ MyApplet.prototype = {
               return;
             }
             if (!followUpArgs) {
-              try {
-                this._targetXWindowMatchesSnapshot(expectedTargetWindow, (pasteTargetMatches) => {
-                  try {
-                    if (!isCurrentOperation()) {
-                      fail();
-                      return;
-                    }
-                    if (!pasteTargetMatches) {
-                      fail(_("Target window changed after automatic paste"));
-                      return;
-                    }
-                    if (typeof completionCallback === "function") completionCallback(true);
-                  } catch (error) {
-                    this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
-                  }
-                });
-              } catch (error) {
-                this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
-              }
+              // Pre-paste XID/class validation is the security boundary. A
+              // clipboard paste sends no follow-up keystroke to protect, so a
+              // post-paste focus change must not turn a successful paste into
+              // a false failure.
+              if (typeof completionCallback === "function") completionCallback(true);
               return;
             }
             if (!this._scheduleTrackedTimer("paste", PASTE_SUBMIT_DELAY_MS, () => {
@@ -17469,7 +19756,7 @@ MyApplet.prototype = {
                 return false;
               }
               try {
-                this._targetXWindowMatchesSnapshot(expectedTargetWindow, (submitTargetMatches) => {
+                let submitAfterTargetCheck = (submitTargetMatches) => {
                   try {
                     if (!isCurrentOperation()) {
                       fail();
@@ -17479,7 +19766,7 @@ MyApplet.prototype = {
                       fail(_("Target window changed before automatic submit"));
                       return;
                     }
-                    if (!this._windowTitleMatchesAutoPaste()) {
+                    if (!this._windowSnapshotMatchesAutoPaste(expectedTargetWindow)) {
                       fail(_("Target window changed before automatic submit"));
                       return;
                     }
@@ -17497,7 +19784,39 @@ MyApplet.prototype = {
                       } catch (error) {
                         this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
                       }
-                    }, processTimeoutMs, isCurrentOperation);
+                    }, processTimeoutMs, isCurrentOperation, expectedTargetWindow, _("Target window changed before automatic submit"));
+                  } catch (error) {
+                    this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
+                  }
+                };
+                let restoreAndValidateTarget = () => {
+                  this._restoreTargetWindowForPaste((restoredForSubmit) => {
+                    try {
+                      if (!isCurrentOperation()) {
+                        fail();
+                        return;
+                      }
+                      if (!restoredForSubmit) {
+                        fail(_("Target window unavailable before automatic submit"));
+                        return;
+                      }
+                      this._targetXWindowMatchesSnapshot(expectedTargetWindow, submitAfterTargetCheck);
+                    } catch (error) {
+                      this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
+                    }
+                  });
+                };
+                this._targetXWindowMatchesSnapshot(expectedTargetWindow, (targetStillFocused) => {
+                  try {
+                    if (!isCurrentOperation()) {
+                      fail();
+                      return;
+                    }
+                    if (targetStillFocused) {
+                      submitAfterTargetCheck(true);
+                      return;
+                    }
+                    restoreAndValidateTarget();
                   } catch (error) {
                     this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
                   }
@@ -17512,7 +19831,7 @@ MyApplet.prototype = {
           } catch (error) {
             this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
           }
-        }, processTimeoutMs, isCurrentOperation);
+        }, processTimeoutMs, isCurrentOperation, expectedTargetWindow, _("Target window changed before automatic paste"));
       } catch (error) {
         this._completeKeyboardInsertFailure(completionCallback, _("Keyboard insert failed"), error);
       }
@@ -17542,7 +19861,9 @@ MyApplet.prototype = {
       );
       return;
     }
-    this._ensureAutoRelistenPendingForDonePayload(payload);
+    if (!this._ensureAutoRelistenPendingForDonePayload(payload)) {
+      return;
+    }
     let reservation = this._reserveAutoInsertFingerprint(insertFingerprint);
     if (reservation === null) {
       this.autoRelistenPending = false;
@@ -17643,7 +19964,7 @@ MyApplet.prototype = {
 
   _ensureAutoRelistenPendingForDonePayload: function(payload) {
     if (this.autoRelistenManualStopRequested) {
-      return;
+      return true;
     }
     let payloadLanguage = payload && typeof payload.language === "string"
       ? payload.language.trim().toLowerCase()
@@ -17655,16 +19976,36 @@ MyApplet.prototype = {
       if (payloadLanguage !== "") {
         this.autoRelistenPendingLanguage = payloadLanguage;
       }
-      return;
+      return true;
     }
     if (!this.autoRelisten || !this.notificationSessionActive) {
-      return;
+      return true;
+    }
+    if (!this._prepareAutoRelistenReservation()) {
+      return false;
     }
     let marker = this._payloadStringMarker(payload, ["audio_path", "audio", "transcript_path", "stopped_at", "started_at"], "done");
     this.autoRelistenSequence += 1;
     this.autoRelistenPending = true;
     this.autoRelistenPendingToken = String(this.autoRelistenSequence) + ":done:" + marker;
     this.autoRelistenPendingLanguage = payloadLanguage;
+    return true;
+  },
+
+  _prepareAutoRelistenReservation: function() {
+    if (this._clearAutoRelistenRetryTimer() !== false) {
+      return true;
+    }
+    this.autoRelistenPending = false;
+    this.autoRelistenPendingToken = "";
+    this.autoRelistenPendingLanguage = "";
+    this.autoRelistenManualStopRequested = true;
+    this._setStatus(
+      "error",
+      _("Could not prepare Auto Relisten retry"),
+      this.lastTranscript
+    );
+    return false;
   },
 
   _finishPendingRelisten: function() {
@@ -17675,23 +20016,30 @@ MyApplet.prototype = {
       return false;
     }
     let shouldRelisten = this.autoRelistenPending;
+    let pendingRelistenToken = String(this.autoRelistenPendingToken || "");
     let previousNotificationSessionActive = this.notificationSessionActive;
     let relistenStarted = false;
-    let relistenFailedWithError = false;
+    let relistenBlockedTransiently = false;
     if (shouldRelisten) {
       this.notificationSessionActive = true;
       relistenStarted = this._restartRelistenRecording();
-      relistenFailedWithError = !relistenStarted && this.status === "error";
+      relistenBlockedTransiently = !relistenStarted &&
+        (this._autoRelistenStartBlock === "busy" || this._autoRelistenStartBlock === "cleanup");
     }
     if (relistenStarted) {
       this.notificationSessionActive = true;
+    } else if (shouldRelisten && relistenBlockedTransiently && pendingRelistenToken !== "") {
+      // Keep the reservation alive until the transient blocker releases it.
+      // The existing tracked timer remains the single retry source.
+      this.notificationSessionActive = previousNotificationSessionActive;
+      this._schedulePendingAutoRelistenRetry(pendingRelistenToken);
     } else if (shouldRelisten) {
       this.autoRelistenPending = false;
       this.autoRelistenPendingToken = "";
       this.autoRelistenPendingLanguage = "";
       this.autoRelistenManualStopRequested = false;
       this.notificationSessionActive = previousNotificationSessionActive;
-      if (relistenFailedWithError) {
+      if (this.status === "error") {
         this.notificationSessionActive = false;
       }
     } else {
@@ -17700,6 +20048,54 @@ MyApplet.prototype = {
       this.autoRelistenPendingLanguage = "";
     }
     return relistenStarted;
+  },
+
+  _schedulePendingAutoRelistenRetry: function(pendingRelistenToken) {
+    if (!this.autoRelistenPending || this.cancelIntentActive || this.autoRelistenManualStopRequested ||
+        String(this.autoRelistenPendingToken || "") !== String(pendingRelistenToken || "")) {
+      return false;
+    }
+    if (this.autoRelistenRetryTimer) {
+      return true;
+    }
+    let retryToken = String(pendingRelistenToken || "");
+    let retryTimer = this._scheduleTrackedTimer("auto-relisten-retry", AUTO_RELISTEN_RETRY_DELAY_MS, () => {
+      if (!this.autoRelistenPending || this.cancelIntentActive || this.autoRelistenManualStopRequested ||
+          String(this.autoRelistenPendingToken || "") !== retryToken ||
+          (typeof this._lifecycleAllowsWork === "function" && !this._lifecycleAllowsWork())) {
+        return false;
+      }
+      if (this.isCommandRunning || this._hasLocalProcessingWorkflow() || this._processCleanupStillPending()) {
+        return true;
+      }
+      this._finishPendingRelisten();
+      return false;
+    }, false, "autoRelistenRetryTimer");
+    if (!retryTimer) {
+      this.autoRelistenRetryTimer = 0;
+      this.autoRelistenPending = false;
+      this.autoRelistenPendingToken = "";
+      this.autoRelistenPendingLanguage = "";
+      this.autoRelistenManualStopRequested = true;
+      this._setStatus(
+        "error",
+        _("Could not schedule Auto Relisten retry"),
+        this.lastTranscript
+      );
+      return false;
+    }
+    return true;
+  },
+
+  _clearAutoRelistenRetryTimer: function() {
+    if (!this.autoRelistenRetryTimer) {
+      return true;
+    }
+    let cleared = typeof this._clearTrackedTimer === "function"
+      ? this._clearTrackedTimer("auto-relisten-retry", "autoRelistenRetryTimer")
+      : true;
+    this.autoRelistenRetryTimer = 0;
+    return cleared;
   },
 
   _transcriptDigest: function(transcript) {
@@ -17826,7 +20222,9 @@ MyApplet.prototype = {
   },
 
   _finishSilentRelistenSkip: function(payload) {
-    this._ensureAutoRelistenPendingForDonePayload(payload);
+    if (!this._ensureAutoRelistenPendingForDonePayload(payload)) {
+      return;
+    }
     let hadPendingRelisten = this.autoRelistenPending;
     if (this._finishPendingRelisten()) {
       return;
@@ -17838,7 +20236,9 @@ MyApplet.prototype = {
   },
 
   _finishEmptyRelistenDone: function(payload) {
-    this._ensureAutoRelistenPendingForDonePayload(payload);
+    if (!this._ensureAutoRelistenPendingForDonePayload(payload)) {
+      return;
+    }
     let hadPendingRelisten = this.autoRelistenPending;
     if (this._finishPendingRelisten()) {
       return;
@@ -17944,7 +20344,9 @@ MyApplet.prototype = {
       ? this._resolveOutputActions(method, autoPasteTarget, canPasteWithKeyboard)
       : { copy: false, restoreFocus: false, paste: false, submit: false };
     let submitWithReturn = outputActions.submit;
-    let suppressAutoPasteEnter = !outputActions.submit;
+    // Dedicated submit key owns the line terminator. Do not paste a newline
+    // first, or terminals submit once during paste and again on the follow-up.
+    let suppressAutoPasteEnter = !outputActions.paste || outputActions.submit;
     let text = this._preparedTranscriptText(transcript, suppressAutoPasteEnter, autoPasteTarget);
     let insertToken = {};
     let insertTargetGeneration = Number(this.targetWindowGeneration || 0);
@@ -18173,6 +20575,7 @@ MyApplet.prototype = {
   },
 
   _restartRelistenRecording: function() {
+    this._autoRelistenStartBlock = "";
     if (this.cancelIntentActive) {
       return false;
     }
@@ -18190,10 +20593,11 @@ MyApplet.prototype = {
     }
     let backgroundCleanupSucceeded = this._invalidateBackgroundCallbacksForRecording();
     if (!backgroundCleanupSucceeded) {
-      this._setStatus("error", _("Could not start next recording"), this.lastTranscript);
+      this._autoRelistenStartBlock = "cleanup";
       return false;
     }
     if (this.isCommandRunning || this._hasLocalProcessingWorkflow() || this.textInsertToken) {
+      this._autoRelistenStartBlock = "busy";
       return false;
     }
     let relistenLanguage = this._normalizeLanguage(this.autoRelistenPendingLanguage, this._currentLanguage());
@@ -18201,6 +20605,10 @@ MyApplet.prototype = {
       ? this._ensureVoiceModelCompatibleForLanguage(relistenLanguage, true, _("relisten language"))
       : this._ensureVoiceModelCompatibleWithCurrentLanguage(true);
     if (!voiceModelCompatible) {
+      if (this.isCommandRunning || this.voiceModelActionToken || this.voiceModelCleanupFailed === true ||
+          this._processCleanupStillPending()) {
+        this._autoRelistenStartBlock = "busy";
+      }
       return false;
     }
     let startArgs;
@@ -18491,11 +20899,13 @@ MyApplet.prototype = {
       this.lastMessage = status === "error" || status === "warning"
         ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
         : this._uiMessageText(safeMessage);
+      this._rememberLastErrorMessage(status, safeMessage);
       if (typeof transcript === "string" && transcript !== "") {
         this.lastTranscript = transcript;
       }
       this._setMenuItemSensitiveSafely(this.copyLastItem, Boolean(this.lastTranscript));
       this._setMenuItemSensitiveSafely(this.insertLastItem, Boolean(this.lastTranscript));
+      this._setMenuItemSensitiveSafely(this.copyLastErrorItem, Boolean(this.lastErrorMessage));
       this._setMenuItemSensitiveSafely(this.cancelItem, this._hasCancelableRecordingWork());
       this._updatePanel();
     } catch (error) {
@@ -18503,7 +20913,7 @@ MyApplet.prototype = {
     }
   },
 
-  _setStatus: function(status, message, transcript) {
+  _setStatus: function(status, message, transcript, suppressErrorJournal) {
     if (!this._lifecycleAllowsWork()) {
       return;
     }
@@ -18512,15 +20922,20 @@ MyApplet.prototype = {
       this._statusRefreshToken++;
       let previousStatus = this.status;
       this.status = status;
+      if (status === "recording" && previousStatus !== "recording") {
+        this.recordingLongWarningShown = false;
+      }
       let safeMessage = (typeof message === "string" ? message : "");
       this.lastMessage = status === "error" || status === "warning"
         ? this._uiMessageText(this._sanitizeErrorMessage(safeMessage))
         : this._uiMessageText(safeMessage);
+      this._rememberLastErrorMessage(status, safeMessage, suppressErrorJournal !== true);
       if (typeof transcript === "string" && transcript !== "") {
         this.lastTranscript = transcript;
       }
       this._setMenuItemSensitiveSafely(this.copyLastItem, Boolean(this.lastTranscript));
       this._setMenuItemSensitiveSafely(this.insertLastItem, Boolean(this.lastTranscript));
+      this._setMenuItemSensitiveSafely(this.copyLastErrorItem, Boolean(this.lastErrorMessage));
       this._setMenuItemSensitiveSafely(this.cancelItem, this._hasCancelableRecordingWork());
       this._updatePanel();
       this._maybeNotify(previousStatus, this.status, this.lastMessage);
@@ -18528,6 +20943,22 @@ MyApplet.prototype = {
       this._scheduleDisplayTick();
     } catch (error) {
       this._recordLifecycleError("status-update", error);
+    }
+  },
+
+  _rememberLastErrorMessage: function(status, message, recordToJournal) {
+    if (status !== "error") {
+      return;
+    }
+    try {
+      let safeMessage = this._uiMessageText(this._sanitizeErrorMessage(typeof message === "string" ? message : ""));
+      this.lastErrorMessage = safeMessage || _("Unknown error");
+      if (recordToJournal !== false) {
+        this._recordErrorFile("status", this.lastErrorMessage);
+      }
+    } catch (error) {
+      this.lastErrorMessage = _("Unknown error");
+      this._recordErrorFile("status", this.lastErrorMessage);
     }
   },
 
@@ -18543,17 +20974,18 @@ MyApplet.prototype = {
       return;
     }
     if (status === "recording") {
-      if (this.notifyRecording) {
+      if (this.notifyRecordingStart) {
         this._notify(_("Speed of Cinnamon"), _("Recording started: ") + this._currentLanguage(), false);
         this.lastNotificationKey = key;
       }
       return;
     }
     if (status === "recorded") {
-      if (this.notifyRecording) {
-        this._notify(_("Speed of Cinnamon"), message || _("Recording ready to transcribe"), false);
+      if (this.recordingReachedTimeLimit && this.notifyRecordingLimit) {
+        this._notify(_("Speed of Cinnamon"), _("Recording reached the time limit"), false);
         this.lastNotificationKey = key;
       }
+      this.recordingReachedTimeLimit = false;
       return;
     }
     if (status === "done") {
@@ -18654,6 +21086,15 @@ MyApplet.prototype = {
     return Math.max(0, elapsed);
   },
 
+  _recordingReachedConfiguredLimit: function() {
+    let maxSeconds = this._normalizeRecordingLimit(
+      this.recordingMaxSeconds !== undefined && this.recordingMaxSeconds !== null
+        ? this.recordingMaxSeconds
+        : this.maxSeconds
+    );
+    return maxSeconds > 0 && this._recordingElapsedSeconds() >= maxSeconds;
+  },
+
   _recordingProgressText: function() {
     let maxSeconds = this._normalizeRecordingLimit(
       this.recordingMaxSeconds !== undefined && this.recordingMaxSeconds !== null ? this.recordingMaxSeconds : this.maxSeconds
@@ -18693,7 +21134,9 @@ MyApplet.prototype = {
 
   _notificationOptionsLabel: function() {
     let enabled = [];
-    if (this.notifyRecording) enabled.push(_("recording"));
+    if (this.notifyRecordingStart) enabled.push(_("recording start"));
+    if (this.notifyRecordingLimit) enabled.push(_("time limit"));
+    if (this.notifyRecordingLonger) enabled.push(_("over 5 minutes"));
     if (this.notifyComplete) enabled.push(_("done"));
     if (this.notifyError) enabled.push(_("errors"));
     return _("Notifications: ") + (enabled.length > 0 ? enabled.join(", ") : _("off"));

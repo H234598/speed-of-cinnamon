@@ -39,7 +39,7 @@ function loadSpawnKeyboardArgs(clock) {
   return loadAppletMethod("_spawnKeyboardArgs", "_finishAppletTextInsert", clock);
 }
 
-test("built-in Auto-Submit marker matches title when class is unknown", () => {
+test("built-in Auto-Submit marker rejects title when class is unknown", () => {
   const clock = { value: 0 };
   const matchesMarker = loadAppletMethod(
     "_windowIdentityValueMatchesMarker",
@@ -66,7 +66,7 @@ test("built-in Auto-Submit marker matches title when class is unknown", () => {
     _windowIdentityValueMatchesMarker: matchesMarker,
   };
 
-  assert.equal(matchesTitle.call(applet), true);
+  assert.equal(matchesTitle.call(applet), false);
 });
 
 test("output policy separates paste from auto-submit and fails closed", () => {
@@ -329,6 +329,35 @@ test("X11 target validation tolerates mutable terminal titles but rejects class 
   assert.equal(result, false);
 });
 
+test("Codex submit keeps builtin authorization after terminal title changes", () => {
+  const clock = { value: 0 };
+  const matchesSnapshot = loadAppletMethod(
+    "_windowSnapshotMatchesAutoPaste",
+    "_updateOpenAiFlexProcessingItem",
+    clock,
+    {
+      AUTO_PASTE_IDENTITY_MARKERS: { codex: ["org.gnome.terminal"] },
+    }
+  );
+  const applet = {
+    autoPasteWindowTitle: "codex",
+    _autoPasteTitleValues: () => ["codex"],
+    _normalizedAutoPasteWindowTitle: (value) => String(value || "").toLowerCase(),
+    _windowIdentityValueMatchesMarker: (value, marker) =>
+      String(value || "").includes(String(marker || "").toLowerCase()),
+    _windowTitleMatchesAutoPaste: () => false,
+  };
+
+  assert.equal(
+    matchesSnapshot.call(applet, {
+      xid: "42",
+      windowClass: "org.gnome.terminal",
+      windowTitle: "codex - old tab title",
+    }),
+    true
+  );
+});
+
 test("X11 target validation rejects protected class before paste", () => {
   const clock = { value: 0 };
   const matchesSnapshot = loadAppletMethod(
@@ -411,6 +440,21 @@ test("keyboard process refuses locked screen and runs only when unlocked", () =>
   assert.equal(result, false);
   assert.equal(failureMessage, "Keyboard input blocked: screen lock state unavailable");
   assert.deepEqual(calls, [["/usr/bin/cinnamon-screensaver-command", "--query"]]);
+
+  screenState = "Der Bildschirmschoner ist inaktiv";
+  calls.length = 0;
+  result = undefined;
+  failureMessage = undefined;
+  spawnKeyboardProcess.call(applet, ["/usr/bin/xdotool", "key", "ctrl+v"], (completed, message) => {
+    result = completed;
+    failureMessage = message;
+  }, 1000);
+  assert.equal(result, true);
+  assert.equal(failureMessage, undefined);
+  assert.deepEqual(calls, [
+    ["/usr/bin/cinnamon-screensaver-command", "--query"],
+    ["/usr/bin/xdotool", "key", "ctrl+v"],
+  ]);
 
   screenState = "The screensaver is not active";
   calls.length = 0;
@@ -925,8 +969,15 @@ function makeApplet(clock) {
       callback(this.targetWindowMatches);
       return this.targetWindowMatches;
     },
+    _restoreTargetWindowForPaste(callback) {
+      callback(true);
+      return true;
+    },
     _windowTitleMatchesAutoPaste() {
       return true;
+    },
+    _windowSnapshotMatchesAutoPaste() {
+      return this._windowTitleMatchesAutoPaste();
     },
     _spawnKeyboardProcess(args, callback, timeoutMs) {
       processes.push(args);
@@ -1273,7 +1324,7 @@ test("parallel GTK clipboard probes keep independent tracked timers", () => {
   assert.equal(scheduled.size, 0);
 });
 
-test("paste without follow-up revalidates target before completion", () => {
+test("paste without follow-up does not revalidate target after completion", () => {
   const clock = { value: 1000 };
   const state = makeApplet(clock);
   let targetChecks = 0;
@@ -1289,8 +1340,8 @@ test("paste without follow-up revalidates target before completion", () => {
   assert.equal(state.processCallbacks.length, 1);
   state.processCallbacks[0](true);
 
-  assert.equal(targetChecks, 2);
-  assert.deepEqual(state.completions, [false]);
+  assert.equal(targetChecks, 1);
+  assert.deepEqual(state.completions, [true]);
 });
 
 test("clipboard mismatch retries with one owner before success", () => {
@@ -1467,6 +1518,32 @@ test("submit window mismatch after timer blocks follow-up process", () => {
   assert.deepEqual(state.processes, [firstArgs]);
   assert.equal(state.processCallbacks.length, 1);
   assert.equal(state.applet.pasteTimer, 0);
+});
+
+test("submit restores focus only after target drift", () => {
+  const clock = { value: 1000 };
+  const state = makeApplet(clock);
+  const firstArgs = ["xdotool", "key", "ctrl+v"];
+  const followUpArgs = ["xdotool", "key", "Return"];
+  let restoreCalls = 0;
+  state.applet.queueProcessCallbacks = true;
+  state.applet._restoreTargetWindowForPaste = (callback) => {
+    restoreCalls += 1;
+    state.applet.targetWindowMatches = true;
+    callback(true);
+    return true;
+  };
+
+  state.applet.invoke(null, null, followUpArgs);
+  state.processCallbacks[0](true);
+  state.applet.targetWindowMatches = false;
+  state.applet.fireTimer(state.applet.pasteTimer);
+
+  assert.equal(restoreCalls, 1);
+  assert.deepEqual(state.processes, [firstArgs, followUpArgs]);
+  assert.equal(state.processCallbacks.length, 2);
+  state.processCallbacks[1](true);
+  assert.deepEqual(state.completions, [true]);
 });
 
 test("duplicate first process callback submits and completes once", () => {
@@ -1933,4 +2010,52 @@ test("async X11 target resolution gates completion until fallback resolves", () 
 
   assert.deepEqual(state.completions, [true]);
   assert.equal(state.applet.targetWindowXPendingGeneration, 0);
+});
+
+test("X11 target capture prefers active XID over stale Cinnamon focus", () => {
+  const staleWindow = {};
+  const completions = [];
+  const applet = {
+    targetWindow: staleWindow,
+    targetWindowGeneration: 0,
+    targetWindowXPendingGeneration: 0,
+    targetWindowXid: "",
+    targetWindowXTitle: "",
+    targetWindowXClass: "",
+    _rememberFocusedWindow: loadAppletMethod(
+      "_rememberFocusedWindow",
+      "_closeMenuForKeyboardInsert",
+      { value: 1000 },
+      { global: { display: { focus_window: staleWindow } } }
+    ),
+    _terminateProcessesByGroup: () => true,
+    _isUsableTargetWindow: (window) => window === staleWindow,
+    _isWaylandSession: () => false,
+    _windowLooksLikeSpeedOfCinnamon: () => false,
+    _rememberActiveXWindow(callback) {
+      this.targetWindowXid = "77";
+      this.targetWindowXTitle = "xed";
+      this.targetWindowXClass = "xed";
+      callback(true);
+      return true;
+    },
+    _clearTargetWindowXid() {
+      this.targetWindowXid = "";
+      this.targetWindowXTitle = "";
+      this.targetWindowXClass = "";
+    },
+    _hasRememberedTargetWindow() {
+      return /^[0-9]+$/.test(String(this.targetWindowXid || "").trim());
+    },
+    _setStatusPreservingRecording() {},
+    _recordLifecycleError() {},
+    _lifecycleAllowsWork: () => true,
+    _windowProbeValue() { return ""; },
+    _shortMenuText: (value) => String(value || ""),
+  };
+
+  assert.equal(applet._rememberFocusedWindow(false, (result) => completions.push(result)), true);
+  assert.deepEqual(completions, [true]);
+  assert.equal(applet.targetWindowXid, "77");
+  assert.equal(applet.targetWindow, null);
 });

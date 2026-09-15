@@ -91,7 +91,7 @@ jobs:
           actionlint_tmp_dir="$(mktemp -d)"
           trap 'rm -rf -- "${actionlint_tmp_dir}"' EXIT
           archive_path="${actionlint_tmp_dir}/${archive}"
-          curl -fsSL -o "${archive_path}" \
+          curl -fsSL --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 --retry-max-time 120 -o "${archive_path}" \
             "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
           printf '%s  %s\n' "${archive_sha256}" "${archive_path}" | sha256sum -c -
           tar -xzf "${archive_path}" -C "${actionlint_tmp_dir}" actionlint
@@ -143,7 +143,7 @@ jobs:
         with:
           python-version: "3.12"
       - name: Install Bandit
-        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt --timeout 30 --retries 3
       - name: Install shell tooling
         run: |
           sudo apt-get update
@@ -154,7 +154,7 @@ jobs:
           actionlint_tmp_dir="$(mktemp -d)"
           trap 'rm -rf -- "${actionlint_tmp_dir}"' EXIT
           archive_path="${actionlint_tmp_dir}/${archive}"
-          curl -fsSLo "${archive_path}" \
+          curl -fsSLo "${archive_path}" --connect-timeout 15 --max-time 120 --retry 3 --retry-delay 2 --retry-max-time 120 \
             "https://github.com/rhysd/actionlint/releases/download/v${version}/${archive}"
           printf '%s  %s\n' "${archive_sha256}" "${archive_path}" | sha256sum -c -
           tar -xzf "${archive_path}" -C "${actionlint_tmp_dir}" actionlint
@@ -223,9 +223,9 @@ jobs:
             printf 'Skipping snap toolchain bootstrap (build_snap=false).\n'
           fi
       - name: Install Python coverage tooling
-        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-coverage.txt
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-coverage.txt --timeout 30 --retries 3
       - name: Install project runtime dependencies
-        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-project.txt
+        run: python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-project.txt --timeout 30 --retries 3
       - name: Run checks
         run: make check
       - name: Generate coverage report

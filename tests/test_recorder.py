@@ -3,19 +3,25 @@ from __future__ import annotations
 
 import subprocess
 import os
+import json
+import select
+import shutil
+import signal
 import sys
 import tempfile
 import time
 import unittest
 import wave
 from pathlib import Path
+from types import SimpleNamespace
 from unittest import mock
 
-from speed_of_cinnamon import recorder as recorder_module
+from speed_of_cinnamon import process_priority, recorder as recorder_module
 from speed_of_cinnamon.recorder import (
     RecorderCommand,
     _assert_valid_input_device,
     RecorderError,
+    RecorderStartupError,
     SilenceDetectionResult,
     SILENCE_DETECT_DURATION_SECONDS,
     SILENCE_DETECT_NOISE,
@@ -40,6 +46,24 @@ from speed_of_cinnamon.recorder import (
     stop_process,
     validate_recording_path,
 )
+
+
+def _mountinfo_device(path: Path) -> str:
+    device = path.stat().st_dev
+    return f"{os.major(device)}:{os.minor(device)}"
+
+
+def _different_mountinfo_device(path: Path) -> str:
+    device = path.stat().st_dev
+    return f"{os.major(device)}:{os.minor(device) + 1}"
+
+
+def _scandir_for_paths(paths):
+    scanner = mock.MagicMock()
+    scanner.__enter__.return_value = iter(
+        SimpleNamespace(name=path.name, path=str(path)) for path in paths
+    )
+    return scanner
 
 
 PACTL_SOURCES = """Source #10
@@ -126,6 +150,625 @@ def _popen_from_run(runner: object):
 
 
 class RecorderTest(unittest.TestCase):
+    def test_dedicated_scope_stops_reparented_setsid_recorder_and_preserves_caller(self) -> None:
+        if (
+            not shutil.which("systemd-run", path=process_priority._TRUSTED_COMMAND_PATH)
+            or not os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+            or not os.environ.get("XDG_RUNTIME_DIR")
+        ):
+            self.skipTest("user systemd scope environment is unavailable")
+        probe = "import os,time; child=os.fork(); " "time.sleep(1.5) if child else (os.setsid(), os.close(1), os.close(2), time.sleep(30))"
+        inner = (
+            "import json, os, time; "
+            "from pathlib import Path; "
+            "from speed_of_cinnamon import recorder as r; "
+            "from speed_of_cinnamon.recorder import RecorderCommand, start_recorder; "
+            f"probe={probe!r}; "
+            "log=Path(os.environ['TMPDIR']) / ('soc-dedicated-' + str(os.getpid()) + '.log'); "
+            "p=start_recorder(RecorderCommand('python3', ['python3', '-c', probe]), log); "
+            "scope=vars(p)['_soc_recorder_scope']; "
+            "caller=r._recorder_scope_for_pid(os.getpid()); "
+            "members=r._recorder_scope_process_identities(scope); "
+            "identity=vars(p)['_soc_process_identity']; "
+            "print(json.dumps({'leader':p.pid,'identity':identity,'scope':scope,'caller':caller,'caller_pid':os.getpid(),'members':members}), flush=True); "
+            "time.sleep(2.0); p.wait(timeout=2.0); time.sleep(30)"
+        )
+        environment = os.environ.copy()
+        environment["PYTHONPATH"] = os.fspath(Path(__file__).resolve().parents[1] / "src")
+        environment.pop(process_priority.SOC_PRIORITY_SCOPE_MARKER, None)
+        try:
+            process = subprocess.Popen(  # nosec B603
+                process_priority.build_soc_priority_scope_command([sys.executable, "-c", inner]),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+                shell=False,
+                env=environment,
+            )
+        except FileNotFoundError:
+            self.skipTest("required host command is unavailable")
+        member_pids: tuple[int, ...] = ()
+        try:
+            if process.stdout is None:
+                self.fail("dedicated scope probe stdout is unavailable")
+            ready, _, _ = select.select([process.stdout], [], [], 3.0)
+            if not ready:
+                stdout, stderr = process.communicate(timeout=3.0)
+                self.fail(
+                    "user systemd scope unavailable: "
+                    f"rc={process.returncode}, stdout={stdout!r}, stderr={stderr!r}"
+                )
+            payload = json.loads(process.stdout.readline().decode("utf-8"))
+            leader_pid = int(payload["leader"])
+            identity = str(payload["identity"])
+            scope = str(payload["scope"])
+            caller_scope = str(payload["caller"])
+            caller_pid = int(payload["caller_pid"])
+            member_pids = tuple(int(pid) for pid in dict(payload["members"]))
+            self.assertEqual(process.pid, caller_pid)
+            self.assertNotEqual(scope, caller_scope)
+            self.assertTrue(recorder_module._recorder_scope_is_current(leader_pid, scope))
+            self.assertEqual(recorder_module._recorder_scope_for_pid(caller_pid), caller_scope)
+            self.assertGreaterEqual(len(member_pids), 1)
+            time.sleep(2.0)
+            self.assertTrue(
+                stop_process(
+                    leader_pid,
+                    timeout_seconds=3,
+                    expected_process_identity=identity,
+                    expected_recorder_scope=scope,
+                )
+            )
+            self.assertIsNone(process.poll())
+            os.kill(caller_pid, 0)
+            deadline = time.monotonic() + 2
+            while time.monotonic() < deadline:
+                if all(recorder_module._recording_process_stat_fields(pid) is None for pid in member_pids):
+                    break
+                time.sleep(0.05)
+            self.assertTrue(all(recorder_module._recording_process_stat_fields(pid) is None for pid in member_pids))
+        finally:
+            if member_pids:
+                try:
+                    for member_pid in member_pids:
+                        os.kill(member_pid, signal.SIGKILL)
+                except OSError:
+                    pass
+            if process.poll() is None:
+                process.kill()
+                process.wait(timeout=3)
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+
+    def test_scope_scan_distinguishes_vanished_from_unknown(self) -> None:
+        identity = process_priority.PriorityScopeIdentity(
+            "/sys/fs/cgroup/user.slice/recorder.scope",
+            1,
+            2,
+        )
+        scope = process_priority.serialize_priority_scope_identity(identity)
+        self.assertIsNotNone(scope)
+        with (
+            mock.patch.object(recorder_module, "verify_priority_scope_identity", return_value=False),
+            mock.patch.object(recorder_module.Path, "lstat", side_effect=FileNotFoundError),
+        ):
+            vanished = recorder_module._recorder_scope_scan(scope)
+        self.assertEqual(vanished.status, recorder_module._RECORDER_SCOPE_SCAN_VANISHED)
+
+        with (
+            mock.patch.object(recorder_module, "verify_priority_scope_identity", return_value=False),
+            mock.patch.object(recorder_module.Path, "lstat", return_value=mock.Mock()),
+        ):
+            unknown = recorder_module._recorder_scope_scan(scope)
+        self.assertEqual(unknown.status, recorder_module._RECORDER_SCOPE_SCAN_UNKNOWN)
+
+    def test_scope_scan_rejects_incomplete_process_stat_scan(self) -> None:
+        identity = process_priority.PriorityScopeIdentity(
+            "/sys/fs/cgroup/user.slice/recorder.scope",
+            1,
+            2,
+        )
+        scope = process_priority.serialize_priority_scope_identity(identity)
+        with (
+            mock.patch.object(recorder_module, "verify_priority_scope_identity", return_value=True),
+            mock.patch.object(recorder_module, "priority_scope_process_ids", return_value=(1234,)),
+            mock.patch.object(recorder_module, "_recording_process_stat_fields", return_value=None),
+            mock.patch.object(recorder_module.Path, "lstat", return_value=mock.Mock()),
+        ):
+            scan = recorder_module._recorder_scope_scan(scope)
+        self.assertEqual(scan.status, recorder_module._RECORDER_SCOPE_SCAN_UNKNOWN)
+
+        with (
+            mock.patch.object(recorder_module, "verify_priority_scope_identity", return_value=True),
+            mock.patch.object(recorder_module, "priority_scope_process_ids", return_value=(1234,)),
+            mock.patch.object(recorder_module, "_recording_process_stat_fields", return_value=["R"]),
+            mock.patch.object(recorder_module.Path, "lstat", return_value=mock.Mock()),
+        ):
+            short_scan = recorder_module._recorder_scope_scan(scope)
+        self.assertEqual(short_scan.status, recorder_module._RECORDER_SCOPE_SCAN_UNKNOWN)
+
+    def test_scope_scan_rejects_caller_membership(self) -> None:
+        identity = process_priority.PriorityScopeIdentity(
+            "/sys/fs/cgroup/user.slice/recorder.scope",
+            1,
+            2,
+        )
+        scope = process_priority.serialize_priority_scope_identity(identity)
+        with (
+            mock.patch.object(recorder_module.os, "getpid", return_value=4321),
+            mock.patch.object(recorder_module, "verify_priority_scope_identity", return_value=True),
+            mock.patch.object(recorder_module, "priority_scope_process_ids", return_value=(4321, 5678)),
+            mock.patch.object(recorder_module, "_recording_process_stat_fields") as mocked_stat,
+        ):
+            scan = recorder_module._recorder_scope_scan(scope)
+        self.assertEqual(scan.status, recorder_module._RECORDER_SCOPE_SCAN_UNKNOWN)
+        mocked_stat.assert_not_called()
+
+    def test_recorder_scope_for_unit_distinguishes_absent_and_verified_scope(self) -> None:
+        unit = "speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope"
+
+        def completed_with(payload: bytes):
+            def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+                stdout = kwargs["stdout"]
+                self.assertTrue(hasattr(stdout, "write"))
+                stdout.write(payload)
+                return subprocess.CompletedProcess(command, 0)
+
+            return run
+
+        for load_state in ("not-found", "loaded"):
+            with (
+                self.subTest(load_state=load_state),
+                mock.patch.object(
+                    recorder_module,
+                    "_command_path",
+                    return_value="/usr/bin/systemctl",
+                ),
+                mock.patch.object(
+                    recorder_module.subprocess,
+                    "run",
+                    side_effect=completed_with(
+                        f"LoadState={load_state}\nActiveState=inactive\nControlGroup=\n".encode(
+                            "ascii"
+                        )
+                    ),
+                ),
+            ):
+                self.assertEqual(
+                    recorder_module._recorder_scope_for_unit(unit),
+                    (recorder_module._RECORDER_SCOPE_UNIT_ABSENT, None),
+                )
+
+        identity = process_priority.PriorityScopeIdentity(
+            f"/specific/{unit}",
+            1,
+            2,
+        )
+        with (
+            mock.patch.object(recorder_module, "_command_path", return_value="/usr/bin/systemctl"),
+            mock.patch.object(
+                recorder_module.subprocess,
+                "run",
+                side_effect=completed_with(
+                    f"LoadState=loaded\nActiveState=active\nControlGroup=/app.slice/{unit}\n".encode(
+                        "ascii"
+                    )
+                ),
+            ),
+            mock.patch.object(
+                recorder_module,
+                "priority_scope_identity_for_control_group",
+                return_value=identity,
+            ) as mocked_identity,
+        ):
+            unit_state, scope = recorder_module._recorder_scope_for_unit(unit)
+
+        self.assertEqual(unit_state, recorder_module._RECORDER_SCOPE_UNIT_PRESENT)
+        self.assertTrue(recorder_module._recorder_scope_matches_unit(scope, unit))
+        mocked_identity.assert_called_once_with(
+            f"/app.slice/{unit}",
+            cpu_weight=recorder_module.SOC_CPU_WEIGHT,
+            io_weight=recorder_module.SOC_IO_WEIGHT,
+        )
+
+    def test_recorder_scope_for_unit_uses_canonical_specific_mount(self) -> None:
+        unit = "speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope"
+
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            kwargs["stdout"].write(
+                f"LoadState=loaded\nActiveState=active\nControlGroup=/root.slice/{unit}\n".encode(
+                    "ascii"
+                )
+            )
+            return subprocess.CompletedProcess(command, 0)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            generic_mount = root / "generic"
+            (generic_mount / "root.slice" / unit).mkdir(parents=True)
+            specific_mount = root / "specific"
+            specific_scope = specific_mount / unit
+            specific_scope.mkdir(parents=True)
+            (specific_scope / "cpu.weight").write_text("200\n", encoding="ascii")
+            (specific_scope / "io.weight").write_text(
+                "default 200\n",
+                encoding="ascii",
+            )
+            mountinfo = root / "mountinfo"
+            mountinfo.write_text(
+                f"35 25 {_mountinfo_device(root)} / {generic_mount} rw - cgroup2 cgroup rw\n"
+                f"36 25 {_mountinfo_device(root)} /root.slice {specific_mount} rw - cgroup2 cgroup rw\n",
+                encoding="ascii",
+            )
+            with (
+                mock.patch.object(recorder_module, "_command_path", return_value="/usr/bin/systemctl"),
+                mock.patch.object(recorder_module.subprocess, "run", side_effect=run),
+                mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
+            ):
+                unit_state, serialized = recorder_module._recorder_scope_for_unit(unit)
+
+        self.assertEqual(unit_state, recorder_module._RECORDER_SCOPE_UNIT_PRESENT)
+        identity = process_priority.parse_priority_scope_identity(serialized)
+        self.assertIsNotNone(identity)
+        assert identity is not None
+        self.assertEqual(identity.path, os.fspath(specific_scope))
+
+    def test_recorder_scope_for_unit_rejects_unresolved_or_wrong_scope(self) -> None:
+        unit = "speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope"
+
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            kwargs["stdout"].write(
+                f"LoadState=loaded\nActiveState=active\nControlGroup=/app.slice/{unit}\n".encode(
+                    "ascii"
+                )
+            )
+            return subprocess.CompletedProcess(command, 0)
+
+        for identity in (
+            None,
+            process_priority.PriorityScopeIdentity("/specific/other.scope", 1, 2),
+        ):
+            with (
+                self.subTest(identity=identity),
+                mock.patch.object(recorder_module, "_command_path", return_value="/usr/bin/systemctl"),
+                mock.patch.object(recorder_module.subprocess, "run", side_effect=run),
+                mock.patch.object(
+                    recorder_module,
+                    "priority_scope_identity_for_control_group",
+                    return_value=identity,
+                    create=True,
+                ),
+            ):
+                self.assertEqual(
+                    recorder_module._recorder_scope_for_unit(unit),
+                    (recorder_module._RECORDER_SCOPE_UNIT_UNKNOWN, None),
+                )
+
+    def test_recorder_scope_for_unit_rejects_active_or_transitioning_empty_unit(self) -> None:
+        unit = "speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope"
+
+        def completed_with(payload: bytes):
+            def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+                kwargs["stdout"].write(payload)
+                return subprocess.CompletedProcess(command, 0)
+
+            return run
+
+        for active_state in ("active", "activating", "deactivating", "failed"):
+            with (
+                self.subTest(active_state=active_state),
+                mock.patch.object(
+                    recorder_module,
+                    "_command_path",
+                    return_value="/usr/bin/systemctl",
+                ),
+                mock.patch.object(
+                    recorder_module.subprocess,
+                    "run",
+                    side_effect=completed_with(
+                        f"LoadState=loaded\nActiveState={active_state}\nControlGroup=\n".encode(
+                            "ascii"
+                        )
+                    ),
+                ),
+            ):
+                self.assertEqual(
+                    recorder_module._recorder_scope_for_unit(unit),
+                    (recorder_module._RECORDER_SCOPE_UNIT_UNKNOWN, None),
+                )
+
+    def test_recorder_scope_unit_accepts_two_stable_inactive_observations(self) -> None:
+        unit = "speed-of-cinnamon-recorder-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.scope"
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_for_unit",
+                return_value=(recorder_module._RECORDER_SCOPE_UNIT_ABSENT, None),
+            ) as mocked_unit,
+            mock.patch.object(recorder_module.time, "sleep") as mocked_sleep,
+        ):
+            self.assertTrue(recorder_module._recorder_scope_unit_is_stably_gone(unit))
+
+        self.assertEqual(mocked_unit.call_count, 2)
+        mocked_sleep.assert_called_once_with(
+            recorder_module.RECORDER_SCOPE_UNIT_ABSENCE_DELAY_SECONDS
+        )
+
+    def test_recorder_scope_unit_stable_absence_rejects_live_or_transitioning_unit(self) -> None:
+        unit = "speed-of-cinnamon-recorder-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.scope"
+        scope = f"/sys/fs/cgroup/user.slice/{unit}|1|2"
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_for_unit",
+                return_value=(recorder_module._RECORDER_SCOPE_UNIT_PRESENT, scope),
+            ),
+            mock.patch.object(recorder_module, "_recorder_scope_has_live_processes", return_value=True),
+        ):
+            self.assertFalse(recorder_module._recorder_scope_unit_is_stably_gone(unit))
+
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_for_unit",
+                side_effect=[
+                    (recorder_module._RECORDER_SCOPE_UNIT_ABSENT, None),
+                    (recorder_module._RECORDER_SCOPE_UNIT_PRESENT, scope),
+                ],
+            ),
+            mock.patch.object(recorder_module, "_recorder_scope_has_live_processes", return_value=False),
+            mock.patch.object(recorder_module.time, "sleep") as mocked_sleep,
+        ):
+            self.assertIsNone(recorder_module._recorder_scope_unit_is_stably_gone(unit))
+        mocked_sleep.assert_called_once_with(
+            recorder_module.RECORDER_SCOPE_UNIT_ABSENCE_DELAY_SECONDS
+        )
+
+    def test_recorder_scope_unit_present_without_live_processes_is_unknown(self) -> None:
+        unit = "speed-of-cinnamon-recorder-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.scope"
+        scope = f"/sys/fs/cgroup/user.slice/{unit}|1|2"
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_for_unit",
+                return_value=(recorder_module._RECORDER_SCOPE_UNIT_PRESENT, scope),
+            ) as mocked_unit,
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_has_live_processes",
+                return_value=False,
+            ),
+            mock.patch.object(recorder_module.time, "sleep") as mocked_sleep,
+        ):
+            self.assertIsNone(recorder_module._recorder_scope_unit_is_stably_gone(unit))
+
+        mocked_unit.assert_called_once_with(unit)
+        mocked_sleep.assert_not_called()
+
+    def test_pidfd_scope_signal_rejects_caller_membership_at_signal_time(self) -> None:
+        scope = "/sys/fs/cgroup/user.slice/recorder.scope|1|2"
+        scan = recorder_module._RecorderScopeScan("ok", {4321: "9", 1234: "10"})
+        with (
+            mock.patch.object(recorder_module.os, "getpid", return_value=4321),
+            mock.patch.object(recorder_module, "_recorder_scope_for_pid", return_value="/sys/fs/cgroup/user.slice/cli.scope|3|4"),
+            mock.patch.object(recorder_module, "_recorder_scope_scan", return_value=scan),
+            mock.patch.object(recorder_module.os, "pidfd_open", return_value=7),
+            mock.patch.object(recorder_module.signal, "pidfd_send_signal") as mocked_signal,
+            mock.patch.object(recorder_module.os, "close") as mocked_close,
+        ):
+            result = recorder_module._send_process_signal_with_pidfd(
+                1234,
+                "boot:10",
+                "-TERM",
+                expected_recorder_scope=scope,
+            )
+        self.assertFalse(result)
+        mocked_signal.assert_not_called()
+        mocked_close.assert_called_once_with(7)
+
+    def test_unscoped_pidfd_signal_rechecks_caller_before_send(self) -> None:
+        with (
+            mock.patch.object(recorder_module.os, "getpid", side_effect=[9999, 1234]),
+            mock.patch.object(recorder_module.os, "pidfd_open", return_value=7),
+            mock.patch.object(recorder_module.signal, "pidfd_send_signal") as mocked_signal,
+            mock.patch.object(recorder_module.os, "close") as mocked_close,
+            mock.patch.object(recorder_module, "_recording_process_identity_matches", return_value=True),
+        ):
+            result = recorder_module._send_process_signal_with_pidfd(
+                1234,
+                "boot:10",
+                "-TERM",
+            )
+
+        self.assertFalse(result)
+        mocked_signal.assert_not_called()
+        mocked_close.assert_called_once_with(7)
+
+    def test_pidfd_signal_does_not_send_after_identity_probe_exhausts_deadline(self) -> None:
+        clock = [0.0]
+
+        def delayed_identity_probe(_pid: int, _identity: str) -> bool:
+            clock[0] = 1.0
+            return True
+
+        with (
+            mock.patch.object(recorder_module.os, "getpid", return_value=9999),
+            mock.patch.object(recorder_module.os, "pidfd_open", return_value=7),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_matches",
+                side_effect=delayed_identity_probe,
+            ),
+            mock.patch.object(recorder_module.signal, "pidfd_send_signal") as mocked_signal,
+            mock.patch.object(recorder_module.os, "close") as mocked_close,
+            mock.patch.object(
+                recorder_module.time,
+                "monotonic",
+                side_effect=lambda: clock[0],
+            ),
+        ):
+            result = recorder_module._send_process_signal_with_pidfd(
+                1234,
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345",
+                "-TERM",
+                deadline=1.0,
+            )
+
+        self.assertFalse(result)
+        mocked_signal.assert_not_called()
+        mocked_close.assert_called_once_with(7)
+
+    def test_pidfd_signal_does_not_send_after_scope_probe_exhausts_deadline(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        scope = "/sys/fs/cgroup/user.slice/recorder.scope|1|2"
+        clock = [0.0]
+
+        def delayed_scope_scan(_scope: str) -> recorder_module._RecorderScopeScan:
+            clock[0] = 1.0
+            return recorder_module._RecorderScopeScan(
+                recorder_module._RECORDER_SCOPE_SCAN_OK,
+                {1234: "12345"},
+            )
+
+        with (
+            mock.patch.object(recorder_module.os, "getpid", return_value=9999),
+            mock.patch.object(recorder_module.os, "pidfd_open", return_value=7),
+            mock.patch.object(recorder_module, "_recorder_scope_for_pid", return_value=None),
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_scan",
+                side_effect=delayed_scope_scan,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_matches",
+            ) as mocked_identity,
+            mock.patch.object(recorder_module.signal, "pidfd_send_signal") as mocked_signal,
+            mock.patch.object(recorder_module.os, "close") as mocked_close,
+            mock.patch.object(
+                recorder_module.time,
+                "monotonic",
+                side_effect=lambda: clock[0],
+            ),
+        ):
+            result = recorder_module._send_process_signal_with_pidfd(
+                1234,
+                identity,
+                "-TERM",
+                expected_recorder_scope=scope,
+                deadline=1.0,
+            )
+
+        self.assertFalse(result)
+        mocked_identity.assert_not_called()
+        mocked_signal.assert_not_called()
+        mocked_close.assert_called_once_with(7)
+
+    def test_start_time_signal_does_not_open_pidfd_after_identity_probe_deadline(self) -> None:
+        clock = [0.0]
+
+        def delayed_identity(_pid: int) -> str:
+            clock[0] = 1.0
+            return "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+
+        with (
+            mock.patch.object(recorder_module.os, "getpid", return_value=9999),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_for_pid",
+                side_effect=delayed_identity,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_pidfd",
+            ) as mocked_pidfd,
+            mock.patch.object(
+                recorder_module.time,
+                "monotonic",
+                side_effect=lambda: clock[0],
+            ),
+        ):
+            result = recorder_module._send_process_signal_with_start_time(
+                1234,
+                "12345",
+                "-TERM",
+                deadline=1.0,
+            )
+
+        self.assertFalse(result)
+        mocked_pidfd.assert_not_called()
+
+    def test_stop_rejects_persisted_caller_scope_before_any_signal(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        scope = (
+            "/sys/fs/cgroup/user.slice/"
+            "speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope|1|2"
+        )
+        with (
+            mock.patch.object(recorder_module, "verify_priority_scope_identity", return_value=True),
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_for_pid",
+                return_value=scope,
+            ) as mocked_scope,
+            mock.patch.object(recorder_module.os, "getpgid") as mocked_getpgid,
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_pidfd",
+            ) as mocked_signal,
+        ):
+            self.assertFalse(
+                stop_process(
+                    1234,
+                    expected_process_identity=identity,
+                    expected_recorder_scope=scope,
+                )
+            )
+        mocked_scope.assert_called_once()
+        mocked_getpgid.assert_not_called()
+        mocked_signal.assert_not_called()
+
+    def test_stop_rejects_non_soc_scope_before_any_signal(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        scope = "/sys/fs/cgroup/user.slice/foreign.scope|1|2"
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_is_soc_recorder_unit",
+                return_value=False,
+            ) as mocked_soc_scope,
+            mock.patch.object(recorder_module, "_recorder_scope_for_pid") as mocked_scope,
+            mock.patch.object(recorder_module.os, "getpgid") as mocked_getpgid,
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_pidfd",
+            ) as mocked_signal,
+        ):
+            self.assertFalse(
+                stop_process(
+                    1234,
+                    expected_process_identity=identity,
+                    expected_recorder_scope=scope,
+                )
+            )
+        mocked_soc_scope.assert_called_once_with(scope)
+        mocked_scope.assert_not_called()
+        mocked_getpgid.assert_not_called()
+        mocked_signal.assert_not_called()
+
+    def test_recorder_session_stop_rejects_non_finite_timeout(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "timeout_seconds must be finite"):
+            recorder_module._wait_for_recorder_session_stop(1234, timeout_seconds=float("inf"))
+
+    def test_recorder_session_stop_rejects_oversized_timeout(self) -> None:
+        with self.assertRaisesRegex(RecorderError, "timeout_seconds exceeds safe limit"):
+            recorder_module._wait_for_recorder_session_stop(
+                1234,
+                timeout_seconds=recorder_module.MAX_PROCESS_STOP_TIMEOUT_SECONDS + 1,
+            )
+
     def test_fsync_retries_interrupted_calls(self) -> None:
         with mock.patch.object(recorder_module.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
             recorder_module._fsync_fd(123)
@@ -147,6 +790,316 @@ class RecorderTest(unittest.TestCase):
         mocked_killpg.assert_not_called()
         process.communicate.assert_called_once_with(timeout=1)
 
+    def test_reap_scoped_recorder_stops_scope_after_leader_exit(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 0
+        process.communicate.return_value = (b"", b"")
+        unit = "speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope"
+        scope = f"/sys/fs/cgroup/user.slice/{unit}|1|2"
+        process._soc_process_identity = "owner-identity"
+        process._soc_recorder_scope = scope
+        process._soc_recorder_scope_unit = unit
+
+        with mock.patch.object(recorder_module, "stop_process", return_value=True) as mocked_stop:
+            self.assertTrue(recorder_module._reap_timed_out_recorder_process(process))
+
+        mocked_stop.assert_called_once_with(
+            1234,
+            timeout_seconds=1.0,
+            expected_process_identity="owner-identity",
+            expected_recorder_scope=scope,
+        )
+        process.communicate.assert_called_once_with(timeout=1)
+
+    def test_reap_never_signals_scope_discovered_by_reusable_unit_name(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 0
+        process.communicate.return_value = (b"", b"")
+        unit = "speed-of-cinnamon-recorder-cccccccccccccccccccccccccccccccc.scope"
+        process._soc_process_identity = "owner-identity"
+        process._soc_recorder_scope_unit = unit
+
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_unit_is_stably_gone",
+                return_value=False,
+            ),
+            mock.patch.object(recorder_module, "stop_process", return_value=True) as mocked_stop,
+        ):
+            self.assertFalse(recorder_module._reap_timed_out_recorder_process(process))
+
+        self.assertNotIn("_soc_recorder_scope", vars(process))
+        mocked_stop.assert_not_called()
+
+    def test_unit_only_absence_path_never_signals_live_descendant(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 0
+        process._soc_process_identity = "owner-identity"
+        process._soc_recorder_scope_unit = (
+            "speed-of-cinnamon-recorder-cccccccccccccccccccccccccccccccc.scope"
+        )
+
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_unit_is_stably_gone",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_is_current",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_descendant_identities",
+                return_value={2345: "descendant-identity"},
+            ),
+            mock.patch.object(recorder_module, "_kill_output_process_tree") as mocked_tree_kill,
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_pidfd",
+            ) as mocked_pidfd_signal,
+            mock.patch.object(recorder_module, "stop_process") as mocked_stop,
+            mock.patch.object(recorder_module.os, "killpg") as mocked_killpg,
+        ):
+            self.assertFalse(recorder_module._terminate_recorder_process_group(process))
+
+        mocked_tree_kill.assert_not_called()
+        mocked_pidfd_signal.assert_not_called()
+        mocked_stop.assert_not_called()
+        mocked_killpg.assert_not_called()
+
+    def test_unit_only_absence_path_succeeds_passively_when_every_process_is_gone(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 0
+        process._soc_process_identity = "owner-identity"
+        process._soc_recorder_scope_unit = (
+            "speed-of-cinnamon-recorder-cccccccccccccccccccccccccccccccc.scope"
+        )
+
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_unit_is_stably_gone",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_is_current",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_descendant_identities",
+                return_value={},
+            ),
+            mock.patch.object(
+                recorder_module,
+                "process_group_has_live_processes",
+                return_value=False,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_pipe_holder_identities",
+                return_value={},
+            ),
+            mock.patch.object(recorder_module, "_kill_output_process_tree") as mocked_tree_kill,
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_pidfd",
+            ) as mocked_pidfd_signal,
+            mock.patch.object(recorder_module, "stop_process") as mocked_stop,
+            mock.patch.object(recorder_module.os, "killpg") as mocked_killpg,
+        ):
+            self.assertTrue(recorder_module._terminate_recorder_process_group(process))
+
+        self.assertTrue(process._soc_recorder_scope_unit_absent)
+        mocked_tree_kill.assert_not_called()
+        mocked_pidfd_signal.assert_not_called()
+        mocked_stop.assert_not_called()
+        mocked_killpg.assert_not_called()
+
+    def test_unit_only_absence_is_last_gate_and_catches_late_unit_creation(self) -> None:
+        events: list[str] = []
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.side_effect = lambda: events.append("leader") or 0
+        process._soc_process_identity = "owner-identity"
+        unit = "speed-of-cinnamon-recorder-cccccccccccccccccccccccccccccccc.scope"
+        scope = f"/sys/fs/cgroup/user.slice/{unit}|1|2"
+        process._soc_recorder_scope_unit = unit
+        unit_observations = iter(
+            (
+                (recorder_module._RECORDER_SCOPE_UNIT_ABSENT, None),
+                (recorder_module._RECORDER_SCOPE_UNIT_PRESENT, scope),
+            )
+        )
+
+        def observe_unit(_unit: object) -> tuple[str, str | None]:
+            events.append("unit")
+            return next(unit_observations)
+
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_is_current",
+                side_effect=lambda _process: events.append("identity") or True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_descendant_identities",
+                side_effect=lambda _pid: events.append("descendants") or {},
+            ),
+            mock.patch.object(
+                recorder_module,
+                "process_group_has_live_processes",
+                side_effect=lambda _pid: events.append("group") or False,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_pipe_holder_identities",
+                side_effect=lambda _process: events.append("pipes") or {},
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_for_unit",
+                side_effect=observe_unit,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_recorder_scope_has_live_processes",
+                return_value=False,
+            ),
+            mock.patch.object(recorder_module.time, "sleep"),
+            mock.patch.object(recorder_module, "_kill_output_process_tree") as mocked_tree_kill,
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_pidfd",
+            ) as mocked_pidfd_signal,
+        ):
+            self.assertFalse(recorder_module._terminate_recorder_process_group(process))
+
+        self.assertEqual(
+            events,
+            ["leader", "identity", "descendants", "group", "pipes", "unit", "unit"],
+        )
+        mocked_tree_kill.assert_not_called()
+        mocked_pidfd_signal.assert_not_called()
+
+    def test_unit_only_reap_mismatched_control_group_device_never_signals(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 0
+        process.communicate.return_value = (b"", b"")
+        process._soc_process_identity = "8d4d9202-4f80-4f1f-b527-154d0fa62a9a:12345"
+        unit = "speed-of-cinnamon-recorder-dddddddddddddddddddddddddddddddd.scope"
+        process._soc_recorder_scope_unit = unit
+
+        def run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            kwargs["stdout"].write(
+                f"LoadState=loaded\nActiveState=active\nControlGroup=/app.slice/{unit}\n".encode(
+                    "ascii"
+                )
+            )
+            return subprocess.CompletedProcess(command, 0)
+
+        scope_results: list[tuple[str, str | None]] = []
+        real_scope_for_unit = recorder_module._recorder_scope_for_unit
+
+        def observe_scope(unit_name: object) -> tuple[str, str | None]:
+            result = real_scope_for_unit(unit_name)
+            scope_results.append(result)
+            return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            mountpoint = root / "cgroup"
+            scope = mountpoint / unit
+            scope.mkdir(parents=True)
+            (scope / "cpu.weight").write_text("200\n", encoding="ascii")
+            (scope / "io.weight").write_text(
+                "default 200\n",
+                encoding="ascii",
+            )
+            mountinfo = root / "mountinfo"
+            mountinfo.write_text(
+                f"35 25 {_different_mountinfo_device(root)} /app.slice {mountpoint} rw - cgroup2 cgroup rw\n",
+                encoding="ascii",
+            )
+            with (
+                mock.patch.object(
+                    recorder_module,
+                    "_recording_process_identity_is_current",
+                    return_value=True,
+                ),
+                mock.patch.object(
+                    recorder_module,
+                    "_process_tree_descendant_identities",
+                    return_value={},
+                ) as mocked_descendants,
+                mock.patch.object(
+                    recorder_module,
+                    "process_group_has_live_processes",
+                    return_value=False,
+                ) as mocked_group,
+                mock.patch.object(
+                    recorder_module,
+                    "_process_pipe_holder_identities",
+                    return_value={},
+                ) as mocked_pipes,
+                mock.patch.object(
+                    recorder_module,
+                    "_command_path",
+                    return_value="/usr/bin/systemctl",
+                ),
+                mock.patch.object(recorder_module.subprocess, "run", side_effect=run),
+                mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
+                mock.patch.object(
+                    recorder_module,
+                    "priority_scope_identity_for_control_group",
+                    wraps=recorder_module.priority_scope_identity_for_control_group,
+                ) as mocked_identity,
+                mock.patch.object(
+                    recorder_module,
+                    "_recorder_scope_for_unit",
+                    side_effect=observe_scope,
+                ),
+                mock.patch.object(recorder_module.os, "killpg") as mocked_killpg,
+                mock.patch.object(
+                    recorder_module,
+                    "_kill_output_process_tree",
+                ) as mocked_tree_kill,
+                mock.patch.object(
+                    recorder_module,
+                    "_send_process_signal_with_pidfd",
+                ) as mocked_pidfd_signal,
+                mock.patch.object(recorder_module, "stop_process") as mocked_stop,
+            ):
+                self.assertFalse(recorder_module._reap_timed_out_recorder_process(process))
+
+        mocked_descendants.assert_called_once_with(1234)
+        mocked_group.assert_called_once_with(1234)
+        mocked_pipes.assert_called_once_with(process)
+        mocked_identity.assert_called_once_with(
+            f"/app.slice/{unit}",
+            cpu_weight=recorder_module.SOC_CPU_WEIGHT,
+            io_weight=recorder_module.SOC_IO_WEIGHT,
+        )
+        self.assertEqual(
+            scope_results,
+            [(recorder_module._RECORDER_SCOPE_UNIT_UNKNOWN, None)],
+        )
+        mocked_killpg.assert_not_called()
+        mocked_tree_kill.assert_not_called()
+        mocked_pidfd_signal.assert_not_called()
+        mocked_stop.assert_not_called()
+
     def test_reap_recorder_process_if_zombie_reaps_owned_child(self) -> None:
         process = subprocess.Popen(["/bin/true"])
         deadline = time.monotonic() + 2
@@ -167,22 +1120,29 @@ class RecorderTest(unittest.TestCase):
                 os.waitpid(process.pid, os.WNOHANG)
 
     def test_recorder_process_cleanup_fails_closed_when_pid_identity_changes(self) -> None:
+        owner_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        reused_identity = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:12345"
         process = mock.Mock()
         process.pid = 1234
         process.poll.return_value = None
-        process._soc_process_identity = "owner-identity"
+        process._soc_process_identity = owner_identity
         with (
             mock.patch(
                 "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
-                return_value="foreign-identity",
-            ),
+                return_value=reused_identity,
+            ) as mocked_identity,
             mock.patch("speed_of_cinnamon.recorder.process_group_has_live_processes") as mocked_group_scan,
             mock.patch("speed_of_cinnamon.recorder.os.killpg") as mocked_killpg,
+            mock.patch(
+                "speed_of_cinnamon.recorder._send_process_signal_with_pidfd",
+            ) as mocked_pidfd,
         ):
             self.assertFalse(recorder_module._terminate_recorder_process_group(process))
 
+        mocked_identity.assert_called_once_with(1234)
         mocked_group_scan.assert_not_called()
         mocked_killpg.assert_not_called()
+        mocked_pidfd.assert_not_called()
 
     def test_recorder_process_cleanup_does_not_kill_reused_pid_after_group_failure(self) -> None:
         process = mock.Mock()
@@ -2174,6 +3134,179 @@ class RecorderTest(unittest.TestCase):
         self.assertEqual(mocked_popen.call_args.kwargs["stderr"], subprocess.STDOUT)
         mocked_popen.call_args.kwargs["stdout"].finish()
 
+    def test_start_recorder_captures_identity_before_scope_poll_and_binds_scope_unit(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = None
+        parent_scope = "/sys/fs/cgroup/user.slice/cli.scope|1|2"
+        wrong_scope = "/sys/fs/cgroup/user.slice/other.scope|3|4"
+        events: list[str] = []
+        scope_calls = 0
+        owner_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+
+        def identity(_pid: int) -> str:
+            events.append("identity")
+            return owner_identity
+
+        def scope_for_pid(_pid: int) -> str:
+            nonlocal scope_calls
+            scope_calls += 1
+            if scope_calls == 1:
+                events.append("caller-scope")
+                return parent_scope
+            if scope_calls == 2:
+                events.append("child-scope")
+                return wrong_scope
+            events.append("caller-scope")
+            return parent_scope
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch("speed_of_cinnamon.recorder.secrets.token_hex", return_value="a" * 32),
+                mock.patch.object(recorder_module, "_recording_process_identity_for_pid", side_effect=identity),
+                mock.patch.object(recorder_module, "_recorder_scope_for_pid", side_effect=scope_for_pid),
+                mock.patch.object(recorder_module, "_recorder_scope_is_current", return_value=True),
+                mock.patch.object(recorder_module.time, "monotonic", side_effect=[0.0, 999.0]),
+                mock.patch.object(recorder_module.time, "sleep"),
+                mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", return_value=True) as mocked_reap,
+            ):
+                with self.assertRaisesRegex(RecorderError, "dedicated SOC priority scope"):
+                    start_recorder(command, Path(tmp) / "session.log")
+
+        self.assertLess(events.index("identity"), events.index("child-scope"))
+        process.poll.assert_called_once_with()
+        mocked_reap.assert_called_once_with(process)
+
+    def test_start_recorder_rejects_identity_race_during_scope_wait(self) -> None:
+        owner_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        reused_identity = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:12345"
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = None
+        parent_scope = "/sys/fs/cgroup/user.slice/cli.scope|1|2"
+        child_scope = "/sys/fs/cgroup/user.slice/speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope|3|4"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch("speed_of_cinnamon.recorder.secrets.token_hex", return_value="a" * 32),
+                mock.patch.object(recorder_module.os, "getpid", return_value=4321),
+                mock.patch.object(
+                    recorder_module,
+                    "_recording_process_identity_for_pid",
+                    side_effect=[owner_identity, reused_identity],
+                ) as mocked_identity,
+                mock.patch.object(
+                    recorder_module,
+                    "_recorder_scope_for_pid",
+                    side_effect=[parent_scope, child_scope],
+                ) as mocked_scope,
+                mock.patch.object(recorder_module, "_recorder_scope_is_current", return_value=True),
+                mock.patch.object(
+                    recorder_module,
+                    "_reap_timed_out_recorder_process",
+                    return_value=True,
+                ) as mocked_reap,
+                mock.patch.object(
+                    recorder_module,
+                    "_send_process_signal_with_pidfd",
+                ) as mocked_signal,
+            ):
+                with self.assertRaises(RecorderStartupError) as caught:
+                    start_recorder(command, Path(tmp) / "session.log")
+
+        self.assertIn("identity changed during startup", str(caught.exception))
+        self.assertEqual(caught.exception.pid, 1234)
+        self.assertEqual(caught.exception.process_identity, owner_identity)
+        self.assertEqual(caught.exception.recorder_scope, child_scope)
+        self.assertFalse(caught.exception.cleanup_incomplete)
+        self.assertEqual(mocked_identity.call_args_list, [mock.call(1234), mock.call(1234)])
+        self.assertEqual(mocked_scope.call_args_list, [mock.call(4321), mock.call(1234)])
+        mocked_reap.assert_called_once_with(process)
+        mocked_signal.assert_not_called()
+
+    def test_start_recorder_startup_error_carries_verified_dedicated_scope(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 7
+        parent_scope = "/sys/fs/cgroup/user.slice/cli.scope|1|2"
+        child_scope = "/sys/fs/cgroup/user.slice/speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope|3|4"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch("speed_of_cinnamon.recorder.secrets.token_hex", return_value="a" * 32),
+                mock.patch.object(
+                    recorder_module,
+                    "_recording_process_identity_for_pid",
+                    return_value="owner-identity",
+                ),
+                mock.patch.object(
+                    recorder_module,
+                    "_recorder_scope_for_pid",
+                    side_effect=[parent_scope, child_scope],
+                ),
+                mock.patch.object(recorder_module, "_recorder_scope_is_current", return_value=True),
+                mock.patch.object(recorder_module.time, "monotonic", side_effect=[0.0, 0.0]),
+                mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", return_value=True),
+            ):
+                with self.assertRaises(RecorderStartupError) as caught:
+                    start_recorder(command, Path(tmp) / "session.log")
+
+        self.assertEqual(caught.exception.pid, 1234)
+        self.assertEqual(caught.exception.process_identity, "owner-identity")
+        self.assertEqual(caught.exception.recorder_scope, child_scope)
+        self.assertFalse(caught.exception.cleanup_incomplete)
+
+    def test_start_recorder_fails_closed_when_scope_cannot_be_captured_before_exit(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 7
+        parent_scope = "/sys/fs/cgroup/user.slice/cli.scope|1|2"
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch("speed_of_cinnamon.recorder.secrets.token_hex", return_value="a" * 32),
+                mock.patch.object(
+                    recorder_module,
+                    "_recording_process_identity_for_pid",
+                    return_value="owner-identity",
+                ),
+                mock.patch.object(
+                    recorder_module,
+                    "_recorder_scope_for_pid",
+                    side_effect=[parent_scope, None],
+                ),
+                mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", return_value=True),
+            ):
+                with self.assertRaises(RecorderStartupError) as caught:
+                    start_recorder(command, Path(tmp) / "session.log")
+
+        self.assertIsNone(caught.exception.recorder_scope)
+        self.assertEqual(
+            caught.exception.recorder_scope_unit,
+            "speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope",
+        )
+        self.assertTrue(caught.exception.cleanup_incomplete)
+        self.assertIn(
+            "recorder priority scope cleanup could not be verified",
+            getattr(caught.exception.__cause__, "__notes__", ()),
+        )
+
     def test_start_recorder_rejects_recorder_that_exited_during_startup(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         process = mock.Mock()
@@ -2201,6 +3334,64 @@ class RecorderTest(unittest.TestCase):
 
         mocked_reap.assert_called_once_with(process)
         self.assertFalse(log_path.exists())
+
+    def test_start_recorder_transports_spawn_identity_and_cleanup_ownership(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+        process = mock.Mock()
+        process.pid = 1234
+        process.poll.return_value = 7
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with (
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                mock.patch(
+                    "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                    return_value="owner-identity",
+                ),
+                mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", return_value=False),
+            ):
+                with self.assertRaises(RecorderStartupError) as caught:
+                    start_recorder(command, Path(tmp) / "session.log")
+
+        self.assertEqual(caught.exception.pid, 1234)
+        self.assertEqual(caught.exception.process_identity, "owner-identity")
+        self.assertIsNone(caught.exception.recorder_scope)
+        self.assertTrue(caught.exception.cleanup_incomplete)
+        self.assertIn("exited during startup with status 7", str(caught.exception))
+
+    def test_start_recorder_transports_baseexception_ownership_without_wrapping_control_flow(self) -> None:
+        command = RecorderCommand(name="noop", argv=["true"])
+
+        for control_flow in (KeyboardInterrupt("interrupt"), SystemExit(23)):
+            with self.subTest(exception=type(control_flow).__name__):
+                process = mock.Mock()
+                process.pid = 1234
+                process.poll.side_effect = control_flow
+                with tempfile.TemporaryDirectory() as tmp:
+                    with (
+                        mock.patch.dict(os.environ, {"XDG_CACHE_HOME": tmp}),
+                        mock.patch("speed_of_cinnamon.recorder.shutil.which", return_value="/usr/bin/true"),
+                        mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
+                        mock.patch.object(recorder_module, "_recorder_scope_for_pid", return_value=None),
+                        mock.patch.object(
+                            recorder_module,
+                            "_recording_process_identity_for_pid",
+                            return_value="owner-identity",
+                        ),
+                        mock.patch.object(recorder_module, "_reap_timed_out_recorder_process", return_value=False),
+                    ):
+                        with self.assertRaises(type(control_flow)) as caught:
+                            start_recorder(command, Path(tmp) / "session.log")
+
+                self.assertIs(caught.exception, control_flow)
+                ownership = recorder_module.recorder_startup_ownership(caught.exception)
+                self.assertIsNotNone(ownership)
+                self.assertEqual(ownership.pid, 1234)
+                self.assertEqual(ownership.process_identity, "owner-identity")
+                self.assertIsNone(ownership.recorder_scope)
+                self.assertTrue(ownership.cleanup_incomplete)
 
     def test_start_recorder_rejects_recorder_that_exited_cleanly_during_startup(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
@@ -3598,7 +4789,11 @@ Source #13
     def test_stop_process_wraps_pid_range_errors(self) -> None:
         with mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=OverflowError("pid out of range")):
             with self.assertRaisesRegex(RecorderError, "failed to inspect recorder process"):
-                stop_process(10**100, timeout_seconds=0.1, expected_process_identity="owner-identity")
+                stop_process(
+                    10**100,
+                    timeout_seconds=0.1,
+                    expected_process_identity="aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345",
+                )
 
     def test_stop_process_rejects_non_positive_timeout(self) -> None:
         with self.assertRaisesRegex(RecorderError, "timeout_seconds must be positive"):
@@ -3626,14 +4821,31 @@ Source #13
         mocked_kill.assert_not_called()
 
     def test_stop_process_fails_closed_without_pidfd(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
-            mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=identity),
+            mock.patch(
+                "speed_of_cinnamon.recorder._send_process_signal_with_pidfd",
+                return_value=None,
+            ) as mocked_pidfd,
             mock.patch("speed_of_cinnamon.recorder.subprocess.run") as mocked_run,
         ):
-            self.assertFalse(stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity"))
+            self.assertFalse(
+                stop_process(
+                    1234,
+                    timeout_seconds=0.1,
+                    expected_process_identity=identity,
+                )
+            )
 
+        mocked_pidfd.assert_called_once_with(
+            1234,
+            identity,
+            "-INT",
+            deadline=mock.ANY,
+            distinguish_deadline_expiry=True,
+        )
         mocked_run.assert_not_called()
     def test_stop_process_rejects_invalid_expected_process_identity(self) -> None:
         with mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234):
@@ -3647,6 +4859,90 @@ Source #13
 
         mocked_kill.assert_not_called()
 
+    def test_stop_process_rejects_untrusted_identity_before_scope_cleanup(self) -> None:
+        scope = (
+            "/sys/fs/cgroup/user.slice/"
+            "speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope|1|2"
+        )
+        for identity in ("", "pid:1234:12345", "malformed-identity"):
+            with (
+                self.subTest(identity=identity),
+                mock.patch.object(
+                    recorder_module,
+                    "verify_priority_scope_identity",
+                    return_value=True,
+                ) as mocked_scope_verify,
+                mock.patch.object(recorder_module.os, "getpgid") as mocked_getpgid,
+                mock.patch.object(
+                    recorder_module,
+                    "_send_process_signal_with_start_time",
+                ) as mocked_scope_signal,
+                mock.patch.object(
+                    recorder_module,
+                    "_send_process_signal_with_pidfd",
+                ) as mocked_pidfd_signal,
+            ):
+                self.assertFalse(
+                    stop_process(
+                        1234,
+                        timeout_seconds=0.1,
+                        expected_process_identity=identity,
+                        expected_recorder_scope=scope,
+                    )
+                )
+
+            mocked_scope_verify.assert_not_called()
+            mocked_getpgid.assert_not_called()
+            mocked_scope_signal.assert_not_called()
+            mocked_pidfd_signal.assert_not_called()
+
+    def test_stop_process_allows_canonical_identity_to_reach_verified_scope_cleanup(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        scope = (
+            "/sys/fs/cgroup/user.slice/"
+            "speed-of-cinnamon-recorder-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.scope|1|2"
+        )
+        scope_scan = recorder_module._RecorderScopeScan(
+            recorder_module._RECORDER_SCOPE_SCAN_OK,
+            {4321: "777"},
+        )
+        with (
+            mock.patch.object(recorder_module, "verify_priority_scope_identity", return_value=True),
+            mock.patch.object(recorder_module, "_recorder_scope_for_pid", return_value=None),
+            mock.patch.object(recorder_module.os, "getpgid", side_effect=ProcessLookupError),
+            mock.patch.object(recorder_module, "_recorder_scope_has_live_processes", return_value=True),
+            mock.patch.object(recorder_module, "_recorder_scope_scan", return_value=scope_scan),
+            mock.patch.object(recorder_module, "_recording_process_identity_matches", return_value=False),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_is_absent",
+                side_effect=lambda target_pid: target_pid == 1234,
+            ),
+            mock.patch.object(recorder_module, "_process_tree_descendant_identities", return_value={}),
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_start_time",
+                return_value=False,
+            ) as mocked_scope_signal,
+        ):
+            self.assertFalse(
+                stop_process(
+                    1234,
+                    timeout_seconds=0.1,
+                    expected_process_identity=identity,
+                    expected_recorder_scope=scope,
+                )
+            )
+
+        mocked_scope_signal.assert_called_once_with(
+            4321,
+            "777",
+            "-INT",
+            expected_recorder_scope=scope,
+            deadline=mock.ANY,
+            distinguish_deadline_expiry=True,
+        )
+
     def test_stop_process_rejects_unverified_process_override(self) -> None:
         with mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill:
             with self.assertRaisesRegex(RecorderError, "expected_process_identity is required"):
@@ -3655,78 +4951,157 @@ Source #13
         mocked_kill.assert_not_called()
 
     def test_stop_process_does_not_use_kill_command(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
-            mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=None),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=identity),
+            mock.patch(
+                "speed_of_cinnamon.recorder._send_process_signal_with_pidfd",
+                return_value=None,
+            ) as mocked_pidfd,
             mock.patch("speed_of_cinnamon.recorder.subprocess.run") as mocked_run,
         ):
-            self.assertFalse(stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity"))
+            self.assertFalse(
+                stop_process(
+                    1234,
+                    timeout_seconds=0.1,
+                    expected_process_identity=identity,
+                )
+            )
 
+        mocked_pidfd.assert_called_once_with(
+            1234,
+            identity,
+            "-INT",
+            deadline=mock.ANY,
+            distinguish_deadline_expiry=True,
+        )
         mocked_run.assert_not_called()
 
     def test_stop_process_aborts_if_expected_identity_changes(self) -> None:
+        owner_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        foreign_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:54321"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=999),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", side_effect=["owner-identity", "foreign-identity"]) as mocked_identity,
+            mock.patch(
+                "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                side_effect=[owner_identity, foreign_identity],
+            ) as mocked_identity,
             mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", return_value=0.0),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(
+                1234,
+                timeout_seconds=0.1,
+                expected_process_identity=owner_identity,
+            )
 
         self.assertFalse(result)
         self.assertEqual(mocked_identity.call_count, 2)
         mocked_kill.assert_not_called()
 
     def test_stop_process_aborts_group_stop_when_leader_identity_changes_after_signal(self) -> None:
-        identity_calls = 0
-
-        def changing_identity(_pid: int) -> str:
-            nonlocal identity_calls
-            identity_calls += 1
-            return "owner-identity" if identity_calls == 1 else "foreign-identity"
+        owner_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        foreign_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:54321"
 
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", side_effect=changing_identity),
+            mock.patch(
+                "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                side_effect=[owner_identity, owner_identity, owner_identity, owner_identity, foreign_identity],
+            ),
             mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
             mock.patch("speed_of_cinnamon.recorder.process_group_has_live_processes", return_value=True),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2]),
+            mock.patch("speed_of_cinnamon.recorder._process_tree_descendant_identities", return_value={}),
+            mock.patch("speed_of_cinnamon.recorder._same_session_process_identities", return_value={}),
+            mock.patch("speed_of_cinnamon.recorder._process_tree_has_live_processes", return_value=False),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_is_absent", return_value=False),
+            mock.patch("speed_of_cinnamon.recorder._reap_recorder_process_if_zombie", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=False),
+            mock.patch(
+                "speed_of_cinnamon.recorder._send_process_signal_with_pidfd",
+                return_value=True,
+            ) as mocked_pidfd,
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", return_value=0.0),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(
+                1234,
+                timeout_seconds=0.1,
+                expected_process_identity=owner_identity,
+            )
 
         self.assertFalse(result)
+        mocked_pidfd.assert_called_once_with(
+            1234,
+            owner_identity,
+            "-INT",
+            deadline=0.1,
+            distinguish_deadline_expiry=True,
+        )
         mocked_kill.assert_not_called()
 
     def test_stop_process_does_not_signal_if_expected_identity_already_mismatches(self) -> None:
+        owner_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        foreign_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:54321"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="foreign-identity"),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=foreign_identity),
+            mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd") as mocked_pidfd,
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(
+                1234,
+                timeout_seconds=0.1,
+                expected_process_identity=owner_identity,
+            )
 
         self.assertFalse(result)
+        mocked_pidfd.assert_not_called()
         mocked_kill.assert_not_called()
 
     def test_stop_process_succeeds_only_when_identity_matches(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_matches", side_effect=[True, True, False]),
-            mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=True),
+            mock.patch(
+                "speed_of_cinnamon.recorder._recording_process_identity_matches",
+                side_effect=[True, True, True, True, False],
+            ),
+            mock.patch("speed_of_cinnamon.recorder._process_tree_descendant_identities", return_value={}),
+            mock.patch("speed_of_cinnamon.recorder._same_session_process_identities", return_value={}),
+            mock.patch("speed_of_cinnamon.recorder._process_tree_has_live_processes", return_value=False),
+            mock.patch("speed_of_cinnamon.recorder._reap_recorder_process_if_zombie", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=False),
+            mock.patch(
+                "speed_of_cinnamon.recorder._send_process_signal_with_pidfd",
+                return_value=True,
+            ) as mocked_pidfd,
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", return_value=0.0),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(
+                1234,
+                timeout_seconds=0.1,
+                expected_process_identity=identity,
+            )
 
         self.assertFalse(result)
+        mocked_pidfd.assert_called_once_with(
+            1234,
+            identity,
+            "-INT",
+            deadline=0.1,
+            distinguish_deadline_expiry=True,
+        )
         mocked_kill.assert_not_called()
 
     def test_stop_process_short_circuits_live_group_scan(self) -> None:
         pid = 1234
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         now = 0.0
 
         def monotonic() -> float:
@@ -3782,62 +5157,768 @@ Source #13
                 stop_process(
                     pid,
                     timeout_seconds=5,
-                    expected_process_identity="owner",
+                    expected_process_identity=identity,
                 )
         )
 
         full_scan.assert_not_called()
         self.assertEqual(session_groups.call_count, 0)
-        mocked_pidfd.assert_called_once_with(pid, "owner", "-INT")
+        mocked_pidfd.assert_called_once_with(
+            pid,
+            identity,
+            "-INT",
+            deadline=3.8,
+            distinguish_deadline_expiry=True,
+        )
         mocked_kill.assert_not_called()
         mocked_sleep.assert_not_called()
 
     def test_stop_process_signals_recorder_process_group(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=identity),
             mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=True) as mocked_pidfd,
-            mock.patch("speed_of_cinnamon.recorder.process_group_has_live_processes", return_value=True),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.95, 0.99, 0.99, 1.1, 1.2]),
+            mock.patch("speed_of_cinnamon.recorder._process_tree_has_live_processes", return_value=False),
+            mock.patch("speed_of_cinnamon.recorder._reap_recorder_process_if_zombie", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", return_value=0.0),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity=identity)
 
         self.assertTrue(result)
         self.assertEqual([call.args[2] for call in mocked_pidfd.call_args_list], ["-INT"])
         mocked_kill.assert_not_called()
 
-    def test_stop_process_does_not_escalate_after_total_deadline(self) -> None:
-        with (
-            mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
-            mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=True) as mocked_pidfd,
-            mock.patch("speed_of_cinnamon.recorder.process_group_has_live_processes", return_value=True),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.2, 0.2]),
-            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
-            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
-        ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+    def test_stop_process_tiny_budget_still_sends_initial_int(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        clock = [0.0]
 
-        self.assertTrue(result)
-        mocked_pidfd.assert_called_once_with(1234, "owner-identity", "-INT")
-        mocked_kill.assert_not_called()
+        def sleep(seconds: float) -> None:
+            self.assertLessEqual(seconds, 0.05 - clock[0])
+            clock[0] += seconds
+
+        with (
+            mock.patch.object(recorder_module.os, "getpgid", return_value=1234),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_matches",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_descendant_identities",
+                return_value={},
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_same_session_process_identities",
+                return_value={},
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_has_live_processes",
+                return_value=False,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_reap_recorder_process_if_zombie",
+                return_value=True,
+            ),
+            mock.patch.object(recorder_module, "_process_is_gone", return_value=False),
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_pidfd",
+                return_value=True,
+            ) as mocked_pidfd,
+            mock.patch.object(
+                recorder_module.time,
+                "monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            mock.patch.object(recorder_module.time, "sleep", side_effect=sleep),
+            mock.patch.object(recorder_module, "_kill_output_process_tree") as mocked_tree,
+        ):
+            result = stop_process(
+                1234,
+                timeout_seconds=0.05,
+                expected_process_identity=identity,
+            )
+
+        self.assertFalse(result)
+        self.assertEqual(clock[0], 0.05)
+        mocked_pidfd.assert_called_once_with(
+            1234,
+            identity,
+            "-INT",
+            deadline=0.05,
+            distinguish_deadline_expiry=True,
+        )
+        mocked_tree.assert_not_called()
+
+    def test_stop_process_short_budgets_only_send_initial_int(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        for timeout_seconds in (0.1, 0.11, 0.2, 0.25):
+            with self.subTest(timeout_seconds=timeout_seconds):
+                clock = [0.0]
+                gone_probe_times: list[float] = []
+
+                def sleep(seconds: float) -> None:
+                    self.assertLessEqual(seconds, timeout_seconds - clock[0])
+                    clock[0] += seconds
+
+                def target_is_gone(_target: str) -> bool:
+                    gone_probe_times.append(clock[0])
+                    return False
+
+                with (
+                    mock.patch.object(recorder_module.os, "getpgid", return_value=1234),
+                    mock.patch.object(
+                        recorder_module,
+                        "_recording_process_identity_matches",
+                        return_value=True,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_process_tree_descendant_identities",
+                        return_value={},
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_same_session_process_identities",
+                        return_value={},
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_process_tree_has_live_processes",
+                        return_value=False,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_reap_recorder_process_if_zombie",
+                        return_value=True,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_process_is_gone",
+                        side_effect=target_is_gone,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_send_process_signal_with_pidfd",
+                        return_value=True,
+                    ) as mocked_pidfd,
+                    mock.patch.object(
+                        recorder_module.time,
+                        "monotonic",
+                        side_effect=lambda: clock[0],
+                    ),
+                    mock.patch.object(recorder_module.time, "sleep", side_effect=sleep),
+                    mock.patch.object(
+                        recorder_module,
+                        "_kill_output_process_tree",
+                    ) as mocked_tree,
+                ):
+                    self.assertFalse(
+                        stop_process(
+                            1234,
+                            timeout_seconds=timeout_seconds,
+                            expected_process_identity=identity,
+                        )
+                    )
+
+                self.assertEqual(clock[0], timeout_seconds)
+                self.assertTrue(
+                    all(probe_time < timeout_seconds for probe_time in gone_probe_times)
+                )
+                mocked_pidfd.assert_called_once_with(
+                    1234,
+                    identity,
+                    "-INT",
+                    deadline=timeout_seconds,
+                    distinguish_deadline_expiry=True,
+                )
+                mocked_tree.assert_not_called()
+
+    def test_stop_process_missed_int_phase_advances_to_term(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        timeout_seconds = 1.0
+        int_deadline = timeout_seconds - min(0.2, timeout_seconds / 5) - min(
+            1.0,
+            timeout_seconds / 3,
+        )
+        clock = [0.0]
+        scans = 0
+        stopped = [False]
+
+        def delayed_descendant_scan(_pid: int) -> dict[int, str]:
+            nonlocal scans
+            scans += 1
+            if scans == 1:
+                clock[0] = int_deadline
+            return {}
+
+        def send_signal(
+            _pidfd: int,
+            signal_number: int,
+            _siginfo: object,
+            _flags: int,
+        ) -> None:
+            if signal_number == recorder_module.signal.SIGTERM:
+                stopped[0] = True
+
+        with (
+            mock.patch.object(recorder_module.os, "getpgid", return_value=1234),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_matches",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_descendant_identities",
+                side_effect=delayed_descendant_scan,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_same_session_process_identities",
+                return_value={},
+            ),
+            mock.patch.object(recorder_module, "_process_tree_has_live_processes", return_value=False),
+            mock.patch.object(recorder_module, "_reap_recorder_process_if_zombie", return_value=True),
+            mock.patch.object(
+                recorder_module,
+                "_process_is_gone",
+                side_effect=lambda _target: stopped[0],
+            ),
+            mock.patch.object(recorder_module.os, "pidfd_open", return_value=7),
+            mock.patch.object(
+                recorder_module.signal,
+                "pidfd_send_signal",
+                side_effect=send_signal,
+            ) as mocked_pidfd_signal,
+            mock.patch.object(recorder_module.os, "close"),
+            mock.patch.object(
+                recorder_module.time,
+                "monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            mock.patch.object(recorder_module.time, "sleep") as mocked_sleep,
+        ):
+            self.assertTrue(
+                stop_process(
+                    1234,
+                    timeout_seconds=timeout_seconds,
+                    expected_process_identity=identity,
+                )
+            )
+
+        self.assertAlmostEqual(clock[0], int_deadline)
+        self.assertEqual(scans, 2)
+        mocked_pidfd_signal.assert_called_once_with(
+            7,
+            recorder_module.signal.SIGTERM,
+            None,
+            0,
+        )
+        mocked_sleep.assert_not_called()
+
+    def test_stop_process_missed_term_phase_advances_to_kill(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        timeout_seconds = 1.0
+        int_deadline = timeout_seconds - min(0.2, timeout_seconds / 5) - min(
+            1.0,
+            timeout_seconds / 3,
+        )
+        term_deadline = timeout_seconds - min(1.0, timeout_seconds / 3)
+        clock = [0.0]
+        scans = 0
+        stopped = [False]
+
+        def descendant_scan(_pid: int) -> dict[int, str]:
+            nonlocal scans
+            scans += 1
+            if scans == 2:
+                clock[0] = term_deadline
+            return {}
+
+        def sleep(seconds: float) -> None:
+            clock[0] += seconds
+
+        signal_numbers: list[int] = []
+
+        def send_signal(
+            _pidfd: int,
+            signal_number: int,
+            _siginfo: object,
+            _flags: int,
+        ) -> None:
+            signal_numbers.append(signal_number)
+            if signal_number == recorder_module.signal.SIGKILL:
+                stopped[0] = True
+
+        with (
+            mock.patch.object(recorder_module.os, "getpgid", return_value=1234),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_matches",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_descendant_identities",
+                side_effect=descendant_scan,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_same_session_process_identities",
+                return_value={},
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_has_live_processes",
+                return_value=False,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_reap_recorder_process_if_zombie",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_is_gone",
+                side_effect=lambda _target: stopped[0],
+            ),
+            mock.patch.object(recorder_module.os, "pidfd_open", return_value=7),
+            mock.patch.object(
+                recorder_module.signal,
+                "pidfd_send_signal",
+                side_effect=send_signal,
+            ),
+            mock.patch.object(recorder_module.os, "close"),
+            mock.patch.object(
+                recorder_module.time,
+                "monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            mock.patch.object(recorder_module.time, "sleep", side_effect=sleep),
+        ):
+            self.assertTrue(
+                stop_process(
+                    1234,
+                    timeout_seconds=timeout_seconds,
+                    expected_process_identity=identity,
+                )
+            )
+
+        self.assertGreaterEqual(clock[0], int_deadline)
+        self.assertAlmostEqual(clock[0], term_deadline)
+        self.assertEqual(scans, 3)
+        self.assertEqual(
+            signal_numbers,
+            [recorder_module.signal.SIGINT, recorder_module.signal.SIGKILL],
+        )
+
+    def test_stop_process_hard_budget_contains_all_signal_phases(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        for timeout_seconds in (1.0, 5.0):
+            with self.subTest(timeout_seconds=timeout_seconds):
+                clock = [0.0]
+                post_kill_settle_seconds = min(1.0, timeout_seconds / 3)
+                phase_deadlines = {
+                    "-INT": timeout_seconds
+                    - min(0.2, timeout_seconds / 5)
+                    - post_kill_settle_seconds,
+                    "-TERM": timeout_seconds - post_kill_settle_seconds,
+                    "-KILL": timeout_seconds,
+                }
+                signal_events: list[tuple[str, float]] = []
+                descendant_signal_events: list[tuple[str, float]] = []
+                probe_events: list[float] = []
+                sleep_events: list[tuple[float, float]] = []
+
+                def signal_target(
+                    _pid: int,
+                    _expected_identity: str,
+                    signal_name: str,
+                    **_kwargs: object,
+                ) -> bool:
+                    self.assertEqual(
+                        _kwargs,
+                        {
+                            "deadline": phase_deadlines[signal_name],
+                            "distinguish_deadline_expiry": True,
+                        },
+                    )
+                    signal_events.append((signal_name, clock[0]))
+                    return True
+
+                def target_is_gone(_target: str) -> bool:
+                    probe_events.append(clock[0])
+                    return False
+
+                def signal_descendant(
+                    _pid: int,
+                    _expected_start_time: str,
+                    signal_name: str,
+                    **_kwargs: object,
+                ) -> bool:
+                    self.assertEqual(
+                        _kwargs,
+                        {
+                            "expected_recorder_scope": None,
+                            "deadline": phase_deadlines[signal_name],
+                            "distinguish_deadline_expiry": True,
+                        },
+                    )
+                    descendant_signal_events.append((signal_name, clock[0]))
+                    return True
+
+                def sleep(seconds: float) -> None:
+                    sleep_events.append((clock[0], seconds))
+                    clock[0] += seconds
+
+                with (
+                    mock.patch.object(recorder_module.os, "getpgid", return_value=1234),
+                    mock.patch.object(
+                        recorder_module,
+                        "_recording_process_identity_matches",
+                        return_value=True,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_process_tree_descendant_identities",
+                        return_value={4321: "12345"},
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_same_session_process_identities",
+                        return_value={},
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_process_tree_has_live_processes",
+                        return_value=False,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_reap_recorder_process_if_zombie",
+                        return_value=True,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_process_is_gone",
+                        side_effect=target_is_gone,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_recording_process_is_absent",
+                        return_value=False,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_send_process_signal_with_pidfd",
+                        side_effect=signal_target,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_send_process_signal_with_start_time",
+                        side_effect=signal_descendant,
+                    ),
+                    mock.patch.object(
+                        recorder_module,
+                        "_kill_output_process_tree",
+                    ) as mocked_tree,
+                    mock.patch.object(
+                        recorder_module.time,
+                        "monotonic",
+                        side_effect=lambda: clock[0],
+                    ),
+                    mock.patch.object(
+                        recorder_module.time,
+                        "sleep",
+                        side_effect=sleep,
+                    ),
+                ):
+                    self.assertFalse(
+                        stop_process(
+                            1234,
+                            timeout_seconds=timeout_seconds,
+                            expected_process_identity=identity,
+                        )
+                    )
+
+                self.assertEqual(
+                    [signal_name for signal_name, _ in signal_events],
+                    ["-INT", "-TERM", "-KILL"],
+                )
+                self.assertLessEqual(clock[0], timeout_seconds)
+                self.assertTrue(
+                    all(event_time < timeout_seconds for _, event_time in signal_events)
+                )
+                self.assertEqual(
+                    [signal_name for signal_name, _ in descendant_signal_events],
+                    ["-INT", "-TERM", "-KILL"],
+                )
+                self.assertTrue(
+                    all(
+                        event_time < timeout_seconds
+                        for _, event_time in descendant_signal_events
+                    )
+                )
+                mocked_tree.assert_not_called()
+                self.assertTrue(all(event_time < timeout_seconds for event_time in probe_events))
+                self.assertTrue(
+                    all(
+                        started < timeout_seconds
+                        and duration <= timeout_seconds - started
+                        for started, duration in sleep_events
+                    )
+                )
+
+    def test_stop_process_detects_target_gone_exactly_at_int_phase_boundary(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        timeout_seconds = 1.0
+        int_deadline = timeout_seconds - min(0.2, timeout_seconds / 5) - min(
+            1.0,
+            timeout_seconds / 3,
+        )
+        clock = [0.0]
+        gone_probe_times: list[float] = []
+
+        def target_is_gone(_target: str) -> bool:
+            gone_probe_times.append(clock[0])
+            return clock[0] >= int_deadline
+
+        with (
+            mock.patch.object(recorder_module.os, "getpgid", return_value=1234),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_matches",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_descendant_identities",
+                return_value={},
+            ) as mocked_descendants,
+            mock.patch.object(
+                recorder_module,
+                "_same_session_process_identities",
+                return_value={},
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_has_live_processes",
+                return_value=False,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_reap_recorder_process_if_zombie",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_is_gone",
+                side_effect=target_is_gone,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_pidfd",
+                return_value=True,
+            ) as mocked_pidfd,
+            mock.patch.object(
+                recorder_module.time,
+                "monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            mock.patch.object(
+                recorder_module.time,
+                "sleep",
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
+        ):
+            self.assertTrue(
+                stop_process(
+                    1234,
+                    timeout_seconds=timeout_seconds,
+                    expected_process_identity=identity,
+                )
+            )
+
+        self.assertAlmostEqual(clock[0], int_deadline)
+        self.assertAlmostEqual(gone_probe_times[-1], int_deadline)
+        self.assertTrue(all(probe_time < int_deadline for probe_time in gone_probe_times[:-1]))
+        mocked_pidfd.assert_called_once_with(
+            1234,
+            identity,
+            "-INT",
+            deadline=int_deadline,
+            distinguish_deadline_expiry=True,
+        )
+        mocked_descendants.assert_called_once_with(1234)
+
+    def test_stop_process_descendant_probe_exhausts_budget_before_next_member(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        timeout_seconds = 1.0
+        int_deadline = timeout_seconds - min(0.2, timeout_seconds / 5) - min(
+            1.0,
+            timeout_seconds / 3,
+        )
+        clock = [0.0]
+
+        def delayed_descendant_signal(
+            _pid: int,
+            _expected_start_time: str,
+            _signal_name: str,
+            *,
+            expected_recorder_scope: str | None = None,
+            deadline: float | None = None,
+            distinguish_deadline_expiry: bool = False,
+        ) -> bool:
+            self.assertIsNone(expected_recorder_scope)
+            self.assertEqual(deadline, int_deadline)
+            self.assertTrue(distinguish_deadline_expiry)
+            clock[0] = timeout_seconds
+            return True
+
+        with (
+            mock.patch.object(recorder_module.os, "getpgid", return_value=1234),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_matches",
+                return_value=True,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_descendant_identities",
+                return_value={4321: "111", 4322: "222"},
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_same_session_process_identities",
+                return_value={},
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_is_absent",
+                return_value=False,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_pidfd",
+                return_value=True,
+            ) as mocked_leader_signal,
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_start_time",
+                side_effect=delayed_descendant_signal,
+            ) as mocked_descendant_signal,
+            mock.patch.object(
+                recorder_module.time,
+                "monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            mock.patch.object(recorder_module.time, "sleep") as mocked_sleep,
+            mock.patch.object(
+                recorder_module,
+                "_kill_output_process_tree",
+            ) as mocked_tree,
+        ):
+            self.assertFalse(
+                stop_process(
+                    1234,
+                    timeout_seconds=timeout_seconds,
+                    expected_process_identity=identity,
+                )
+            )
+
+        mocked_leader_signal.assert_called_once_with(
+            1234,
+            identity,
+            "-INT",
+            deadline=int_deadline,
+            distinguish_deadline_expiry=True,
+        )
+        self.assertEqual(
+            [call.args[0] for call in mocked_descendant_signal.call_args_list],
+            [4321],
+        )
+        mocked_sleep.assert_not_called()
+        mocked_tree.assert_not_called()
+
+    def test_stop_process_initial_probe_consumes_total_budget(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        clock = [0.0]
+
+        def delayed_identity_probe(_pid: int, _identity: str) -> bool:
+            clock[0] = 0.1
+            return True
+
+        with (
+            mock.patch.object(recorder_module.os, "getpgid", return_value=1234),
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_matches",
+                side_effect=delayed_identity_probe,
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_descendant_identities",
+            ) as mocked_descendants,
+            mock.patch.object(
+                recorder_module,
+                "_send_process_signal_with_pidfd",
+            ) as mocked_pidfd,
+            mock.patch.object(recorder_module, "_kill_output_process_tree") as mocked_tree,
+            mock.patch.object(
+                recorder_module.time,
+                "monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            mock.patch.object(recorder_module.time, "sleep") as mocked_sleep,
+        ):
+            self.assertFalse(
+                stop_process(
+                    1234,
+                    timeout_seconds=0.1,
+                    expected_process_identity=identity,
+                )
+            )
+
+        self.assertEqual(clock[0], 0.1)
+        mocked_descendants.assert_not_called()
+        mocked_pidfd.assert_not_called()
+        mocked_tree.assert_not_called()
+        mocked_sleep.assert_not_called()
 
     def test_stop_process_waits_after_term_before_kill(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        clock = [0.0]
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=identity),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_matches", return_value=True),
             mock.patch("speed_of_cinnamon.recorder._process_tree_descendant_identities", return_value={}),
             mock.patch("speed_of_cinnamon.recorder._process_tree_has_live_processes", return_value=False),
-            mock.patch("speed_of_cinnamon.recorder._process_is_gone", side_effect=[False, False, False, True]),
+            mock.patch(
+                "speed_of_cinnamon.recorder._process_is_gone",
+                side_effect=lambda _target: clock[0] >= 0.6,
+            ),
             mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=True) as mocked_pidfd,
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.9, 0.95, 1.0]),
-            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            mock.patch(
+                "speed_of_cinnamon.recorder.time.monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            mock.patch(
+                "speed_of_cinnamon.recorder.time.sleep",
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity=identity)
 
         self.assertTrue(result)
         self.assertEqual([call.args[2] for call in mocked_pidfd.call_args_list], ["-INT", "-TERM"])
@@ -3847,7 +5928,10 @@ Source #13
         entries = (Path("/proc/100"), Path("/proc/200"))
         stat_results = [None, ["Z", "1", "1234"]]
         with (
-            mock.patch("speed_of_cinnamon.recorder.Path.iterdir", return_value=entries),
+            mock.patch(
+                "speed_of_cinnamon.recorder.os.scandir",
+                return_value=_scandir_for_paths(entries),
+            ),
             mock.patch(
                 "speed_of_cinnamon.recorder._recording_process_stat_fields",
                 side_effect=stat_results,
@@ -3862,7 +5946,10 @@ Source #13
         self.assertFalse(result)
 
     def test_process_group_scan_reports_empty_group_as_stopped(self) -> None:
-        with mock.patch("speed_of_cinnamon.recorder.Path.iterdir", return_value=()):
+        with mock.patch(
+            "speed_of_cinnamon.recorder.os.scandir",
+            return_value=_scandir_for_paths(()),
+        ):
             result = recorder_module.process_group_has_live_processes(1234)
 
         self.assertFalse(result)
@@ -3870,7 +5957,10 @@ Source #13
     def test_process_group_scan_fails_closed_for_same_session_different_group(self) -> None:
         entries = (Path("/proc/100"),)
         with (
-            mock.patch("speed_of_cinnamon.recorder.Path.iterdir", return_value=entries),
+            mock.patch(
+                "speed_of_cinnamon.recorder.os.scandir",
+                side_effect=lambda _path: _scandir_for_paths(entries),
+            ),
             mock.patch(
                 "speed_of_cinnamon.recorder._recording_process_stat_fields",
                 return_value=["S", "1", "9999", "1234"],
@@ -3882,7 +5972,10 @@ Source #13
     def test_process_group_scan_reports_live_non_leader_group(self) -> None:
         entries = (Path("/proc/4321"),)
         with (
-            mock.patch("speed_of_cinnamon.recorder.Path.iterdir", return_value=entries),
+            mock.patch(
+                "speed_of_cinnamon.recorder.os.scandir",
+                return_value=_scandir_for_paths(entries),
+            ),
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=4321),
             mock.patch("speed_of_cinnamon.recorder.os.getsid", return_value=1234),
             mock.patch(
@@ -3893,21 +5986,29 @@ Source #13
             self.assertTrue(recorder_module.process_group_has_live_processes(4321))
 
     def test_stop_process_signals_live_same_session_process_groups(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        clock = [0.0]
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=4321),
             mock.patch("speed_of_cinnamon.recorder.os.getsid", return_value=1234),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=identity),
             mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=True) as mocked_pidfd,
             mock.patch(
                 "speed_of_cinnamon.recorder._same_session_process_group_ids",
                 return_value={1234, 4321},
             ),
             mock.patch("speed_of_cinnamon.recorder._same_session_has_live_processes", return_value=True),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.95, 0.99, 0.99, 1.1, 1.2]),
-            mock.patch("speed_of_cinnamon.recorder.time.sleep"),
+            mock.patch(
+                "speed_of_cinnamon.recorder.time.monotonic",
+                side_effect=lambda: clock[0],
+            ),
+            mock.patch(
+                "speed_of_cinnamon.recorder.time.sleep",
+                side_effect=lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+            ),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity=identity)
 
         self.assertFalse(result)
         self.assertEqual([call.args[2] for call in mocked_pidfd.call_args_list], ["-INT", "-TERM", "-KILL"])
@@ -3934,7 +6035,8 @@ Source #13
         stat_fields[19] = "12345"
         try:
             recorder_module._BOOT_ID_CACHE = None
-            mocked_open = mock.mock_open(read_data="boot-id")
+            boot_id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
+            mocked_open = mock.mock_open(read_data=boot_id)
             with (
                 mock.patch.object(recorder_module, "_recording_process_stat_fields", return_value=stat_fields),
                 mock.patch.object(recorder_module.Path, "open", mocked_open),
@@ -3944,12 +6046,12 @@ Source #13
         finally:
             recorder_module._BOOT_ID_CACHE = previous_cache
 
-        self.assertEqual(first, "boot-id:12345")
+        self.assertEqual(first, f"{boot_id}:12345")
         self.assertEqual(second, first)
         mocked_open.assert_called_once_with("r", encoding="ascii")
         mocked_open.return_value.read.assert_called_once_with(recorder_module.MAX_PROC_BOOT_ID_BYTES)
 
-    def test_recording_process_identity_falls_back_to_pid_start_time_prefix_when_boot_id_missing(self) -> None:
+    def test_recording_process_identity_is_unknown_when_boot_id_is_missing(self) -> None:
         previous_cache = recorder_module._BOOT_ID_CACHE
         stat_fields = ["S"] * 20
         stat_fields[19] = "12345"
@@ -3966,21 +6068,134 @@ Source #13
                 identity = recorder_module._recording_process_identity_for_pid(1234)
         finally:
             recorder_module._BOOT_ID_CACHE = previous_cache
-        self.assertEqual(identity, "pid:1234:12345")
+        self.assertIsNone(identity)
         self.assertEqual(mocked_read.call_count, 1)
 
-    def test_recording_process_identity_matches_fallback_after_boot_id_appears(self) -> None:
-        stat_fields = ["S"] * 20
-        stat_fields[19] = "12345"
-        with (
-            mock.patch.object(recorder_module, "_recording_process_stat_fields", return_value=stat_fields),
-            mock.patch.object(recorder_module, "_recording_process_identity_for_pid", return_value="boot-id:12345"),
+    def test_recording_process_identity_rejects_fallback_after_boot_id_appears(self) -> None:
+        boot_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        with mock.patch.object(
+            recorder_module,
+            "_recording_process_identity_for_pid",
+            return_value=boot_identity,
         ):
-            self.assertTrue(recorder_module._recording_process_identity_matches(1234, "pid:1234:12345"))
-            self.assertFalse(recorder_module._recording_process_identity_matches(1234, "pid:1235:12345"))
-            self.assertFalse(recorder_module._recording_process_identity_matches(1234, "pid:1234:12346"))
+            self.assertFalse(
+                recorder_module._recording_process_identity_matches(
+                    1234,
+                    "pid:1234:12345",
+                )
+            )
 
-    def test_start_recorder_accepts_identity_after_initial_poll_when_boot_id_missing(self) -> None:
+    def test_pidfd_signal_rejects_legacy_fallback_reboot_collision(self) -> None:
+        current_identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        with (
+            mock.patch.object(recorder_module.os, "getpid", return_value=9999),
+            mock.patch.object(recorder_module.os, "pidfd_open", return_value=7),
+            mock.patch.object(
+                recorder_module.signal,
+                "pidfd_send_signal",
+            ) as mocked_signal,
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_for_pid",
+                return_value=current_identity,
+            ),
+            mock.patch.object(recorder_module.os, "close") as mocked_close,
+        ):
+            result = recorder_module._send_process_signal_with_pidfd(
+                1234,
+                "pid:1234:12345",
+                "-TERM",
+            )
+
+        self.assertFalse(result)
+        mocked_signal.assert_not_called()
+        mocked_close.assert_called_once_with(7)
+
+    def test_process_identity_relation_handles_fallback_reboot_and_malformed_values(self) -> None:
+        first_boot = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        second_boot = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:12345"
+
+        self.assertEqual(
+            recorder_module._recording_process_identity_relation(
+                1234,
+                "pid:1234:12345",
+                first_boot,
+            ),
+            recorder_module._PROCESS_IDENTITY_UNKNOWN,
+        )
+        self.assertEqual(
+            recorder_module._recording_process_identity_relation(
+                1234,
+                "pid:1234:12345",
+                "pid:1234:12345",
+            ),
+            recorder_module._PROCESS_IDENTITY_UNKNOWN,
+        )
+        self.assertEqual(
+            recorder_module._recording_process_identity_relation(
+                1234,
+                "pid:1234:12345",
+                "pid:1234:54321",
+            ),
+            recorder_module._PROCESS_IDENTITY_UNKNOWN,
+        )
+        self.assertEqual(
+            recorder_module._recording_process_identity_relation(
+                1234,
+                first_boot,
+                first_boot,
+            ),
+            recorder_module._PROCESS_IDENTITY_SAME,
+        )
+        self.assertEqual(
+            recorder_module._recording_process_identity_relation(
+                1234,
+                first_boot,
+                "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:54321",
+            ),
+            recorder_module._PROCESS_IDENTITY_REUSED,
+        )
+        self.assertEqual(
+            recorder_module._recording_process_identity_relation(
+                1234,
+                first_boot,
+                second_boot,
+            ),
+            recorder_module._PROCESS_IDENTITY_REUSED,
+        )
+        self.assertEqual(
+            recorder_module._recording_process_identity_relation(
+                1234,
+                "malformed-identity",
+                first_boot,
+            ),
+            recorder_module._PROCESS_IDENTITY_UNKNOWN,
+        )
+
+    def test_recorder_cleanup_identity_gate_uses_semantic_relation(self) -> None:
+        process = mock.Mock()
+        process.pid = 1234
+        first_boot = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        second_boot = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:12345"
+
+        for expected_identity, current_identity, expected_result in (
+            ("pid:1234:12345", first_boot, False),
+            (first_boot, first_boot, True),
+            (first_boot, second_boot, False),
+            ("malformed-identity", first_boot, False),
+        ):
+            with self.subTest(expected_identity=expected_identity), mock.patch.object(
+                recorder_module,
+                "_recording_process_identity_for_pid",
+                return_value=current_identity,
+            ):
+                process._soc_process_identity = expected_identity
+                self.assertIs(
+                    recorder_module._recording_process_identity_is_current(process),
+                    expected_result,
+                )
+
+    def test_start_recorder_accepts_boot_identity_after_initial_poll(self) -> None:
         command = RecorderCommand(name="noop", argv=["true"])
         process = mock.Mock()
         process.pid = 1234
@@ -3992,7 +6207,10 @@ Source #13
                 mock.patch("speed_of_cinnamon.recorder.subprocess.Popen", return_value=process),
                 mock.patch(
                     "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
-                    side_effect=[None, "pid:1234:12345"],
+                    side_effect=[
+                        None,
+                        "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345",
+                    ],
                 ),
                 mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.05, 1.5]),
                 mock.patch("speed_of_cinnamon.recorder.time.sleep"),
@@ -4002,7 +6220,10 @@ Source #13
     def test_process_group_scan_ignores_foreign_session(self) -> None:
         entries = (Path("/proc/100"),)
         with (
-            mock.patch("speed_of_cinnamon.recorder.Path.iterdir", return_value=entries),
+            mock.patch(
+                "speed_of_cinnamon.recorder.os.scandir",
+                return_value=_scandir_for_paths(entries),
+            ),
             mock.patch(
                 "speed_of_cinnamon.recorder._recording_process_stat_fields",
                 return_value=["S", "1", "1234", "9999"],
@@ -4036,31 +6257,35 @@ Source #13
                 process.wait()
 
     def test_stop_process_signals_pid_when_process_is_not_group_leader(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=999),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder.os.getsid", return_value=999),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=identity),
             mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=True) as mocked_pidfd,
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.95, 0.99, 0.99, 1.1, 1.2]),
+            mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", return_value=0.0),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity=identity)
 
         self.assertTrue(result)
         self.assertEqual([call.args[2] for call in mocked_pidfd.call_args_list], ["-INT"])
         mocked_kill.assert_not_called()
 
     def test_stop_process_uses_pidfd_for_single_pid_when_available(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=999),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=identity),
             mock.patch("speed_of_cinnamon.recorder.os.pidfd_open", return_value=42) as mocked_open,
             mock.patch("speed_of_cinnamon.recorder.signal.pidfd_send_signal") as mocked_send,
             mock.patch("speed_of_cinnamon.recorder.os.close") as mocked_close,
             mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=True),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity=identity)
 
         self.assertTrue(result)
         mocked_open.assert_called_once_with(1234, 0)
@@ -4069,6 +6294,8 @@ Source #13
         mocked_kill.assert_not_called()
 
     def test_stop_process_uses_pidfds_for_descendants_after_group_leader_exit(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        child_identity = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
             mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=True),
@@ -4079,97 +6306,210 @@ Source #13
                 return_value={4321: "12345"},
             ),
             mock.patch("speed_of_cinnamon.recorder._process_tree_has_live_processes", side_effect=[True, True, True, False]),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="boot-id:12345"),
+            mock.patch(
+                "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                return_value=child_identity,
+            ),
             mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=True) as mocked_pidfd,
             mock.patch("speed_of_cinnamon.recorder._same_session_process_group_ids", return_value={1234}),
             mock.patch("speed_of_cinnamon.recorder._reap_recorder_process_if_zombie", return_value=True),
             mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=True),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity=identity)
 
         self.assertTrue(result)
-        mocked_pidfd.assert_called_once_with(4321, "boot-id:12345", "-INT")
+        mocked_pidfd.assert_called_once_with(
+            4321,
+            child_identity,
+            "-INT",
+            deadline=mock.ANY,
+            distinguish_deadline_expiry=True,
+        )
         mocked_kill.assert_not_called()
 
     def test_stop_process_does_not_treat_permission_denied_kill_zero_as_success(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        int_deadline = 1.0 - min(0.2, 1.0 / 5) - min(1.0, 1.0 / 3)
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
-            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value="owner-identity"),
-            mock.patch("speed_of_cinnamon.recorder._send_process_signal_with_pidfd", return_value=None),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.95, 0.99, 0.99, 1.1, 1.2]),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=identity),
+            mock.patch(
+                "speed_of_cinnamon.recorder._send_process_signal_with_pidfd",
+                return_value=None,
+            ) as mocked_pidfd,
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", return_value=0.0),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity=identity)
 
         self.assertFalse(result)
+        mocked_pidfd.assert_called_once_with(
+            1234,
+            identity,
+            "-INT",
+            deadline=int_deadline,
+            distinguish_deadline_expiry=True,
+        )
         mocked_kill.assert_not_called()
 
-    def test_stop_process_does_not_claim_success_when_leader_and_group_are_absent(self) -> None:
+    def test_stop_process_rejects_caller_pid_at_legacy_entry(self) -> None:
         with (
-            mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
-            mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=False),
-            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+            mock.patch.object(recorder_module.os, "getpid", return_value=1234),
+            mock.patch.object(recorder_module.os, "getpgid") as mocked_getpgid,
+            mock.patch.object(recorder_module, "_send_process_signal_with_pidfd") as mocked_signal,
         ):
             result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
 
         self.assertFalse(result)
+        mocked_getpgid.assert_not_called()
+        mocked_signal.assert_not_called()
+
+    def test_stop_process_removes_caller_from_unscoped_descendant_targets(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        with (
+            mock.patch.object(recorder_module.os, "getpid", return_value=9999),
+            mock.patch.object(recorder_module.os, "getpgid", return_value=1234),
+            mock.patch.object(recorder_module.os, "getsid", return_value=1234),
+            mock.patch.object(recorder_module, "_recording_process_identity_matches", return_value=True),
+            mock.patch.object(
+                recorder_module,
+                "_process_tree_descendant_identities",
+                return_value={1234: "leader", 4321: "child", 9999: "caller"},
+            ),
+            mock.patch.object(
+                recorder_module,
+                "_same_session_process_identities",
+                return_value={1234: "leader", 4321: "child", 9999: "caller"},
+            ),
+            mock.patch.object(recorder_module, "_process_tree_has_live_processes", return_value=False),
+            mock.patch.object(recorder_module, "_recording_process_is_absent", return_value=False),
+            mock.patch.object(recorder_module, "_send_process_signal_with_pidfd", return_value=True),
+            mock.patch.object(recorder_module, "_send_process_signal_with_start_time", return_value=True) as mocked_child,
+            mock.patch.object(recorder_module, "_reap_recorder_process_if_zombie", return_value=True),
+            mock.patch.object(recorder_module, "_process_is_gone", return_value=True),
+            mock.patch.object(recorder_module.time, "monotonic", return_value=0.0),
+        ):
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity=identity)
+
+        self.assertTrue(result)
+        self.assertEqual([call.args[0] for call in mocked_child.call_args_list], [4321])
+
+    def test_stop_process_does_not_claim_success_when_leader_and_group_are_absent(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
+        with (
+            mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
+            mock.patch(
+                "speed_of_cinnamon.recorder._process_group_exists",
+                return_value=False,
+            ) as mocked_group,
+            mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
+        ):
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity=identity)
+
+        self.assertFalse(result)
+        mocked_group.assert_called_once_with(1234)
         mocked_kill.assert_not_called()
 
     def test_stop_process_fails_closed_when_reaped_group_presence_is_unknown(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
-            mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=None),
+            mock.patch(
+                "speed_of_cinnamon.recorder._process_group_exists",
+                return_value=None,
+            ) as mocked_group,
+            mock.patch(
+                "speed_of_cinnamon.recorder._send_process_signal_with_pidfd",
+            ) as mocked_signal,
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity=identity)
 
         self.assertFalse(result)
+        mocked_group.assert_called_once_with(1234)
+        mocked_signal.assert_not_called()
         mocked_kill.assert_not_called()
 
     def test_stop_process_does_not_assume_reaped_group_is_gone_on_permission_error(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
-            mock.patch("speed_of_cinnamon.recorder.os.kill", side_effect=PermissionError("Operation not permitted")),
+            mock.patch(
+                "speed_of_cinnamon.recorder._process_group_has_recorder_session",
+                return_value=False,
+            ) as mocked_session,
+            mock.patch(
+                "speed_of_cinnamon.recorder.os.kill",
+                side_effect=PermissionError("Operation not permitted"),
+            ) as mocked_probe,
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_matches", return_value=False),
+            mock.patch(
+                "speed_of_cinnamon.recorder._send_process_signal_with_pidfd",
+            ) as mocked_signal,
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity=identity)
 
         self.assertFalse(result)
+        self.assertEqual(mocked_session.call_args_list, [mock.call(1234), mock.call(1234)])
+        self.assertEqual(
+            mocked_probe.call_args_list,
+            [mock.call(-1234, 0), mock.call(1234, 0)],
+        )
+        mocked_signal.assert_not_called()
         mocked_kill.assert_not_called()
 
     def test_stop_process_does_not_kill_reused_zombie_pid(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
             mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=True),
-            mock.patch("speed_of_cinnamon.recorder._process_group_has_recorder_session", return_value=False),
+            mock.patch(
+                "speed_of_cinnamon.recorder._process_group_has_recorder_session",
+                return_value=False,
+            ) as mocked_session,
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=None),
             mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=True),
+            mock.patch(
+                "speed_of_cinnamon.recorder._send_process_signal_with_pidfd",
+            ) as mocked_signal,
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity=identity)
 
         self.assertFalse(result)
+        mocked_session.assert_called_once_with(1234)
+        mocked_signal.assert_not_called()
         mocked_kill.assert_not_called()
 
     def test_stop_process_does_not_kill_present_zombie_when_identity_is_unknown(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         with (
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", return_value=1234),
             mock.patch("speed_of_cinnamon.recorder.os.kill", return_value=None),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_for_pid", return_value=None),
             mock.patch("speed_of_cinnamon.recorder._process_is_gone", return_value=True),
             mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=True),
-            mock.patch("speed_of_cinnamon.recorder._process_group_has_recorder_session", return_value=True),
+            mock.patch(
+                "speed_of_cinnamon.recorder._process_group_has_recorder_session",
+                return_value=True,
+            ) as mocked_session,
+            mock.patch(
+                "speed_of_cinnamon.recorder._send_process_signal_with_pidfd",
+            ) as mocked_signal,
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=0.1, expected_process_identity=identity)
 
         self.assertFalse(result)
+        mocked_session.assert_called_once_with(1234)
+        mocked_signal.assert_not_called()
         mocked_kill.assert_not_called()
 
     def test_stop_process_fails_closed_after_leader_was_reaped_without_verified_descendants(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         group_checks = 0
 
         def process_gone(target: str) -> bool:
@@ -4183,16 +6523,21 @@ Source #13
             mock.patch("speed_of_cinnamon.recorder.os.getpgid", side_effect=ProcessLookupError),
             mock.patch("speed_of_cinnamon.recorder._process_group_exists", return_value=True) as mocked_group_exists,
             mock.patch("speed_of_cinnamon.recorder._process_group_has_recorder_session", return_value=True),
+            mock.patch("speed_of_cinnamon.recorder._process_tree_descendant_identities", return_value={}),
             mock.patch("speed_of_cinnamon.recorder._recording_process_identity_matches", return_value=False),
+            mock.patch("speed_of_cinnamon.recorder._recording_process_is_absent", return_value=True),
             mock.patch("speed_of_cinnamon.recorder._process_is_gone", side_effect=process_gone),
-            mock.patch("speed_of_cinnamon.recorder.time.monotonic", side_effect=[0.0, 0.0, 0.9, 0.95, 0.99, 0.99, 1.1, 1.2]),
+            mock.patch("speed_of_cinnamon.recorder.time.monotonic", return_value=0.0),
             mock.patch("speed_of_cinnamon.recorder.time.sleep"),
             mock.patch("speed_of_cinnamon.recorder._run_kill") as mocked_kill,
         ):
-            result = stop_process(1234, timeout_seconds=1, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1, expected_process_identity=identity)
 
         self.assertFalse(result)
-        self.assertGreaterEqual(mocked_group_exists.call_count, 2)
+        self.assertEqual(
+            mocked_group_exists.call_args_list,
+            [mock.call(1234), mock.call(1234), mock.call(1234)],
+        )
         mocked_kill.assert_not_called()
 
     def test_stop_process_kills_live_descendant_that_created_new_session(self) -> None:
@@ -4233,6 +6578,7 @@ Source #13
             process.communicate()
 
     def test_stop_process_refreshes_descendants_before_escalation(self) -> None:
+        identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
         scans = [{}, {4321: "12345"}]
         clock = [0.0]
 
@@ -4259,7 +6605,7 @@ Source #13
             mock.patch.object(recorder_module.time, "monotonic", side_effect=monotonic),
             mock.patch.object(recorder_module.time, "sleep", side_effect=sleep),
         ):
-            result = stop_process(1234, timeout_seconds=1.0, expected_process_identity="owner-identity")
+            result = stop_process(1234, timeout_seconds=1.0, expected_process_identity=identity)
 
         self.assertFalse(result)
         self.assertEqual([call.args[2] for call in mocked_pidfd.call_args_list], ["-INT", "-TERM", "-KILL"])

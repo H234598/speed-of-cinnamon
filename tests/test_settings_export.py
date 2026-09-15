@@ -308,6 +308,16 @@ class SettingsExportTest(unittest.TestCase):
                     with self.assertRaisesRegex(SettingsExportError, "settings export could not be read"):
                         read_export(path)
 
+    def test_read_export_rejects_duplicate_json_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text(
+                '{"app":"speed-of-cinnamon","app":"other", "version":2, "settings":{}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(SettingsExportError, "settings export could not be read"):
+                read_export(path)
+
     def test_read_export_does_not_echo_invalid_version(self) -> None:
         for version in ("SECRET_TOKEN", {"secret": "SECRET_TOKEN"}):
             with self.subTest(version=version), tempfile.TemporaryDirectory() as tmp:
@@ -552,6 +562,12 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "setting transcriber has unsupported value"):
             normalize_setting("transcriber", "shell")
 
+    def test_normalize_setting_canonicalizes_legacy_output_alias(self) -> None:
+        self.assertEqual(
+            normalize_setting("insert-method", "clipboard-paste.submit"),
+            "clipboard-paste-submit",
+        )
+
     def test_write_and_read_export_round_trips_normalized_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
@@ -698,7 +714,7 @@ class SettingsExportTest(unittest.TestCase):
                     with self.assertRaisesRegex(SettingsExportError, "metadata is incomplete"):
                         read_export(path)
 
-    def test_read_export_uses_schema_aligned_show_panel_label_default(self) -> None:
+    def test_read_export_uses_schema_aligned_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text(
@@ -708,7 +724,53 @@ class SettingsExportTest(unittest.TestCase):
             )
             payload = read_export(path)
 
-        self.assertTrue(payload["settings"]["show-panel-label"])
+        settings = payload["settings"]
+        self.assertFalse(settings["show-panel-label"])
+        self.assertEqual(settings["language"], "de")
+        self.assertEqual(settings["secondary-language"], "en")
+        self.assertEqual(settings["max-seconds"], 60)
+        self.assertFalse(settings["auto-transcribe-timeout"])
+        self.assertTrue(settings["notify-complete"])
+        self.assertTrue(settings["soften-profanity"])
+        self.assertEqual(settings["auto-paste-window-title"], "codex, Terminal, Telegram, Ghostty, Kitty")
+        self.assertEqual(settings["transcriber"], "openai-compatible")
+        self.assertEqual(settings["post-process-backend"], "openai-compatible")
+        self.assertEqual(settings["openai-compatible-model"], "gpt-transcribe")
+        self.assertEqual(settings["openai-compatible-text-model"], "gpt-5.6-luna")
+
+    def test_read_export_defaults_remain_aligned_with_schema(self) -> None:
+        schema = json.loads(
+            (Path(__file__).parents[1] / "files" / "speed-of-cinnamon@H234598" / "settings-schema.json")
+            .read_text(encoding="utf-8")
+        )
+        keys = (
+            "show-panel-label",
+            "language",
+            "secondary-language",
+            "max-seconds",
+            "auto-transcribe-timeout",
+            "notify-complete",
+            "soften-profanity",
+            "max-transcript-files",
+            "artifact-encryption",
+            "auto-paste-window-title",
+            "transcriber",
+            "post-process-backend",
+            "openai-compatible-model",
+            "openai-compatible-text-model",
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "settings-export.json"
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"settings":{"language":"de"},'
+                '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
+                encoding="utf-8",
+            )
+            settings = read_export(path)["settings"]
+
+        for key in keys:
+            with self.subTest(key=key):
+                self.assertEqual(settings[key], schema[key]["default"])
 
     def test_write_export_rejects_out_of_range_numeric_settings(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "must be at least"):

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import io
+import json
 import fcntl
 import hashlib
 import http.client
@@ -22,6 +23,7 @@ from pathlib import Path
 from unittest import mock
 
 from speed_of_cinnamon import transcriber as transcriber_module
+from speed_of_cinnamon import faster_whisper_worker
 from speed_of_cinnamon.transcriber import (
     TranscriberConfig,
     TranscriptionError,
@@ -61,6 +63,7 @@ from speed_of_cinnamon.transcriber import (
 from speed_of_cinnamon.command_chain import CommandChainError
 from speed_of_cinnamon.personalization import MAX_PERSONAL_CONTEXT_CHARS, MAX_VOCABULARY_CHARS
 from speed_of_cinnamon.path_safety import ExpectedTarget, ExpectedTargetKind
+from speed_of_cinnamon.process_priority import LocalModelPriorityError
 
 
 def _capture_expected_target_for_test(path: Path) -> ExpectedTarget:
@@ -2279,6 +2282,12 @@ class TranscriberTest(unittest.TestCase):
         with self.assertRaisesRegex(TranscriptionError, "must be text"):
             _assert_text_length(12, field_name="text")
 
+    def test_language_validation_keeps_str_subclass_compatibility(self) -> None:
+        class LanguageText(str):
+            pass
+
+        self.assertEqual(transcriber_module._validate_language_code(LanguageText("en")), "en")
+
     def test_assert_text_length_rejects_oversized_text_bytes(self) -> None:
         with mock.patch("speed_of_cinnamon.transcriber.MAX_TRANSCRIPT_TEXT_CHARS", 4):
             with self.assertRaisesRegex(TranscriptionError, "is too large"):
@@ -2318,6 +2327,29 @@ class TranscriberTest(unittest.TestCase):
                 _read_response_text(response, deadline=1.0)
 
         response.read.assert_called_once_with(65536)
+
+    def test_read_response_text_default_deadline_is_bounded(self) -> None:
+        response = mock.Mock()
+        response.read.return_value = b"partial"
+        with mock.patch("speed_of_cinnamon.transcriber.time.monotonic", side_effect=[0.0, 901.0]):
+            with self.assertRaisesRegex(TranscriptionError, "API response timed out"):
+                _read_response_text(response)
+
+        response.read.assert_not_called()
+
+    def test_set_response_read_timeout_tries_lower_layer_after_failure(self) -> None:
+        response = mock.Mock(spec=["settimeout", "fp"])
+        response.settimeout.side_effect = OSError("outer timeout unsupported")
+        frame = mock.Mock(spec=["raw"])
+        raw = mock.Mock(spec=["_sock"])
+        socket = mock.Mock(spec=["settimeout"])
+        response.fp = frame
+        frame.raw = raw
+        raw._sock = socket
+
+        transcriber_module._set_response_read_timeout(response, 2.0)
+
+        socket.settimeout.assert_called_once_with(2.0)
 
     def test_contains_escaped_null_rejects_non_text(self) -> None:
         with self.assertRaisesRegex(TranscriptionError, "value must be text"):
@@ -3000,6 +3032,44 @@ class TranscriberTest(unittest.TestCase):
             _run_limited_process(["whisper", "audio"])
 
         self.assertEqual(calls[0][0], "/usr/bin/whisper")
+
+    def test_run_transcriber_process_fails_closed_before_spawn_without_priority_helpers(self) -> None:
+        with (
+            mock.patch(
+                "speed_of_cinnamon.transcriber.local_model_command",
+                side_effect=LocalModelPriorityError(
+                    "local model priority helper is unavailable: ionice"
+                ),
+            ),
+            mock.patch("speed_of_cinnamon.transcriber.run_process_bounded_output") as run_process,
+        ):
+            with self.assertRaisesRegex(
+                CommandChainError,
+                "local model priority helper is unavailable: ionice",
+            ):
+                transcriber_module._run_transcriber_process(
+                    ["/usr/bin/whisper", "audio"],
+                    timeout=1,
+                    env={},
+                )
+
+        run_process.assert_not_called()
+
+    def test_run_limited_process_reports_missing_priority_helper(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value="/usr/bin/whisper"),
+            mock.patch(
+                "speed_of_cinnamon.transcriber._run_transcriber_process",
+                side_effect=CommandChainError(
+                    "local model priority helper is unavailable: nice"
+                ),
+            ),
+        ):
+            with self.assertRaisesRegex(
+                TranscriptionError,
+                "local model priority helper is unavailable: nice",
+            ):
+                _run_limited_process(["whisper", "audio"])
 
     def test_run_limited_process_filters_dangerous_environment_variables(self) -> None:
         captured_env: dict[str, str] = {}
@@ -4250,6 +4320,21 @@ class TranscriberTest(unittest.TestCase):
             finally:
                 if fresh_dir.exists():
                     shutil.rmtree(fresh_dir, ignore_errors=False)
+
+    def test_staged_audio_cleanup_fails_closed_when_directory_entry_budget_is_exceeded(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            private_root = Path(tmp) / "private-runtime"
+            private_root.mkdir(mode=0o700)
+            stale_dirs = [private_root / f"{transcriber_module.STAGED_AUDIO_PREFIX}{index}" for index in range(3)]
+            for stale_dir in stale_dirs:
+                stale_dir.mkdir(mode=0o700)
+                old_time = time.time() - transcriber_module.STAGED_AUDIO_CLEANUP_MIN_AGE_SECONDS - 1
+                os.utime(stale_dir, (old_time, old_time))
+
+            with mock.patch.object(transcriber_module, "MAX_STAGED_AUDIO_DIRECTORY_ENTRIES", 2):
+                transcriber_module._cleanup_stale_staged_audio_dirs(private_root)
+
+            self.assertTrue(all(stale_dir.exists() for stale_dir in stale_dirs))
 
     def test_staged_audio_cleanup_reports_failure_after_backend_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -5772,6 +5857,1251 @@ class TranscriberTest(unittest.TestCase):
         self.assertIn(b"de", data)
         self.assertNotIn(b'name="service_tier"', data)
 
+    def test_openai_compatible_api_accepts_common_transcript_response_shapes(self) -> None:
+        responses = [
+            b'{"transcript":"nested transcript"}',
+            b'{"output_text":"direct output text"}',
+            b'{"output":[{"content":[{"type":"output_text","text":"output transcript"}]}]}',
+            b'{"segments":[{"text":"first"},{"text":"second"}]}',
+            b'{"text":"complete transcript","segments":[{"text":"complete"},{"text":"transcript"}]}',
+            b'{"chunks":[{"text":"first"},{"text":"second"}]}',
+        ]
+
+        class Response:
+            def __init__(self, body: bytes) -> None:
+                self.body = body
+                self._read = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if self._read:
+                    return b""
+                self._read = True
+                return self.body
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            for body, expected in zip(
+                responses,
+                (
+                    "nested transcript",
+                    "direct output text",
+                    "output transcript",
+                    "first second",
+                    "complete transcript",
+                    "first second",
+                ),
+            ):
+                with self.subTest(expected=expected):
+                    with mock.patch(
+                        "speed_of_cinnamon.transcriber._open_http_request",
+                        return_value=Response(body),
+                    ):
+                        result = transcribe_with_openai_compatible_api(
+                            audio,
+                            "en",
+                            Path(tmp) / "sample.txt",
+                            model="local-transcriber",
+                            url="http://127.0.0.1:8000/v1",
+                            write_transcript=False,
+                        )
+                    self.assertEqual(result, expected)
+
+    def test_openai_compatible_transcript_text_keeps_all_chunks_beyond_legacy_limit(self) -> None:
+        chunks = [{"text": f"chunk {index}"} for index in range(65)]
+
+        result = transcriber_module._openai_compatible_transcript_text({"chunks": chunks})
+
+        self.assertEqual(result, " ".join(f"chunk {index}" for index in range(65)))
+
+    def test_openai_compatible_transcript_text_joins_ordered_content_parts(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {"type": "text", "text": "part one"},
+                                {"type": "text", "text": "part two"},
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(result, "part one part two")
+
+    def test_openai_compatible_transcript_text_keeps_choice_order_before_later_full_text(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "choices": [
+                    {"segments": [{"text": "first choice segment"}]},
+                    {"text": "later choice full text"},
+                ]
+            }
+        )
+
+        self.assertEqual(result, "first choice segment")
+
+    def test_openai_compatible_transcript_text_prefers_full_text_inside_choice(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "choices": [
+                    {
+                        "text": "choice full text",
+                        "segments": [{"text": "choice segmented text"}],
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(result, "choice full text")
+
+    def test_openai_compatible_transcript_text_joins_nested_output_chunks(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "output": [
+                    {
+                        "content": [
+                            {
+                                "chunks": [
+                                    {"text": "nested one"},
+                                    {"text": "nested two"},
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(result, "nested one nested two")
+
+    def test_openai_compatible_transcript_text_supports_nested_parts_shape(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "output": [
+                    {
+                        "content": {
+                            "parts": [
+                                {"chunks": [{"text": "part chunk one"}]},
+                                {"chunks": [{"text": "part chunk two"}]},
+                            ]
+                        }
+                    }
+                ]
+            }
+        )
+
+        self.assertEqual(result, "part chunk one part chunk two")
+
+    def test_openai_compatible_transcript_text_allows_typed_metadata_in_provider_lists(self) -> None:
+        cases = (
+            (
+                {
+                    "output": [
+                        {
+                            "type": "reasoning",
+                            "id": "rs_reasoning",
+                            "summary": [],
+                        },
+                        {
+                            "type": "message",
+                            "id": "msg_transcript",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [
+                                {
+                                    "type": "output_text",
+                                    "text": "responses transcript",
+                                    "annotations": [],
+                                }
+                            ],
+                        },
+                    ]
+                },
+                "responses transcript",
+            ),
+            (
+                {
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {
+                                "role": "assistant",
+                                "content": [
+                                    {
+                                        "type": "refusal",
+                                        "refusal": "not a transcript part",
+                                    },
+                                    {"type": "text", "text": "chat transcript"},
+                                ],
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+                "chat transcript",
+            ),
+            (
+                {
+                    "content": [
+                        {"type": "refusal", "refusal": "ignored metadata"},
+                        {"type": "text", "text": "content transcript"},
+                    ]
+                },
+                "content transcript",
+            ),
+            (
+                {
+                    "parts": [
+                        {"type": "image_url", "image_url": {"url": "ignored metadata"}},
+                        {"type": "text", "text": "stt transcript"},
+                    ]
+                },
+                "stt transcript",
+            ),
+            (
+                {"content": {"type": "output_text", "text": "typed dict transcript"}},
+                "typed dict transcript",
+            ),
+        )
+        for payload, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(
+                    transcriber_module._openai_compatible_transcript_text(payload),
+                    expected,
+                )
+
+    def test_openai_compatible_transcript_text_applies_typed_policy_to_segments_and_chunks(self) -> None:
+        for list_key in ("segments", "chunks"):
+            with self.subTest(list_key=list_key):
+                for item_type in ("refusal", "reasoning", "audio", "tool"):
+                    for direct_key in ("text", "transcript", "output_text"):
+                        with self.subTest(item_type=item_type, direct_key=direct_key):
+                            item = {"type": item_type, direct_key: "INJECT"}
+                            if item_type == "refusal":
+                                item["refusal"] = "metadata refusal"
+                            self.assertEqual(
+                                transcriber_module._openai_compatible_transcript_text(
+                                    {list_key: [item, {"text": "safe"}]}
+                                ),
+                                "safe",
+                            )
+                for item_type in ("text", "input_text", "output_text"):
+                    with self.subTest(item_type=item_type):
+                        self.assertEqual(
+                            transcriber_module._openai_compatible_transcript_text(
+                                {list_key: [{"type": item_type, "text": "typed"}]}
+                            ),
+                            "typed",
+                        )
+                for item_type in ("unknown", " text", "output_text "):
+                    with self.subTest(item_type=item_type):
+                        with self.assertRaisesRegex(TranscriptionError, "response item type"):
+                            transcriber_module._openai_compatible_transcript_text(
+                                {list_key: [{"type": item_type, "text": "value"}]}
+                            )
+                with self.assertRaisesRegex(TranscriptionError, "response"):
+                    transcriber_module._openai_compatible_transcript_text(
+                        {list_key: [{"type": "text", "text": 123}]}
+                    )
+
+    def test_openai_compatible_transcript_text_rejects_typed_text_in_envelopes(self) -> None:
+        cases = (
+            {"audio": {"type": "text", "text": "INJECT"}},
+            {"delta": {"type": "input_text", "text": "INJECT"}},
+            {"message": {"type": "output_text", "text": "INJECT"}},
+            {"data": {"type": "output_text", "text": "INJECT"}},
+            {"results": {"type": "text", "text": "INJECT"}},
+            {"response": {"type": "output_text", "text": "INJECT"}},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "response item type"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_never_injects_typed_nontext_direct_fields(self) -> None:
+        nontext_types = (
+            "audio",
+            "file",
+            "function_call",
+            "function_call_output",
+            "image",
+            "image_url",
+            "input_audio",
+            "input_file",
+            "input_image",
+            "output_audio",
+            "reasoning",
+            "refusal",
+            "tool",
+            "tool_call",
+            "tool_use",
+            "web_search_call",
+        )
+        for list_key in ("output", "content", "parts", "choices"):
+            for item_type in nontext_types:
+                for direct_key in ("text", "transcript", "output_text"):
+                    with self.subTest(list_key=list_key, item_type=item_type, direct_key=direct_key):
+                        safe_item = (
+                            {"text": "safe transcript"}
+                            if list_key == "choices"
+                            else {"type": "text", "text": "safe transcript"}
+                        )
+                        item = {"type": item_type, direct_key: "INJECT"}
+                        if item_type == "refusal":
+                            item["refusal"] = "metadata refusal"
+                        elif item_type == "image_url":
+                            item["image_url"] = {"url": "metadata image"}
+                        payload = {
+                            list_key: [
+                                item,
+                                safe_item,
+                            ]
+                        }
+                        self.assertEqual(
+                            transcriber_module._openai_compatible_transcript_text(payload),
+                            "safe transcript",
+                        )
+
+    def test_openai_compatible_transcript_text_never_emits_opaque_audio_or_data(self) -> None:
+        cases = (
+            {"choices": [{"message": {"audio": {"data": "BASE64"}}}]},
+            {"choices": [{"delta": {"data": "BASE64"}}]},
+            {"output": [{"type": "message", "content": {"data": "BASE64"}}]},
+            {"output": [{"type": "message", "content": {"transcript": "BASE64"}}]},
+            {"output": [{"type": "message", "content": [{"data": "BASE64"}]}]},
+            {"content": [{"transcript": "BASE64"}]},
+            {"content": [{"data": "BASE64"}]},
+            {"audio": "BASE64"},
+            {"data": "BASE64"},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                try:
+                    result = transcriber_module._openai_compatible_transcript_text(payload)
+                except TranscriptionError:
+                    continue
+                self.assertNotIn("BASE64", result)
+
+    def test_openai_compatible_transcript_text_applies_typed_policy_to_nested_wrappers(self) -> None:
+        for wrapper in ("response", "data", "message", "audio", "delta"):
+            for item_type in ("audio", "reasoning", "refusal", "tool"):
+                with self.subTest(wrapper=wrapper, item_type=item_type):
+                    item = {"type": item_type, "text": "INJECT"}
+                    if item_type == "refusal":
+                        item["refusal"] = "metadata refusal"
+                    result = transcriber_module._openai_compatible_transcript_text(
+                        {
+                            wrapper: item,
+                            "segments": [{"text": "safe transcript"}],
+                        }
+                    )
+                    self.assertEqual(result, "safe transcript")
+
+        for wrapper, item_type in (
+            ("response", "unknown"),
+            ("data", "unknown"),
+            ("message", "unknown"),
+            ("audio", "unknown"),
+            ("delta", "unknown"),
+            ("response", " refusal"),
+            ("data", "output_text "),
+            ("message", "tool "),
+            ("audio", "audio "),
+            ("delta", "text "),
+        ):
+            with self.subTest(wrapper=wrapper, item_type=item_type):
+                with self.assertRaisesRegex(TranscriptionError, "response item type"):
+                    transcriber_module._openai_compatible_transcript_text(
+                        {wrapper: {"type": item_type, "text": "INJECT"}}
+                    )
+
+    def test_openai_compatible_transcript_text_rejects_unknown_empty_and_padded_types(self) -> None:
+        cases = (
+            {"output": [{"type": "unknown", "text": ""}, {"type": "text", "text": "safe"}]},
+            {"content": [{"type": "unknown", "output_text": "   "}, {"type": "text", "text": "safe"}]},
+            {"parts": [{"type": "unknown", "transcript": None}, {"type": "text", "text": "safe"}]},
+            {"choices": [{"type": "unknown", "text": ""}, {"text": "safe"}]},
+            {"content": {"type": "unknown", "text": ""}},
+            {"content": [{"type": " text", "text": "safe"}]},
+            {"parts": [{"type": "output_text ", "text": "safe"}]},
+            {"output": [{"type": "text", "text": None}]},
+            {"content": [{"type": "output_text", "text": 123}]},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "speech API"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_requires_text_path_for_output_message(self) -> None:
+        valid_cases = (
+            (
+                {"output": [{"type": "message", "content": "content transcript"}]},
+                "content transcript",
+            ),
+            (
+                {"output": [{"type": "message", "audio": {"transcript": "audio transcript"}}]},
+                "audio transcript",
+            ),
+            (
+                {"output": [{"type": "message", "delta": {"text": "delta transcript"}}]},
+                "delta transcript",
+            ),
+            (
+                {
+                    "output": [
+                        {
+                            "type": "message",
+                            "delta": {
+                                "content": [
+                                    {"type": "output_text", "text": "delta content transcript"}
+                                ]
+                            },
+                        }
+                    ]
+                },
+                "delta content transcript",
+            ),
+        )
+        for payload, expected in valid_cases:
+            with self.subTest(expected=expected):
+                self.assertEqual(
+                    transcriber_module._openai_compatible_transcript_text(payload),
+                    expected,
+                )
+
+        malformed_cases = (
+            {"output": [{"type": "message", "id": "missing-content"}]},
+            {"output": [{"type": "message", "text": "direct injection"}]},
+            {"output": [{"type": "message", "content": 123}]},
+            {"output": [{"type": "message", "audio": {"transcript": 123}}]},
+            {"output": [{"type": "message", "delta": {}}]},
+            {"output": [{"type": "message", "delta": {"content": 123}}]},
+            {
+                "output": [
+                    {"type": "message", "content": [{"type": "refusal", "refusal": "no text"}]}
+                ]
+            },
+        )
+        for payload in malformed_cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "response"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_validates_typed_and_choice_metadata(self) -> None:
+        malformed_cases = (
+            {"content": [{"type": "refusal", "text": "missing refusal"}, {"type": "text", "text": "ok"}]},
+            {"content": [{"type": "refusal", "refusal": 123}, {"type": "text", "text": "ok"}]},
+            {"content": [{"type": "refusal", "refusal": None}, {"type": "text", "text": "ok"}]},
+            {"content": [{"type": "refusal", "refusal": "   "}, {"type": "text", "text": "ok"}]},
+            {"response": {"type": "refusal", "refusal": []}},
+            {"content": [{"type": "image_url"}, {"type": "text", "text": "ok"}]},
+            {"content": [{"type": "image_url", "image_url": "url"}, {"type": "text", "text": "ok"}]},
+            {"content": [{"type": "image_url", "image_url": {"url": "   "}}, {"type": "text", "text": "ok"}]},
+            {"output": [{"type": "message", "role": 123, "content": "ok"}]},
+            {"message": {"type": "text", "role": 123, "text": "ok"}},
+            {"choices": [{"type": "tool", "index": "0"}, {"text": "later"}]},
+            {"choices": [{"type": "tool", "finish_reason": 1}, {"text": "later"}]},
+            {"choices": [{"type": "tool", "logprobs": []}, {"text": "later"}]},
+            {"choices": [{"type": "tool", "logprobs": {}}, {"text": "later"}]},
+            {"choices": [{"type": "tool", "logprobs": {"content": [123]}}, {"text": "later"}]},
+            {"choices": [{"type": "tool", "logprobs": {"content": [{"token": 1, "logprob": 0}]}}, {"text": "later"}]},
+            {"choices": [{"text": "safe", "logprobs": {"content": [{"token": "t", "logprob": 0, "bytes": [-1]}]}}]},
+            {"choices": [{"text": "safe", "logprobs": {"content": [{"token": "t", "logprob": 0, "bytes": [256]}]}}]},
+            {"choices": [{"text": "safe", "logprobs": {"content": [{"token": "t", "logprob": 0, "bytes": [True]}]}}]},
+            {"choices": [{"message": {"role": [], "content": "bad"}}, {"text": "later"}]},
+            {"choices": [{"message": {"content": "bad", "tool_calls": [{}]}}, {"text": "later"}]},
+            {"choices": [{"message": {"content": "bad", "tool_calls": [{"id": 1}]}}, {"text": "later"}]},
+            {"choices": [{"message": {"content": "bad", "tool_calls": [{"function": None}]}}, {"text": "later"}]},
+            {"choices": [{"message": {"content": "bad", "function_call": {"name": "fn"}}}, {"text": "later"}]},
+            {"choices": [{"message": {"content": "bad", "function_call": {"name": "fn", "arguments": 1}}}, {"text": "later"}]},
+        )
+        for payload in malformed_cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "speech API"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+        self.assertEqual(
+            transcriber_module._openai_compatible_transcript_text(
+                {
+                    "choices": [
+                        {"type": "tool", "index": 0, "finish_reason": "tool_calls", "logprobs": None},
+                        {"text": "later transcript"},
+                    ]
+                }
+            ),
+            "later transcript",
+        )
+
+    def test_openai_compatible_transcript_text_rejects_metadata_cycles(self) -> None:
+        top_logprobs = []
+        member = {"token": "token", "logprob": 0.0, "top_logprobs": top_logprobs}
+        top_logprobs.append(member)
+        with self.assertRaisesRegex(TranscriptionError, "response contains a cycle"):
+            transcriber_module._openai_compatible_transcript_text(
+                {"choices": [{"text": "safe", "logprobs": {"content": [member]}}]}
+            )
+
+        delta: dict[str, object] = {"content": "SAFE"}
+        delta["audio"] = delta
+        with self.assertRaisesRegex(TranscriptionError, "response contains a cycle"):
+            transcriber_module._openai_compatible_transcript_text({"delta": delta})
+
+    def test_openai_compatible_transcript_text_rejects_active_metadata_object_cycles(self) -> None:
+        message_with_tool_cycle = {"content": "SAFE", "id": "m"}
+        message_with_tool_cycle["tool_calls"] = [message_with_tool_cycle]
+        message_with_function_cycle = {"content": "SAFE", "name": "fn", "arguments": "{}"}
+        message_with_function_cycle["function_call"] = message_with_function_cycle
+        choice_with_logprob_cycle = {"text": "SAFE", "token": "t", "logprob": 0.0}
+        choice_with_logprob_cycle["logprobs"] = {"content": [choice_with_logprob_cycle]}
+        image_with_cycle = {"type": "image_url", "url": "image"}
+        image_with_cycle["image_url"] = image_with_cycle
+        cases = (
+            {"message": message_with_tool_cycle},
+            {"message": message_with_function_cycle},
+            {"choices": [choice_with_logprob_cycle]},
+            {"content": [image_with_cycle]},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "response contains a cycle"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_accepts_shared_acyclic_metadata_dag(self) -> None:
+        shared = {"text": "same", "metadata_one": "one", "metadata_two": "two"}
+
+        with mock.patch.object(transcriber_module, "MAX_OPENAI_COMPATIBLE_RESPONSE_NODES", 5):
+            self.assertEqual(
+                transcriber_module._openai_compatible_transcript_text(
+                    {"data": shared, "response": shared}
+                ),
+                "same",
+            )
+
+    def test_openai_compatible_transcript_text_validates_message_delta_and_image_metadata(self) -> None:
+        valid = (
+            {
+                "output": [
+                    {
+                        "type": "message",
+                        "role": None,
+                        "status": None,
+                        "refusal": None,
+                        "tool_calls": None,
+                        "function_call": {"name": "lookup", "arguments": "{}"},
+                        "audio": None,
+                        "content": "response text",
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "role": None,
+                            "status": "completed",
+                            "refusal": None,
+                            "tool_calls": [],
+                            "function_call": None,
+                            "audio": {"transcript": "audio text"},
+                            "content": None,
+                        }
+                    }
+                ]
+            },
+            {
+                "delta": {
+                    "role": None,
+                    "status": None,
+                    "refusal": None,
+                    "tool_calls": [],
+                    "function_call": None,
+                    "audio": None,
+                    "content": "delta text",
+                }
+            },
+            {
+                "choices": [
+                    {
+                        "text": "choice text",
+                        "logprobs": {
+                            "content": [
+                                {
+                                    "token": "choice",
+                                    "logprob": -0.1,
+                                    "bytes": [99, 104, 111, 105, 99, 101],
+                                    "top_logprobs": [],
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+            {"content": [{"type": "image_url", "image_url": {"url": "image", "detail": "high"}}, {"type": "text", "text": "text"}]},
+        )
+        for payload in valid:
+            with self.subTest(payload=payload):
+                self.assertIn(
+                    transcriber_module._openai_compatible_transcript_text(payload),
+                    {"response text", "audio text", "delta text", "choice text", "text"},
+                )
+
+        malformed = (
+            {"output": [{"type": "message", "role": 1, "content": "safe"}]},
+            {"output": [{"type": "message", "status": [], "content": "safe"}]},
+            {"output": [{"type": "message", "refusal": {}, "content": "safe"}]},
+            {"output": [{"type": "message", "tool_calls": {}, "content": "safe"}]},
+            {"output": [{"type": "message", "function_call": [], "content": "safe"}]},
+            {"output": [{"type": "message", "audio": [], "content": "safe"}]},
+            {"output": [{"type": "message", "audio": {"transcript": 1}, "content": "safe"}]},
+            {"output": [{"type": "message", "audio": {"type": "text", "text": "INJECT"}, "content": "safe"}]},
+            {"response": {"type": "message", "id": "missing-content"}},
+            {"delta": {"role": 1, "content": "safe"}},
+            {"delta": {"tool_calls": {}, "content": "safe"}},
+            {"delta": {"function_call": [], "content": "safe"}},
+            {"delta": {"audio": [], "content": "safe"}},
+            {"content": [{"type": "image_url", "image_url": "image"}, {"type": "text", "text": "safe"}]},
+            {"content": [{"type": "image_url", "image_url": {}}, {"type": "text", "text": "safe"}]},
+            {"content": [{"type": "image_url", "image_url": {"url": 1}}, {"type": "text", "text": "safe"}]},
+            {"content": [{"type": "image_url", "image_url": {"url": "image", "detail": 1}}, {"type": "text", "text": "safe"}]},
+        )
+        for payload in malformed:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "speech API"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_propagates_rank_through_output_content_parts(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "response": {
+                    "output": [
+                        {
+                            "type": "message",
+                            "content": [
+                                {
+                                    "parts": [
+                                        {"chunks": [{"text": "complete response"}]},
+                                    ],
+                                },
+                            ],
+                        }
+                    ]
+                },
+                "segments": [{"text": "partial root"}],
+            }
+        )
+
+        self.assertEqual(result, "complete response")
+
+    def test_openai_compatible_transcript_text_propagates_rank_through_dict_wrappers(self) -> None:
+        cases = (
+            {
+                "output": {"content": {"parts": {"chunks": {"text": "AUTH"}}}},
+                "data": {"text": "OTHER"},
+            },
+            {"content": {"parts": {"text": "AUTH"}}, "data": {"text": "OTHER"}},
+            {"parts": {"chunks": {"text": "AUTH"}}, "data": {"text": "OTHER"}},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                self.assertEqual(
+                    transcriber_module._openai_compatible_transcript_text(payload),
+                    "AUTH",
+                )
+
+    def test_openai_compatible_transcript_text_stops_aggregate_before_consuming_later_items(self) -> None:
+        chunks = [
+            {"text": "1234"},
+            {"text": "5678"},
+            {"text": "must not be consumed"},
+        ]
+        with mock.patch.object(transcriber_module, "MAX_TRANSCRIPT_TEXT_CHARS", 5):
+            with self.assertRaisesRegex(TranscriptionError, "max 5 characters"):
+                transcriber_module._openai_compatible_transcript_text({"chunks": chunks})
+
+    def test_openai_compatible_transcript_text_stops_nested_aggregate_at_parent_budget(self) -> None:
+        nested = [{"text": "x"}, *({"text": "never"} for _ in range(20))]
+        with mock.patch.object(transcriber_module, "MAX_TRANSCRIPT_TEXT_CHARS", 5):
+            with self.assertRaisesRegex(TranscriptionError, "max 5 characters"):
+                transcriber_module._openai_compatible_transcript_text(
+                    {"chunks": [{"text": "1234"}, {"chunks": nested}]}
+                )
+
+    def test_openai_compatible_transcript_text_stops_alternative_lists_at_first_source(self) -> None:
+        for key in ("choices", "data", "results"):
+            values = [{"text": "first source"}, {"text": 123}]
+            with self.subTest(key=key):
+                self.assertEqual(
+                    transcriber_module._openai_compatible_transcript_text({key: values}),
+                    "first source",
+                )
+
+    def test_openai_compatible_transcript_text_rejects_non_exact_json_lists(self) -> None:
+        class CountingList(list):
+            def __iter__(self):
+                raise AssertionError("custom JSON list iterator was visited")
+
+        cases = (
+            {"content": CountingList(["text"])},
+            {"output": CountingList(["text"])},
+            {"parts": CountingList(["text"])},
+            {"segments": CountingList([{"text": "text"}])},
+            {"chunks": CountingList([{"text": "text"}])},
+            {"choices": CountingList([{"text": "text"}])},
+            {"choices": [{"message": {"content": "safe", "tool_calls": CountingList([])}}]},
+            {"choices": [{"text": "safe", "logprobs": {"content": CountingList([])}}]},
+            {
+                "choices": [
+                    {
+                        "text": "safe",
+                        "logprobs": {
+                            "content": [
+                                {"token": "token", "logprob": 0, "bytes": CountingList([])}
+                            ]
+                        },
+                    }
+                ]
+            },
+            {
+                "choices": [
+                    {
+                        "text": "safe",
+                        "logprobs": {
+                            "content": [
+                                {"token": "token", "logprob": 0, "top_logprobs": CountingList([])}
+                            ]
+                        },
+                    }
+                ]
+            },
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "speech API"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_requires_choices_list_container(self) -> None:
+        for payload in (
+            {"choices": "INJECT"},
+            {"choices": {"text": "INJECT"}},
+            {"choices": ["INJECT"]},
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "choices|speech API"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_direct_source_skips_fallback_work(self) -> None:
+        class CountingList(list):
+            def __init__(self, values):
+                super().__init__(values)
+                self.consumed = 0
+
+            def __iter__(self):
+                for value in super().__iter__():
+                    self.consumed += 1
+                    yield value
+
+        segments = CountingList([123, {"text": "must not be consumed"}])
+        with mock.patch.object(transcriber_module, "MAX_OPENAI_COMPATIBLE_RESPONSE_NODES", 2):
+            self.assertEqual(
+                transcriber_module._openai_compatible_transcript_text(
+                    {"text": "DIRECT", "segments": segments}
+                ),
+                "DIRECT",
+            )
+        self.assertEqual(segments.consumed, 0)
+
+    def test_openai_compatible_transcript_text_authoritative_source_skips_lower_wrappers(self) -> None:
+        class CountingList(list):
+            def __init__(self, values):
+                super().__init__(values)
+                self.consumed = 0
+
+            def __iter__(self):
+                for value in super().__iter__():
+                    self.consumed += 1
+                    yield value
+
+        data = CountingList([123, {"text": "must not be consumed"}])
+        self.assertEqual(
+            transcriber_module._openai_compatible_transcript_text(
+                {"output": {"text": "DIRECT"}, "data": data}
+            ),
+            "DIRECT",
+        )
+        self.assertEqual(data.consumed, 0)
+
+        delta = CountingList([123, {"text": "must not be consumed"}])
+        self.assertEqual(
+            transcriber_module._openai_compatible_transcript_text(
+                {"output": {"text": "DIRECT"}, "delta": delta}
+            ),
+            "DIRECT",
+        )
+        self.assertEqual(delta.consumed, 0)
+
+    def test_openai_compatible_transcript_text_counts_chat_audio_node_once(self) -> None:
+        payload = {"choices": [{"message": {"audio": {"transcript": "audio"}}}]}
+        with mock.patch.object(transcriber_module, "MAX_OPENAI_COMPATIBLE_RESPONSE_NODES", 6):
+            self.assertEqual(
+                transcriber_module._openai_compatible_transcript_text(payload),
+                "audio",
+            )
+        with mock.patch.object(transcriber_module, "MAX_OPENAI_COMPATIBLE_RESPONSE_NODES", 5):
+            with self.assertRaisesRegex(TranscriptionError, "response contains too many nodes"):
+                transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_rejects_unknown_or_malformed_typed_items(self) -> None:
+        cases = (
+            {
+                "output": [
+                    {"type": "provider_private_item", "id": "unknown"},
+                    {"type": "message", "content": [{"type": "output_text", "text": "ok"}]},
+                ]
+            },
+            {
+                "content": [
+                    {"type": "unknown_content_part"},
+                    {"type": "text", "text": "ok"},
+                ]
+            },
+            {
+                "parts": [
+                    {"type": "text", "text": "ok"},
+                    {"type": "unknown_part"},
+                ]
+            },
+            {"content": [{"type": "refusal", "text": 123}, {"type": "text", "text": "ok"}]},
+            {"output": [{"type": "reasoning", "content": 123}, {"text": "ok"}]},
+            {"parts": [{"type": None}, {"text": "ok"}]},
+            {"segments": [{"type": "unknown"}, {"text": "ok"}]},
+            {"content": None},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "response"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_skips_well_formed_nontext_choice(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"type": "image_url", "image_url": {"url": "image"}}],
+                        },
+                        "finish_reason": "stop",
+                    },
+                    {
+                        "index": 1,
+                        "message": {"role": "assistant", "content": "later transcript"},
+                        "finish_reason": "stop",
+                    },
+                ]
+            }
+        )
+
+        self.assertEqual(result, "later transcript")
+
+    def test_openai_compatible_transcript_text_accepts_chat_tool_choice_with_null_content(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [{"id": "call_1", "type": "function"}],
+                        },
+                        "finish_reason": "tool_calls",
+                    },
+                    {"index": 1, "message": {"content": "later transcript"}},
+                ]
+            }
+        )
+
+        self.assertEqual(result, "later transcript")
+
+    def test_openai_compatible_transcript_text_rejects_malformed_choice_after_metadata_choice(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "choice index is invalid"):
+            transcriber_module._openai_compatible_transcript_text(
+                {
+                    "choices": [
+                        {"index": 0, "finish_reason": "stop"},
+                        {"index": "bad", "message": {"content": []}, "finish_reason": "stop"},
+                        {"text": "later transcript"},
+                    ]
+                }
+            )
+
+    def test_openai_compatible_transcript_text_uses_first_alternative_whole(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "choices": [
+                    {
+                        "message": {
+                            "content": [
+                                {"text": "first one"},
+                                {"text": "first two"},
+                            ]
+                        }
+                    },
+                    {"message": {"content": [{"text": "second choice"}]}},
+                ]
+            }
+        )
+
+        self.assertEqual(result, "first one first two")
+
+    def test_openai_compatible_transcript_text_allows_string_and_dict_content_parts(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {"content": ["string part", {"content": "dict part"}]}
+        )
+
+        self.assertEqual(result, "string part dict part")
+
+    def test_openai_compatible_transcript_text_preserves_legitimate_repeated_chunks(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {"chunks": [{"text": "repeat"}, {"text": "repeat"}]},
+        )
+
+        self.assertEqual(result, "repeat repeat")
+
+    def test_openai_compatible_transcript_text_accepts_identical_segmented_sources_once(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "segments": [{"text": "same source"}],
+                "chunks": [{"text": "same source"}],
+            }
+        )
+
+        self.assertEqual(result, "same source")
+
+    def test_openai_compatible_transcript_text_accepts_identical_wrapper_sources_once(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "data": {"text": "same source"},
+                "response": {"text": "same source"},
+            }
+        )
+
+        self.assertEqual(result, "same source")
+
+    def test_openai_compatible_transcript_text_rejects_conflicting_segmented_sources(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "ambiguous transcript sources"):
+            transcriber_module._openai_compatible_transcript_text(
+                {
+                    "segments": [{"text": "segment source"}],
+                    "chunks": [{"text": "chunk source"}],
+                }
+            )
+
+    def test_openai_compatible_transcript_text_rejects_conflicting_wrapper_sources(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "ambiguous transcript sources"):
+            transcriber_module._openai_compatible_transcript_text(
+                {
+                    "data": {"text": "data source"},
+                    "response": {"text": "response source"},
+                }
+            )
+
+    def test_openai_compatible_transcript_text_prefers_full_text_over_segmented_sources(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "segments": [{"text": "segmented text"}],
+                "chunks": [{"text": "chunk text"}],
+                "text": "complete text",
+            }
+        )
+
+        self.assertEqual(result, "complete text")
+
+    def test_openai_compatible_transcript_text_prefers_nested_full_text_over_root_segments(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "response": {"text": "complete nested text"},
+                "segments": [{"text": "partial root text"}],
+            }
+        )
+
+        self.assertEqual(result, "complete nested text")
+
+    def test_openai_compatible_transcript_text_direct_full_text_suppresses_fallback(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "text": "complete text",
+                "segments": [{"text": "segment source"}],
+                "chunks": [{"text": "conflicting source"}],
+            }
+        )
+
+        self.assertEqual(result, "complete text")
+
+    def test_openai_compatible_transcript_text_ordered_full_text_suppresses_bad_fallback(self) -> None:
+        self.assertEqual(
+            transcriber_module._openai_compatible_transcript_text(
+                {"output": [{"text": "complete output"}], "segments": [123]}
+            ),
+            "complete output",
+        )
+
+    def test_openai_compatible_transcript_text_skips_empty_first_segmented_source(self) -> None:
+        result = transcriber_module._openai_compatible_transcript_text(
+            {
+                "segments": [{"text": "  "}],
+                "chunks": [{"text": "usable second source"}],
+            }
+        )
+
+        self.assertEqual(result, "usable second source")
+
+    def test_openai_compatible_transcript_text_uses_one_preferred_full_text(self) -> None:
+        cases = (
+            (
+                {"text": "", "transcript": None, "output_text": "output text"},
+                "output text",
+            ),
+            (
+                {"text": None, "transcript": "transcript text", "output_text": ""},
+                "transcript text",
+            ),
+            (
+                {"text": "text field", "transcript": "", "output_text": None},
+                "text field",
+            ),
+            (
+                {"text": "same field", "transcript": "same field", "output_text": "same field"},
+                "same field",
+            ),
+        )
+        for payload, expected in cases:
+            with self.subTest(payload=payload):
+                self.assertEqual(
+                    transcriber_module._openai_compatible_transcript_text(payload),
+                    expected,
+                )
+
+    def test_openai_compatible_transcript_text_rejects_conflicting_direct_full_text_fields(self) -> None:
+        with self.assertRaisesRegex(TranscriptionError, "ambiguous transcript sources"):
+            transcriber_module._openai_compatible_transcript_text(
+                {
+                    "text": "text field",
+                    "transcript": "transcript field",
+                    "output_text": "output field",
+                }
+            )
+
+    def test_openai_compatible_transcript_text_rejects_nested_non_text_full_fields(self) -> None:
+        cases = (
+            {"response": {"transcript": 123}},
+            {"choices": [{"output_text": 123}]},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "response text must be text"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_enforces_maximum_depth(self) -> None:
+        def nested_response(value: object, depth: int) -> dict[str, object]:
+            for _ in range(depth):
+                value = {"response": value}
+            return value  # type: ignore[return-value]
+
+        self.assertEqual(
+            transcriber_module._openai_compatible_transcript_text(
+                nested_response({"text": "boundary"}, 9),
+            ),
+            "boundary",
+        )
+        with self.assertRaisesRegex(TranscriptionError, "response nesting is too deep"):
+            transcriber_module._openai_compatible_transcript_text(
+                nested_response({"text": "too deep"}, 10),
+            )
+
+    def test_openai_compatible_transcript_text_rejects_root_scalar_or_list(self) -> None:
+        class DictSubclass(dict):
+            pass
+
+        for payload in ("text", [], ["text"], DictSubclass(text="text")):
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "root must be an object"):
+                    transcriber_module._openai_compatible_transcript_text(payload)  # type: ignore[arg-type]
+
+    def test_openai_compatible_transcript_text_requires_exact_json_scalars_and_objects(self) -> None:
+        class LyingText(str):
+            def strip(self, *args: object, **kwargs: object) -> str:
+                return "INJECT"
+
+            def encode(self, *args: object, **kwargs: object) -> bytes:
+                return b"INJECT"
+
+        class HideType(dict):
+            def __contains__(self, key: object) -> bool:
+                return True
+
+            def __getitem__(self, key: object) -> object:
+                return "INJECT"
+
+        cases = (
+            {"text": LyingText("DIRECT")},
+            {"choices": [{"message": {"role": LyingText("assistant"), "content": "safe"}}]},
+            {"content": [{"type": LyingText("text"), "text": "safe"}]},
+            {"response": HideType(text="INJECT")},
+            {"content": [HideType(text="INJECT")]},
+            {"choices": [HideType(text="INJECT")]},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "speech API"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_rejects_non_exact_object_keys(self) -> None:
+        class AliasKey(str):
+            pass
+
+        cases = (
+            {AliasKey("text"): "INJECT"},
+            {1: "INJECT"},
+            {"content": [{AliasKey("text"): "INJECT"}]},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "object keys"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_bounds_wide_object_key_work(self) -> None:
+        wide = {"text": "DIRECT"}
+        wide.update({f"key{index}": "metadata" for index in range(100_000)})
+        with mock.patch.object(transcriber_module, "MAX_OPENAI_COMPATIBLE_RESPONSE_NODES", 1):
+            with self.assertRaisesRegex(TranscriptionError, "too many object keys"):
+                transcriber_module._openai_compatible_transcript_text(wide)
+
+    def test_openai_compatible_transcript_text_rejects_cycles(self) -> None:
+        payload: dict[str, object] = {}
+        payload["response"] = payload
+
+        with self.assertRaisesRegex(TranscriptionError, "response contains a cycle"):
+            transcriber_module._openai_compatible_transcript_text(payload)
+
+        chunks: list[object] = []
+        chunks.append(chunks)
+        with self.assertRaisesRegex(TranscriptionError, "response contains a cycle"):
+            transcriber_module._openai_compatible_transcript_text({"chunks": chunks})
+
+    def test_openai_compatible_transcript_text_rejects_non_text_segment_values(self) -> None:
+        cases = (
+            {"chunks": [{"text": 123}]},
+            {"chunks": [123]},
+            {"chunks": [{"text": "first"}, 123, {"text": "last"}]},
+            {"segments": [None]},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with self.assertRaisesRegex(TranscriptionError, "response"):
+                    transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_rejects_malformed_siblings_in_known_lists(self) -> None:
+        cases = (
+            ("content", ["valid", 123]),
+            ("output", ["valid", 123]),
+            ("parts", ["valid", 123]),
+            ("segments", ["valid", 123]),
+            ("chunks", ["valid", 123]),
+            ("content", ["valid", {}]),
+            ("output", ["valid", {}]),
+            ("parts", ["valid", {}]),
+            ("segments", ["valid", {}]),
+            ("chunks", ["valid", {}]),
+            ("choices", [123, {"text": "later"}]),
+            ("choices", [{}, {"text": "later"}]),
+        )
+        for key, value in cases:
+            with self.subTest(key=key, value=value):
+                with self.assertRaisesRegex(TranscriptionError, "response"):
+                    transcriber_module._openai_compatible_transcript_text({key: value})
+
+    def test_openai_compatible_transcript_text_rejects_node_budget_overrun(self) -> None:
+        cases = (
+            {"text": "direct"},
+            {"chunks": [{"text": "first"}, {"text": "second"}]},
+        )
+        for payload in cases:
+            with self.subTest(payload=payload):
+                with mock.patch.object(transcriber_module, "MAX_OPENAI_COMPATIBLE_RESPONSE_NODES", 1):
+                    with self.assertRaisesRegex(TranscriptionError, "response contains too many nodes"):
+                        transcriber_module._openai_compatible_transcript_text(payload)
+
+    def test_openai_compatible_transcript_text_bounds_direct_and_unicode_text_before_join(self) -> None:
+        with mock.patch.object(transcriber_module, "MAX_TRANSCRIPT_TEXT_CHARS", 4):
+            with self.assertRaisesRegex(TranscriptionError, "max 4 characters"):
+                transcriber_module._openai_compatible_transcript_text(
+                    {"text": "12345"},
+                )
+            with self.assertRaisesRegex(TranscriptionError, "max 4 bytes"):
+                transcriber_module._openai_compatible_transcript_text(
+                    {"text": "😀😀"},
+                )
+            with self.assertRaisesRegex(TranscriptionError, "max 4 bytes"):
+                transcriber_module._openai_compatible_transcript_text(
+                    {"chunks": [{"text": "😀"}, {"text": "😀"}]},
+                )
+
+    def test_openai_compatible_transcript_text_rejects_oversized_selected_source(self) -> None:
+        with mock.patch.object(transcriber_module, "MAX_TRANSCRIPT_TEXT_CHARS", 8):
+            with self.assertRaisesRegex(TranscriptionError, "transcript is too large"):
+                transcriber_module._openai_compatible_transcript_text(
+                    {"chunks": [{"text": "12345"}, {"text": "67890"}]},
+                )
+
+    def test_openai_compatible_api_rejects_oversized_aggregated_segment_fallback(self) -> None:
+        class Response:
+            def __init__(self) -> None:
+                self._read = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if self._read:
+                    return b""
+                self._read = True
+                return b'{"segments":[{"text":"12345"},{"text":"67890"}]}'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with (
+                mock.patch("speed_of_cinnamon.transcriber.MAX_TRANSCRIPT_TEXT_CHARS", 8),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._open_http_request",
+                    return_value=Response(),
+                ),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "transcript is too large"):
+                    transcribe_with_openai_compatible_api(
+                        audio,
+                        "en",
+                        Path(tmp) / "sample.txt",
+                        model="local-transcriber",
+                        url="http://127.0.0.1:8000/v1",
+                        write_transcript=False,
+                    )
+
     def test_openai_compatible_api_rejects_non_text_response_text(self) -> None:
         class Response:
             def __init__(self) -> None:
@@ -5818,6 +7148,36 @@ class TranscriberTest(unittest.TestCase):
                     return b""
                 self._read = True
                 return b'{"text":"hello","usage":{"duration":NaN}}'
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            with mock.patch("speed_of_cinnamon.transcriber._open_http_request", return_value=Response()):
+                with self.assertRaisesRegex(TranscriptionError, "returned invalid JSON"):
+                    transcribe_with_openai_compatible_api(
+                        audio,
+                        "en",
+                        Path(tmp) / "sample.txt",
+                        model="local-transcriber",
+                        url="http://127.0.0.1:8000/v1",
+                    )
+
+    def test_openai_compatible_api_rejects_duplicate_json_response_keys(self) -> None:
+        class Response:
+            def __init__(self) -> None:
+                self._read = False
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args: object) -> None:
+                return None
+
+            def read(self, size: int = -1) -> bytes:
+                if self._read:
+                    return b""
+                self._read = True
+                return b'{"text":"safe","text":"unsafe"}'
 
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
@@ -5981,13 +7341,13 @@ class TranscriberTest(unittest.TestCase):
                     "de",
                     Path(tmp) / "sample.txt",
                     backend="openai-compatible",
-                    openai_compatible_model="gpt-5.6-luna",
+                    openai_compatible_model="gpt-transcribe",
                     openai_compatible_url="https://api.openai.com/v1",
                     openai_compatible_api_key="secret",
                 )
 
         self.assertEqual(result, "hello api")
-        self.assertIn(b"gpt-5.6-luna", captured["data"])
+        self.assertIn(b"gpt-transcribe", captured["data"])
 
     def test_openai_compatible_api_can_disable_flex_for_openai_transcription(self) -> None:
         class Response:
@@ -7270,7 +8630,9 @@ class TranscriberTest(unittest.TestCase):
             (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
             with mock.patch.dict("sys.modules", {"faster_whisper": fake_module}):
                 with self.assertRaises(TranscriptionError) as raised:
-                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+                    transcriber_module._transcribe_with_faster_whisper_in_process(
+                        audio, "en", text_path, str(model_path)
+                    )
 
         message = str(raised.exception)
         self.assertEqual(message, "faster-whisper failed: error detail redacted")
@@ -7303,12 +8665,390 @@ class TranscriberTest(unittest.TestCase):
                 mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
                 mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
             ):
-                result = transcriber_module.transcribe_with_faster_whisper(
+                result = transcriber_module._transcribe_with_faster_whisper_in_process(
                     audio, "en", text_path, str(model_path)
                 )
 
         self.assertEqual(result, "local transcript")
         self.assertIs(captured.get("local_files_only"), True)
+
+    def test_faster_whisper_uses_bounded_worker_process(self) -> None:
+        fake_module = type("FakeFasterWhisper", (), {})
+        written = ""
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+            with (
+                mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._run_faster_whisper_worker",
+                    return_value="worker transcript",
+                ) as run_worker,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._transcribe_with_faster_whisper_in_process",
+                    side_effect=AssertionError("production dispatch must stay out of process"),
+                ) as run_in_process,
+            ):
+                result = transcriber_module.transcribe_with_faster_whisper(
+                    audio, "en", text_path, str(model_path)
+                )
+                written = text_path.read_text(encoding="utf-8")
+
+        self.assertEqual(result, "worker transcript")
+        self.assertEqual(written, "worker transcript\n")
+        self.assertEqual(run_worker.call_args.args[1:], ("en", str(model_path)))
+        run_in_process.assert_not_called()
+
+    def test_faster_whisper_worker_rejects_symlinked_ancestor(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            real_dir = Path(tmp) / "real"
+            real_dir.mkdir()
+            (real_dir / "faster_whisper_worker.py").write_text("# worker\n", encoding="utf-8")
+            linked_dir = Path(tmp) / "linked"
+            linked_dir.symlink_to(real_dir, target_is_directory=True)
+            fake_module_path = linked_dir / "transcriber.py"
+            with mock.patch("speed_of_cinnamon.transcriber.__file__", str(fake_module_path)):
+                with self.assertRaisesRegex(transcriber_module.TranscriptionError, "unavailable"):
+                    transcriber_module._faster_whisper_worker_path()
+
+    def test_faster_whisper_worker_rejects_hardlink(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            source = Path(tmp) / "source.py"
+            source.write_text("# worker\n", encoding="utf-8")
+            worker = Path(tmp) / "faster_whisper_worker.py"
+            worker.hardlink_to(source)
+            fake_module_path = Path(tmp) / "transcriber.py"
+            with mock.patch("speed_of_cinnamon.transcriber.__file__", str(fake_module_path)):
+                with self.assertRaisesRegex(transcriber_module.TranscriptionError, "unsafe"):
+                    transcriber_module._faster_whisper_worker_path()
+
+    def test_faster_whisper_worker_maps_safe_error_code(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["python", "faster_whisper_worker.py"],
+            1,
+            stdout=b'{"status":"error","error_code":"load"}\n',
+            stderr=b"backend secret details",
+        )
+        with mock.patch(
+            "speed_of_cinnamon.transcriber._run_transcriber_process",
+            return_value=result,
+        ):
+            with self.assertRaisesRegex(
+                TranscriptionError,
+                "^faster-whisper model could not be loaded$",
+            ):
+                transcriber_module._run_faster_whisper_worker(
+                    Path("audio.flac"),
+                    "en",
+                    "model",
+                    deadline=time.monotonic() + 10,
+                )
+
+    def test_faster_whisper_worker_rejects_duplicate_json_response_keys(self) -> None:
+        result = subprocess.CompletedProcess(
+            ["python", "faster_whisper_worker.py"],
+            0,
+            stdout=b'{"status":"done","transcript":"safe","transcript":"secret"}',
+            stderr=b"",
+        )
+        with mock.patch(
+            "speed_of_cinnamon.transcriber._run_transcriber_process",
+            return_value=result,
+        ):
+            with self.assertRaisesRegex(
+                TranscriptionError,
+                "^faster-whisper worker returned invalid response$",
+            ):
+                transcriber_module._run_faster_whisper_worker(
+                    Path("audio.flac"),
+                    "en",
+                    "model",
+                    deadline=time.monotonic() + 10,
+                )
+
+    def test_faster_whisper_worker_redacts_output_limit_error(self) -> None:
+        secret = "output exceeded: /srv/private/transcript-token secret=abc123"
+        with mock.patch(
+            "speed_of_cinnamon.transcriber._run_transcriber_process",
+            side_effect=CommandChainError(secret),
+        ):
+            with self.assertRaisesRegex(
+                TranscriptionError,
+                "^faster-whisper worker failed$",
+            ) as raised:
+                transcriber_module._run_faster_whisper_worker(
+                    Path("audio.flac"),
+                    "en",
+                    "model",
+                    deadline=time.monotonic() + 10,
+                )
+
+        self.assertNotIn(secret, str(raised.exception))
+        self.assertNotIn("/srv/private", str(raised.exception))
+        self.assertNotIn("secret=abc123", str(raised.exception))
+
+    def test_faster_whisper_worker_passes_total_deadline_to_process_guard(self) -> None:
+        deadline = time.monotonic() + 10
+        captured: dict[str, object] = {}
+
+        def fake_run(
+            _command: list[str],
+            *,
+            timeout: int,
+            env: dict[str, str],
+            deadline: float | None = None,
+        ) -> subprocess.CompletedProcess[bytes]:
+            captured.update(timeout=timeout, env=env, deadline=deadline)
+            return subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=b'{"status":"done","transcript":"ok"}\n',
+                stderr=b"",
+            )
+
+        with mock.patch(
+            "speed_of_cinnamon.transcriber._run_transcriber_process",
+            side_effect=fake_run,
+        ):
+            result = transcriber_module._run_faster_whisper_worker(
+                Path("audio.flac"),
+                "en",
+                "model",
+                deadline=deadline,
+            )
+
+        self.assertEqual(result, "ok")
+        self.assertIs(captured["deadline"], deadline)
+
+    def test_faster_whisper_runtime_diagnostic_uses_fixed_bounded_child(self) -> None:
+        payload = {
+            "schema_version": 1,
+            "ctranslate2": {
+                "available": True,
+                "version": "4.6.0",
+                "supported_compute_types": ["int8", "float32"],
+            },
+            "faster_whisper": {"available": True, "version": "1.1.0"},
+        }
+        worker_path = Path("/trusted/faster_whisper_worker.py")
+        with (
+            mock.patch.object(transcriber_module.sys, "executable", "/usr/bin/python3"),
+            mock.patch.object(
+                transcriber_module,
+                "_faster_whisper_worker_path",
+                return_value=worker_path,
+            ),
+            mock.patch.object(
+                transcriber_module,
+                "_filtered_environment",
+                return_value={"SAFE": "1"},
+            ) as filtered_environment,
+            mock.patch.object(
+                transcriber_module,
+                "run_process_bounded_output",
+                return_value=(0, json.dumps(payload).encode("ascii"), b""),
+            ) as run_process,
+        ):
+            diagnostic = transcriber_module.faster_whisper_runtime_diagnostics()
+
+        self.assertEqual(
+            diagnostic,
+            {
+                "probe_status": "ok",
+                "ctranslate2": {
+                    "available": True,
+                    "version": "4.6.0",
+                    "supported_compute_types": ["float32", "int8"],
+                },
+                "faster_whisper": {"available": True, "version": "1.1.0"},
+                "worker_available": True,
+            },
+        )
+        filtered_environment.assert_called_once_with(
+            {
+                "LANG": "C",
+                "LC_ALL": "C",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+            }
+        )
+        run_process.assert_called_once_with(
+            ["/usr/bin/python3", str(worker_path), "--diagnose-runtime"],
+            timeout_seconds=15,
+            max_output_bytes=8 * 1024,
+            env={"SAFE": "1"},
+            label="faster-whisper runtime diagnostic",
+        )
+        self.assertEqual(
+            transcriber_module.FASTER_WHISPER_REQUESTED_COMPUTE_TYPE,
+            faster_whisper_worker.FASTER_WHISPER_REQUESTED_COMPUTE_TYPE,
+        )
+        self.assertIsNone(transcriber_module.FASTER_WHISPER_REQUESTED_CPU_THREADS)
+        self.assertIsNone(transcriber_module.FASTER_WHISPER_REQUESTED_NUM_WORKERS)
+
+    def test_faster_whisper_runtime_diagnostic_preserves_partial_capability(self) -> None:
+        payload = {
+            "schema_version": 1,
+            "ctranslate2": {
+                "available": True,
+                "version": None,
+                "supported_compute_types": None,
+            },
+            "faster_whisper": {"available": True, "version": None},
+        }
+        with (
+            mock.patch.object(transcriber_module.sys, "executable", "/usr/bin/python3"),
+            mock.patch.object(
+                transcriber_module,
+                "_faster_whisper_worker_path",
+                return_value=Path("/trusted/faster_whisper_worker.py"),
+            ),
+            mock.patch.object(transcriber_module, "_filtered_environment", return_value={}),
+            mock.patch.object(
+                transcriber_module,
+                "run_process_bounded_output",
+                return_value=(0, json.dumps(payload).encode("ascii"), b""),
+            ),
+        ):
+            diagnostic = transcriber_module.faster_whisper_runtime_diagnostics()
+
+        self.assertEqual(diagnostic["probe_status"], "partial")
+        self.assertEqual(diagnostic["ctranslate2"], payload["ctranslate2"])
+        self.assertEqual(diagnostic["faster_whisper"], payload["faster_whisper"])
+
+    def test_faster_whisper_runtime_diagnostic_rejects_untrusted_responses(self) -> None:
+        valid = {
+            "schema_version": 1,
+            "ctranslate2": {
+                "available": True,
+                "version": "4.6.0",
+                "supported_compute_types": ["int8"],
+            },
+            "faster_whisper": {"available": True, "version": "1.1.0"},
+        }
+        valid_bytes = json.dumps(valid).encode("ascii")
+        oversized_valid_json = valid_bytes + b" " * (((8 * 1024) + 1) - len(valid_bytes))
+        invalid_payloads = {
+            "multiple json": valid_bytes + b"\n{}",
+            "extra key": json.dumps({**valid, "detail": "private"}).encode("ascii"),
+            "missing key": json.dumps(
+                {
+                    "schema_version": 1,
+                    "ctranslate2": valid["ctranslate2"],
+                }
+            ).encode("ascii"),
+            "duplicate keys": (
+                b'{"schema_version":1,"schema_version":1,'
+                b'"ctranslate2":{"available":true,"version":"4.6.0",'
+                b'"supported_compute_types":["int8"]},'
+                b'"faster_whisper":{"available":true,"version":"1.1.0"}}'
+            ),
+            "wrong type": json.dumps(
+                {
+                    **valid,
+                    "ctranslate2": {**valid["ctranslate2"], "available": 1},
+                }
+            ).encode("ascii"),
+            "control": json.dumps(
+                {
+                    **valid,
+                    "ctranslate2": {**valid["ctranslate2"], "version": "4.6\nprivate"},
+                }
+            ).encode("ascii"),
+            "overlength version": json.dumps(
+                {
+                    **valid,
+                    "ctranslate2": {**valid["ctranslate2"], "version": "v" * 65},
+                }
+            ).encode("ascii"),
+            "invalid compute type": json.dumps(
+                {
+                    **valid,
+                    "ctranslate2": {
+                        **valid["ctranslate2"],
+                        "supported_compute_types": ["int8!"],
+                    },
+                }
+            ).encode("ascii"),
+            "duplicate compute type": json.dumps(
+                {
+                    **valid,
+                    "ctranslate2": {
+                        **valid["ctranslate2"],
+                        "supported_compute_types": ["int8", "int8"],
+                    },
+                }
+            ).encode("ascii"),
+            "too many compute types": json.dumps(
+                {
+                    **valid,
+                    "ctranslate2": {
+                        **valid["ctranslate2"],
+                        "supported_compute_types": [f"type{index}" for index in range(33)],
+                    },
+                }
+            ).encode("ascii"),
+            "oversize valid json": oversized_valid_json,
+        }
+        cases: dict[str, tuple[object, str]] = {
+            "timeout": (CommandChainError("runtime diagnostic command timed out: private"), "timeout"),
+            "crash": (OSError("private runtime path"), "failed"),
+            "nonzero": ((7, valid_bytes, b""), "failed"),
+            "stderr": ((0, valid_bytes, b"private stderr"), "failed"),
+        }
+        cases.update(
+            (label, ((0, output, b""), "failed")) for label, output in invalid_payloads.items()
+        )
+        for label, (runner_result, expected_status) in cases.items():
+            runner = mock.Mock()
+            if isinstance(runner_result, BaseException):
+                runner.side_effect = runner_result
+            else:
+                runner.return_value = runner_result
+            with (
+                self.subTest(label=label),
+                mock.patch.object(transcriber_module.sys, "executable", "/usr/bin/python3"),
+                mock.patch.object(
+                    transcriber_module,
+                    "_faster_whisper_worker_path",
+                    return_value=Path("/trusted/faster_whisper_worker.py"),
+                ),
+                mock.patch.object(transcriber_module, "_filtered_environment", return_value={}),
+                mock.patch.object(transcriber_module, "run_process_bounded_output", runner),
+            ):
+                diagnostic = transcriber_module.faster_whisper_runtime_diagnostics()
+
+            self.assertEqual(diagnostic["probe_status"], expected_status)
+            self.assertNotIn("private", repr(diagnostic))
+
+    def test_faster_whisper_runtime_diagnostic_fails_soft_without_safe_entry(self) -> None:
+        cases = (
+            ("worker", "/usr/bin/python3", TranscriptionError("private worker path"), False),
+            ("runtime", "python3", Path("/trusted/faster_whisper_worker.py"), True),
+        )
+        for label, runtime, worker_result, worker_available in cases:
+            with (
+                self.subTest(label=label),
+                mock.patch.object(transcriber_module.sys, "executable", runtime),
+                mock.patch.object(
+                    transcriber_module,
+                    "_faster_whisper_worker_path",
+                    side_effect=worker_result if isinstance(worker_result, BaseException) else None,
+                    return_value=None if isinstance(worker_result, BaseException) else worker_result,
+                ),
+                mock.patch.object(transcriber_module, "run_process_bounded_output") as run_process,
+            ):
+                diagnostic = transcriber_module.faster_whisper_runtime_diagnostics()
+
+            self.assertEqual(diagnostic["probe_status"], "unavailable")
+            self.assertIs(diagnostic["worker_available"], worker_available)
+            self.assertIsNone(diagnostic["ctranslate2"]["available"])
+            run_process.assert_not_called()
 
     def test_faster_whisper_requires_local_tokenizer(self) -> None:
         class WhisperModel:
@@ -7388,14 +9128,20 @@ class TranscriberTest(unittest.TestCase):
             self.assertFalse(text_path.exists())
 
     def test_faster_whisper_timeout_includes_model_initialization(self) -> None:
+        clock = {"model_initialized": False}
+
         class WhisperModel:
             def __init__(self, *_args: object, **_kwargs: object) -> None:
-                pass
+                clock["model_initialized"] = True
 
             def transcribe(self, *_args: object, **_kwargs: object) -> tuple[list[object], object]:
                 self.fail("transcribe should not run after model initialization timeout")
 
         fake_module = type("FakeFasterWhisper", (), {"WhisperModel": WhisperModel})
+
+        def monotonic() -> float:
+            return 901.0 if clock["model_initialized"] else 0.0
+
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"
             audio.write_bytes(b"audio")
@@ -7406,10 +9152,147 @@ class TranscriberTest(unittest.TestCase):
             with (
                 mock.patch.dict("sys.modules", {"faster_whisper": fake_module}),
                 mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
-                mock.patch("speed_of_cinnamon.transcriber.time.monotonic", side_effect=(0, 0, 901)),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.time.monotonic",
+                    side_effect=monotonic,
+                ),
             ):
                 with self.assertRaisesRegex(TranscriptionError, "faster-whisper timed out"):
-                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+                    transcriber_module._transcribe_with_faster_whisper_in_process(
+                        audio, "en", text_path, str(model_path)
+                    )
+
+    def test_faster_whisper_deadline_includes_slow_preflight(self) -> None:
+        clock = {"now": 0.0}
+
+        def monotonic() -> float:
+            return clock["now"]
+
+        def slow_availability_check() -> None:
+            clock["now"] = 901.0
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._require_faster_whisper_available",
+                    side_effect=slow_availability_check,
+                ),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+                mock.patch("speed_of_cinnamon.transcriber.time.monotonic", side_effect=monotonic),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._run_transcriber_process",
+                    return_value=subprocess.CompletedProcess(
+                        [],
+                        0,
+                        stdout=b'{"status":"done","transcript":"unexpected"}',
+                        stderr=b"",
+                    ),
+                ) as run_process,
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "faster-whisper timed out"):
+                    transcriber_module.transcribe_with_faster_whisper(
+                        audio,
+                        "en",
+                        text_path,
+                        str(model_path),
+                        write_transcript=False,
+                    )
+
+            run_process.assert_not_called()
+
+    def test_faster_whisper_deadline_after_worker_return_prevents_write(self) -> None:
+        clock = {"now": 0.0}
+
+        def monotonic() -> float:
+            return clock["now"]
+
+        def run_worker(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            clock["now"] = 901.0
+            return subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=b'{"status":"done","transcript":"worker transcript"}',
+                stderr=b"",
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+            with (
+                mock.patch("speed_of_cinnamon.transcriber._require_faster_whisper_available"),
+                mock.patch("speed_of_cinnamon.transcriber._require_faster_whisper_worker_available"),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+                mock.patch("speed_of_cinnamon.transcriber.time.monotonic", side_effect=monotonic),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._run_transcriber_process",
+                    side_effect=run_worker,
+                ),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "faster-whisper timed out"):
+                    transcriber_module.transcribe_with_faster_whisper(
+                        audio, "en", text_path, str(model_path)
+                    )
+
+            self.assertFalse(text_path.exists())
+
+    def test_faster_whisper_deadline_after_staging_cleanup_prevents_write(self) -> None:
+        clock = {"now": 0.0}
+
+        def monotonic() -> float:
+            return clock["now"]
+
+        def run_worker(*args: object, **kwargs: object) -> subprocess.CompletedProcess[bytes]:
+            return subprocess.CompletedProcess(
+                [],
+                0,
+                stdout=b'{"status":"done","transcript":"worker transcript"}',
+                stderr=b"",
+            )
+
+        real_cleanup = transcriber_module._remove_staged_audio_file_after_mismatch
+
+        def cleanup_then_consume_budget(*args: object, **kwargs: object) -> object:
+            result = real_cleanup(*args, **kwargs)
+            clock["now"] = 901.0
+            return result
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "sample.wav"
+            audio.write_bytes(b"audio")
+            text_path = Path(tmp) / "sample.txt"
+            model_path = Path(tmp) / "model"
+            model_path.mkdir()
+            (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
+            with (
+                mock.patch("speed_of_cinnamon.transcriber._require_faster_whisper_available"),
+                mock.patch("speed_of_cinnamon.transcriber._require_faster_whisper_worker_available"),
+                mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
+                mock.patch("speed_of_cinnamon.transcriber.time.monotonic", side_effect=monotonic),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._run_transcriber_process",
+                    side_effect=run_worker,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._remove_staged_audio_file_after_mismatch",
+                    side_effect=cleanup_then_consume_budget,
+                ),
+            ):
+                with self.assertRaisesRegex(TranscriptionError, "faster-whisper timed out"):
+                    transcriber_module.transcribe_with_faster_whisper(
+                        audio, "en", text_path, str(model_path)
+                    )
+
+            self.assertFalse(text_path.exists())
 
     def test_faster_whisper_timeout_interrupts_blocking_decode(self) -> None:
         class WhisperModel:
@@ -7435,8 +9318,10 @@ class TranscriberTest(unittest.TestCase):
             ):
                 started = time.monotonic()
                 with self.assertRaisesRegex(TranscriptionError, "faster-whisper timed out"):
-                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
-                self.assertLess(time.monotonic() - started, 0.15)
+                    transcriber_module._transcribe_with_faster_whisper_in_process(
+                        audio, "en", text_path, str(model_path)
+                    )
+                self.assertLess(time.monotonic() - started, 0.25)
 
     def test_faster_whisper_availability_fails_closed_on_native_import_error(self) -> None:
         original_import = __import__
@@ -7466,7 +9351,9 @@ class TranscriberTest(unittest.TestCase):
             (model_path / "tokenizer.json").write_text("{}", encoding="utf-8")
             with mock.patch("builtins.__import__", side_effect=fail_import):
                 with self.assertRaisesRegex(TranscriptionError, "faster-whisper could not be loaded"):
-                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+                    transcriber_module._transcribe_with_faster_whisper_in_process(
+                        audio, "en", text_path, str(model_path)
+                    )
 
     def test_faster_whisper_direct_helper_rejects_symlinked_model_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7520,7 +9407,9 @@ class TranscriberTest(unittest.TestCase):
             model_path.mkdir()
             with mock.patch("speed_of_cinnamon.transcriber.os.scandir", side_effect=OSError("permission denied")):
                 with self.assertRaisesRegex(TranscriptionError, "CTranslate2 model path is invalid"):
-                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+                    transcriber_module._transcribe_with_faster_whisper_in_process(
+                        audio, "en", text_path, str(model_path)
+                    )
 
     def test_faster_whisper_direct_helper_requires_model_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -7557,7 +9446,9 @@ class TranscriberTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
             ):
                 with self.assertRaisesRegex(TranscriptionError, "without transcript"):
-                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+                    transcriber_module._transcribe_with_faster_whisper_in_process(
+                        audio, "en", text_path, str(model_path)
+                    )
 
         self.assertFalse(text_path.exists())
 
@@ -7585,7 +9476,9 @@ class TranscriberTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.transcriber.model_supports_language", return_value=True),
             ):
                 with self.assertRaisesRegex(TranscriptionError, "invalid segment text"):
-                    transcriber_module.transcribe_with_faster_whisper(audio, "en", text_path, str(model_path))
+                    transcriber_module._transcribe_with_faster_whisper_in_process(
+                        audio, "en", text_path, str(model_path)
+                    )
 
             self.assertFalse(text_path.exists())
 
@@ -7660,6 +9553,136 @@ class TranscriberTest(unittest.TestCase):
         ):
             self.assertEqual(resolve_transcriber(TranscriberConfig()), "whisper-cpp")
 
+    def test_auto_uses_whisper_cpp_when_ct2_model_exists_but_backend_is_unavailable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ct2_model = Path(tmp) / "ct2-model"
+            ct2_model.mkdir()
+            ggml_model = Path(tmp) / "ggml-base.bin"
+            ggml_model.write_bytes(b"model")
+
+            def model_backend(path: str) -> str:
+                if path == str(ct2_model):
+                    return "faster-whisper"
+                if path == str(ggml_model):
+                    return "whisper-cpp"
+                return ""
+
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.default_ctranslate2_model_path",
+                    return_value=str(ct2_model),
+                ) as mocked_ct2_model,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.default_whisper_cpp_model_path",
+                    return_value=str(ggml_model),
+                ) as mocked_ggml_model,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.model_backend_for_path",
+                    side_effect=model_backend,
+                ) as mocked_model_backend,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._faster_whisper_backend_available",
+                    return_value=False,
+                ) as mocked_faster_whisper,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.resolve_whisper_cpp_command",
+                    return_value="/usr/bin/whisper-cli",
+                ) as mocked_whisper_cpp,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._is_command_available",
+                    return_value=False,
+                ) as mocked_generic_whisper,
+            ):
+                self.assertEqual(
+                    resolve_transcriber(TranscriberConfig()),
+                    "whisper-cpp",
+                )
+
+        mocked_generic_whisper.assert_called_once_with("whisper")
+        mocked_ct2_model.assert_called_once_with("en")
+        mocked_ggml_model.assert_called_once_with("en")
+        self.assertEqual(
+            mocked_model_backend.call_args_list,
+            [mock.call(str(ct2_model)), mock.call(str(ggml_model))],
+        )
+        mocked_faster_whisper.assert_called_once_with()
+        mocked_whisper_cpp.assert_called_once_with()
+
+    def test_auto_prefers_usable_ct2_model_without_probing_whisper_cpp(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ct2_model = Path(tmp) / "ct2-model"
+            ct2_model.mkdir()
+            ggml_model = Path(tmp) / "ggml-base.bin"
+            ggml_model.write_bytes(b"model")
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.default_ctranslate2_model_path",
+                    return_value=str(ct2_model),
+                ) as mocked_ct2_model,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.default_whisper_cpp_model_path",
+                    return_value=str(ggml_model),
+                ) as mocked_ggml_model,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.model_backend_for_path",
+                    return_value="faster-whisper",
+                ) as mocked_model_backend,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._faster_whisper_backend_available",
+                    return_value=True,
+                ) as mocked_faster_whisper,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.resolve_whisper_cpp_command",
+                ) as mocked_whisper_cpp,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._is_command_available",
+                    return_value=False,
+                ),
+            ):
+                self.assertEqual(
+                    resolve_transcriber(TranscriberConfig()),
+                    "faster-whisper",
+                )
+
+        mocked_ct2_model.assert_called_once_with("en")
+        mocked_ggml_model.assert_not_called()
+        mocked_model_backend.assert_called_once_with(str(ct2_model))
+        mocked_faster_whisper.assert_called_once_with()
+        mocked_whisper_cpp.assert_not_called()
+
+    def test_explicit_backend_does_not_probe_auto_model_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            ggml_model = Path(tmp) / "ggml-base.bin"
+            ggml_model.write_bytes(b"model")
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.default_ctranslate2_model_path",
+                ) as mocked_ct2_model,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.default_whisper_cpp_model_path",
+                ) as mocked_ggml_model,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber._faster_whisper_backend_available",
+                ) as mocked_faster_whisper,
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.resolve_whisper_cpp_command",
+                ) as mocked_whisper_cpp,
+            ):
+                self.assertEqual(
+                    resolve_transcriber(
+                        TranscriberConfig(
+                            backend="whisper-cpp",
+                            whisper_model=str(ggml_model),
+                        )
+                    ),
+                    "whisper-cpp",
+                )
+
+        mocked_ct2_model.assert_not_called()
+        mocked_ggml_model.assert_not_called()
+        mocked_faster_whisper.assert_not_called()
+        mocked_whisper_cpp.assert_not_called()
+
     def test_auto_does_not_use_whisper_cpp_for_downloaded_ctranslate2_model(self) -> None:
         def which(command: str, path: str | None = None) -> str | None:
             return "/usr/bin/whisper-cli" if command == "whisper-cli" else None
@@ -7732,6 +9755,19 @@ class TranscriberTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.transcriber.default_ctranslate2_model_path", return_value=""),
             mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value=""),
+            mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value=None),
+        ):
+            with self.assertRaisesRegex(TranscriptionError, "no transcriber available"):
+                resolve_transcriber(TranscriberConfig())
+
+    def test_auto_does_not_select_faster_whisper_without_worker(self) -> None:
+        with (
+            mock.patch("speed_of_cinnamon.transcriber.default_ctranslate2_model_path", return_value="/models/ct2"),
+            mock.patch("speed_of_cinnamon.transcriber.default_whisper_cpp_model_path", return_value=""),
+            mock.patch("speed_of_cinnamon.transcriber.model_backend_for_path", return_value="faster-whisper"),
+            mock.patch("speed_of_cinnamon.transcriber.faster_whisper_available", return_value=True),
+            mock.patch("speed_of_cinnamon.transcriber.faster_whisper_worker_available", return_value=False),
+            mock.patch("speed_of_cinnamon.transcriber.resolve_whisper_cpp_command", return_value=""),
             mock.patch("speed_of_cinnamon.transcriber.shutil.which", return_value=None),
         ):
             with self.assertRaisesRegex(TranscriptionError, "no transcriber available"):
@@ -8291,8 +10327,9 @@ class TranscriberTest(unittest.TestCase):
             text = root / "result.txt"
             captured: dict[str, object] = {}
 
-            def fake_run(segments: list[list[str]], *_args: object, **_kwargs: object) -> str:
+            def fake_run(segments: list[list[str]], *_args: object, **kwargs: object) -> str:
                 captured["segments"] = segments
+                captured["local_model_priority"] = kwargs.get("local_model_priority")
                 staged_path = Path(segments[0][1])
                 self.assertNotEqual(staged_path, audio)
                 self.assertEqual(staged_path.read_bytes(), b"original audio")
@@ -8323,6 +10360,7 @@ class TranscriberTest(unittest.TestCase):
                 )
 
         self.assertEqual(result, "safe transcript")
+        self.assertIs(captured["local_model_priority"], True)
         self.assertEqual(snapshot_mock.call_count, 1)
         self.assertIn("segments", captured)
         self.assertNotIn(str(audio), str(captured["segments"]))

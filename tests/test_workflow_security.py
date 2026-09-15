@@ -22,6 +22,10 @@ ALLOWED_GITHUB_RUN_EXPRESSIONS = {
     "github.event.pull_request.head.sha",
     "github.sha",
 }
+PIP_OPTIONS_WITH_VALUES = {
+    "--timeout",
+    "--retries",
+}
 
 
 def workflow_text(path: Path) -> str:
@@ -124,6 +128,10 @@ class WorkflowSecurityTest(unittest.TestCase):
                             continue
                         if part.startswith("--requirement="):
                             requirement_files.append(part.split("=", 1)[1])
+                            continue
+                        if part in PIP_OPTIONS_WITH_VALUES:
+                            self.assertLess(arg_index + 1, len(install_args))
+                            skip_next = True
                             continue
                         if part and not part.startswith("-"):
                             packages.append(part)

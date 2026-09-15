@@ -14,6 +14,7 @@ from pathlib import Path
 
 
 APPLET_UUID = "speed-of-cinnamon@H234598"
+GUI_LIVE_TESTS_ENV = "SOC_RUN_GUI_LIVE_TESTS"
 EVAL_TIMEOUT_SECONDS = 5
 EDITOR_TIMEOUT_SECONDS = 15
 PASTE_TIMEOUT_SECONDS = 8
@@ -22,6 +23,13 @@ PASTE_TIMEOUT_SECONDS = 8
 def _require_display() -> None:
     if not os.environ.get("DISPLAY"):
         raise unittest.SkipTest("live paste test requires an X11 DISPLAY")
+
+
+def _require_live_test_opt_in() -> None:
+    if os.environ.get(GUI_LIVE_TESTS_ENV) != "1":
+        raise unittest.SkipTest(
+            f"desktop live paste tests disabled; set {GUI_LIVE_TESTS_ENV}=1 explicitly"
+        )
 
 
 def _require_tool(name: str) -> str:
@@ -139,6 +147,101 @@ def _require_clipboard_target_probe() -> None:
         raise unittest.SkipTest("live paste test requires a clipboard helper with target probing support")
 
 
+def _suspend_live_error_journal() -> bool:
+    payload = _cinnamon_eval(
+        f"""
+(() => {{
+  const A = imports.ui.appletManager;
+  const applet = A.definitions
+    .filter(d => d.real_uuid === {json.dumps(APPLET_UUID)} || d.uuid === {json.dumps(APPLET_UUID)})
+    .map(d => d.applet)
+    .filter(a => !!a)[0];
+  if (!applet || typeof applet._recordErrorFile !== "function") return false;
+  if (applet._socLivePasteOriginalRecordErrorFile) return true;
+  applet._socLivePasteOriginalRecordErrorFile = applet._recordErrorFile;
+  applet._recordErrorFile = function() {{}};
+  return true;
+}})()
+"""
+    )
+    return payload is True
+
+
+def _restore_live_error_journal() -> None:
+    try:
+        _cinnamon_eval(
+            f"""
+(() => {{
+  const applet = imports.ui.appletManager.getRunningInstancesForUuid({json.dumps(APPLET_UUID)})[0];
+  if (!applet || typeof applet._socLivePasteOriginalRecordErrorFile !== "function") return false;
+  applet._recordErrorFile = applet._socLivePasteOriginalRecordErrorFile;
+  delete applet._socLivePasteOriginalRecordErrorFile;
+  return true;
+}})()
+"""
+        )
+    except (AssertionError, subprocess.SubprocessError):
+        pass
+
+
+def _suspend_auto_relisten_for_live_test() -> dict[str, bool]:
+    payload = _cinnamon_eval(
+        f"""
+(() => {{
+  const A = imports.ui.appletManager;
+  const applet = A.definitions
+    .filter(d => d.real_uuid === {json.dumps(APPLET_UUID)} || d.uuid === {json.dumps(APPLET_UUID)})
+    .map(d => d.applet)
+    .filter(a => !!a)[0];
+  if (!applet) return {{busy: true, enabled: false}};
+  const busy = Boolean(
+    applet.isCommandRunning ||
+    applet._recordingCommandToken ||
+    applet.textInsertToken ||
+    applet.autoRelistenPending ||
+    applet.clipboardOverwriteDialog ||
+    applet.setupDiagnosticsToken
+  );
+  if (busy) return {{busy: true, enabled: applet.autoRelisten === true, timeoutEnabled: applet.autoTranscribeTimeout === true}};
+  const enabled = applet.autoRelisten === true;
+  const timeoutEnabled = applet.autoTranscribeTimeout === true;
+  applet.autoRelisten = false;
+  applet.autoTranscribeTimeout = false;
+  return {{busy: false, enabled: enabled, timeoutEnabled: timeoutEnabled}};
+}})()
+"""
+    )
+    if not isinstance(payload, dict) or payload.get("busy") is True:
+        raise unittest.SkipTest("live paste test requires an idle applet without a concurrent workflow")
+    return {
+        "enabled": payload.get("enabled") is True,
+        "timeoutEnabled": payload.get("timeoutEnabled") is True,
+    }
+
+
+def _restore_auto_relisten_after_live_test(state: dict[str, bool]) -> None:
+    enabled = state.get("enabled") is True if isinstance(state, dict) else False
+    timeout_enabled = state.get("timeoutEnabled") is True if isinstance(state, dict) else False
+    try:
+        _cinnamon_eval(
+            f"""
+(() => {{
+  const A = imports.ui.appletManager;
+  const applet = A.definitions
+    .filter(d => d.real_uuid === {json.dumps(APPLET_UUID)} || d.uuid === {json.dumps(APPLET_UUID)})
+    .map(d => d.applet)
+    .filter(a => !!a)[0];
+  if (!applet) return false;
+  applet.autoRelisten = {str(enabled).lower()};
+  applet.autoTranscribeTimeout = {str(timeout_enabled).lower()};
+  return true;
+}})()
+"""
+        )
+    except (AssertionError, subprocess.SubprocessError):
+        pass
+
+
 def _window_ids_for(args: list[str]) -> list[str]:
     result = _run(args, timeout=2, check=False)
     if result.returncode != 0:
@@ -199,6 +302,44 @@ def _activate_window(window_id: str) -> None:
             return
         time.sleep(0.05)
     raise AssertionError(f"window {window_id!r} could not be focused")
+
+
+def _wait_for_applet_text_insert_idle() -> None:
+    deadline = time.monotonic() + EVAL_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        payload = _cinnamon_eval(
+            f"""
+(() => {{
+  const A = imports.ui.appletManager;
+  const applet = A.definitions
+    .filter(d => d.real_uuid === {json.dumps(APPLET_UUID)} || d.uuid === {json.dumps(APPLET_UUID)})
+    .map(d => d.applet)
+    .filter(a => !!a)[0];
+  return {{
+    idle: !!applet && !applet.textInsertToken,
+    completed: applet && Object.prototype.hasOwnProperty.call(applet, "_socLivePasteCompletionResult")
+      ? applet._socLivePasteCompletionResult
+      : null,
+    message: applet ? String(applet.lastMessage || "") : ""
+  }};
+}})()
+"""
+        )
+        if isinstance(payload, dict) and payload.get("completed") is False:
+            raise AssertionError(f"applet text insertion failed: {payload!r}")
+        if isinstance(payload, dict) and payload.get("idle") is True and payload.get("completed") is True:
+            _cinnamon_eval(
+                f"""
+(() => {{
+  const applet = imports.ui.appletManager.getRunningInstancesForUuid({json.dumps(APPLET_UUID)})[0];
+  if (applet) delete applet._socLivePasteCompletionResult;
+  return true;
+}})()
+"""
+            )
+            return
+        time.sleep(0.05)
+    raise AssertionError(f"applet text insertion did not become idle: {payload!r}")
 
 
 def _close_owned_test_window(window_id: str, *, expected_title: str, expected_class: str) -> None:
@@ -311,8 +452,12 @@ def _trigger_applet_clipboard_paste(
   let inserted = false;
   let autoPasteEnter = false;
   let terminalTarget = false;
+  applet._socLivePasteCompletionResult = null;
   try {{
-    inserted = applet._insertTranscriptText({json.dumps(text)}, function() {{ restoreSettings(); }});
+    inserted = applet._insertTranscriptText({json.dumps(text)}, function(result) {{
+      applet._socLivePasteCompletionResult = result === true;
+      restoreSettings();
+    }});
     autoPasteEnter = applet._windowTitleMatchesAutoPaste();
     terminalTarget = applet._isTerminalTargetWindow();
   }} finally {{
@@ -339,6 +484,15 @@ def _trigger_applet_clipboard_paste(
 
 
 class LivePasteEditorTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        _require_live_test_opt_in()
+        super().setUpClass()
+        cls._error_journal_suspended = _suspend_live_error_journal()
+        cls.addClassCleanup(_restore_live_error_journal)
+        cls._auto_recording_state = _suspend_auto_relisten_for_live_test()
+        cls.addClassCleanup(_restore_auto_relisten_after_live_test, cls._auto_recording_state)
+
     def test_cinnamon_applet_pastes_clipboard_text_into_focused_xed_file(self) -> None:
         self._assert_live_paste_into_xed(simulate_menu_click=False)
 
@@ -403,7 +557,6 @@ class LivePasteEditorTest(unittest.TestCase):
                     insert_method="clipboard-paste-submit",
                     retitle_window_id=window_id if change_title_after_capture else "",
                     retitle_window_name=changed_title if change_title_after_capture else "",
-                    clear_target_window_id=window_id,
                 )
                 self.assertIsInstance(result, dict)
                 self.assertTrue(result.get("ok"), result)
@@ -419,6 +572,7 @@ class LivePasteEditorTest(unittest.TestCase):
                     if capture_path.exists():
                         captured = capture_path.read_text(encoding="utf-8", errors="replace").strip()
                         if captured == paste_text:
+                            _wait_for_applet_text_insert_idle()
                             return
                     time.sleep(0.25)
                 self.fail(
@@ -468,14 +622,17 @@ class LivePasteEditorTest(unittest.TestCase):
                 if simulate_menu_click:
                     self.assertTrue(result.get("menuActivated"), result)
 
+                _wait_for_applet_text_insert_idle()
+                _activate_window(window_id)
+
                 deadline = time.monotonic() + PASTE_TIMEOUT_SECONDS
                 last_content = ""
                 while time.monotonic() < deadline:
-                    _activate_window(window_id)
                     _run([xdotool, "key", "--clearmodifiers", "ctrl+s"], timeout=3)
                     last_content = target_path.read_text(encoding="utf-8", errors="replace")
                     if paste_text in last_content:
                         return
+                    _activate_window(window_id)
                     time.sleep(0.25)
                 self.fail(
                     "applet did not paste the expected text into xed; "

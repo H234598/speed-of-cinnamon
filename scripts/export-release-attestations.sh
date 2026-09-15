@@ -3,6 +3,7 @@ set -euo pipefail
 umask 077
 IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+readonly GIT_TIMEOUT_SECONDS=30
 export PATH="${TRUSTED_COMMAND_PATH}"
 
 if [[ $# -ne 1 || ! "${1}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -17,7 +18,7 @@ state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/speed-of-cinnamon"
 bundle_dir="${repo_dir}/release-attestations/${tag}"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 safe_fs_cmd=(python3 "${safe_fs}")
-for tool in python3 git; do
+for tool in python3 git timeout; do
   command -v -- "${tool}" >/dev/null 2>&1 || { printf '%s not found.\n' "${tool}" >&2; exit 1; }
 done
 if [[ -e "${bundle_dir}" || -L "${bundle_dir}" ]]; then
@@ -31,7 +32,7 @@ fi
 
 ./scripts/verify-real-e2e-attestation.sh
 ./scripts/verify-local-model-e2e-attestation.sh
-expected_head="$(git rev-parse HEAD)"
+expected_head="$(timeout --signal=TERM --kill-after=2s "${GIT_TIMEOUT_SECONDS}s" git -C "${repo_dir}" rev-parse HEAD)"
 bundle_identity=""
 cleanup_bundle() {
   if [[ -n "${bundle_identity}" ]]; then

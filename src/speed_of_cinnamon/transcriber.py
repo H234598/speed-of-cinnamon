@@ -10,6 +10,7 @@ import hashlib
 import json
 import errno
 import fcntl
+import math
 import os
 import re
 import signal
@@ -34,9 +35,28 @@ from .models import (
     model_supports_language,
 )
 from .command_chain import CommandChainError, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, run_process_bounded_output, split_command_chain
-from .process_priority import local_model_command, with_local_model_priority
+from .process_priority import (
+    LocalModelPriorityError,
+    local_model_command,
+    with_local_model_priority,
+)
+from .faster_whisper_worker import (
+    FASTER_WHISPER_REQUESTED_COMPUTE_TYPE as FASTER_WHISPER_REQUESTED_COMPUTE_TYPE,
+    FASTER_WHISPER_REQUESTED_CPU_THREADS as FASTER_WHISPER_REQUESTED_CPU_THREADS,
+    FASTER_WHISPER_REQUESTED_NUM_WORKERS as FASTER_WHISPER_REQUESTED_NUM_WORKERS,
+    RUNTIME_DIAGNOSTIC_SCHEMA_VERSION as _FASTER_WHISPER_RUNTIME_DIAGNOSTIC_SCHEMA_VERSION,
+    WORKER_ERROR_MESSAGES as _FASTER_WHISPER_WORKER_ERROR_MESSAGES,
+)
 from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
-from .http_safety import PinnedHTTPHandler, PinnedHTTPSHandler, UnsafeUrlError, is_loopback_hostname, resolve_url_host
+from .http_safety import (
+    MAX_DNS_RESOLUTION_TIMEOUT_SECONDS,
+    MAX_PINNED_CONNECTION_TIMEOUT_SECONDS,
+    PinnedHTTPHandler,
+    PinnedHTTPSHandler,
+    UnsafeUrlError,
+    is_loopback_hostname,
+    resolve_url_host,
+)
 from .postprocessor import (
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
     DEFAULT_OPENAI_COMPATIBLE_URL,
@@ -74,9 +94,63 @@ MAX_TRANSCRIBER_TEXT_CHARS = 65_535
 ALLOWED_AUDIO_EXTENSIONS = {".wav", ".m4a", ".flac", ".ogg", ".mp3", ".aac", ".webm"}
 MAX_TRANSCRIPT_TEXT_CHARS = 1_000_000
 MAX_TRANSCRIBER_JSON_BYTES = 1_000_000
+# Supports response -> output[] -> content[] -> parts[] -> chunks[] -> text;
+# object forms consume one less level. MAX_OPENAI_COMPATIBLE_RESPONSE_NODES stays hard.
+MAX_OPENAI_COMPATIBLE_RESPONSE_DEPTH = 10
+MAX_OPENAI_COMPATIBLE_RESPONSE_TYPE_CHARS = 64
+# _read_response_text bounds accepted JSON to this many bytes. Every JSON
+# value consumes at least one input byte, so this visits every accepted node
+# and fails closed only for directly supplied, unbounded Python objects.
+MAX_OPENAI_COMPATIBLE_RESPONSE_NODES = MAX_TRANSCRIBER_JSON_BYTES
+# Exact, documented content/output item types. Unknown typed items are never
+# treated as metadata: their transcript shape is unsupported and fails closed.
+_OPENAI_COMPATIBLE_TEXT_ITEM_TYPES = frozenset({"input_text", "output_text", "text"})
+_OPENAI_COMPATIBLE_NON_TEXT_ITEM_TYPES = frozenset(
+    {
+        "audio",
+        "code_interpreter_call",
+        "computer_call",
+        "custom_tool_call",
+        "file",
+        "file_search_call",
+        "function_call",
+        "function_call_output",
+        "image",
+        "image_generation_call",
+        "image_url",
+        "input_audio",
+        "input_file",
+        "input_image",
+        "local_shell_call",
+        "mcp_approval_request",
+        "mcp_call",
+        "mcp_list_tools",
+        "output_audio",
+        "reasoning",
+        "refusal",
+        "tool",
+        "tool_call",
+        "tool_use",
+        "web_search_call",
+    }
+)
+FASTER_WHISPER_RUNTIME_DIAGNOSTIC_TIMEOUT_SECONDS = 15
+MAX_FASTER_WHISPER_RUNTIME_DIAGNOSTIC_BYTES = 8 * 1024
+MAX_FASTER_WHISPER_RUNTIME_VERSION_CHARS = 64
+MAX_FASTER_WHISPER_COMPUTE_TYPES = 32
+MAX_FASTER_WHISPER_COMPUTE_TYPE_CHARS = 32
+_FASTER_WHISPER_RUNTIME_VERSION_RE = re.compile(
+    rf"^[A-Za-z0-9][A-Za-z0-9._+~-]{{0,{MAX_FASTER_WHISPER_RUNTIME_VERSION_CHARS - 1}}}$",
+    re.ASCII,
+)
+_FASTER_WHISPER_COMPUTE_TYPE_RE = re.compile(
+    rf"^[a-z0-9_]{{1,{MAX_FASTER_WHISPER_COMPUTE_TYPE_CHARS}}}$",
+    re.ASCII,
+)
 TRANSCRIBER_OUTPUT_LOCK_NAME = ".speed-of-cinnamon-transcriber.lock"
 STAGED_AUDIO_PREFIX = ".sc-audio-"
 STAGED_AUDIO_CLEANUP_MIN_AGE_SECONDS = TRANSCRIBE_COMMAND_TIMEOUT_SECONDS * 2
+MAX_STAGED_AUDIO_DIRECTORY_ENTRIES = 100_000
 PLACEHOLDER_TRANSCRIPTS = {"[speaking in foreign language]"}
 _SUPPORTED_TRANSCRIBER_BACKENDS = frozenset(
     {"auto", "command", "whisper", "whisper-cpp", "faster-whisper", "openai-compatible"}
@@ -756,12 +830,25 @@ def _cleanup_stale_staged_audio_dirs(runtime_root: Path) -> None:
     ):
         return
     directory_open_flags = os.O_RDONLY | nofollow_flag | directory_flag | getattr(os, "O_CLOEXEC", 0)
+
+    def bounded_directory_names(directory_fd: int) -> list[str]:
+        names: list[str] = []
+        with os.scandir(directory_fd) as entries:
+            for entry in entries:
+                if len(names) >= MAX_STAGED_AUDIO_DIRECTORY_ENTRIES:
+                    raise OSError("staged audio directory contains too many entries")
+                name = entry.name
+                if not isinstance(name, str) or not name:
+                    raise OSError("invalid staged audio directory entry")
+                names.append(name)
+        return names
+
     root_fd: int | None = None
     try:
         root_fd = os.open(runtime_root, directory_open_flags)
         assert_fd_is_private_directory(root_fd, field_name="staged audio runtime directory")
         try:
-            names = os.listdir(root_fd)
+            names = bounded_directory_names(root_fd)
         except OSError:
             return
         cutoff = time.time() - STAGED_AUDIO_CLEANUP_MIN_AGE_SECONDS
@@ -779,7 +866,7 @@ def _cleanup_stale_staged_audio_dirs(runtime_root: Path) -> None:
                     continue
                 stage_fd = os.open(name, directory_open_flags, dir_fd=root_fd)
                 assert_fd_is_private_directory(stage_fd, field_name="staged audio directory")
-                child_names = os.listdir(stage_fd)
+                child_names = bounded_directory_names(stage_fd)
                 child_stats: list[tuple[str, os.stat_result]] = []
                 for child_name in child_names:
                     if not isinstance(child_name, str) or not child_name:
@@ -908,7 +995,7 @@ def _set_response_read_timeout(response: object, timeout_seconds: float) -> None
             try:
                 setter(max(0.001, timeout_seconds))
             except (OSError, ValueError):
-                pass
+                continue
             return
 
 
@@ -924,6 +1011,8 @@ def _read_response_text(
         raise TranscriptionError("max response bytes must be an integer")
     if max_bytes < 0:
         raise TranscriptionError("max response bytes must be non-negative")
+    if deadline is None:
+        deadline = time.monotonic() + TRANSCRIBE_COMMAND_TIMEOUT_SECONDS
     if deadline is not None and (
         not isinstance(deadline, (int, float))
         or isinstance(deadline, bool)
@@ -1014,26 +1103,29 @@ def _open_http_request(request: urllib.request.Request, *, timeout: int, field_n
     request_deadline = time.monotonic() + timeout
     try:
         remaining_timeout = request_deadline - time.monotonic()
-        if remaining_timeout <= 0:
+        if remaining_timeout <= 0 or not math.isfinite(remaining_timeout):
             raise UnsafeUrlError(f"{field_name} request timed out")
         pinned_addresses = resolve_url_host(
             request.get_full_url(),
             field_name=field_name,
             allow_loopback_host=True,
-            timeout_seconds=remaining_timeout,
+            timeout_seconds=min(remaining_timeout, MAX_DNS_RESOLUTION_TIMEOUT_SECONDS),
         )
     except UnsafeUrlError as exc:
         raise TranscriptionError(str(exc)) from None
+    remaining_timeout = request_deadline - time.monotonic()
+    if remaining_timeout <= 0 or not math.isfinite(remaining_timeout):
+        raise TranscriptionError(f"{field_name} request timed out")
     opener = urllib.request.build_opener(
         _SameOriginRedirectHandler,
         PinnedHTTPHandler(pinned_addresses),
         PinnedHTTPSHandler(pinned_addresses),
         urllib.request.ProxyHandler({}),
     )
-    remaining_timeout = request_deadline - time.monotonic()
-    if remaining_timeout <= 0:
-        raise TranscriptionError(f"{field_name} request timed out")
-    return opener.open(request, timeout=remaining_timeout)  # nosec B310
+    return opener.open(  # nosec B310
+        request,
+        timeout=min(remaining_timeout, MAX_PINNED_CONNECTION_TIMEOUT_SECONDS),
+    )
 
 
 def _file_size(file: io.BufferedRandom) -> int:
@@ -1043,14 +1135,26 @@ def _file_size(file: io.BufferedRandom) -> int:
     return file.tell()
 
 
-def _run_transcriber_process(command: list[str], *, timeout: int, env: dict[str, str]) -> subprocess.CompletedProcess[bytes]:
+def _run_transcriber_process(
+    command: list[str],
+    *,
+    timeout: int,
+    env: dict[str, str],
+    deadline: float | None = None,
+) -> subprocess.CompletedProcess[bytes]:
+    try:
+        runtime_command = local_model_command(command)
+    except LocalModelPriorityError as exc:
+        raise CommandChainError(str(exc)) from exc
     returncode, stdout_data, stderr_data = run_process_bounded_output(
-        local_model_command(command),
+        runtime_command,
         b"",
         timeout_seconds=timeout,
         max_output_bytes=MAX_COMMAND_OUTPUT_CHARS,
         env=env,
         label="transcriber",
+        deadline=deadline,
+        preserve_user_systemd_environment=True,
     )
     return subprocess.CompletedProcess(command, returncode, stdout=stdout_data, stderr=stderr_data)
 
@@ -2328,6 +2432,7 @@ def transcribe_with_template(
                 max_output_chars=MAX_COMMAND_OUTPUT_CHARS,
                 personal_context=personal_context,
                 vocabulary=vocabulary,
+                local_model_priority=True,
             )
     except BaseException as exc:
         cleanup_failed = False
@@ -2799,8 +2904,12 @@ def _faster_whisper_deadline(deadline: float):
             signal.setitimer(signal.ITIMER_REAL, restored_delay, previous_timer[1])
 
 
+# Production dispatch below uses _run_faster_whisper_worker(), whose bounded
+# process is wrapped by _run_transcriber_process() with local model priority.
+# Keep this in-process helper for isolated compatibility coverage only; it is
+# intentionally not a production backend dispatch target.
 @with_local_model_priority
-def transcribe_with_faster_whisper(
+def _transcribe_with_faster_whisper_in_process(
     audio_path: Path,
     language: str,
     text_path: Path,
@@ -2845,7 +2954,7 @@ def transcribe_with_faster_whisper(
             model = WhisperModel(
                 model_path,
                 device="cpu",
-                compute_type="int8",
+                compute_type=FASTER_WHISPER_REQUESTED_COMPUTE_TYPE,
                 local_files_only=True,
             )
             ensure_deadline()
@@ -2890,6 +2999,328 @@ def transcribe_with_faster_whisper(
     if not text:
         raise TranscriptionError("transcriber completed without transcript")
     _assert_text_length(text, field_name="transcript")
+    if write_transcript:
+        _write_text_atomic(text_path, text + "\n")
+    return text
+
+
+def _faster_whisper_worker_path() -> Path:
+    worker_path = Path(__file__).with_name("faster_whisper_worker.py")
+    try:
+        assert_no_symlink_ancestors(worker_path, field_name="faster-whisper worker path")
+        worker_stat = worker_path.stat(follow_symlinks=False)
+    except (OSError, RuntimeError) as exc:
+        raise TranscriptionError("faster-whisper worker is unavailable") from exc
+    if (
+        stat_module.S_ISLNK(worker_stat.st_mode)
+        or not stat_module.S_ISREG(worker_stat.st_mode)
+        or getattr(worker_stat, "st_nlink", 1) != 1
+    ):
+        raise TranscriptionError("faster-whisper worker is unsafe")
+    return worker_path
+
+
+def faster_whisper_worker_available() -> bool:
+    try:
+        _faster_whisper_worker_path()
+    except Exception:
+        return False
+    return True
+
+
+def _empty_faster_whisper_runtime_diagnostic(
+    probe_status: str,
+    *,
+    worker_available: bool,
+) -> dict[str, object]:
+    return {
+        "probe_status": probe_status,
+        "ctranslate2": {
+            "available": None,
+            "version": None,
+            "supported_compute_types": None,
+        },
+        "faster_whisper": {"available": None, "version": None},
+        "worker_available": worker_available,
+    }
+
+
+def _validated_faster_whisper_runtime_version(value: object) -> str | None:
+    if value is None:
+        return None
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, str)
+        or _FASTER_WHISPER_RUNTIME_VERSION_RE.fullmatch(value) is None
+    ):
+        raise ValueError("invalid runtime version")
+    return value
+
+
+def _parse_faster_whisper_runtime_diagnostic(payload_bytes: bytes) -> dict[str, object]:
+    if not isinstance(payload_bytes, bytes):
+        raise ValueError("invalid runtime diagnostic response")
+    try:
+        payload = json.loads(
+            payload_bytes.decode("ascii"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_non_finite_json_number,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, MemoryError) as exc:
+        raise ValueError("invalid runtime diagnostic response") from exc
+    if not isinstance(payload, dict) or set(payload) != {
+        "schema_version",
+        "ctranslate2",
+        "faster_whisper",
+    }:
+        raise ValueError("invalid runtime diagnostic response")
+    schema_version = payload["schema_version"]
+    if type(schema_version) is not int or schema_version != _FASTER_WHISPER_RUNTIME_DIAGNOSTIC_SCHEMA_VERSION:
+        raise ValueError("invalid runtime diagnostic response")
+
+    ctranslate2 = payload["ctranslate2"]
+    faster_whisper = payload["faster_whisper"]
+    if not isinstance(ctranslate2, dict) or set(ctranslate2) != {
+        "available",
+        "version",
+        "supported_compute_types",
+    }:
+        raise ValueError("invalid runtime diagnostic response")
+    if not isinstance(faster_whisper, dict) or set(faster_whisper) != {
+        "available",
+        "version",
+    }:
+        raise ValueError("invalid runtime diagnostic response")
+
+    ctranslate2_available = ctranslate2["available"]
+    faster_whisper_available_value = faster_whisper["available"]
+    if type(ctranslate2_available) is not bool or type(faster_whisper_available_value) is not bool:
+        raise ValueError("invalid runtime diagnostic response")
+    ctranslate2_version = _validated_faster_whisper_runtime_version(ctranslate2["version"])
+    faster_whisper_version = _validated_faster_whisper_runtime_version(faster_whisper["version"])
+
+    raw_compute_types = ctranslate2["supported_compute_types"]
+    if raw_compute_types is None:
+        compute_types = None
+    else:
+        if (
+            not isinstance(raw_compute_types, list)
+            or len(raw_compute_types) > MAX_FASTER_WHISPER_COMPUTE_TYPES
+        ):
+            raise ValueError("invalid runtime diagnostic response")
+        compute_types = []
+        for compute_type in raw_compute_types:
+            if (
+                isinstance(compute_type, bool)
+                or not isinstance(compute_type, str)
+                or _FASTER_WHISPER_COMPUTE_TYPE_RE.fullmatch(compute_type) is None
+                or compute_type in compute_types
+            ):
+                raise ValueError("invalid runtime diagnostic response")
+            compute_types.append(compute_type)
+        compute_types.sort()
+
+    if not ctranslate2_available and (ctranslate2_version is not None or compute_types is not None):
+        raise ValueError("invalid runtime diagnostic response")
+    if not faster_whisper_available_value and faster_whisper_version is not None:
+        raise ValueError("invalid runtime diagnostic response")
+    return {
+        "ctranslate2": {
+            "available": ctranslate2_available,
+            "version": ctranslate2_version,
+            "supported_compute_types": compute_types,
+        },
+        "faster_whisper": {
+            "available": faster_whisper_available_value,
+            "version": faster_whisper_version,
+        },
+    }
+
+
+def faster_whisper_runtime_diagnostics() -> dict[str, object]:
+    try:
+        worker_path = _faster_whisper_worker_path()
+    except Exception:
+        return _empty_faster_whisper_runtime_diagnostic(
+            "unavailable",
+            worker_available=False,
+        )
+    runtime = str(sys.executable or "").strip()
+    if not runtime or not os.path.isabs(runtime):
+        return _empty_faster_whisper_runtime_diagnostic(
+            "unavailable",
+            worker_available=True,
+        )
+    try:
+        environment = _filtered_environment(
+            {
+                "LANG": "C",
+                "LC_ALL": "C",
+                "HF_HUB_OFFLINE": "1",
+                "TRANSFORMERS_OFFLINE": "1",
+            }
+        )
+        returncode, stdout, stderr = run_process_bounded_output(
+            [runtime, str(worker_path), "--diagnose-runtime"],
+            timeout_seconds=FASTER_WHISPER_RUNTIME_DIAGNOSTIC_TIMEOUT_SECONDS,
+            max_output_bytes=MAX_FASTER_WHISPER_RUNTIME_DIAGNOSTIC_BYTES,
+            env=environment,
+            label="faster-whisper runtime diagnostic",
+        )
+    except CommandChainError as exc:
+        detail = str(exc).lower()
+        status = "timeout" if "timeout" in detail or "timed out" in detail else "failed"
+        return _empty_faster_whisper_runtime_diagnostic(status, worker_available=True)
+    except Exception:
+        return _empty_faster_whisper_runtime_diagnostic("failed", worker_available=True)
+    if (
+        type(returncode) is not int
+        or returncode != 0
+        or not isinstance(stdout, bytes)
+        or not isinstance(stderr, bytes)
+        or stderr
+        or len(stdout) + len(stderr) > MAX_FASTER_WHISPER_RUNTIME_DIAGNOSTIC_BYTES
+    ):
+        return _empty_faster_whisper_runtime_diagnostic("failed", worker_available=True)
+    try:
+        parsed = _parse_faster_whisper_runtime_diagnostic(stdout)
+    except (TypeError, ValueError):
+        return _empty_faster_whisper_runtime_diagnostic("failed", worker_available=True)
+
+    ctranslate2 = parsed["ctranslate2"]
+    faster_whisper = parsed["faster_whisper"]
+    assert isinstance(ctranslate2, dict)
+    assert isinstance(faster_whisper, dict)
+    if ctranslate2["available"] is False:
+        status = "unavailable"
+    elif (
+        faster_whisper["available"] is False
+        or ctranslate2["version"] is None
+        or ctranslate2["supported_compute_types"] is None
+        or faster_whisper["version"] is None
+    ):
+        status = "partial"
+    else:
+        status = "ok"
+    return {
+        "probe_status": status,
+        **parsed,
+        "worker_available": True,
+    }
+
+
+def _faster_whisper_backend_available() -> bool:
+    return faster_whisper_available() and faster_whisper_worker_available()
+
+
+def _require_faster_whisper_worker_available() -> None:
+    if not faster_whisper_worker_available():
+        raise TranscriptionError("faster-whisper worker is unavailable")
+
+
+def _run_faster_whisper_worker(
+    staged_audio_path: Path,
+    language: str,
+    model_path: str,
+    *,
+    deadline: float,
+) -> str:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise TranscriptionError("faster-whisper timed out")
+    runtime = str(sys.executable or "").strip()
+    if not runtime or not os.path.isabs(runtime):
+        raise TranscriptionError("faster-whisper worker runtime is unavailable")
+    command = [
+        runtime,
+        str(_faster_whisper_worker_path()),
+        "--audio",
+        str(staged_audio_path),
+        "--language",
+        language,
+        "--model",
+        model_path,
+    ]
+    try:
+        result = _run_transcriber_process(
+            command,
+            timeout=max(1, int(remaining) + 1),
+            env=_filtered_environment(),
+            deadline=deadline,
+        )
+    except CommandChainError as exc:
+        detail = _sanitize_local_command_error(str(exc)).lower()
+        if "timed out" in detail or "timeout" in detail:
+            raise TranscriptionError("faster-whisper worker timed out") from None
+        raise TranscriptionError("faster-whisper worker failed") from None
+    except (FileNotFoundError, OSError, RuntimeError, TypeError, ValueError):
+        raise TranscriptionError("faster-whisper worker failed") from None
+    try:
+        payload = json.loads(
+            result.stdout.decode("utf-8"),
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_non_finite_json_number,
+        )
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, MemoryError):
+        raise TranscriptionError("faster-whisper worker returned invalid response") from None
+    if result.returncode != 0:
+        error_code = payload.get("error_code") if isinstance(payload, dict) else ""
+        if isinstance(error_code, str) and error_code in _FASTER_WHISPER_WORKER_ERROR_MESSAGES:
+            raise TranscriptionError(_FASTER_WHISPER_WORKER_ERROR_MESSAGES[error_code])
+        raise TranscriptionError("faster-whisper worker failed")
+    if not isinstance(payload, dict) or payload.get("status") != "done":
+        raise TranscriptionError("faster-whisper worker returned invalid response")
+    text = payload.get("transcript")
+    if not isinstance(text, str):
+        raise TranscriptionError("faster-whisper worker returned invalid transcript")
+    return _assert_text_length(text.strip(), field_name="transcript")
+
+
+def transcribe_with_faster_whisper(
+    audio_path: Path,
+    language: str,
+    text_path: Path,
+    model_path: str,
+    write_transcript: bool = True,
+    *,
+    _expected_audio_snapshot: tuple[int, int, int, int, int, int]
+    | tuple[int, int, int, int, int, int, str]
+    | None = None,
+) -> str:
+    deadline = time.monotonic() + TRANSCRIBE_COMMAND_TIMEOUT_SECONDS
+
+    def ensure_deadline() -> None:
+        if deadline - time.monotonic() <= 0:
+            raise TranscriptionError("faster-whisper timed out")
+
+    write_transcript = _validate_write_transcript(write_transcript)
+    language = _validate_language_code(language)
+    audio_path, audio_snapshot = _prepare_local_backend_audio(
+        audio_path,
+        expected_snapshot=_expected_audio_snapshot,
+        field_name="audio file for backend",
+    )
+    text_path = _normalize_transcript_path(text_path)
+    model_path = _validate_local_model_path(model_path, field_name="CTranslate2 model path", directory=True)
+    _require_verified_catalog_model(model_path, field_name="CTranslate2 model")
+    _require_ctranslate2_tokenizer(model_path)
+    if not model_supports_language(model_path, language):
+        raise TranscriptionError(
+            f"CTranslate2 model does not support language {language}; use a multilingual model"
+        )
+    _require_faster_whisper_available()
+    _require_faster_whisper_worker_available()
+    with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
+        text = _run_faster_whisper_worker(
+            staged_audio_path,
+            language,
+            model_path,
+            deadline=deadline,
+        )
+        ensure_deadline()
+    ensure_deadline()
+    if not text:
+        raise TranscriptionError("transcriber completed without transcript")
     if write_transcript:
         _write_text_atomic(text_path, text + "\n")
     return text
@@ -3024,12 +3455,25 @@ def _reject_non_finite_json_number(_value: str) -> object:
     raise ValueError("JSON response contains non-finite number")
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key is not allowed")
+        result[key] = value
+    return result
+
+
 def _openai_compatible_error_detail(raw: str) -> str:
     raw = _assert_text_length(raw or "", field_name="OpenAI-compatible API error", max_chars=MAX_TRANSCRIBER_ERROR_CHARS).strip()
     if not raw:
         return ""
     try:
-        payload = json.loads(raw, parse_constant=_reject_non_finite_json_number)
+        payload = json.loads(
+            raw,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_non_finite_json_number,
+        )
     except (json.JSONDecodeError, RecursionError, ValueError, MemoryError):
         return raw
     if isinstance(payload, dict) and payload.get("error"):
@@ -3047,7 +3491,11 @@ def _openai_compatible_error_detail(raw: str) -> str:
 def _openai_compatible_error_category(raw: str) -> str:
     """Return an allowlisted category from an API error without exposing its body."""
     try:
-        payload = json.loads(raw or "", parse_constant=_reject_non_finite_json_number)
+        payload = json.loads(
+            raw or "",
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_non_finite_json_number,
+        )
     except (json.JSONDecodeError, RecursionError, ValueError, MemoryError):
         return ""
     if not isinstance(payload, dict) or not isinstance(payload.get("error"), dict):
@@ -3074,6 +3522,8 @@ def _sanitize_local_command_error(message: str) -> str:
     ):
         return message
     if "path separators" in lowered or "must be text" in lowered or "must not contain" in lowered:
+        return message
+    if lowered.startswith("local model priority"):
         return message
     if "exit code " in lowered:
         start = lowered.index("exit code ") + len("exit code ")
@@ -3200,6 +3650,625 @@ def _bind_staged_transcriber_command(
 
 def _sanitize_remote_error_detail(value: object) -> str:
     return "[redacted remote error]"
+
+
+class _OpenAICompatibleTranscriptState:
+    def __init__(self) -> None:
+        self.nodes_seen = 0
+        self.active_containers: set[int] = set()
+        self.validated_object_keys: set[int] = set()
+        self.object_keys_seen = 0
+
+
+def _openai_compatible_check_node(
+    state: _OpenAICompatibleTranscriptState, value: object, depth: int
+) -> None:
+    if type(value) in (dict, list) and id(value) in state.active_containers:
+        raise TranscriptionError("OpenAI-compatible speech API response contains a cycle")
+    state.nodes_seen += 1
+    if state.nodes_seen > MAX_OPENAI_COMPATIBLE_RESPONSE_NODES:
+        raise TranscriptionError("OpenAI-compatible speech API response contains too many nodes")
+    if depth > MAX_OPENAI_COMPATIBLE_RESPONSE_DEPTH:
+        raise TranscriptionError("OpenAI-compatible speech API response nesting is too deep")
+
+
+def _openai_compatible_validate_object_keys(
+    state: _OpenAICompatibleTranscriptState,
+    value: dict[object, object],
+) -> None:
+    object_id = id(value)
+    if object_id in state.validated_object_keys:
+        return
+    for key in value:
+        state.object_keys_seen += 1
+        if state.object_keys_seen > MAX_OPENAI_COMPATIBLE_RESPONSE_NODES:
+            raise TranscriptionError("OpenAI-compatible speech API response contains too many object keys")
+        if type(key) is not str:
+            raise TranscriptionError("OpenAI-compatible speech API response object keys must be text")
+    state.validated_object_keys.add(object_id)
+
+
+def _openai_compatible_read_text(
+    state: _OpenAICompatibleTranscriptState,
+    value: object,
+    depth: int,
+    field_name: str = "transcript",
+    *,
+    exact: bool = False,
+    max_chars: int | None = None,
+) -> str | None:
+    _openai_compatible_check_node(state, value, depth)
+    if value is None and not exact:
+        return None
+    if type(value) is not str:
+        message = "OpenAI-compatible speech API response text must be text" if field_name == "transcript" else f"OpenAI-compatible speech API {field_name} must be text"
+        raise TranscriptionError(message)
+    return _assert_text_length(value, field_name=field_name, max_chars=max_chars)
+
+
+def _openai_compatible_typed_policy(item_type: str | None, context: str | None) -> str | None:
+    if item_type in _OPENAI_COMPATIBLE_TEXT_ITEM_TYPES:
+        return "text" if context in _OPENAI_COMPATIBLE_TYPED_TEXT_CONTEXTS else None
+    if item_type == "message":
+        return "message" if context is None or context in _OPENAI_COMPATIBLE_MESSAGE_CONTEXTS else "nontext" if context == "choices" else None
+    if item_type == "response":
+        return "wrapper" if context is None or context in _OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS else None
+    return "nontext" if item_type in _OPENAI_COMPATIBLE_NON_TEXT_ITEM_TYPES and (context is None or context in _OPENAI_COMPATIBLE_TYPED_CONTEXTS) else None
+
+
+def _openai_compatible_validate_metadata(
+    state: _OpenAICompatibleTranscriptState,
+    value: dict[object, object],
+    depth: int,
+    label: str,
+) -> None:
+    _openai_compatible_validate_object_keys(state, value)
+    for key in ("role", "status", "refusal"):
+        if key not in value:
+            continue
+        field = _openai_compatible_read_text(
+            state,
+            value[key],
+            depth + 1,
+            f"response {label}.{key}",
+            exact=value[key] is not None,
+        )
+        if key == "role" and field is not None and not field.strip():
+            raise TranscriptionError(f"OpenAI-compatible speech API response {label}.role must be text")
+    if "tool_calls" in value:
+        _openai_compatible_validate_tool_calls(state, value["tool_calls"], depth + 1, label)
+    if "function_call" in value:
+        _openai_compatible_validate_function_call(state, value["function_call"], depth + 1, label)
+    if "audio" not in value:
+        return
+    audio = value["audio"]
+    if audio is not None and type(audio) is not dict:
+        raise TranscriptionError(f"OpenAI-compatible speech API response {label}.audio must be an object")
+    if audio is not None:
+        _openai_compatible_validate_object_keys(state, audio)
+    if label != "delta":
+        return
+    _openai_compatible_check_node(state, audio, depth + 1)
+    if audio is None:
+        return
+    if "type" in audio:
+        item_type = _openai_compatible_read_text(
+            state,
+            audio["type"],
+            depth + 2,
+            "response item type",
+            exact=True,
+            max_chars=MAX_OPENAI_COMPATIBLE_RESPONSE_TYPE_CHARS,
+        )
+        if _openai_compatible_typed_policy(item_type, "audio") != "nontext":
+            raise TranscriptionError("OpenAI-compatible speech API response item type is unsupported")
+        _openai_compatible_validate_typed_requirements(state, audio, depth + 1, item_type)
+    if "transcript" in audio:
+        _openai_compatible_read_text(
+            state,
+            audio["transcript"],
+            depth + 2,
+            f"response {label}.audio.transcript",
+            exact=audio["transcript"] is not None,
+        )
+
+
+def _openai_compatible_validate_function_call(
+    state: _OpenAICompatibleTranscriptState,
+    value: object,
+    depth: int,
+    label: str,
+    *,
+    allow_none: bool = True,
+) -> None:
+    _openai_compatible_check_node(state, value, depth)
+    if value is None:
+        if not allow_none:
+            raise TranscriptionError(f"OpenAI-compatible speech API response {label}.function must be an object")
+        return
+    if type(value) is not dict:
+        raise TranscriptionError(f"OpenAI-compatible speech API response {label}.function_call must be an object")
+    _openai_compatible_validate_object_keys(state, value)
+    if "name" not in value or "arguments" not in value:
+        raise TranscriptionError(f"OpenAI-compatible speech API response {label}.function_call is malformed")
+    for key in ("name", "arguments"):
+        _openai_compatible_read_text(
+            state,
+            value[key],
+            depth + 1,
+            f"response {label}.function_call.{key}",
+            exact=True,
+        )
+
+
+def _openai_compatible_validate_tool_calls(
+    state: _OpenAICompatibleTranscriptState,
+    value: object,
+    depth: int,
+    label: str,
+) -> None:
+    _openai_compatible_check_node(state, value, depth)
+    if value is None:
+        return
+    if type(value) is not list:
+        raise TranscriptionError(f"OpenAI-compatible speech API response {label}.tool_calls must be a list")
+    for member in value:
+        _openai_compatible_check_node(state, member, depth + 1)
+        if type(member) is not dict:
+            raise TranscriptionError(f"OpenAI-compatible speech API response {label}.tool_calls member is invalid")
+        _openai_compatible_validate_object_keys(state, member)
+        if not any(key in member for key in ("id", "type", "function")):
+            raise TranscriptionError(f"OpenAI-compatible speech API response {label}.tool_calls member is malformed")
+        for key in ("id", "type"):
+            if key in member:
+                _openai_compatible_read_text(
+                    state,
+                    member[key],
+                    depth + 2,
+                    f"response {label}.tool_calls.{key}",
+                    exact=True,
+                )
+        if "function" in member:
+            _openai_compatible_validate_function_call(
+                state,
+                member["function"],
+                depth + 2,
+                f"{label}.tool_calls",
+                allow_none=False,
+            )
+
+
+def _openai_compatible_validate_logprob_list(
+    state: _OpenAICompatibleTranscriptState,
+    value: object,
+    depth: int,
+    label: str,
+) -> None:
+    _openai_compatible_check_node(state, value, depth)
+    if value is None:
+        return
+    if type(value) is not list:
+        raise TranscriptionError(f"OpenAI-compatible speech API {label} must be a list")
+    container_id = id(value)
+    state.active_containers.add(container_id)
+    try:
+        for member in value:
+            _openai_compatible_check_node(state, member, depth + 1)
+            if type(member) is not dict:
+                raise TranscriptionError(f"OpenAI-compatible speech API {label} member is invalid")
+            _openai_compatible_validate_object_keys(state, member)
+            if "token" not in member or "logprob" not in member:
+                raise TranscriptionError(f"OpenAI-compatible speech API {label} member is malformed")
+            _openai_compatible_read_text(state, member["token"], depth + 2, f"{label}.token", exact=True)
+            logprob = member["logprob"]
+            _openai_compatible_check_node(state, logprob, depth + 2)
+            if type(logprob) not in (int, float) or (type(logprob) is float and not math.isfinite(logprob)):
+                raise TranscriptionError(f"OpenAI-compatible speech API {label}.logprob is invalid")
+            if "bytes" in member:
+                bytes_value = member["bytes"]
+                _openai_compatible_check_node(state, bytes_value, depth + 2)
+                if bytes_value is not None and type(bytes_value) is not list:
+                    raise TranscriptionError(f"OpenAI-compatible speech API {label}.bytes is invalid")
+                if bytes_value is not None:
+                    for byte in bytes_value:
+                        _openai_compatible_check_node(state, byte, depth + 3)
+                        if type(byte) is not int or byte < 0 or byte > 255:
+                            raise TranscriptionError(f"OpenAI-compatible speech API {label}.bytes is invalid")
+            if "top_logprobs" in member:
+                _openai_compatible_validate_logprob_list(
+                    state,
+                    member["top_logprobs"],
+                    depth + 2,
+                    f"{label}.top_logprobs",
+                )
+    finally:
+        state.active_containers.remove(container_id)
+
+
+def _openai_compatible_validate_logprobs(
+    state: _OpenAICompatibleTranscriptState,
+    value: object,
+    depth: int,
+) -> None:
+    _openai_compatible_check_node(state, value, depth)
+    if value is None:
+        return
+    if type(value) is not dict:
+        raise TranscriptionError("OpenAI-compatible speech API choice logprobs is invalid")
+    _openai_compatible_validate_object_keys(state, value)
+    if not any(key in value for key in ("content", "refusal")):
+        raise TranscriptionError("OpenAI-compatible speech API choice logprobs is malformed")
+    for key in ("content", "refusal"):
+        if key in value:
+            _openai_compatible_validate_logprob_list(state, value[key], depth + 1, f"choice logprobs.{key}")
+
+
+def _openai_compatible_validate_image(
+    state: _OpenAICompatibleTranscriptState,
+    value: dict[object, object],
+    depth: int,
+) -> None:
+    _openai_compatible_validate_object_keys(state, value)
+    image = value["image_url"]
+    _openai_compatible_check_node(state, image, depth + 1)
+    if type(image) is not dict:
+        raise TranscriptionError("OpenAI-compatible speech API image_url.image_url must be an object")
+    _openai_compatible_validate_object_keys(state, image)
+    if "url" not in image:
+        raise TranscriptionError("OpenAI-compatible speech API image_url.url is required")
+    url = _openai_compatible_read_text(state, image["url"], depth + 2, "image_url.url", exact=True)
+    if url is None or not url.strip():
+        raise TranscriptionError("OpenAI-compatible speech API image_url.url must be text")
+    if "detail" in image and _openai_compatible_read_text(
+        state, image["detail"], depth + 2, "image_url.detail", exact=True
+    ) not in {"auto", "low", "high"}:
+        raise TranscriptionError("OpenAI-compatible speech API image_url.detail is invalid")
+
+
+def _openai_compatible_validate_typed_requirements(
+    state: _OpenAICompatibleTranscriptState,
+    value: dict[object, object],
+    depth: int,
+    item_type: str | None,
+) -> None:
+    _openai_compatible_validate_object_keys(state, value)
+    if item_type == "refusal":
+        if "refusal" not in value:
+            raise TranscriptionError("OpenAI-compatible speech API refusal.refusal is required")
+        refusal = _openai_compatible_read_text(
+            state,
+            value["refusal"],
+            depth + 1,
+            "refusal.refusal",
+            exact=True,
+        )
+        if not refusal.strip():
+            raise TranscriptionError("OpenAI-compatible speech API refusal.refusal must be text")
+    elif item_type == "image_url":
+        if "image_url" not in value:
+            raise TranscriptionError("OpenAI-compatible speech API image_url.image_url is required")
+        _openai_compatible_validate_image(state, value, depth)
+
+
+def _openai_compatible_validate_choice_metadata(
+    state: _OpenAICompatibleTranscriptState,
+    value: dict[object, object],
+    depth: int,
+) -> bool:
+    _openai_compatible_validate_object_keys(state, value)
+    saw_metadata = False
+    if "index" in value:
+        saw_metadata = True
+        field = value["index"]
+        _openai_compatible_check_node(state, field, depth + 1)
+        if type(field) is not int or field < 0:
+            raise TranscriptionError("OpenAI-compatible speech API choice index is invalid")
+    if "finish_reason" in value:
+        saw_metadata = True
+        field = value["finish_reason"]
+        finish_reason = _openai_compatible_read_text(
+            state,
+            field,
+            depth + 1,
+            "choice finish reason",
+            exact=field is not None,
+            max_chars=MAX_OPENAI_COMPATIBLE_RESPONSE_TYPE_CHARS,
+        )
+        if finish_reason is not None and not finish_reason.strip():
+            raise TranscriptionError("OpenAI-compatible speech API choice finish reason must be text")
+    if "logprobs" in value:
+        saw_metadata = True
+        _openai_compatible_validate_logprobs(state, value["logprobs"], depth + 1)
+    return saw_metadata
+
+
+def _openai_compatible_read_direct(
+    state: _OpenAICompatibleTranscriptState,
+    value: dict[object, object],
+    depth: int,
+    keys: tuple[str, ...],
+) -> tuple[str | None, str | None, bool]:
+    _openai_compatible_validate_object_keys(state, value)
+    selected: str | None = None
+    text_field: str | None = None
+    saw_value = False
+    for key in keys:
+        if key not in value:
+            continue
+        saw_value = True
+        candidate = _openai_compatible_read_text(state, value[key], depth + 1)
+        if key == "text":
+            text_field = candidate
+        if candidate is None or not candidate.strip():
+            continue
+        if selected is not None and candidate.strip() != selected.strip():
+            raise TranscriptionError("OpenAI-compatible speech API response contains ambiguous transcript sources")
+        selected = candidate
+    return selected, text_field, saw_value
+
+
+def _openai_compatible_append_text(parts: list[str], totals: list[int], value: str) -> None:
+    if type(value) is not str:
+        raise TranscriptionError("OpenAI-compatible speech API response text must be text")
+    text = value.strip()
+    if not text:
+        return
+    separator = 1 if totals[0] else 0
+    text_bytes = len(text.encode("utf-8"))
+    next_chars = totals[0] + separator + len(text)
+    next_bytes = totals[1] + separator + text_bytes
+    if next_chars > MAX_TRANSCRIPT_TEXT_CHARS:
+        raise TranscriptionError(f"transcript is too large (max {MAX_TRANSCRIPT_TEXT_CHARS} characters)")
+    if next_bytes > MAX_TRANSCRIPT_TEXT_CHARS:
+        raise TranscriptionError(f"transcript is too large (max {MAX_TRANSCRIPT_TEXT_CHARS} bytes)")
+    parts.append(text)
+    totals[0], totals[1] = next_chars, next_bytes
+
+
+def _openai_compatible_single(
+    value: str, rank: int, seed: tuple[int, int]
+) -> tuple[list[str], int]:
+    parts: list[str] = []
+    _openai_compatible_append_text(parts, [seed[0], seed[1]], value)
+    return parts, rank
+
+
+def _openai_compatible_choose(
+    sources: list[tuple[list[str], int] | None],
+) -> tuple[list[str], int] | None:
+    candidates = [source for source in sources if source is not None and source[0]]
+    if not candidates:
+        return ([], 0) if any(source is not None for source in sources) else None
+    rank = max(source[1] for source in candidates)
+    ranked = [source for source in candidates if source[1] == rank]
+    selected = ranked[0]
+    selected_text = " ".join(selected[0])
+    if any(" ".join(source[0]) != selected_text for source in ranked[1:]):
+        raise TranscriptionError("OpenAI-compatible speech API response contains ambiguous transcript sources")
+    return selected
+
+
+def _openai_compatible_bad(ordered: bool, element: bool) -> NoReturn:
+    kind = "ordered" if ordered else "alternative"
+    thing = "element" if element else "value"
+    raise TranscriptionError(f"OpenAI-compatible speech API {kind} response {thing} has no text shape")
+
+
+_OPENAI_COMPATIBLE_TEXT_ITEM_KEYS = frozenset({"content", "output", "parts"})
+_OPENAI_COMPATIBLE_TYPED_TEXT_CONTEXTS = _OPENAI_COMPATIBLE_TEXT_ITEM_KEYS | frozenset(
+    {"segments", "chunks"}
+)
+_OPENAI_COMPATIBLE_TYPED_CONTEXTS = _OPENAI_COMPATIBLE_TYPED_TEXT_CONTEXTS | frozenset(
+    {"audio", "choices", "data", "delta", "message", "response", "results"}
+)
+_OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS = frozenset({"data", "results", "response"})
+_OPENAI_COMPATIBLE_MESSAGE_CONTEXTS = frozenset({"data", "message", "output", "response", "results"})
+
+
+def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
+    """Extract transcript text from common OpenAI-compatible response shapes."""
+    if type(payload) is not dict:
+        raise TranscriptionError("OpenAI-compatible speech API response root must be an object")
+
+    direct_keys = ("text", "transcript", "output_text")
+    ordered_sequence = ("content", "output", "parts", "segments", "chunks")
+    ordered_keys = frozenset(ordered_sequence)
+    nested_keys = (
+        "audio", "choices", "content", "data", "delta", "message", "output", "parts",
+        "response", "results", "segments", "chunks",
+    )
+    choice_nested_keys = ("content", "delta", "message", "output", "parts", "segments", "chunks")
+    child_modes = {
+        "audio": "audio", "delta": "delta", "message": "message", "data": "fallback",
+        "results": "fallback", "response": "wrapper",
+    }
+    ordered_direct_keys = {
+        "output": ("text", "output_text"),
+        "segments": ("text", "transcript"),
+        "chunks": ("text", "transcript"),
+    }
+    state = _OpenAICompatibleTranscriptState()
+    Source = tuple[list[str], int]
+
+    def walk(
+        value: object,
+        depth: int,
+        ordered: bool,
+        *,
+        list_item: bool = False,
+        list_key: str | None = None,
+        choice_context: bool = False,
+        mode: str | None = None,
+        seed: tuple[int, int] = (0, 0),
+    ) -> Source | None:
+        _openai_compatible_check_node(state, value, depth)
+        choice_context = choice_context or list_key == "choices"
+        if mode in {"audio", "delta", "message"} and value is not None and type(value) is not dict:
+            raise TranscriptionError("OpenAI-compatible speech API audio value has invalid type")
+        if mode in {"fallback", "wrapper"} and type(value) is not list and type(value) is not dict:
+            raise TranscriptionError("OpenAI-compatible speech API wrapper value has invalid type")
+        if list_key == "choices" and not list_item and type(value) is not list:
+            raise TranscriptionError("OpenAI-compatible speech API choices must be a list")
+        if list_key == "choices" and list_item and type(value) is not dict:
+            raise TranscriptionError("OpenAI-compatible speech API response choice must be an object")
+        source_rank = (
+            2 if mode == "ordered" or list_key in _OPENAI_COMPATIBLE_TEXT_ITEM_KEYS
+            else 1 if mode in {"audio", "delta", "fallback", "wrapper"} or list_key in _OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS
+            else 3 if depth == 0 else 2
+        )
+        if type(value) is str:
+            if mode in {"audio", "delta", "message", "fallback", "wrapper"}:
+                raise TranscriptionError("OpenAI-compatible speech API response value has invalid type")
+            return _openai_compatible_single(_assert_text_length(value, field_name="transcript"), source_rank, seed)
+        if value is None:
+            if list_item:
+                _openai_compatible_bad(ordered, True)
+            if choice_context and ordered and list_key == "content":
+                return ([], 0)
+            if ordered:
+                raise TranscriptionError("OpenAI-compatible speech API ordered response value has invalid type")
+            return None
+        if type(value) is not list and type(value) is not dict:
+            if list_item:
+                _openai_compatible_bad(ordered, True)
+            raise TranscriptionError("OpenAI-compatible speech API response value has invalid type")
+        container_id = id(value)
+        if list_item and type(value) is list:
+            _openai_compatible_bad(ordered, True)
+        state.active_containers.add(container_id)
+        try:
+            if type(value) is list:
+                if ordered:
+                    parts: list[str] = []
+                    totals = [seed[0], seed[1]]
+                    rank = 0
+                    for item in value:
+                        source = walk(item, depth + 1, True, list_item=True, list_key=list_key, choice_context=choice_context, seed=tuple(totals))
+                        if source is None:
+                            _openai_compatible_bad(True, True)
+                        for part in source[0]:
+                            _openai_compatible_append_text(parts, totals, part)
+                        if source[0] and list_key in _OPENAI_COMPATIBLE_TEXT_ITEM_KEYS:
+                            rank = 2
+                    return parts, rank
+                for item in value:
+                    source = walk(item, depth + 1, False, list_item=True, list_key=list_key, choice_context=choice_context, mode=mode, seed=seed)
+                    if source is None:
+                        _openai_compatible_bad(False, True)
+                    if source[0]:
+                        return source
+                return ([], 0)
+
+            _openai_compatible_validate_object_keys(state, value)
+            schema = mode
+            typed_schema = False
+            metadata_done = mode in {"message", "delta"}
+            if metadata_done:
+                _openai_compatible_validate_metadata(state, value, depth, mode)
+            choice_metadata = False
+            if list_key == "choices":
+                choice_metadata = _openai_compatible_validate_choice_metadata(state, value, depth)
+            typed_scope = list_key in _OPENAI_COMPATIBLE_TYPED_CONTEXTS or (list_key is None and depth == 0)
+            if typed_scope and "type" in value:
+                item_type = _openai_compatible_read_text(
+                    state,
+                    value["type"], depth + 1, "response item type", exact=True,
+                    max_chars=MAX_OPENAI_COMPATIBLE_RESPONSE_TYPE_CHARS,
+                )
+                policy = _openai_compatible_typed_policy(item_type, list_key)
+                if policy is None:
+                    raise TranscriptionError("OpenAI-compatible speech API response item type is unsupported")
+                typed_text = None
+                if policy in {"text", "nontext"}:
+                    _, typed_text, _ = _openai_compatible_read_direct(state, value, depth, direct_keys)
+                if policy == "text":
+                    if "text" not in value or typed_text is None or not typed_text.strip():
+                        raise TranscriptionError("OpenAI-compatible speech API text item has no text")
+                    return _openai_compatible_single(typed_text, source_rank, seed)
+                if policy == "message":
+                    schema = "message"
+                    typed_schema = True
+                elif policy == "wrapper":
+                    schema = "wrapper"
+                else:
+                    _openai_compatible_validate_typed_requirements(state, value, depth, item_type)
+                    for key in ordered_sequence:
+                        if key not in value or value[key] is None:
+                            continue
+                        source = walk(value[key], depth + 1, True, list_key=key, choice_context=choice_context, mode="ordered")
+                        if source is None:
+                            _openai_compatible_bad(True, False)
+                    return ([], 0)
+            if schema == "message" and not metadata_done:
+                _openai_compatible_validate_metadata(state, value, depth, "message")
+            if schema == "message":
+                fields = direct_keys
+            elif mode == "audio":
+                fields = ("transcript",)
+            elif mode == "delta":
+                fields = ("text",)
+            elif mode == "ordered" or (list_item and list_key in ordered_keys):
+                fields = ordered_direct_keys.get(list_key, ("text",))
+            else:
+                fields = direct_keys
+            direct_text, _, saw_direct = _openai_compatible_read_direct(state, value, depth, fields)
+            if direct_text is not None and schema != "message":
+                return _openai_compatible_single(direct_text, source_rank, seed)
+            if mode == "audio":
+                current_keys = ()
+            elif mode == "delta":
+                current_keys = ("content",)
+            elif schema == "message":
+                current_keys = ("content", "audio", "delta")
+            elif mode == "ordered" or (list_item and (list_key in ordered_keys or list_key in _OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS)):
+                current_keys = ordered_sequence
+            elif list_key == "choices":
+                current_keys = choice_nested_keys
+            else:
+                current_keys = nested_keys
+            nested_sources: list[Source | None] = []
+            selected: Source | None = None
+            groups = (
+                tuple(key for key in ("output", "content", "parts", "message", "choices") if key in current_keys),
+                tuple(key for key in ("data", "results", "response", "audio", "delta") if key in current_keys),
+                tuple(key for key in ("segments", "chunks") if key in current_keys),
+            )
+            for group_index, group in enumerate(groups):
+                for key in group:
+                    if key not in value:
+                        continue
+                    child_ordered = key in ordered_keys
+                    source = walk(value[key], depth + 1, child_ordered, list_key=key, choice_context=choice_context, mode="ordered" if child_ordered else child_modes.get(key), seed=seed)
+                    if source is None:
+                        if (schema == "message" and key == "content") or mode == "delta" or child_ordered or key == "choices":
+                            _openai_compatible_bad(child_ordered, False)
+                        continue
+                    if key in {"segments", "chunks"}:
+                        source = (source[0], 0)
+                    nested_sources.append(source)
+                selected = _openai_compatible_choose(nested_sources)
+                if group_index < 2 and selected is not None and selected[0] and selected[1] >= 2 - group_index and schema != "message":
+                    return selected
+            if selected is not None and selected[0] and mode == "ordered" and list_key in _OPENAI_COMPATIBLE_TEXT_ITEM_KEYS:
+                selected = (selected[0], max(selected[1], 2))
+            if schema == "message":
+                if selected is not None and selected[0]:
+                    return selected
+                if typed_schema:
+                    raise TranscriptionError("OpenAI-compatible speech API response message has no text shape")
+                return ([], 0) if choice_context else None
+            if selected is not None:
+                return selected
+            if list_item and choice_metadata:
+                return ([], 0)
+            if mode in {"audio", "delta", "fallback", "wrapper"}:
+                return ([], 0)
+            return ([], 1) if saw_direct else None
+        finally:
+            state.active_containers.remove(container_id)
+
+    source = walk(payload, 0, False)
+    return " ".join(source[0] if source is not None else [])
 
 
 def _multipart_form_data(
@@ -3439,21 +4508,22 @@ def transcribe_with_openai_compatible_api(
         raise pending_remote_error
     json_error = False
     try:
-        payload = json.loads(raw, parse_constant=_reject_non_finite_json_number)
+        payload = json.loads(
+            raw,
+            object_pairs_hook=_reject_duplicate_json_keys,
+            parse_constant=_reject_non_finite_json_number,
+        )
     except (json.JSONDecodeError, RecursionError, ValueError, MemoryError):
         json_error = True
     if json_error:
         raise TranscriptionError("OpenAI-compatible speech API returned invalid JSON")
-    if not isinstance(payload, dict):
+    if type(payload) is not dict:
         raise TranscriptionError("OpenAI-compatible speech API returned invalid JSON")
     if payload.get("error"):
         error = payload["error"]
         detail = _sanitize_remote_error_detail(str(error.get("message") or error) if isinstance(error, dict) else str(error))
         raise TranscriptionError(f"OpenAI-compatible speech API failed: {detail}")
-    raw_text = payload.get("text")
-    if raw_text is not None and not isinstance(raw_text, str):
-        raise TranscriptionError("OpenAI-compatible speech API response text must be text")
-    text = (raw_text or "").strip()
+    text = _openai_compatible_transcript_text(payload)
     if not text:
         raise TranscriptionError("OpenAI-compatible speech API returned no transcript")
     _assert_text_length(text, field_name="transcript")
@@ -3536,7 +4606,7 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             if not configured_model_exists:
                 raise TranscriptionError("configured whisper model path is missing")
             if configured_model_backend == "faster-whisper" or configured_model_is_dir:
-                if faster_whisper_available():
+                if _faster_whisper_backend_available():
                     return "faster-whisper"
                 raise TranscriptionError("configured CTranslate2 model requires faster-whisper")
             if configured_model_backend == "whisper-cpp":
@@ -3546,17 +4616,19 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             if resolve_whisper_cpp_command():
                 return "whisper-cpp"
             raise TranscriptionError("configured model requires whisper.cpp")
-        if configured_model_backend == "faster-whisper" and faster_whisper_available():
+        if configured_model_backend == "faster-whisper" and _faster_whisper_backend_available():
             return "faster-whisper"
         if configured_model_backend == "whisper-cpp" and resolve_whisper_cpp_command():
             return "whisper-cpp"
         if _is_command_available("whisper"):
             return "whisper"
-        local_model = default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
+        local_model = default_ctranslate2_model_path(language)
         local_model_backend = model_backend_for_path(local_model) if local_model else ""
-        if local_model and local_model_backend == "faster-whisper" and faster_whisper_available():
+        if local_model_backend == "faster-whisper" and _faster_whisper_backend_available():
             return "faster-whisper"
-        if local_model and local_model_backend == "whisper-cpp" and resolve_whisper_cpp_command():
+        local_model = default_whisper_cpp_model_path(language)
+        local_model_backend = model_backend_for_path(local_model) if local_model else ""
+        if local_model_backend == "whisper-cpp" and resolve_whisper_cpp_command():
             return "whisper-cpp"
         raise TranscriptionError(
             "no transcriber available; install 'whisper', install faster-whisper, configure whisper.cpp with a model, "
@@ -3847,6 +4919,7 @@ def transcribe(
                 f"CTranslate2 model does not support language {language}; use a multilingual model"
             )
         _require_faster_whisper_available()
+        _require_faster_whisper_worker_available()
         preflight_audio_snapshot = _snapshot_private_file(
             audio_path,
             field_name="audio file for backend",

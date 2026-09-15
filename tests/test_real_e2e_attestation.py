@@ -20,6 +20,11 @@ class RealE2EAttestationStaticTests(unittest.TestCase):
         self.assertIn('source_attestation_snapshot(Path(repo_dir))', script)
         self.assertIn('real-e2e attestation source changed; rerun acceptance', script)
 
+    def test_acceptance_requires_explicit_desktop_opt_in(self) -> None:
+        script = (REPO_ROOT / "scripts" / "real-e2e-acceptance.sh").read_text(encoding="utf-8")
+        self.assertIn('SOC_RUN_GUI_LIVE_TESTS:-0', script)
+        self.assertIn('Refusing desktop acceptance test.', script)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -11,6 +11,7 @@ readonly MAX_RPM_PATH_DEPTH=32
 readonly MAX_RPM_FILE_BYTES=$((64 * 1024 * 1024))
 readonly MAX_RPM_TOTAL_FILE_BYTES=$((512 * 1024 * 1024))
 readonly MAX_RPM_LISTING_BYTES=$((16 * 1024 * 1024))
+readonly RPM_VERIFY_TIMEOUT_SECONDS=120
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
@@ -26,7 +27,7 @@ if [[ $# -gt 1 ]]; then
   exit 2
 fi
 
-for tool in rpm rpm2cpio cpio python3 realpath stat; do
+for tool in rpm rpm2cpio cpio find python3 realpath stat timeout; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found. Install rpm and cpio tooling.\n' "${tool}" >&2
     exit 1
@@ -43,6 +44,18 @@ if [[ "$(stat -c '%h' "${safe_fs}")" -ne 1 ]]; then
   exit 1
 fi
 safe_fs_cmd=(python3 "${safe_fs}")
+
+run_rpm_bounded() {
+  timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" rpm "$@"
+}
+
+run_rpm2cpio_bounded() {
+  timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" rpm2cpio "$@"
+}
+
+run_cpio_bounded() {
+  timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" cpio "$@"
+}
 
 contains_control_chars() {
   local value=$1
@@ -207,7 +220,7 @@ rpm_bytes="${snapshot_bytes}"
 metadata_file="${tmp_dir}/rpm-metadata.txt"
 scriptlets_file="${tmp_dir}/rpm-scriptlets.txt"
 triggers_file="${tmp_dir}/rpm-triggers.txt"
-rpm -qp --qf 'name=%{NAME}\nversion=%{VERSION}\narch=%{ARCH}\npackager=%{PACKAGER}\nvendor=%{VENDOR}\nurl=%{URL}\n' "${rpm_snapshot}" > "${metadata_file}"
+run_rpm_bounded -qp --qf 'name=%{NAME}\nversion=%{VERSION}\narch=%{ARCH}\npackager=%{PACKAGER}\nvendor=%{VENDOR}\nurl=%{URL}\n' "${rpm_snapshot}" > "${metadata_file}"
 grep -Fxq 'name=speed-of-cinnamon' "${metadata_file}"
 grep -Fxq 'arch=noarch' "${metadata_file}"
 rpm_metadata_version="$(awk -F= '$1 == "version" { print substr($0, index($0, "=") + 1); exit }' "${metadata_file}")"
@@ -219,7 +232,7 @@ grep -Fxq 'packager=H234598 <54270221+H234598@users.noreply.github.com>' "${meta
 grep -Fxq 'vendor=H234598' "${metadata_file}"
 grep -Fxq 'url=https://github.com/H234598/speed-of-cinnamon' "${metadata_file}"
 
-if ! rpm -qp --scripts "${rpm_snapshot}" > "${scriptlets_file}"; then
+if ! run_rpm_bounded -qp --scripts "${rpm_snapshot}" > "${scriptlets_file}"; then
   printf 'failed to query RPM scriptlets: %s\n' "${rpm_snapshot}" >&2
   exit 1
 fi
@@ -227,7 +240,7 @@ if [[ -s "${scriptlets_file}" ]]; then
   printf 'RPM scriptlets are not allowed for release packages: %s\n' "${rpm_snapshot}" >&2
   exit 1
 fi
-if ! rpm -qp --triggers "${rpm_snapshot}" > "${triggers_file}"; then
+if ! run_rpm_bounded -qp --triggers "${rpm_snapshot}" > "${triggers_file}"; then
   printf 'failed to query RPM triggers: %s\n' "${rpm_snapshot}" >&2
   exit 1
 fi
@@ -245,7 +258,7 @@ required_files=(
 file_list="${tmp_dir}/rpm-files.txt"
 file_metadata="${tmp_dir}/rpm-file-metadata.txt"
 
-rpm -qpl "${rpm_snapshot}" > "${file_list}"
+run_rpm_bounded -qpl "${rpm_snapshot}" > "${file_list}"
 python3 - <<'PY' "${file_list}" "${MAX_RPM_FILES}" "${MAX_RPM_PATH_CHARS}" "${MAX_RPM_PATH_DEPTH}" "${MAX_RPM_LISTING_BYTES}"
 from pathlib import Path
 import sys
@@ -300,7 +313,7 @@ for entry in read_bounded_utf8(file_list, "RPM file listing").split("\n"):
         raise SystemExit(f"RPM package contains unexpected path entry: {entry}")
 PY
 
-rpm -qp --qf '[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILECAPS}\t%{FILELINKTOS}\t%{FILESIZES}\n]' "${rpm_snapshot}" > "${file_metadata}"
+run_rpm_bounded -qp --qf '[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILECAPS}\t%{FILELINKTOS}\t%{FILESIZES}\n]' "${rpm_snapshot}" > "${file_metadata}"
 python3 - <<'PY' "${file_list}" "${file_metadata}" "${MAX_RPM_FILE_BYTES}" "${MAX_RPM_TOTAL_FILE_BYTES}" "${MAX_RPM_LISTING_BYTES}"
 from pathlib import Path
 import stat
@@ -413,12 +426,17 @@ do
   fi
 done
 
-(
+if ! (
   cd "${tmp_dir}"
-  rpm2cpio "${rpm_snapshot}" | cpio -idmu --no-absolute-filenames --quiet
-)
+  set -o pipefail
+  run_rpm2cpio_bounded "${rpm_snapshot}" |
+    run_cpio_bounded -idmu --no-absolute-filenames --quiet
+); then
+  printf 'failed to extract RPM package within the verification budget.\n' >&2
+  exit 1
+fi
 
-if ! unsupported_links="$(find "${tmp_dir}" -type l -print -quit)"; then
+if ! unsupported_links="$(timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" find "${tmp_dir}" -type l -print -quit)"; then
   printf 'failed to inspect RPM expansion for symlinks.\n' >&2
   exit 1
 fi
@@ -426,7 +444,7 @@ if [[ -n "${unsupported_links}" ]]; then
   printf 'RPM expansion contains unsupported symlink entries.\n' >&2
   exit 1
 fi
-if ! unsupported_hardlinks="$(find "${tmp_dir}" -type f -links +1 -print -quit)"; then
+if ! unsupported_hardlinks="$(timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" find "${tmp_dir}" -type f -links +1 -print -quit)"; then
   printf 'failed to inspect RPM expansion for hardlinks.\n' >&2
   exit 1
 fi
@@ -445,12 +463,18 @@ if ! grep -Fq 'from speed_of_cinnamon.cli import main' "${backend}"; then
   exit 1
 fi
 
-package_dir="$(find "${tmp_dir}/usr/lib" -type d -path '*/site-packages/speed_of_cinnamon' | sort | head -n 1)"
+if ! package_dir="$(timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" find "${tmp_dir}/usr/lib" -type d -path '*/site-packages/speed_of_cinnamon' -print -quit)"; then
+  printf 'failed to locate extracted Python package within the verification budget\n' >&2
+  exit 1
+fi
 if [[ -z "${package_dir}" ]]; then
   printf 'extracted Python package not found under site-packages\n' >&2
   exit 1
 fi
 
-python3 -m compileall -q "${package_dir}"
+if ! timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" python3 -m compileall -q "${package_dir}"; then
+  printf 'extracted Python package compilation failed or exceeded the verification budget\n' >&2
+  exit 1
+fi
 
 printf 'Verified %s\n' "${rpm_path}"

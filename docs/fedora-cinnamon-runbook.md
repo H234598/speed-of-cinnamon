@@ -61,13 +61,13 @@ Publishing requires repository secret `RELEASE_GITHUB_TOKEN` with `contents: wri
 To trigger the release workflow manually, use its defined inputs:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2 -f dry_run=true -f build_generic_rpm=false
+gh workflow run release.yml -f tag=vX.Y.Z -f dry_run=true -f build_generic_rpm=false
 ```
 
 For an explicit release run, run:
 
 ```bash
-gh workflow run release.yml -f tag=v0.1.2
+gh workflow run release.yml -f tag=vX.Y.Z
 ```
 
 Use the [Release Matrix](development.md#kanonische-release-matrix) for local validation targets and manual workflow

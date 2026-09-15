@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import inspect
 import io
 import os
 import shutil
@@ -64,6 +65,22 @@ def file_sha1s_for(files: tuple[str, ...], data: bytes) -> tuple[tuple[str, str]
 
 
 class ModelsTest(unittest.TestCase):
+    def test_model_lock_requires_bounded_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "model lock timeout is required"):
+            models._flock_retry(1, models.fcntl.LOCK_EX)
+
+    def test_model_lock_rejects_non_finite_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "model lock timeout is invalid"):
+            models._flock_retry(1, models.fcntl.LOCK_EX, timeout_seconds=float("inf"))
+
+    def test_model_lock_rejects_oversized_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "model lock timeout exceeds safe limit"):
+            models._flock_retry(
+                1,
+                models.fcntl.LOCK_EX,
+                timeout_seconds=models.MODEL_OPERATION_LOCK_TIMEOUT_SECONDS + 1,
+            )
+
     def test_model_operation_lock_retries_interrupted_exclusive_lock(self) -> None:
         operations: list[int] = []
 
@@ -79,7 +96,11 @@ class ModelsTest(unittest.TestCase):
 
         self.assertEqual(
             operations,
-            [models.fcntl.LOCK_EX, models.fcntl.LOCK_EX, models.fcntl.LOCK_UN],
+            [
+                models.fcntl.LOCK_EX | models.fcntl.LOCK_NB,
+                models.fcntl.LOCK_EX | models.fcntl.LOCK_NB,
+                models.fcntl.LOCK_UN,
+            ],
         )
 
     def test_fsync_retries_interrupted_calls(self) -> None:
@@ -424,6 +445,24 @@ class ModelsTest(unittest.TestCase):
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(
                 '{"model.bin":{"checksum":"' + ("a" * 40) + '","size":NaN,"mtime_ns":1}}',
+                encoding="utf-8",
+            )
+
+            models._load_model_checksum_cache()
+
+            self.assertFalse(cache_path.exists())
+
+    def test_model_checksum_cache_removes_duplicate_json_keys(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                '{"model.bin":{"checksum":"' + ("a" * 40) + '","size":1,"size":2,"mtime_ns":1}}',
                 encoding="utf-8",
             )
 
@@ -1366,6 +1405,23 @@ class ModelsTest(unittest.TestCase):
             with mock.patch.object(models, "assert_no_symlink_ancestors", side_effect=assert_no_with_race):
                 with self.assertRaisesRegex(models.ModelError, "model path must not pass through a symlink"):
                     models.download_model("ct2-target-race", force=True)
+
+    def test_atomic_model_path_check_rejects_leaf_symlink_created_after_ancestor_check(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            path = root / "model.bin"
+            marker = root / "marker"
+            marker.write_bytes(b"marker")
+            original = models.assert_no_symlink_ancestors
+
+            def assert_no_then_replace(check_path: Path, field_name: str = "path") -> None:
+                original(check_path, field_name=field_name)
+                if check_path == path:
+                    check_path.symlink_to(marker)
+
+            with mock.patch.object(models, "assert_no_symlink_ancestors", side_effect=assert_no_then_replace):
+                with self.assertRaisesRegex(models.ModelError, "model path must not be a symlink"):
+                    models._assert_model_path_for_atomic_replace(path, root)
 
     def test_download_directory_model_uses_nofollow_parent_creation(self) -> None:
         data = b"small model file"
@@ -3950,6 +4006,22 @@ class ModelsTest(unittest.TestCase):
             self.assertEqual(orphan.read_bytes(), b"new orphan")
             self.assertEqual(replacement.read_bytes(), b"old orphan")
 
+    def test_model_orphan_cleanup_fails_closed_at_entry_budget(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            model_path = root / "model.bin"
+            orphan_paths = [root / f".model.bin.{index:016x}.tmp" for index in range(3)]
+            old_mtime = time.time() - models.MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS - 60
+            for orphan in orphan_paths:
+                orphan.write_bytes(b"orphan")
+                os.utime(orphan, (old_mtime, old_mtime))
+
+            with mock.patch.object(models, "MAX_MODEL_ORPHAN_DIRECTORY_ENTRIES", 2):
+                with self.assertRaisesRegex(models.ModelError, "failed to scan model orphan parent"):
+                    models._remove_model_orphan_paths(model_path, root)
+
+            self.assertTrue(all(orphan.exists() for orphan in orphan_paths))
+
     def test_unlink_model_file_preserves_replacement_after_cleanup_check(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -5555,6 +5627,13 @@ class ModelsTest(unittest.TestCase):
     def test_download_model_rejects_non_boolean_force(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "force must be a boolean"):
             models.download_model("tiny.en", force="yes")  # type: ignore[arg-type]
+
+    def test_download_model_uses_verified_status_without_exists_preflight(self) -> None:
+        for helper in (models._download_directory_model, models._download_model_transaction):
+            with self.subTest(helper=helper.__name__):
+                source = inspect.getsource(helper)
+                self.assertIn("if not force", source)
+                self.assertNotIn("if path.exists() and not force:", source)
 
     def test_assert_download_url_rejects_control_character(self) -> None:
         with self.assertRaisesRegex(models.ModelError, "contains invalid control character"):

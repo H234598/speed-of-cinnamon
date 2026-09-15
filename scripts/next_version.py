@@ -4,9 +4,11 @@ from __future__ import annotations
 import argparse
 import os
 import re
+import selectors
 import sys
 import subprocess  # nosec B404
 import stat
+import time
 from pathlib import Path
 try:
     import tomllib
@@ -31,6 +33,88 @@ PATCHES_PER_MINOR = 100
 MINORS_PER_MAJOR = 100
 VERSION_PATTERN = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 MAX_PROJECT_METADATA_BYTES = 1 << 20
+MAX_GIT_OUTPUT_BYTES = 4 * 1024
+GIT_OUTPUT_READ_CHUNK_BYTES = 4 * 1024
+GIT_TIMEOUT_SECONDS = 30.0
+GIT_REAP_TIMEOUT_SECONDS = 1.0
+
+
+def _reap_process_bounded(process: subprocess.Popen[bytes]) -> None:
+    if process.poll() is None:
+        try:
+            process.kill()
+        except (OSError, ValueError):
+            pass
+    try:
+        process.wait(timeout=GIT_REAP_TIMEOUT_SECONDS)
+    except (OSError, ValueError, subprocess.TimeoutExpired):
+        pass
+
+
+def _run_git_bounded(argv: list[str]) -> subprocess.CompletedProcess[str]:
+    process = subprocess.Popen(  # nosec B603
+        [*argv],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    output = {"stdout": bytearray(), "stderr": bytearray()}
+    streams = (("stdout", process.stdout), ("stderr", process.stderr))
+    deadline = time.monotonic() + GIT_TIMEOUT_SECONDS
+    selector = None
+    try:
+        selector = selectors.DefaultSelector()
+        for name, stream in streams:
+            if stream is not None:
+                selector.register(stream, selectors.EVENT_READ, name)
+        while selector.get_map():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(argv, GIT_TIMEOUT_SECONDS)
+            events = selector.select(remaining)
+            if not events:
+                raise subprocess.TimeoutExpired(argv, GIT_TIMEOUT_SECONDS)
+            for key, _ in events:
+                stream = key.fileobj
+                chunk = os.read(stream.fileno(), GIT_OUTPUT_READ_CHUNK_BYTES)
+                if not chunk:
+                    selector.unregister(stream)
+                    stream.close()
+                    continue
+                total_bytes = sum(len(value) for value in output.values()) + len(chunk)
+                if total_bytes > MAX_GIT_OUTPUT_BYTES:
+                    _reap_process_bounded(process)
+                    raise GitEnvironmentError(
+                        f"git output is too large (max {MAX_GIT_OUTPUT_BYTES} bytes)"
+                    )
+                output[key.data].extend(chunk)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(argv, GIT_TIMEOUT_SECONDS)
+        returncode = process.wait(timeout=remaining)
+    except subprocess.TimeoutExpired as exc:
+        _reap_process_bounded(process)
+        raise GitEnvironmentError("git command timed out") from exc
+    except BaseException:
+        _reap_process_bounded(process)
+        raise
+    finally:
+        if selector is not None:
+            selector.close()
+        for _, stream in streams:
+            if stream is not None:
+                stream.close()
+
+    stdout = bytes(output["stdout"]).decode("utf-8", errors="replace")
+    stderr = bytes(output["stderr"]).decode("utf-8", errors="replace")
+    result = subprocess.CompletedProcess(argv, returncode, stdout=stdout, stderr=stderr)
+    if returncode != 0:
+        raise subprocess.CalledProcessError(
+            returncode,
+            argv,
+            output=stdout,
+            stderr=stderr,
+        )
+    return result
 
 
 def _assert_non_negative_int(name: str, value: int) -> int:
@@ -96,11 +180,8 @@ def commits_since_ref(ref: str) -> int:
         raise UserInputError("ref contains invalid control characters")
     try:
         # Fixed git argv, shell=False, ref is validated as text.
-        result = subprocess.run(  # nosec
-            ["git", "rev-list", "--count", "--end-of-options", f"{ref}..HEAD"],
-            check=True,
-            text=True,
-            capture_output=True,
+        result = _run_git_bounded(
+            ["git", "rev-list", "--count", "--end-of-options", f"{ref}..HEAD"]
         )
     except FileNotFoundError as exc:
         raise GitEnvironmentError("git command not available") from exc
@@ -214,16 +295,14 @@ def tag_exists(tag: str) -> bool:
     tag = normalize_tag(tag)
     try:
         # Fixed git argv, shell=False, tag is normalized first.
-        rc = subprocess.run(  # nosec
-            ["git", "tag", "-l", tag],
-            text=True,
-            capture_output=True,
-            check=True,
-        )
+        rc = _run_git_bounded(["git", "tag", "-l", tag])
     except FileNotFoundError as exc:
         raise GitEnvironmentError("git command not available") from exc
     except subprocess.CalledProcessError as exc:
-        raise GitEnvironmentError(f"failed to inspect git tags: {exc.stderr.strip()}") from exc
+        stderr = (exc.stderr or "").strip()
+        if "not a git repository" in stderr.lower():
+            return False
+        raise GitEnvironmentError(f"failed to inspect git tags: {stderr}") from exc
     return tag in (rc.stdout or "").splitlines()
 
 def ensure_tag_exists(tag: str) -> None:

@@ -3,6 +3,7 @@ set -euo pipefail
 umask 077
 IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+readonly GIT_TIMEOUT_SECONDS=120
 export PATH="${TRUSTED_COMMAND_PATH}"
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -10,7 +11,7 @@ expected_wiki_url="https://github.com/H234598/speed-of-cinnamon.wiki.git"
 wiki_url="${WIKI_URL:-${expected_wiki_url}}"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 
-for tool in git python3 stat command realpath; do
+for tool in git timeout python3 stat command realpath; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
@@ -21,6 +22,10 @@ if [[ ! -f "${safe_fs}" || -L "${safe_fs}" ]]; then
   exit 1
 fi
 safe_fs_cmd=(python3 "${safe_fs}")
+
+run_git_bounded() {
+  timeout --signal=TERM --kill-after=5s "${GIT_TIMEOUT_SECONDS}s" git "$@"
+}
 if [[ "${wiki_url}" != "${expected_wiki_url}" ]]; then
   printf 'Invalid wiki URL: expected %s, got %s\n' "${expected_wiki_url}" "${wiki_url}" >&2
   exit 1
@@ -95,7 +100,7 @@ if ! work_dir_identity="$("${safe_fs_cmd[@]}" identity publish-wiki "${work_dir}
   exit 1
 fi
 
-if ! git clone "${wiki_url}" "${work_dir}/wiki"; then
+if ! run_git_bounded clone "${wiki_url}" "${work_dir}/wiki"; then
   printf 'failed to clone wiki repository; refusing to initialize a replacement wiki checkout: %s\n' "${wiki_url}" >&2
   exit 1
 fi
@@ -115,17 +120,25 @@ require_source_file "${repo_dir}/docs/fedora-cinnamon-runbook.md" "wiki source"
 "${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/fedora-cinnamon-runbook.md" "${work_dir}/wiki/Fedora-Cinnamon-Runbook.md" 0644
 
 cd "${work_dir}/wiki"
-remote_head_ref="$(git symbolic-ref --quiet --short refs/remotes/origin/HEAD || true)"
+if ! remote_head_ref="$(run_git_bounded symbolic-ref --quiet --short refs/remotes/origin/HEAD)"; then
+  printf 'failed to determine wiki remote default branch.\n' >&2
+  exit 1
+fi
 wiki_branch="master"
 if [[ "${remote_head_ref}" == origin/* && "${remote_head_ref#origin/}" != "" ]]; then
   wiki_branch="${remote_head_ref#origin/}"
 fi
-if [[ -z "$(git status --porcelain -- .)" ]]; then
+wiki_status=""
+if ! wiki_status="$(run_git_bounded status --porcelain -- .)"; then
+  printf 'failed to inspect wiki working tree.\n' >&2
+  exit 1
+fi
+if [[ -z "${wiki_status}" ]]; then
   printf 'Wiki already up to date.\n'
   exit 0
 fi
 
-git add Home.md User-Guide.md CLI-Reference.md Architecture.md Development.md Fedora-Cinnamon-Runbook.md
-git commit -m "Update Speed of Cinnamon documentation"
-git push origin "HEAD:${wiki_branch}"
+run_git_bounded add Home.md User-Guide.md CLI-Reference.md Architecture.md Development.md Fedora-Cinnamon-Runbook.md
+run_git_bounded commit -m "Update Speed of Cinnamon documentation"
+run_git_bounded push origin "HEAD:${wiki_branch}"
 printf 'Updated wiki at %s\n' "${wiki_url}"

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import fcntl
 import json
+import math
 import os
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator, Mapping, Sequence
@@ -22,6 +24,7 @@ BACKUP_STATE_SCHEMA_VERSION = 1
 MAX_BACKUP_STATE_BYTES = 512_000
 MAX_BACKUP_STATE_JOBS = 256
 MAX_BACKUP_STATE_ARTIFACTS_PER_JOB = 10_000
+BACKUP_STATE_LOCK_TIMEOUT_SECONDS = 5.0
 _STATUSES = {"running", "success", "failed", "skipped"}
 
 
@@ -45,6 +48,37 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
             raise BackupStateError("backup state contains a duplicate key")
         result[key] = value
     return result
+
+
+def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
+    if timeout_seconds is None:
+        raise BackupStateError("backup state lock timeout is required")
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+        raise BackupStateError("backup state lock timeout is invalid")
+    try:
+        timeout = float(timeout_seconds)
+    except (OverflowError, ValueError) as exc:
+        raise BackupStateError("backup state lock timeout is invalid") from exc
+    if not math.isfinite(timeout) or timeout <= 0:
+        raise BackupStateError("backup state lock timeout is invalid")
+    if timeout > BACKUP_STATE_LOCK_TIMEOUT_SECONDS:
+        raise BackupStateError("backup state lock timeout exceeds safe limit")
+    if operation & fcntl.LOCK_UN:
+        fcntl.flock(fd, operation)
+        return
+    deadline = time.monotonic() + timeout
+    nonblocking_operation = operation | fcntl.LOCK_NB
+    while True:
+        try:
+            fcntl.flock(fd, nonblocking_operation)
+            return
+        except InterruptedError:
+            continue
+        except BlockingIOError:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise BackupStateError("backup state lock acquisition timed out")
+            time.sleep(min(0.05, remaining))
 
 
 def _safe_text(value: object, *, field_name: str, max_chars: int = 4096) -> str:
@@ -154,7 +188,11 @@ class BackupStateStore:
             assert_fd_is_regular_private_file(fd, field_name="backup state lock", require_private_mode=True)
             while True:
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_EX)
+                    _flock_retry(
+                        fd,
+                        fcntl.LOCK_EX,
+                        timeout_seconds=BACKUP_STATE_LOCK_TIMEOUT_SECONDS,
+                    )
                     break
                 except InterruptedError:
                     continue
@@ -169,7 +207,11 @@ class BackupStateStore:
             cleanup_errors: list[BaseException] = []
             if fd is not None:
                 try:
-                    fcntl.flock(fd, fcntl.LOCK_UN)
+                    _flock_retry(
+                        fd,
+                        fcntl.LOCK_UN,
+                        timeout_seconds=BACKUP_STATE_LOCK_TIMEOUT_SECONDS,
+                    )
                 except BaseException as cleanup_error:
                     cleanup_errors.append(cleanup_error)
                 try:
@@ -189,19 +231,25 @@ class BackupStateStore:
                     raise BackupStateError("backup state lock cleanup failed") from cleanup_errors[0]
 
     def _read_unlocked(self) -> dict[str, object]:
-        if not self.path.exists():
-            return _empty_state()
         try:
             fd = open_file_without_following_symlinks(self.path, os.O_RDONLY, field_name="backup state")
         except FileNotFoundError:
             return _empty_state()
         try:
+            chunks: list[bytes] = []
+            total_bytes = 0
             while True:
                 try:
-                    payload = os.read(fd, MAX_BACKUP_STATE_BYTES + 1)
-                    break
+                    chunk = os.read(fd, MAX_BACKUP_STATE_BYTES + 1 - total_bytes)
                 except InterruptedError:
                     continue
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                total_bytes += len(chunk)
+                if total_bytes > MAX_BACKUP_STATE_BYTES:
+                    raise BackupStateError("backup state is too large")
+            payload = b"".join(chunks)
         finally:
             os.close(fd)
         if len(payload) > MAX_BACKUP_STATE_BYTES:
@@ -214,7 +262,14 @@ class BackupStateStore:
             )
         except BackupStateError:
             raise
-        except (UnicodeDecodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+        except (
+            UnicodeDecodeError,
+            json.JSONDecodeError,
+            TypeError,
+            ValueError,
+            RecursionError,
+            MemoryError,
+        ) as exc:
             raise BackupStateError("backup state is invalid") from exc
         return _normalize_state(document)
 

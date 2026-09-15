@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import BinaryIO
 
 from .app_logging import log_event
+from .insert_methods import normalize_insert_method
 from .path_safety import (
     _rename_without_replacing,
     assert_no_symlink_ancestors,
@@ -27,11 +28,15 @@ from .path_safety import (
     write_text_atomically_without_following_symlinks,
 )
 from .paths import state_dir
-from .proc_safety import _read_proc_boot_id, _read_proc_stat, _read_proc_stat_path
+from .proc_safety import _bounded_proc_entries, _read_proc_boot_id, _read_proc_stat, _read_proc_stat_path
 
 
 class OutputError(RuntimeError):
     pass
+
+
+class OutputNotInsertedError(OutputError):
+    """Insertion failed before any paste keypress or direct typing occurred."""
 
 
 class _OutputProcessError(OutputError):
@@ -88,6 +93,8 @@ MAX_ERROR_CHARS = 1_024
 MAX_PASTE_TIMEOUT_SECONDS = 10
 MAX_TYPE_TIMEOUT_SECONDS = 30
 MAX_EXEC_TIMEOUT_SECONDS = 10
+MAX_OUTPUT_TIMEOUT_SECONDS = max(MAX_TYPE_TIMEOUT_SECONDS, MAX_EXEC_TIMEOUT_SECONDS)
+MAX_PROCESS_STOP_TIMEOUT_SECONDS = 1.0
 MAX_CLIPBOARD_PENDING_QUARANTINES = 8
 MAX_CLIPBOARD_PENDING_QUARANTINE_CONTEXT_LENGTH = 128
 MAX_CLIPBOARD_PENDING_QUARANTINE_BYTES = 16 * 1024
@@ -96,6 +103,7 @@ MAX_DUPLICATE_TEXT_SECONDS = 2.5
 MAX_DUPLICATE_LOCK_SECONDS = 30.0
 MAX_CLIPBOARD_DEDUP_STATE_BYTES = 1_000_000
 MAX_CLIPBOARD_DEDUP_LOCK_BYTES = 1_024
+MAX_PROC_FD_DIRECTORY_ENTRIES = 100_000
 CLIPBOARD_DEDUP_LOCK_RETRY_ATTEMPTS = 5
 CLIPBOARD_DEDUP_LOCK_RETRY_DELAY_SECONDS = 0.01
 CLIPBOARD_DEDUP_STATE_FILE = "clipboard-last.json"
@@ -279,6 +287,15 @@ def _reject_non_finite_json_number(value: str) -> object:
     raise ValueError(f"non-finite JSON number is not allowed: {value}")
 
 
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key is not allowed")
+        result[key] = value
+    return result
+
+
 def _clipboard_dedup_context_for_window_snapshot(snapshot: tuple[str, str, str] | None) -> str | None:
     if snapshot is None:
         return None
@@ -317,13 +334,6 @@ def _read_clipboard_dedup_state_entry() -> tuple[bool, tuple[str, float], bool]:
     except RuntimeError:
         return False, ("", 0.0), False
     try:
-        path_exists = path.exists()
-        path_is_symlink = path.is_symlink()
-    except OSError:
-        return False, ("", 0.0), False
-    if not path_exists and not path_is_symlink:
-        return True, ("", 0.0), False
-    try:
         raw = read_text_without_following_symlinks(
             path,
             field_name="clipboard dedupe state",
@@ -331,10 +341,22 @@ def _read_clipboard_dedup_state_entry() -> tuple[bool, tuple[str, float], bool]:
         )
     except FileNotFoundError:
         return True, ("", 0.0), False
-    except (OSError, UnicodeDecodeError):
+    except UnicodeDecodeError:
+        return False, ("", 0.0), False
+    except OSError:
+        try:
+            path.lstat()
+        except FileNotFoundError:
+            return True, ("", 0.0), False
+        except OSError:
+            return False, ("", 0.0), False
         return False, ("", 0.0), False
     try:
-        payload = json.loads(raw, parse_constant=_reject_non_finite_json_number)
+        payload = json.loads(
+            raw,
+            parse_constant=_reject_non_finite_json_number,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except (TypeError, ValueError, RecursionError, MemoryError):
         return False, ("", 0.0), False
     if not isinstance(payload, dict):
@@ -510,12 +532,22 @@ def _read_clipboard_dedup_lock_lines_at(parent_fd: int, name: str) -> list[str] 
         file_stat = os.fstat(fd)
         if not stat.S_ISREG(file_stat.st_mode) or getattr(file_stat, "st_nlink", 1) != 1:
             return None
+        chunks: list[bytes] = []
+        total_bytes = 0
         while True:
             try:
-                raw = os.read(fd, MAX_CLIPBOARD_DEDUP_LOCK_BYTES + 1)
+                raw = os.read(
+                    fd,
+                    min(65_536, MAX_CLIPBOARD_DEDUP_LOCK_BYTES + 1 - total_bytes),
+                )
             except InterruptedError:
                 continue
-            break
+            if not raw:
+                break
+            chunks.append(raw)
+            total_bytes += len(raw)
+            if total_bytes > MAX_CLIPBOARD_DEDUP_LOCK_BYTES:
+                return None
     except OSError as exc:
         primary_error = exc
         return None
@@ -538,8 +570,7 @@ def _read_clipboard_dedup_lock_lines_at(parent_fd: int, name: str) -> list[str] 
                     raise
     if cleanup_failed:
         return None
-    if len(raw) > MAX_CLIPBOARD_DEDUP_LOCK_BYTES:
-        return None
+    raw = b"".join(chunks)
     try:
         text = raw.decode("utf-8")
     except UnicodeDecodeError:
@@ -1087,7 +1118,11 @@ def _read_clipboard_pending_quarantine_ledger() -> tuple[
     if final_status != _CLIPBOARD_PENDING_LEDGER_VALID or final_identity != identity:
         return _CLIPBOARD_PENDING_LEDGER_INVALID, {}, None
     try:
-        payload = json.loads(raw, parse_constant=_reject_non_finite_json_number)
+        payload = json.loads(
+            raw,
+            parse_constant=_reject_non_finite_json_number,
+            object_pairs_hook=_reject_duplicate_json_keys,
+        )
     except (TypeError, ValueError, RecursionError, MemoryError):
         return _CLIPBOARD_PENDING_LEDGER_INVALID, {}, None
     if not isinstance(payload, dict) or set(payload) != {"entries"}:
@@ -1377,7 +1412,13 @@ def _record_clipboard_insertion(text: str, method: str, *, dedupe_context: str |
     return True
 
 
-def _commit_clipboard_insertion(text: str, method: str, *, dedupe_context: str | None = None) -> bool:
+def _commit_clipboard_insertion(
+    text: str,
+    method: str,
+    *,
+    dedupe_context: str | None = None,
+    clear_pending_quarantine: bool = True,
+) -> bool:
     global _LAST_CLIPBOARD_TEXT, _LAST_CLIPBOARD_METHOD, _LAST_CLIPBOARD_INSERTION, _LAST_CLIPBOARD_CONTEXT
     cleaned = _normalize_clipboard_text(text)
     if not cleaned:
@@ -1399,7 +1440,11 @@ def _commit_clipboard_insertion(text: str, method: str, *, dedupe_context: str |
     _LAST_CLIPBOARD_METHOD = method
     _LAST_CLIPBOARD_INSERTION = time.monotonic()
     _LAST_CLIPBOARD_CONTEXT = dedupe_context
-    if not _clear_clipboard_pending_quarantine(cleaned, method, dedupe_context=dedupe_context):
+    if clear_pending_quarantine and not _clear_clipboard_pending_quarantine(
+        cleaned,
+        method,
+        dedupe_context=dedupe_context,
+    ):
         _log_clipboard_pending_quarantine_issue(
             "clipboard_pending_quarantine_clear_failed",
             "clipboard pending quarantine clear failed",
@@ -1759,6 +1804,8 @@ def _run_with_input(
         raise OutputError("timeout must be an integer")
     if timeout <= 0:
         raise OutputError("timeout must be positive")
+    if timeout > MAX_OUTPUT_TIMEOUT_SECONDS:
+        raise OutputError(f"timeout must not exceed {MAX_OUTPUT_TIMEOUT_SECONDS}")
     if max_output_chars is None:
         max_output_chars = MAX_OUTPUT_CHARS
     if not isinstance(max_output_chars, int) or isinstance(max_output_chars, bool):
@@ -1978,9 +2025,8 @@ def _bounded_command_output_bytes(
 def _same_session_process_identities(session_id: int) -> dict[int, str] | None:
     if not isinstance(session_id, int) or isinstance(session_id, bool) or session_id <= 0:
         return None
-    try:
-        proc_entries = tuple(Path("/proc").iterdir())
-    except OSError:
+    proc_entries = _bounded_proc_entries()
+    if proc_entries is None:
         return None
     process_identities: dict[int, str] = {}
     scan_incomplete = False
@@ -2016,9 +2062,8 @@ def _same_session_process_identities(session_id: int) -> dict[int, str] | None:
 def _process_tree_descendant_identities(process_id: int) -> dict[int, str] | None:
     if not isinstance(process_id, int) or isinstance(process_id, bool) or process_id <= 0:
         return None
-    try:
-        proc_entries = tuple(Path("/proc").iterdir())
-    except OSError:
+    proc_entries = _bounded_proc_entries()
+    if proc_entries is None:
         return None
     children_by_parent: dict[int, set[int]] = {}
     process_identities: dict[int, str] = {}
@@ -2069,9 +2114,8 @@ def _process_pipe_holder_identities(process: subprocess.Popen[bytes]) -> dict[in
         )
     if not pipe_inodes:
         return {}
-    try:
-        proc_entries = tuple(Path("/proc").iterdir())
-    except OSError:
+    proc_entries = _bounded_proc_entries()
+    if proc_entries is None:
         return None
     current_uid = os.getuid() if hasattr(os, "getuid") else None
     holders: dict[int, str] = {}
@@ -2099,21 +2143,23 @@ def _process_pipe_holder_identities(process: subprocess.Popen[bytes]) -> dict[in
         except (OSError, UnicodeDecodeError, IndexError, ValueError):
             continue
         try:
-            fd_entries = tuple(proc_entry.joinpath("fd").iterdir())
+            with os.scandir(proc_entry.joinpath("fd")) as fd_entries:
+                for fd_index, fd_entry in enumerate(fd_entries):
+                    if fd_index >= MAX_PROC_FD_DIRECTORY_ENTRIES:
+                        return None
+                    try:
+                        target = os.readlink(fd_entry.path)
+                    except FileNotFoundError:
+                        continue
+                    except OSError:
+                        continue
+                    if target in pipe_inodes:
+                        holders[process_id] = start_time
+                        break
         except FileNotFoundError:
             continue
         except OSError:
             continue
-        for fd_entry in fd_entries:
-            try:
-                target = os.readlink(fd_entry)
-            except FileNotFoundError:
-                continue
-            except OSError:
-                continue
-            if target in pipe_inodes:
-                holders[process_id] = start_time
-                break
     return holders
 
 
@@ -2229,8 +2275,24 @@ def _kill_output_process_tree(process_identities: dict[int, str]) -> bool:
     return not cleanup_incomplete
 
 
+def _validated_process_stop_timeout(timeout_seconds: float) -> float:
+    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+        raise OutputError("process stop timeout must be numeric")
+    try:
+        timeout = float(timeout_seconds)
+    except (OverflowError, ValueError) as exc:
+        raise OutputError("process stop timeout must be finite") from exc
+    if not math.isfinite(timeout):
+        raise OutputError("process stop timeout must be finite")
+    if timeout <= 0:
+        raise OutputError("process stop timeout must be positive")
+    if timeout > MAX_PROCESS_STOP_TIMEOUT_SECONDS:
+        raise OutputError(f"process stop timeout must not exceed {MAX_PROCESS_STOP_TIMEOUT_SECONDS}")
+    return timeout
+
+
 def _wait_for_output_process_tree_stop(process_identities: dict[int, str], timeout_seconds: float = 1.0) -> bool:
-    deadline = time.monotonic() + timeout_seconds
+    deadline = time.monotonic() + _validated_process_stop_timeout(timeout_seconds)
     while True:
         tree_live = _process_tree_has_live_processes(process_identities)
         if tree_live is False:
@@ -2243,9 +2305,8 @@ def _wait_for_output_process_tree_stop(process_identities: dict[int, str], timeo
 def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
     if not isinstance(process_group_id, int) or isinstance(process_group_id, bool) or process_group_id <= 0:
         return None
-    try:
-        proc_entries = tuple(Path("/proc").iterdir())
-    except OSError:
+    proc_entries = _bounded_proc_entries()
+    if proc_entries is None:
         return None
     scan_incomplete = False
     group_live = False
@@ -2283,7 +2344,7 @@ def _process_group_has_live_descendants(process_group_id: int) -> bool | None:
 
 
 def _wait_for_output_process_group_stop(process_group_id: int, timeout_seconds: float = 1.0) -> bool:
-    deadline = time.monotonic() + timeout_seconds
+    deadline = time.monotonic() + _validated_process_stop_timeout(timeout_seconds)
     while True:
         descendants = _process_group_has_live_descendants(process_group_id)
         if descendants is False:
@@ -2553,6 +2614,8 @@ def _run_stdout(
         raise OutputError("timeout must be an integer")
     if timeout <= 0:
         raise OutputError("timeout must be positive")
+    if timeout > MAX_OUTPUT_TIMEOUT_SECONDS:
+        raise OutputError(f"timeout must not exceed {MAX_OUTPUT_TIMEOUT_SECONDS}")
 
     command = argv[0].strip()
     if not command:
@@ -2596,6 +2659,8 @@ def _run_stdout_raw(
         raise OutputError("timeout must be an integer")
     if timeout <= 0:
         raise OutputError("timeout must be positive")
+    if timeout > MAX_OUTPUT_TIMEOUT_SECONDS:
+        raise OutputError(f"timeout must not exceed {MAX_OUTPUT_TIMEOUT_SECONDS}")
     command = argv[0].strip()
     if not command:
         raise OutputError("command is empty")
@@ -2701,7 +2766,7 @@ def set_clipboard(text: str, *, allowed_helpers: tuple[str, ...] | None = None) 
     candidates = (
         ("xclip", ["xclip", "-selection", "clipboard"]),
         ("xsel", ["xsel", "--clipboard", "--input"]),
-        ("wl-copy", ["wl-copy"]),
+        ("wl-copy", ["wl-copy", "--type", "text/plain;charset=utf-8"]),
     )
     for helper, command in candidates:
         if allowed_helpers is not None and helper not in allowed_helpers:
@@ -2824,36 +2889,6 @@ def _assert_clipboard_text_snapshot_unchanged(snapshot_available: bool, snapshot
         raise OutputError("refusing automatic paste without readable text clipboard snapshot")
     if current_available != snapshot_available or current_text != snapshot_text:
         raise OutputError("clipboard changed before automatic paste")
-
-
-def _restore_clipboard_snapshot_after_failed_paste(
-    inserted_text: str,
-    snapshot_available: bool,
-    snapshot_text: str,
-    *,
-    allowed_helpers: tuple[str, ...] | None = None,
-) -> bool:
-    try:
-        if not snapshot_available:
-            return True
-        if not _clipboard_still_contains_inserted_text(inserted_text):
-            return True
-        if _clipboard_has_non_text_payload():
-            return True
-        set_clipboard(snapshot_text, allowed_helpers=allowed_helpers)
-        return True
-    except Exception:
-        try:
-            log_event(
-                "warning",
-                "clipboard_restore_after_failed_automatic_paste_failed",
-                error="clipboard restore after failed automatic paste failed",
-            )
-        except Exception:
-            return False
-        return False
-    except BaseException:
-        raise
 
 
 def paste_from_clipboard(
@@ -3087,32 +3122,8 @@ def _refresh_pending_clipboard_dedup_state(
 def _handle_uncertain_clipboard_paste(
     text: str,
     dedupe_context: str | None,
-    snapshot_available: bool,
-    snapshot_text: str,
-    *,
-    restore_allowed: bool = True,
-    restore_confirmed: bool | None = None,
 ) -> None:
     primary_error = sys.exc_info()[1]
-    if restore_confirmed is None:
-        restore_confirmed = True
-        if restore_allowed:
-            try:
-                restore_confirmed = _restore_clipboard_snapshot_after_failed_paste(
-                    text,
-                    snapshot_available,
-                    snapshot_text,
-                    allowed_helpers=("xclip", "xsel"),
-                )
-            except BaseException:
-                if primary_error is None:
-                    raise
-                primary_error.add_note("clipboard restore after failed automatic paste failed")
-                restore_confirmed = False
-        else:
-            restore_confirmed = False
-    if not restore_confirmed and primary_error is not None:
-        primary_error.add_note("clipboard restore after failed automatic paste was not confirmed")
     try:
         refreshed = _refresh_pending_clipboard_dedup_state(
             text,
@@ -3143,19 +3154,64 @@ def _fallback_to_clipboard_only(text: str, *, dedupe_context: str | None = None)
     )
 
 
-def _commit_clipboard_only_after_paste_not_attempted(text: str, dedupe_context: str | None) -> bool:
-    if not _set_clipboard_pending_quarantine(text, "clipboard-paste", dedupe_context=dedupe_context):
-        return False
-    if not _commit_clipboard_insertion(text, "clipboard"):
-        return False
-    return _clear_clipboard_pending_quarantine(
-        text,
-        "clipboard-paste",
-        dedupe_context=dedupe_context,
-    )
+def _commit_clipboard_only_after_paste_not_attempted(
+    text: str,
+    dedupe_context: str | None,
+    clipboard_helper: str,
+) -> bool:
+    snapshot_available, snapshot_text = _read_text_clipboard_snapshot()
+    if not snapshot_available:
+        raise OutputNotInsertedError(
+            "automatic paste was not attempted; clipboard fallback could not be verified"
+        )
+    if snapshot_text != text:
+        try:
+            _assert_clipboard_text_snapshot_unchanged(snapshot_available, snapshot_text)
+        except OutputError:
+            raise OutputNotInsertedError(
+                "automatic paste was not attempted; changed clipboard cannot be safely overwritten"
+            ) from None
+        try:
+            set_clipboard(text, allowed_helpers=(clipboard_helper,))
+        except OutputError:
+            raise OutputNotInsertedError(
+                "automatic paste was not attempted; clipboard fallback rewrite failed"
+            ) from None
+        try:
+            clipboard_matches = _clipboard_still_contains_inserted_text(text)
+        except OutputError:
+            raise OutputNotInsertedError(
+                "automatic paste was not attempted; clipboard fallback rewrite could not be verified"
+            ) from None
+        if not clipboard_matches:
+            raise OutputNotInsertedError(
+                "automatic paste was not attempted; clipboard fallback rewrite could not be verified"
+            )
+    try:
+        quarantine_cleared = _clear_clipboard_pending_quarantine(
+            text,
+            "clipboard-paste",
+            dedupe_context=dedupe_context,
+        )
+    except OutputError:
+        quarantine_cleared = False
+    if not quarantine_cleared:
+        raise OutputNotInsertedError(
+            "automatic paste was not attempted; clipboard fallback quarantine could not be cleared"
+        )
+    try:
+        return _commit_clipboard_insertion(
+            text,
+            "clipboard",
+            clear_pending_quarantine=False,
+        )
+    except OutputError:
+        raise OutputNotInsertedError(
+            "automatic paste was not attempted; clipboard fallback state could not be committed"
+        ) from None
 
 
-def insert_text(
+def _insert_text(
     text: str,
     method: str,
     delay_ms: int = 8,
@@ -3169,7 +3225,11 @@ def insert_text(
         raise OutputError("method contains invalid null byte")
     if _contains_http_header_control_chars(method):
         raise OutputError("method contains invalid control character")
-    method = (method or "clipboard-paste").strip().lower()
+    method = normalize_insert_method(method or "clipboard-paste")
+    # Auto-submit belongs to the Cinnamon applet. Backend CLI keeps the same
+    # clipboard/paste behavior when this canonical applet value is supplied.
+    if method == "clipboard-paste-submit":
+        method = "clipboard-paste"
     if method == "none":
         return False
     if text == "":
@@ -3270,11 +3330,12 @@ def insert_text(
         operation_performed = False
         committed = False
         paste_not_attempted = False
+        paste_recovery_failed = False
         ambiguous_cleanup = False
         paste_attempt_uncertain = False
-        paste_cleanup_unconfirmed = False
         clipboard_snapshot_available = False
         clipboard_snapshot = ""
+        clipboard_helper = ""
         try:
             clipboard_snapshot_available, clipboard_snapshot = _read_text_clipboard_snapshot()
             if not clipboard_snapshot_available:
@@ -3294,21 +3355,20 @@ def insert_text(
                 raise OutputError("failed to reserve clipboard-paste insertion state")
             _assert_clipboard_text_snapshot_unchanged(clipboard_snapshot_available, clipboard_snapshot)
             try:
-                set_clipboard(text, allowed_helpers=("xclip", "xsel"))
+                clipboard_helper = set_clipboard(text, allowed_helpers=("xclip", "xsel"))
             except OutputCleanupError:
                 ambiguous_cleanup = True
                 raise
             operation_performed = True
             try:
-                clipboard_matches = _clipboard_still_contains_inserted_text(text)
-            except BaseException:
-                paste_not_attempted = True
-                raise
-            if not clipboard_matches:
-                paste_not_attempted = True
-                raise PasteNotAttemptedError("clipboard changed before automatic paste")
-            paste_attempt_uncertain = True
-            try:
+                try:
+                    clipboard_matches = _clipboard_still_contains_inserted_text(text)
+                except BaseException:
+                    paste_not_attempted = True
+                    raise
+                if not clipboard_matches:
+                    raise PasteNotAttemptedError("clipboard changed before automatic paste")
+                paste_attempt_uncertain = True
                 paste_from_clipboard(
                     expected_window_snapshot=target_window_snapshot,
                     expected_text=text,
@@ -3316,20 +3376,22 @@ def insert_text(
             except PasteNotAttemptedError:
                 paste_not_attempted = True
                 paste_attempt_uncertain = False
-                if operation_performed and _commit_clipboard_only_after_paste_not_attempted(
-                    text,
-                    dedupe_context,
-                ):
+                try:
+                    fallback_committed = operation_performed and _commit_clipboard_only_after_paste_not_attempted(
+                        text,
+                        dedupe_context,
+                        clipboard_helper,
+                    )
+                except BaseException:
+                    paste_recovery_failed = True
+                    raise
+                if fallback_committed:
                     committed = True
                     return True
-                raise
-            except OutputCleanupError:
-                paste_cleanup_unconfirmed = True
-                raise
-            except BaseException as exc:
-                if not isinstance(exc, Exception):
-                    paste_cleanup_unconfirmed = True
-                raise
+                paste_recovery_failed = True
+                raise OutputNotInsertedError(
+                    "automatic paste was not attempted; clipboard fallback state could not be committed"
+                ) from None
             if not _commit_clipboard_insertion(text, method, dedupe_context=dedupe_context):
                 raise OutputError("failed to commit clipboard-paste insertion state")
             committed = True
@@ -3349,53 +3411,20 @@ def insert_text(
                     _handle_uncertain_clipboard_paste(
                         text,
                         dedupe_context,
-                        clipboard_snapshot_available,
-                        clipboard_snapshot,
-                        restore_allowed=not paste_cleanup_unconfirmed,
                     )
                 elif not committed:
-                    if paste_not_attempted:
-                        restore_confirmed = True
-                        try:
-                            restore_confirmed = _restore_clipboard_snapshot_after_failed_paste(
-                                text,
-                                clipboard_snapshot_available,
-                                clipboard_snapshot,
-                                allowed_helpers=("xclip", "xsel"),
-                            )
-                        except BaseException:
-                            primary_error = sys.exc_info()[1]
-                            if primary_error is None:
-                                raise
-                            primary_error.add_note(
-                                "clipboard restore after failed automatic paste failed"
-                            )
-                            restore_confirmed = False
-                        if restore_confirmed:
+                    if paste_not_attempted and operation_performed:
+                        if paste_recovery_failed:
                             _restore_clipboard_insertion_snapshot(snapshot)
                             _restore_clipboard_dedup_state(
                                 persistent_snapshot,
                                 pending=persistent_snapshot_pending,
                             )
                         else:
-                            _handle_uncertain_clipboard_paste(
-                                text,
-                                dedupe_context,
-                                clipboard_snapshot_available,
-                                clipboard_snapshot,
-                                restore_allowed=False,
-                                restore_confirmed=False,
-                            )
+                            _handle_uncertain_clipboard_paste(text, dedupe_context)
                     elif not operation_performed:
                         _restore_clipboard_insertion_snapshot(snapshot)
                         _restore_clipboard_dedup_state(persistent_snapshot, pending=persistent_snapshot_pending)
-                    else:
-                        _restore_clipboard_snapshot_after_failed_paste(
-                            text,
-                            clipboard_snapshot_available,
-                            clipboard_snapshot,
-                            allowed_helpers=("xclip", "xsel"),
-                        )
             finally:
                 _release_clipboard_dedup_lock(lock_path)
     if method == "type":
@@ -3406,3 +3435,42 @@ def insert_text(
         type_text(text, delay_ms, expected_window_snapshot=target_window_snapshot, xdotool_command=xdotool)
         return True
     raise OutputError(f"unknown insert method: {method}")
+
+
+_UNEXPECTED_INSERT_ERROR = "text insertion failed"
+
+
+def _new_unexpected_insert_error() -> OutputError:
+    error = OutputError(_UNEXPECTED_INSERT_ERROR)
+    error.__cause__ = None
+    error.__context__ = None
+    error.__traceback__ = None
+    error.__suppress_context__ = True
+    error.__notes__ = []
+    return error
+
+
+def insert_text(
+    text: str,
+    method: str,
+    delay_ms: int = 8,
+    *,
+    _dedupe_method: str | None = None,
+    _dedupe_context: str | None = None,
+) -> bool:
+    unexpected_error: OutputError | None = None
+    try:
+        result = _insert_text(
+            text,
+            method,
+            delay_ms,
+            _dedupe_method=_dedupe_method,
+            _dedupe_context=_dedupe_context,
+        )
+    except OutputError:
+        raise
+    except Exception:
+        unexpected_error = _new_unexpected_insert_error()
+    if unexpected_error is not None:
+        raise unexpected_error
+    return result

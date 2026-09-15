@@ -5,6 +5,8 @@ IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 readonly RELEASE_TARGET_REPOSITORY="H234598/speed-of-cinnamon"
 readonly RELEASE_EXPECTED_BRANCH="main"
+readonly GIT_TIMEOUT_SECONDS=30
+readonly GH_TIMEOUT_SECONDS=120
 export PATH="${TRUSTED_COMMAND_PATH}"
 
 usage() {
@@ -69,7 +71,7 @@ if [[ ! "${tag}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
-required_tools=(git python3 realpath awk sha256sum grep stat mktemp chmod basename dirname)
+required_tools=(git timeout python3 realpath awk sha256sum grep stat mktemp chmod basename dirname)
 if [[ "${dry_run}" == "false" ]]; then
   required_tools+=(gh)
 fi
@@ -91,12 +93,24 @@ uploaded_asset_names=()
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 safe_fs_cmd=(python3 "${safe_fs}")
 
+run_git_bounded() {
+  timeout --signal=TERM --kill-after=2s "${GIT_TIMEOUT_SECONDS}s" git "$@"
+}
+
 for tool in "${required_tools[@]}"; do
   if ! command -v -- "${tool}" >/dev/null 2>&1; then
     printf '%s not found.\n' "${tool}" >&2
     exit 1
   fi
 done
+
+if [[ "${dry_run}" == "false" ]]; then
+  gh_path="$(command -v -- gh)"
+  readonly GH_PATH="${gh_path}"
+  gh() {
+    timeout --signal=TERM --kill-after=5s "${GH_TIMEOUT_SECONDS}s" "${GH_PATH}" "$@"
+  }
+fi
 
 contains_control_chars() {
   local value=$1
@@ -123,8 +137,14 @@ with Path("pyproject.toml").open("rb") as handle:
     payload = handle.read(MAX_PROJECT_METADATA_BYTES + 1)
 if len(payload) > MAX_PROJECT_METADATA_BYTES:
     raise SystemExit("pyproject.toml is too large")
-data = tomllib.loads(payload.decode("utf-8"))
-print(data["project"]["version"])
+try:
+    data = tomllib.loads(payload.decode("utf-8"))
+    version = data["project"]["version"]
+except (KeyError, TypeError, UnicodeDecodeError, tomllib.TOMLDecodeError, RecursionError, MemoryError) as exc:
+    raise SystemExit("pyproject.toml project.version is invalid") from exc
+if not isinstance(version, str) or not version:
+    raise SystemExit("pyproject.toml project.version is invalid")
+print(version)
 PY
 )"
 expected_tag="v${version}"
@@ -271,7 +291,7 @@ verify_staged_asset_path() {
 
 resolve_github_remote_repo() {
   local remote_url
-  remote_url="$(git remote get-url origin 2>/dev/null || true)"
+  remote_url="$(run_git_bounded remote get-url origin 2>/dev/null || true)"
   remote_url="${remote_url%.git}"
   if [[ "${remote_url}" =~ ^https://github\.com/([A-Za-z0-9._-]+/[A-Za-z0-9._-]+)(\.git)?$ ]]; then
     printf '%s\n' "${BASH_REMATCH[1]}"
@@ -625,7 +645,7 @@ if [[ "${repo}" != "${RELEASE_TARGET_REPOSITORY}" ]]; then
   exit 1
 fi
 
-if ! tag_commit="$(git rev-parse --verify "${tag}^{commit}")"; then
+if ! tag_commit="$(run_git_bounded rev-parse --verify "${tag}^{commit}")"; then
   printf 'failed to resolve release tag commit: %s\n' "${tag}" >&2
   exit 1
 fi
@@ -639,7 +659,7 @@ if [[ "${commit}" != "${tag_commit}" ]]; then
   exit 1
 fi
 
-current_branch="$(git symbolic-ref --quiet --short HEAD || true)"
+current_branch="$(run_git_bounded symbolic-ref --quiet --short HEAD || true)"
 if [[ -n "${current_branch}" ]]; then
   if [[ "${current_branch}" != "${RELEASE_EXPECTED_BRANCH}" ]]; then
     printf 'release must run from %s, got %s\n' "${RELEASE_EXPECTED_BRANCH}" "${current_branch}" >&2

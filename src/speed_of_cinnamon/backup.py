@@ -1,17 +1,21 @@
 from __future__ import annotations
 
+import errno
+import fcntl
 import hashlib
 import io
+import math
 import os
 import secrets
 import shutil
 import stat
 import sys
 import tarfile
+import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Mapping, Sequence
+from typing import BinaryIO, Mapping, Sequence
 
 from .artifact_crypto import (
     ARTIFACT_ENCRYPTION_OFF,
@@ -27,6 +31,7 @@ from .artifact_crypto import (
 from .backup_manifest import (
     BACKUP_KINDS,
     BACKUP_SELECTION_KEYS,
+    MAX_MANIFEST_BYTES,
     BackupArtifact,
     BackupManifest,
     BackupManifestError,
@@ -41,6 +46,7 @@ from .path_safety import (
     assert_backup_source_regular_file,
     assert_backup_target_not_within_sources,
     assert_fd_is_private_directory,
+    assert_fd_is_regular_private_file,
     assert_no_symlink_ancestors,
     assert_safe_path_components,
     create_bytes_atomically_without_following_symlinks,
@@ -55,6 +61,8 @@ from .secure_delete import secure_wipe_regular_file_at
 MAX_BACKUP_MEMBER_COUNT = 10_001
 MAX_BACKUP_ARCHIVE_BYTES = MAX_ENCRYPTED_ARTIFACT_BYTES
 HASH_CHUNK_BYTES = 1024 * 1024
+BACKUP_LOCK_NAME = ".speed-of-cinnamon-backup.lock"
+BACKUP_LOCK_TIMEOUT_SECONDS = 30.0
 
 
 class BackupError(RuntimeError):
@@ -85,6 +93,52 @@ class RestoreDryRun:
     manifest: BackupManifest
     archive_members: tuple[str, ...]
     conflicts: tuple[str, ...] = ()
+
+
+class _BoundedArchiveReader:
+    def __init__(self, stream: BinaryIO, max_bytes: int) -> None:
+        if not hasattr(stream, "read") or not hasattr(stream, "seek") or not hasattr(stream, "tell"):
+            raise BackupError("backup archive stream is not seekable")
+        if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
+            raise BackupError("backup archive size limit is invalid")
+        self._stream = stream
+        self._max_bytes = max_bytes
+
+    def read(self, size: int = -1) -> bytes:
+        position = self.tell()
+        if position < 0 or position > self._max_bytes:
+            raise BackupError("backup archive read exceeded size limit")
+        if not isinstance(size, int) or isinstance(size, bool):
+            raise BackupError("backup archive read size is invalid")
+        remaining = self._max_bytes - position
+        requested = remaining if size < 0 else min(size, remaining)
+        chunk = self._stream.read(requested)
+        if not isinstance(chunk, bytes):
+            raise BackupError("backup archive read returned invalid data")
+        if len(chunk) > requested:
+            raise BackupError("backup archive read exceeded size limit")
+        return chunk
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        if not isinstance(offset, int) or isinstance(offset, bool):
+            raise BackupError("backup archive seek offset is invalid")
+        if whence == io.SEEK_SET:
+            target = offset
+        elif whence == io.SEEK_CUR:
+            target = self.tell() + offset
+        elif whence == io.SEEK_END:
+            target = self._stream.seek(0, io.SEEK_END) + offset
+        else:
+            raise BackupError("backup archive seek mode is invalid")
+        if target < 0 or target > self._max_bytes:
+            raise BackupError("backup archive seek exceeded size limit")
+        return self._stream.seek(target, io.SEEK_SET)
+
+    def tell(self) -> int:
+        position = self._stream.tell()
+        if not isinstance(position, int) or isinstance(position, bool):
+            raise BackupError("backup archive position is invalid")
+        return position
 
 
 def _utc_now() -> str:
@@ -138,6 +192,125 @@ def _archive_name(job_id: str, created_at_utc: str, *, encrypted: bool) -> str:
     timestamp = created_at_utc.replace("-", "").replace(":", "").replace("+00:00", "").replace("Z", "Z")
     suffix = ".socbackup.socenc" if encrypted else ".socbackup"
     return f"soc-backup-{timestamp}-{job_id[:16]}{suffix}"
+
+
+def _acquire_backup_lock(target_fd: int, *, timeout_seconds: float | None = None) -> int:
+    if isinstance(target_fd, bool) or not isinstance(target_fd, int) or target_fd < 0:
+        raise BackupError("backup target lock descriptor is invalid")
+    timeout = BACKUP_LOCK_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise BackupError("backup target lock timeout is invalid")
+    try:
+        finite_timeout = math.isfinite(timeout)
+    except OverflowError:
+        finite_timeout = False
+    if not finite_timeout or timeout <= 0:
+        raise BackupError("backup target lock timeout is invalid")
+    if timeout > BACKUP_LOCK_TIMEOUT_SECONDS:
+        raise BackupError("backup target lock timeout exceeds safe limit")
+    flags = os.O_RDWR | os.O_CREAT | _resolve_no_follow_flag(field_name="backup target lock") | getattr(os, "O_CLOEXEC", 0)
+    try:
+        lock_fd = os.open(BACKUP_LOCK_NAME, flags, 0o600, dir_fd=target_fd)
+    except OSError as exc:
+        raise BackupError("backup target lock could not be opened") from exc
+    try:
+        assert_fd_is_regular_private_file(lock_fd, field_name="backup target lock", require_private_mode=True)
+        deadline = time.monotonic() + float(timeout)
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return lock_fd
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                    raise BackupError("backup target lock could not be acquired") from exc
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BackupError("backup target is busy") from None
+                time.sleep(min(0.05, remaining))
+    except BaseException:
+        _close_fd(lock_fd)
+        raise
+
+
+def _release_backup_lock(lock_fd: int | None) -> None:
+    if lock_fd is None:
+        return
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    finally:
+        os.close(lock_fd)
+
+
+def _manifest_ledger_artifacts(manifest: BackupManifest) -> list[dict[str, object]]:
+    return [
+        {
+            "kind": artifact.kind,
+            "mtime_ns": artifact.mtime_ns,
+            "sha256": artifact.sha256,
+            "size": artifact.size,
+            "source_identity": artifact.source_identity,
+        }
+        for artifact in manifest.artifacts
+    ]
+
+
+def _reconcile_interrupted_jobs(target: Path, ledger: BackupStateStore) -> None:
+    state = ledger.load()
+    jobs = state.get("jobs")
+    if not isinstance(jobs, list):
+        raise BackupError("backup recovery state is invalid")
+    for job in jobs:
+        if not isinstance(job, Mapping) or job.get("status") != "running":
+            continue
+        job_id = job.get("job_id")
+        created_at_utc = job.get("created_at_utc")
+        archive_name = job.get("archive_name")
+        if not isinstance(job_id, str) or not isinstance(created_at_utc, str):
+            raise BackupError("backup recovery job identity is invalid")
+        if not isinstance(archive_name, str) or not archive_name:
+            raise BackupError("backup recovery requires manual intervention: archive name is missing")
+        try:
+            normalized_archive_name = normalize_backup_archive_path(
+                archive_name,
+                field_name="backup recovery archive name",
+            )
+        except (RuntimeError, TypeError, ValueError) as exc:
+            raise BackupError("backup recovery archive name is unsafe") from exc
+        if normalized_archive_name != archive_name or Path(archive_name).name != archive_name:
+            raise BackupError("backup recovery archive name is unsafe")
+        archive_path = target / archive_name
+        try:
+            archive_stat = os.stat(archive_path, follow_symlinks=False)
+        except FileNotFoundError:
+            ledger.record_job(
+                job_id=job_id,
+                status="failed",
+                created_at_utc=created_at_utc,
+                error="backup interrupted before archive publication",
+            )
+            continue
+        except OSError as exc:
+            raise BackupError("backup recovery archive could not be inspected") from exc
+        if not stat.S_ISREG(archive_stat.st_mode) or getattr(archive_stat, "st_nlink", 1) != 1:
+            raise BackupError("backup recovery archive is not a safe regular file")
+        try:
+            manifest = verify_backup(archive_path)
+        except BackupError:
+            ledger.record_job(
+                job_id=job_id,
+                status="failed",
+                created_at_utc=created_at_utc,
+                archive_name=archive_name,
+                error="interrupted backup archive failed verification",
+            )
+            continue
+        ledger.record_job(
+            job_id=job_id,
+            status="success",
+            created_at_utc=created_at_utc,
+            archive_name=archive_name,
+            artifacts=_manifest_ledger_artifacts(manifest),
+        )
 
 
 def _close_fd(fd: int | None, *, strict: bool = False) -> None:
@@ -336,17 +509,41 @@ def _hash_tar_member(archive: tarfile.TarFile, member: tarfile.TarInfo, expected
         raise BackupError("backup archive member cannot be read")
     digest = hashlib.sha256()
     size = 0
-    while True:
-        chunk = stream.read(HASH_CHUNK_BYTES)
-        if not chunk:
-            break
-        size += len(chunk)
-        if size > expected_size:
-            raise BackupError("backup archive member is larger than its manifest")
-        digest.update(chunk)
+    with stream:
+        while True:
+            chunk = stream.read(HASH_CHUNK_BYTES)
+            if not chunk:
+                break
+            size += len(chunk)
+            if size > expected_size:
+                raise BackupError("backup archive member is larger than its manifest")
+            digest.update(chunk)
     if size != expected_size:
         raise BackupError("backup archive member size differs from its manifest")
     return digest.hexdigest()
+
+
+def _read_tar_member_exact(stream: BinaryIO, expected_size: int) -> bytes:
+    if isinstance(expected_size, bool) or not isinstance(expected_size, int) or expected_size < 0:
+        raise BackupError("backup archive member size is invalid")
+    chunks: list[bytes] = []
+    remaining = expected_size
+    while True:
+        chunk = stream.read(min(HASH_CHUNK_BYTES, remaining + 1))
+        if not isinstance(chunk, bytes):
+            raise BackupError("backup archive member read returned invalid data")
+        if not chunk:
+            if remaining:
+                raise BackupError("backup archive member size changed during restore")
+            return b"".join(chunks)
+        if len(chunk) > remaining:
+            raise BackupError("backup archive member is larger than its manifest")
+        chunks.append(chunk)
+        remaining -= len(chunk)
+        if remaining == 0:
+            if stream.read(1):
+                raise BackupError("backup archive member is larger than its manifest")
+            return b"".join(chunks)
 
 
 def _verify_tar_archive(archive: tarfile.TarFile) -> BackupManifest:
@@ -370,12 +567,13 @@ def _verify_tar_archive(archive: tarfile.TarFile) -> BackupManifest:
                 raise BackupError("backup archive contains an unsafe path") from exc
         by_name[member.name] = member
     manifest_member = by_name.get("manifest.json")
-    if manifest_member is None or manifest_member.size > 1_000_000:
+    if manifest_member is None or manifest_member.size > MAX_MANIFEST_BYTES:
         raise BackupError("backup archive manifest is missing or too large")
     manifest_stream = archive.extractfile(manifest_member)
     if manifest_stream is None:
         raise BackupError("backup archive manifest cannot be read")
-    manifest = parse_manifest(manifest_stream.read(manifest_member.size + 1))
+    with manifest_stream:
+        manifest = parse_manifest(manifest_stream.read(MAX_MANIFEST_BYTES + 1))
     expected = {"manifest.json"} | {artifact.archive_path for artifact in manifest.artifacts}
     if set(by_name) != expected:
         raise BackupError("backup archive members differ from its manifest")
@@ -393,10 +591,28 @@ def _verify_archive(path: Path) -> BackupManifest:
         raise BackupError("backup archive is too large")
     fd = open_file_without_following_symlinks(path, os.O_RDONLY, field_name="backup archive")
     try:
+        opened_stat = os.fstat(fd)
+        if (
+            not stat.S_ISREG(opened_stat.st_mode)
+            or opened_stat.st_nlink != 1
+            or opened_stat.st_size > MAX_BACKUP_ARCHIVE_BYTES
+            or (hasattr(os, "getuid") and opened_stat.st_uid != os.getuid())
+            or (opened_stat.st_dev, opened_stat.st_ino) != (archive_stat.st_dev, archive_stat.st_ino)
+        ):
+            raise BackupError("backup archive changed before verification")
         with os.fdopen(fd, "rb", closefd=True) as stream:
             fd = -1
-            with tarfile.open(fileobj=stream, mode="r:") as archive:
-                return _verify_tar_archive(archive)
+            bounded_stream = _BoundedArchiveReader(stream, MAX_BACKUP_ARCHIVE_BYTES)
+            with tarfile.open(fileobj=bounded_stream, mode="r:") as archive:
+                manifest = _verify_tar_archive(archive)
+            finished_stat = os.fstat(stream.fileno())
+            if (
+                (finished_stat.st_dev, finished_stat.st_ino) != (opened_stat.st_dev, opened_stat.st_ino)
+                or finished_stat.st_size != opened_stat.st_size
+                or finished_stat.st_mtime_ns != opened_stat.st_mtime_ns
+            ):
+                raise BackupError("backup archive changed during verification")
+            return manifest
     except (tarfile.TarError, OSError, EOFError) as exc:
         raise BackupError("backup archive could not be verified") from exc
     finally:
@@ -474,6 +690,7 @@ def create_backup(
     created = created_at_utc or _utc_now()
     archive_name = _archive_name(job, created, encrypted=effective_encryption_mode != ARTIFACT_ENCRYPTION_OFF)
     target_fd: int | None = None
+    lock_fd: int | None = None
     stage: Path | None = None
     temporary_name: str | None = None
     plain_temporary_name: str | None = None
@@ -486,8 +703,15 @@ def create_backup(
         target_stat = os.fstat(target_fd)
         if not stat.S_ISDIR(target_stat.st_mode) or (hasattr(os, "getuid") and target_stat.st_uid != os.getuid()):
             raise BackupError("backup target directory is not owned by the current user")
+        lock_fd = _acquire_backup_lock(target_fd)
+        _reconcile_interrupted_jobs(target_directory, ledger)
         ledger_started = True
-        ledger.record_job(job_id=job, status="running", created_at_utc=created)
+        ledger.record_job(
+            job_id=job,
+            status="running",
+            created_at_utc=created,
+            archive_name=archive_name,
+        )
         collected: list[tuple[BackupArtifact, Path]] = []
         seen_fingerprints: set[tuple[str, int, str]] = set()
         seen_archive_paths: set[str] = set()
@@ -622,7 +846,20 @@ def create_backup(
             raise
         raise BackupError("backup job failed") from exc
     except BaseException as exc:
-        if ledger_started and not published:
+        if published and result is not None:
+            try:
+                ledger.record_job(
+                    job_id=job,
+                    status="success",
+                    created_at_utc=created,
+                    archive_name=archive_name,
+                    artifacts=_ledger_artifacts(collected),
+                    error="",
+                )
+            except BaseException as ledger_error:
+                exc.add_note("backup post-publish success could not be recorded")
+                exc.add_note(type(ledger_error).__name__)
+        elif ledger_started:
             try:
                 ledger.record_job(
                     job_id=job,
@@ -661,6 +898,11 @@ def create_backup(
                 pass
             except OSError as exc:
                 cleanup_errors.append(exc)
+        try:
+            _release_backup_lock(lock_fd)
+        except OSError as exc:
+            cleanup_errors.append(exc)
+        lock_fd = None
         try:
             _close_fd(target_fd, strict=True)
         except OSError as exc:
@@ -823,15 +1065,18 @@ def restore_backup(
         else:
             raise BackupError("restore destination already exists")
         stage_name, stage_path, stage_fd = _create_restore_stage_directory(parent_fd, destination_directory)
+        artifact_sizes = {artifact.archive_path: artifact.size for artifact in plan.manifest.artifacts}
         with tarfile.open(fileobj=io.BytesIO(payload), mode="r:") as archive:
             for member_name in plan.archive_members:
                 member = archive.getmember(member_name)
                 stream = archive.extractfile(member)
                 if stream is None:
                     raise BackupError("backup archive member cannot be read")
-                member_data = stream.read(member.size + 1)
-                if len(member_data) != member.size:
-                    raise BackupError("backup archive member size changed during restore")
+                expected_size = member.size if member_name == "manifest.json" else artifact_sizes.get(member_name)
+                if expected_size is None or member.size != expected_size:
+                    raise BackupError("backup archive member size differs from its manifest")
+                with stream:
+                    member_data = _read_tar_member_exact(stream, expected_size)
                 target = stage_path / member_name
                 create_bytes_atomically_without_following_symlinks(
                     target,

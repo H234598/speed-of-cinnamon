@@ -329,3 +329,14 @@ The applet provides `Copy diagnostics` and `Save diagnostics`. Saved reports are
 
 Diagnostics include app/runtime paths, desktop/session details, doctor checks, input-source metadata, model catalog
 status, and state. They omit transcript contents, private command templates, and personalization text.
+
+The applet also records lifecycle and backend errors in two private files:
+
+```text
+~/.local/state/speed-of-cinnamon/logs/errors.log
+~/.local/state/speed-of-cinnamon/logs/errors.md
+```
+
+`errors.log` is redacted JSONL. `errors.md` is the matching checkbox list for review and maintenance. Both files use
+user-only permissions and are created when logging starts, even before the first error. Open them from
+`Tools > Diagnostics > Open error log` or `Open error checklist`; use `Open error log folder` to see both files.

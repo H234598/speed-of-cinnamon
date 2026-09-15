@@ -16,6 +16,7 @@ import unicodedata
 import time
 import zlib
 from collections.abc import Callable
+from fnmatch import fnmatchcase
 from functools import wraps
 from itertools import islice
 from datetime import date, datetime, timedelta, timezone
@@ -28,6 +29,7 @@ from .path_safety import (
     assert_fd_is_regular_private_file,
     ensure_directory_without_following_symlinks,
     open_file_without_following_symlinks,
+    open_directory_without_following_symlinks,
 )
 from .paths import logs_dir
 
@@ -41,12 +43,17 @@ LOG_LEVEL_VALUES = {
 DEFAULT_LOG_LEVEL = "error"
 MAX_DAILY_LOG_BYTES = 1_000_000
 MAX_TOTAL_LOG_BYTES = 5_000_000
+MAX_ERROR_LOG_BYTES = 5_000_000
+ERROR_LOG_FILENAME = "errors.log"
+ERROR_MARKDOWN_FILENAME = "errors.md"
 COMPRESS_AFTER_DAYS = 3
 MAX_LOG_ROTATION_CANDIDATES = 100
+MAX_LOG_MAINTENANCE_SCAN_ENTRIES = 100_000
 MAX_LOG_MESSAGE_CHARS = 320
 MAX_LOG_FIELD_CHARS = 160
 MAX_LOG_VALUE_DEPTH = 32
 LOG_MAINTENANCE_INTERVAL_SECONDS = 60.0
+LOG_LOCK_TIMEOUT_SECONDS = 5.0
 LOGGER_NAME = "speed_of_cinnamon"
 HOME_DIR = str(Path.home())
 _CONFIGURE_LOCK = threading.RLock()
@@ -131,12 +138,18 @@ def _acquire_log_lock(base_dir: Path) -> int:
     try:
         os.fchmod(fd, 0o600)
         assert_fd_is_regular_private_file(fd, field_name="log lock", require_private_mode=True)
+        deadline = time.monotonic() + LOG_LOCK_TIMEOUT_SECONDS
         while True:
             try:
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return fd
             except InterruptedError:
                 continue
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("log lock acquisition timed out")
+                time.sleep(min(0.05, remaining))
     except BaseException:
         try:
             os.close(fd)
@@ -410,6 +423,8 @@ class SizeCappedJsonFileHandler(logging.Handler):
             lock_fd = _acquire_log_lock(self.base_dir)
             try:
                 self._emit_locked(record)
+                self._retry_count = 0
+                self._retry_until = 0.0
             finally:
                 _release_log_lock(lock_fd)
         except Exception:
@@ -449,11 +464,20 @@ class SizeCappedJsonFileHandler(logging.Handler):
         self._open()
         if self.stream is None:
             raise RuntimeError("failed to open log file")
+        try:
+            opened_size = os.fstat(self.stream.fileno()).st_size
+        except OSError as exc:
+            raise RuntimeError("failed to stat log file") from exc
+        if opened_size > 0 and opened_size + len(encoded) > MAX_DAILY_LOG_BYTES:
+            self.close()
+            _rotate_active_if_needed(self.path, force=True)
+            rotated = True
+            self._open()
+            if self.stream is None:
+                raise RuntimeError("failed to reopen log file after rotation")
         self.stream.write(line)
         self.stream.flush()
         self._maintain_after_emit(force=rotated)
-        self._retry_count = 0
-        self._retry_until = 0.0
 
     def _is_log_path_insecure(self) -> bool:
         parent_fd = None
@@ -598,6 +622,294 @@ class SizeCappedJsonFileHandler(logging.Handler):
         self._next_maintenance_at = now + LOG_MAINTENANCE_INTERVAL_SECONDS
 
 
+class ErrorJsonFileHandler(SizeCappedJsonFileHandler):
+    """Keep a stable, redacted JSONL journal of error records."""
+
+    def _emit_locked(self, record: logging.LogRecord) -> None:
+        line = self.format(record) + "\n"
+        encoded = line.encode("utf-8")
+        if len(encoded) > MAX_ERROR_LOG_BYTES:
+            line = _oversized_record_line(record)
+            encoded = line.encode("utf-8")
+        self._open()
+        if self.stream is None:
+            raise RuntimeError("failed to open error log file")
+        try:
+            current_size = os.fstat(self.stream.fileno()).st_size
+        except OSError as exc:
+            raise RuntimeError("failed to stat error log file") from exc
+        if current_size + len(encoded) > MAX_ERROR_LOG_BYTES:
+            self.stream.seek(0)
+            self.stream.truncate(0)
+        self.stream.write(line)
+        self.stream.flush()
+
+
+class ErrorMarkdownFileHandler(SizeCappedJsonFileHandler):
+    """Keep a private, checkbox-friendly Markdown error list."""
+
+    def _emit_locked(self, record: logging.LogRecord) -> None:
+        fields = getattr(record, "fields", None)
+        group = fields.get("group", "unknown") if isinstance(fields, dict) else "unknown"
+        message = fields.get("error_message", record.getMessage()) if isinstance(fields, dict) else record.getMessage()
+        timestamp = datetime.fromtimestamp(record.created, timezone.utc).isoformat()
+        line = _error_markdown_line(timestamp, group, record.getMessage(), message)
+        encoded = line.encode("utf-8")
+        if len(encoded) > MAX_ERROR_LOG_BYTES:
+            line = f"- [ ] {timestamp} | error | [redacted oversized error]\n"
+            encoded = line.encode("utf-8")
+        self._open()
+        if self.stream is None:
+            raise RuntimeError("failed to open error Markdown file")
+        try:
+            current_size = os.fstat(self.stream.fileno()).st_size
+        except OSError as exc:
+            raise RuntimeError("failed to stat error Markdown file") from exc
+        if current_size + len(encoded) > MAX_ERROR_LOG_BYTES:
+            self.stream.seek(0)
+            self.stream.truncate(0)
+        self.stream.write(line)
+        self.stream.flush()
+
+
+def _error_log_path(directory: Path) -> Path:
+    return directory / ERROR_LOG_FILENAME
+
+
+def _error_markdown_path(directory: Path) -> Path:
+    return directory / ERROR_MARKDOWN_FILENAME
+
+
+def _ensure_private_error_journal_file(path: Path, directory: Path) -> None:
+    handler = SizeCappedJsonFileHandler(path, directory)
+    try:
+        handler._open()
+    finally:
+        handler.close()
+
+
+def _markdown_component(value: object, *, max_chars: int) -> str:
+    safe = sanitize_text(str(value), max_chars=max_chars)
+    return (
+        safe.replace("\r", " ")
+        .replace("\n", " ")
+        .replace("\\r", " ")
+        .replace("\\n", " ")
+        .replace("|", "\\|")
+    )
+
+
+def _error_markdown_line(timestamp: object, group: object, event: object, message: object) -> str:
+    safe_message = sanitize_error_message(str(message), max_chars=MAX_LOG_MESSAGE_CHARS)
+    return (
+        f"- [ ] {_markdown_component(timestamp, max_chars=64)} | "
+        f"{_markdown_component(group, max_chars=128)} | "
+        f"{_markdown_component(event, max_chars=MAX_LOG_MESSAGE_CHARS)} | "
+        f"{_markdown_component(safe_message, max_chars=MAX_LOG_MESSAGE_CHARS)}\n"
+    )
+
+
+def _same_file_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
+    return all(
+        getattr(first, field) == getattr(second, field)
+        for field in (
+            "st_dev",
+            "st_ino",
+            "st_mode",
+            "st_nlink",
+            "st_size",
+            "st_mtime_ns",
+            "st_ctime_ns",
+        )
+    )
+
+
+def _resolve_no_atime_flag(*, field_name: str) -> int:
+    noatime_flag = getattr(os, "O_NOATIME", None)
+    if isinstance(noatime_flag, bool) or not isinstance(noatime_flag, int) or noatime_flag <= 0:
+        raise OSError(f"secure no-atime open is not supported for {field_name}")
+    return noatime_flag
+
+
+def _read_private_error_log(
+    path: Path,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> str | None:
+    fd: int | None = None
+    try:
+        flags = os.O_RDONLY | _resolve_no_atime_flag(field_name="error log")
+        fd = open_file_without_following_symlinks(path, flags, field_name="error log")
+        assert_fd_is_regular_private_file(fd, field_name="error log", require_private_mode=True)
+        if expected_stat is not None and not _same_file_snapshot(expected_stat, os.fstat(fd)):
+            return None
+        chunks: list[bytes] = []
+        total = 0
+        while total <= MAX_ERROR_LOG_BYTES:
+            chunk = os.read(fd, min(65536, MAX_ERROR_LOG_BYTES + 1 - total))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > MAX_ERROR_LOG_BYTES:
+                return ""
+        return b"".join(chunks).decode("utf-8", errors="replace")
+    except (OSError, RuntimeError):
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _rewrite_private_error_markdown(
+    path: Path,
+    rendered: bytes,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> None:
+    fd: int | None = None
+    try:
+        flags = os.O_RDWR | os.O_CREAT | _resolve_no_atime_flag(field_name="error Markdown file")
+        if expected_stat is None:
+            flags |= os.O_EXCL
+        fd = open_file_without_following_symlinks(
+            path,
+            flags,
+            0o600,
+            field_name="error Markdown file",
+        )
+        assert_fd_is_regular_private_file(fd, field_name="error Markdown file")
+        opened_stat = os.fstat(fd)
+        if expected_stat is not None and not _same_file_snapshot(expected_stat, opened_stat):
+            raise RuntimeError("error Markdown file changed during rebuild")
+        if stat_module.S_IMODE(opened_stat.st_mode) != 0o600:
+            os.fchmod(fd, 0o600)
+        opened_stat = os.fstat(fd)
+        assert_fd_is_regular_private_file(fd, field_name="error Markdown file", require_private_mode=True)
+        matches = opened_stat.st_size == len(rendered)
+        if matches:
+            os.lseek(fd, 0, os.SEEK_SET)
+            offset = 0
+            while offset < len(rendered):
+                chunk = os.read(fd, min(65_536, len(rendered) - offset))
+                if not chunk or chunk != rendered[offset : offset + len(chunk)]:
+                    matches = False
+                    break
+                offset += len(chunk)
+        current_fd_stat = os.fstat(fd)
+        try:
+            current_path_stat = path.stat(follow_symlinks=False)
+        except OSError as exc:
+            raise RuntimeError("error Markdown file changed during rebuild") from exc
+        if not _same_file_snapshot(opened_stat, current_fd_stat) or not _same_file_snapshot(opened_stat, current_path_stat):
+            raise RuntimeError("error Markdown file changed during rebuild")
+        if matches:
+            return
+        os.lseek(fd, 0, os.SEEK_SET)
+        os.ftruncate(fd, 0)
+        offset = 0
+        while offset < len(rendered):
+            try:
+                written = os.write(fd, rendered[offset:])
+            except InterruptedError:
+                continue
+            if written <= 0:
+                raise RuntimeError("failed to write error Markdown file")
+            offset += written
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _clear_private_error_markdown(
+    path: Path,
+    *,
+    expected_stat: os.stat_result | None = None,
+) -> None:
+    try:
+        _rewrite_private_error_markdown(path, b"", expected_stat=expected_stat)
+    except (OSError, RuntimeError):
+        return
+
+
+def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key is not allowed")
+        result[key] = value
+    return result
+
+
+def _rebuild_error_markdown(directory: Path) -> None:
+    source_path = _error_log_path(directory)
+    target_path = _error_markdown_path(directory)
+    try:
+        source_stat = source_path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        source_stat = None
+    except OSError:
+        return
+    try:
+        target_stat = target_path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        target_stat = None
+    except OSError:
+        return
+    if source_stat is None:
+        _clear_private_error_markdown(target_path, expected_stat=target_stat)
+        return
+    raw = _read_private_error_log(source_path, expected_stat=source_stat)
+    if raw is None:
+        return
+    if not raw:
+        _clear_private_error_markdown(target_path, expected_stat=target_stat)
+        return
+    lines: list[bytes] = []
+    line_sizes: list[int] = []
+    total_bytes = 0
+    for raw_line in raw.splitlines():
+        try:
+            payload = json.loads(raw_line, object_pairs_hook=_reject_duplicate_json_keys)
+        except (TypeError, ValueError, RecursionError, MemoryError):
+            continue
+        if not isinstance(payload, dict) or payload.get("level") != "error":
+            continue
+        line = _error_markdown_line(
+            payload.get("ts", "unknown"),
+            payload.get("group", "unknown"),
+            payload.get("event", "unknown"),
+            payload.get("error_message", payload.get("event", "unknown")),
+        ).encode("utf-8")
+        lines.append(line)
+        line_size = len(line)
+        line_sizes.append(line_size)
+        total_bytes += line_size
+    first_line = 0
+    while first_line < len(lines) and total_bytes > MAX_ERROR_LOG_BYTES:
+        total_bytes -= line_sizes[first_line]
+        first_line += 1
+    if first_line:
+        lines = lines[first_line:]
+    if not lines:
+        _clear_private_error_markdown(target_path, expected_stat=target_stat)
+        return
+    try:
+        _rewrite_private_error_markdown(
+            target_path,
+            b"".join(lines),
+            expected_stat=target_stat,
+        )
+    except (OSError, RuntimeError):
+        return
+
+
 def _contains_forbidden_control(value: str) -> bool:
     return _FORBIDDEN_CONTROL_RE.search(value) is not None or _ESCAPED_FORBIDDEN_CONTROL_RE.search(value) is not None
 
@@ -679,6 +991,9 @@ def _configure_logging_unlocked(normalized: str, *, base_dir: Path | None = None
         maintain_logs(directory)
         log_path = _active_log_path(directory)
         _rotate_active_if_needed(log_path)
+        _rebuild_error_markdown(directory)
+        _ensure_private_error_journal_file(_error_log_path(directory), directory)
+        _ensure_private_error_journal_file(_error_markdown_path(directory), directory)
     finally:
         _release_log_lock(lock_fd)
 
@@ -686,6 +1001,13 @@ def _configure_logging_unlocked(normalized: str, *, base_dir: Path | None = None
     handler.setFormatter(JsonLogFormatter())
     handler.setLevel(level_value)
     logger.addHandler(handler)
+    error_handler = ErrorJsonFileHandler(_error_log_path(directory), directory)
+    error_handler.setFormatter(JsonLogFormatter())
+    error_handler.setLevel(logging.ERROR)
+    logger.addHandler(error_handler)
+    error_markdown_handler = ErrorMarkdownFileHandler(_error_markdown_path(directory), directory)
+    error_markdown_handler.setLevel(logging.ERROR)
+    logger.addHandler(error_markdown_handler)
 
 
 def log_event(level: str, event: str, **fields: object) -> None:
@@ -1349,9 +1671,46 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
     raise RuntimeError("failed to allocate log rotation slot")
 
 
+def _bounded_log_paths(directory: Path, pattern: str) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    try:
+        directory_fd = open_directory_without_following_symlinks(directory, field_name="log directory")
+    except (OSError, RuntimeError) as exc:
+        raise RuntimeError("log directory scan failed") from exc
+    primary_error: BaseException | None = None
+    try:
+        try:
+            with os.scandir(directory_fd) as directory_entries:
+                for directory_entry in directory_entries:
+                    name = directory_entry.name
+                    if not isinstance(name, str) or not fnmatchcase(name, pattern):
+                        continue
+                    if len(paths) >= MAX_LOG_MAINTENANCE_SCAN_ENTRIES:
+                        raise RuntimeError("log directory exceeds scan budget")
+                    paths.append(directory / name)
+        except RuntimeError:
+            raise
+        except OSError as exc:
+            raise RuntimeError("log directory scan failed") from exc
+        return tuple(paths)
+    except BaseException as exc:
+        primary_error = exc
+        raise
+    finally:
+        try:
+            os.close(directory_fd)
+        except OSError:
+            pass
+        except BaseException as cleanup_error:
+            if primary_error is not None:
+                _note_cleanup_failure(primary_error, cleanup_error)
+            else:
+                raise
+
+
 def _compress_old_daily_logs(directory: Path, today: date) -> None:
     cutoff = today - timedelta(days=COMPRESS_AFTER_DAYS)
-    for path in sorted(directory.glob("speed-of-cinnamon-*.log")):
+    for path in sorted(_bounded_log_paths(directory, "speed-of-cinnamon-*.log")):
         log_date = _daily_log_date(path)
         if log_date is None or log_date > cutoff or log_date.month != today.month or log_date.year != today.year:
             continue
@@ -1361,7 +1720,7 @@ def _compress_old_daily_logs(directory: Path, today: date) -> None:
 
 def _merge_old_months(directory: Path, today: date) -> None:
     grouped: dict[str, list[Path]] = {}
-    for path in directory.glob("speed-of-cinnamon-*.log*"):
+    for path in _bounded_log_paths(directory, "speed-of-cinnamon-*.log*"):
         log_date = _daily_log_date(path)
         if log_date is None or (log_date.year == today.year and log_date.month == today.month):
             continue
@@ -2300,7 +2659,7 @@ def _gzip_file(source: Path, target: Path) -> None:
 
 def _enforce_file_size_limit(directory: Path, *, today: date | None = None) -> None:
     active = _active_log_path(directory, today=today)
-    for path in directory.glob("speed-of-cinnamon-*.log"):
+    for path in _bounded_log_paths(directory, "speed-of-cinnamon-*.log"):
         file_stat = _assert_regular_unlinked_file(path, field_name="log file")
         if file_stat.st_size <= MAX_DAILY_LOG_BYTES:
             continue
@@ -2313,7 +2672,7 @@ def _enforce_file_size_limit(directory: Path, *, today: date | None = None) -> N
 
 def _enforce_total_size_limit(directory: Path, *, today: date | None = None) -> None:
     file_info = []
-    for path in directory.glob("speed-of-cinnamon-*.log*"):
+    for path in _bounded_log_paths(directory, "speed-of-cinnamon-*.log*"):
         if path.name.endswith(".tmp"):
             continue
         try:

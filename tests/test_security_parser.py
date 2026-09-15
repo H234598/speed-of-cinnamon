@@ -24,6 +24,22 @@ from speed_of_cinnamon.security_parser import (
 
 
 class SecurityParserTest(unittest.TestCase):
+    def test_blacklist_lock_requires_bounded_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "blacklist lock timeout is required"):
+            security_parser._flock_retry(1, fcntl.LOCK_EX)
+
+    def test_blacklist_lock_rejects_non_finite_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "blacklist lock timeout is invalid"):
+            security_parser._flock_retry(1, fcntl.LOCK_EX, timeout_seconds=float("inf"))
+
+    def test_blacklist_lock_rejects_oversized_timeout(self) -> None:
+        with self.assertRaisesRegex(RuntimeError, "blacklist lock timeout exceeds safe limit"):
+            security_parser._flock_retry(
+                1,
+                fcntl.LOCK_EX,
+                timeout_seconds=security_parser._BLACKLIST_LOCK_TIMEOUT_SECONDS + 1,
+            )
+
     def test_blacklist_lock_retries_interrupted_exclusive_lock(self) -> None:
         operations: list[int] = []
 
@@ -38,7 +54,10 @@ class SecurityParserTest(unittest.TestCase):
                 fd = security_parser._acquire_blacklist_lock(path)
                 security_parser._release_blacklist_lock(fd)
 
-        self.assertEqual(operations, [fcntl.LOCK_EX, fcntl.LOCK_EX, fcntl.LOCK_UN])
+        self.assertEqual(
+            operations,
+            [fcntl.LOCK_EX | fcntl.LOCK_NB, fcntl.LOCK_EX | fcntl.LOCK_NB, fcntl.LOCK_UN],
+        )
 
     def test_blacklist_lock_is_close_on_exec(self) -> None:
         cloexec_flag = getattr(os, "O_CLOEXEC", 0)
@@ -691,7 +710,7 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(entries, ["geheim"])
         self.assertEqual(
             [call.args[1] for call in mocked_flock.call_args_list],
-            [fcntl.LOCK_EX, fcntl.LOCK_UN],
+            [fcntl.LOCK_EX | fcntl.LOCK_NB, fcntl.LOCK_UN],
         )
 
     def test_update_blacklist_preserves_primary_error_when_unlock_fails(self) -> None:

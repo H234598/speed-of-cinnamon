@@ -2,6 +2,13 @@
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
+readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+export PATH="${TRUSTED_COMMAND_PATH}"
+
+if [[ "${SOC_RUN_GUI_LIVE_TESTS:-0}" != "1" ]]; then
+  printf 'Refusing desktop crash-safety test. Set SOC_RUN_GUI_LIVE_TESTS=1 explicitly.\n' >&2
+  exit 2
+fi
 
 repo_dir="${APPLET_CRASH_SAFETY_REPO:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)}"
 uuid="speed-of-cinnamon@H234598"

@@ -58,7 +58,7 @@ def test_repo_falls_back_to_target_when_github_repository_empty_and_origin_is_al
         encoding="utf-8"
     )
     section = script[
-        script.index('repo="${GITHUB_REPOSITORY:-}"') : script.index('if ! tag_commit="$(git rev-parse --verify "${tag}^{commit}")"')
+        script.index('repo="${GITHUB_REPOSITORY:-}"') : script.index('if ! tag_commit="$(run_git_bounded rev-parse --verify "${tag}^{commit}")"')
     ]
     remote_target_check = 'if [[ -n "${remote_repo}" && "${remote_repo}" != "${RELEASE_TARGET_REPOSITORY}" ]]; then'
     checked_out_mismatch_check = (
@@ -77,7 +77,11 @@ def test_release_notes_commit_must_match_verified_tag_commit():
         encoding="utf-8"
     )
 
-    assert 'if ! tag_commit="$(git rev-parse --verify "${tag}^{commit}")"; then' in script
+    assert 'readonly GIT_TIMEOUT_SECONDS=30' in script
+    assert 'required_tools=(git timeout python3 realpath awk sha256sum grep stat mktemp chmod basename dirname)' in script
+    assert 'run_git_bounded() {' in script
+    assert 'timeout --signal=TERM --kill-after=2s "${GIT_TIMEOUT_SECONDS}s" git "$@"' in script
+    assert 'if ! tag_commit="$(run_git_bounded rev-parse --verify "${tag}^{commit}")"; then' in script
     assert 'commit="${RELEASE_EXPECTED_COMMIT:-${GITHUB_SHA:-${tag_commit}}}"' in script
     assert 'if [[ "${commit}" != "${tag_commit}" ]]; then' in script
     assert "release expected commit does not match release tag commit" in script
@@ -90,7 +94,7 @@ def test_release_requires_main_or_verified_github_release_ref():
     )
 
     assert 'readonly RELEASE_EXPECTED_BRANCH="main"' in script
-    assert 'current_branch="$(git symbolic-ref --quiet --short HEAD || true)"' in script
+    assert 'current_branch="$(run_git_bounded symbolic-ref --quiet --short HEAD || true)"' in script
     assert 'if [[ "${current_branch}" != "${RELEASE_EXPECTED_BRANCH}" ]]; then' in script
     assert 'elif [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" ]]; then' in script
     assert '"${GITHUB_REF_NAME:-}" != "${RELEASE_EXPECTED_BRANCH}"' in script

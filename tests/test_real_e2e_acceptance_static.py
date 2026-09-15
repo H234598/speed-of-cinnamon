@@ -22,7 +22,7 @@ class RealE2EAcceptanceStaticTest(unittest.TestCase):
         self.assertIn('timeout --signal=TERM --kill-after=2s 10s', script)
         self.assertIn('i.insertMethod=\\"none\\"', script)
         self.assertIn('i.autoRelisten=false', script)
-        self.assertIn('i._socRealE2eSnapshot={insertMethod:i.insertMethod', script)
+        self.assertIn('i._socRealE2eSnapshot={xdgStateHome:', script)
         self.assertIn('inputDevice:i.inputDevice', script)
         self.assertIn('i.recorder===\\\"arecord\\\"', script)
         self.assertIn('i.inputDevice=\\\"pipewire\\\"', script)
@@ -32,6 +32,9 @@ class RealE2EAcceptanceStaticTest(unittest.TestCase):
         self.assertIn('i&&i.status===\\"recording\\"', script)
         self.assertIn('i.status===\\"done\\"&&i.lastTranscript', script)
         self.assertNotIn('_recordingState', script)
+        self.assertIn('test_state_home_json=', script)
+        self.assertIn('G.setenv', script)
+        self.assertIn('G.unsetenv', script)
 
     def test_release_requires_fresh_real_e2e_attestation(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
@@ -41,6 +44,32 @@ class RealE2EAcceptanceStaticTest(unittest.TestCase):
         self.assertIn('release-dry-run-no-snap: check release-validate-flags verify-real-e2e-attestation verify-local-model-e2e-attestation', makefile)
         self.assertIn('git_head', verifier)
         self.assertIn('timedelta(hours=24)', verifier)
+
+    def test_git_revision_capture_is_bounded(self) -> None:
+        fragment = 'timeout --signal=TERM --kill-after=2s "${GIT_TIMEOUT_SECONDS}s" git -C "${repo_dir}" rev-parse HEAD'
+        for name in (
+            "local-model-e2e-acceptance.sh",
+            "real-e2e-acceptance.sh",
+            "verify-local-model-e2e-attestation.sh",
+            "verify-real-e2e-attestation.sh",
+        ):
+            script = (ROOT / "scripts" / name).read_text(encoding="utf-8")
+            self.assertIn('readonly GIT_TIMEOUT_SECONDS=30', script)
+            self.assertIn(fragment, script)
+
+    def test_release_attestation_git_revision_capture_is_bounded(self) -> None:
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        exporter = (ROOT / "scripts" / "export-release-attestations.sh").read_text(encoding="utf-8")
+        self.assertIn(
+            "timeout --signal=TERM --kill-after=2s 30s git rev-parse HEAD^",
+            makefile,
+        )
+        self.assertIn('readonly GIT_TIMEOUT_SECONDS=30', exporter)
+        self.assertIn('for tool in python3 git timeout; do', exporter)
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=2s "${GIT_TIMEOUT_SECONDS}s" git -C "${repo_dir}" rev-parse HEAD',
+            exporter,
+        )
 
     def test_attestation_schema_version_requires_a_real_integer(self) -> None:
         for name in ("verify-real-e2e-attestation.sh", "verify-local-model-e2e-attestation.sh"):
@@ -68,6 +97,10 @@ class RealE2EAcceptanceStaticTest(unittest.TestCase):
         self.assertIn("authorship scan descriptor cleanup failed", verifier)
         self.assertIn("primary_error.add_note", verifier)
 
+    def test_authorship_verifier_reap_cleans_up_kill_errors(self) -> None:
+        verifier = (ROOT / "scripts" / "verify-authorship.sh").read_text(encoding="utf-8")
+        self.assertIn("except (OSError, ValueError):\n            pass\n    try:\n        process.wait(timeout=1)", verifier)
+
     def test_local_model_e2e_requires_all_installed_local_backends_and_safe_output(self) -> None:
         script_path = ROOT / "scripts" / "local-model-e2e-acceptance.sh"
         self.assertTrue(script_path.is_file())
@@ -88,10 +121,16 @@ class RealE2EAcceptanceStaticTest(unittest.TestCase):
         self.assertIn('attestation source changed', verifier)
         self.assertIn('MAX_LOCAL_MODEL_JSON_BYTES = 4 * 1024 * 1024', script)
         self.assertIn('handle.read(MAX_LOCAL_MODEL_JSON_BYTES + 1)', script)
+        self.assertIn('object_pairs_hook=reject_duplicate_keys', script)
+        self.assertIn('parse_constant=reject_constant', script)
+        self.assertIn('raw_limit_per_backend = os.environ.get("SOC_LOCAL_MODEL_E2E_LIMIT_PER_BACKEND", "0")', script)
+        self.assertIn('re.fullmatch(r"[0-9]{1,9}", raw_limit_per_backend)', script)
         self.assertIn('MAX_ATTESTATION_BYTES = 4 * 1024 * 1024', verifier)
         self.assertIn('handle.read(MAX_ATTESTATION_BYTES + 1)', verifier)
         self.assertIn('entry.st_size > MAX_ATTESTATION_BYTES', verifier)
         self.assertNotIn('--insert-method', script)
+        self.assertIn('export XDG_STATE_HOME="${tmp_root}/state"', script)
+        self.assertIn('attestation="${state_dir}/local-model-e2e-attestation.json"', script)
         self.assertIn('verify-local-model-e2e-attestation', makefile)
 
     def test_local_model_e2e_is_hugging_face_offline_and_does_not_forward_tokens(self) -> None:
