@@ -114,7 +114,7 @@ jobs:
           persist-credentials: false
           ref: ${{ needs.validate-release-tag.outputs.ref }}
       - name: Check spelling
-        uses: crate-ci/typos@f8a58b6b53f2279f71eb605f03a4ae4d10608f45
+        uses: crate-ci/typos@8a48f81b6c64dcfea44b3633223084c4be58ac5f
         with:
           config: ./typos.toml
 
