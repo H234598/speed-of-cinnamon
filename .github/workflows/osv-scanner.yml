@@ -70,7 +70,7 @@ jobs:
         run: git checkout --detach "${OSV_BASE_SHA}"
 
       - name: Run OSV scanner on base revision
-        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@f4cfcc01edc9c8b756a9b873b7a623ca674da51e # v2.3.8
         continue-on-error: true
         with:
           scan-args: |-
@@ -84,7 +84,7 @@ jobs:
         run: git checkout --detach "${GITHUB_SHA}"
 
       - name: Run OSV scanner on proposed revision
-        uses: google/osv-scanner-action/osv-scanner-action@8dc09193bb540e09b23da07ad7e30bd33bf87018 # v2.3.8
+        uses: google/osv-scanner-action/osv-scanner-action@f4cfcc01edc9c8b756a9b873b7a623ca674da51e # v2.3.8
         continue-on-error: true
         with:
           scan-args: |-
