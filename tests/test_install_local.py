@@ -167,6 +167,32 @@ class InstallLocalTest(unittest.TestCase):
                 self.assertEqual(marshal.loads(data[16:]).co_filename, str(source))
                 self.assertEqual(stat.S_IMODE(pyc.parent.lstat().st_mode), 0o700)
 
+    def test_install_local_excludes_applet_bytecode_and_replaces_existing_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            repo_root = self._copy_installable_minimal_repo(tmp_path)
+            source_applet = repo_root / "files" / "speed-of-cinnamon@H234598"
+            source_cache = source_applet / "__pycache__"
+            source_cache.mkdir()
+            (source_cache / "SettingsLogo.cpython-314.pyc").write_bytes(b"source bytecode")
+
+            home = tmp_path / "home"
+            home.mkdir()
+            applet_target = home / ".local" / "share" / "cinnamon" / "applets" / "speed-of-cinnamon@H234598"
+            target_cache = applet_target / "__pycache__"
+            target_cache.mkdir(parents=True)
+            (target_cache / "stale.cpython-314.pyc").write_bytes(b"stale bytecode")
+            (applet_target / "stale-only.txt").write_text("stale\n", encoding="utf-8")
+            (applet_target / "metadata.json").write_text('{"generation":"old"}\n', encoding="utf-8")
+
+            result = self._run_install_local(repo_root, home)
+
+            self.assertEqual(result.returncode, 0, msg=result.stdout + result.stderr)
+            self.assertEqual((applet_target / "metadata.json").read_text(encoding="utf-8"), "{}")
+            self.assertFalse((applet_target / "stale-only.txt").exists())
+            self.assertFalse(any(path.name == "__pycache__" for path in applet_target.rglob("__pycache__")))
+            self.assertFalse(list(applet_target.rglob("*.pyc")))
+
     def test_install_local_fails_before_activation_on_compile_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)

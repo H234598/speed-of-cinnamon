@@ -392,7 +392,8 @@ write_staging_dir() {
   safe_fs mkdirs install "${stage_root}/speed-of-cinnamon/bin"
   safe_fs mkdirs install "${stage_root}/man/man1"
 
-  if ! safe_fs install-tree install "${source_root}/files/${uuid}" "${stage_root}/speed-of-cinnamon/share/${uuid}" "applet"; then
+  if ! safe_fs install-tree install "${source_root}/files/${uuid}" "${stage_root}/speed-of-cinnamon/share/${uuid}" "applet" \
+    --exclude-name __pycache__; then
     printf 'failed to stage applet installation files\n' >&2
     exit 1
   fi

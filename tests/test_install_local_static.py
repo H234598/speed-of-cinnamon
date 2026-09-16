@@ -71,7 +71,17 @@ class InstallLocalStaticTest(unittest.TestCase):
     def test_checked_hash_bytecode_precedes_manifest_and_activation(self):
         source = (REPO_ROOT / "scripts" / "install-local.sh").read_text(encoding="utf-8")
 
-        self.assertEqual(source.count("--exclude-name __pycache__"), 1)
+        self.assertEqual(source.count("--exclude-name __pycache__"), 2)
+        self.assertIn(
+            'safe_fs install-tree install "${source_root}/files/${uuid}" "${stage_root}/speed-of-cinnamon/share/${uuid}" "applet" \\\n'
+            '    --exclude-name __pycache__',
+            source,
+        )
+        self.assertIn(
+            'safe_fs install-tree install "${source_root}/src/speed_of_cinnamon" "${stage_root}/speed-of-cinnamon/python/speed_of_cinnamon" "python package" \\\n'
+            '    --exclude-name __pycache__',
+            source,
+        )
         self.assertIn('"${python3_path}" -I -m compileall -q -f', source)
         self.assertIn("--invalidation-mode checked-hash", source)
         self.assertIn('-s "${stage_python_root}" -p "${app_data}/python"', source)
@@ -83,7 +93,6 @@ class InstallLocalStaticTest(unittest.TestCase):
         self.assertIn("info.st_nlink != 1", source)
         self.assertIn("mode != 0o600", source)
         self.assertIn("cache_directories != expected_cache_directories", source)
-        self.assertNotIn('"python package" \\\n  --exclude-name __pycache__', source)
         copy_index = source.index('safe_fs install-tree install "${source_root}/src/speed_of_cinnamon"')
         compile_index = source.index('compile_staged_python "${stage_root}/speed-of-cinnamon/python"')
         manifest_index = source.index('staging_python_digest="$(snapshot_staging_target')
