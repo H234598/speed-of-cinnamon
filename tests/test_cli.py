@@ -47,6 +47,72 @@ from speed_of_cinnamon.recorder import (
 from speed_of_cinnamon.state import MAX_STATE_FILE_BYTES, RecordingState, StateStore
 
 
+class TranscriptFailureDiagnosticsTest(unittest.TestCase):
+    def test_transcript_diagnostics_known_causes_secret_redaction(self) -> None:
+        marker = "PRIVATE_KEY_PROMPT_TRANSCRIPT:/private/secret"
+        original = RuntimeError(marker)
+        original.__cause__ = artifact_crypto.ArtifactCryptoError(marker)
+        original.__cause__.__cause__ = PermissionError(marker)
+        original.__cause__.__cause__.__cause__ = TypeError(marker)
+        original.add_note(marker)
+        for phase in ("transcript_prepare", "transcript_store"):
+            with self.subTest(phase=phase), self.assertRaises(RuntimeError) as caught:
+                cli._raise_backend_sanitized_exception(
+                    original, message=cli.TRANSIENT_TRANSCRIPT_WRITE_ERROR, error_phase=phase,
+                )
+            error = caught.exception
+            fields = cli._public_transcript_failure_fields(error)
+            self.assertEqual(fields, {
+                "error_phase": phase, "diagnostic_error_class": "RuntimeError",
+                "diagnostic_cause_classes": ["ArtifactCryptoError", "PermissionError"],
+            })
+            self.assertNotIn(marker, json.dumps(fields))
+            self.assertEqual(str(error), cli.TRANSIENT_TRANSCRIPT_WRITE_ERROR)
+            self.assertIsNone(error.__cause__)
+            self.assertIsNone(error.__context__)
+            self.assertEqual(getattr(error, "__notes__", []), [])
+
+    def test_transcript_diagnostics_unknown_primary_and_cause(self) -> None:
+        private_error = type("PRIVATE_CLASS_MARKER", (RuntimeError,), {})
+        original = private_error("PRIVATE_MESSAGE_MARKER")
+        original.__cause__ = private_error("PRIVATE_CAUSE_MARKER")
+        fields = cli._transcript_failure_diagnostics(original)
+        self.assertEqual(fields, {"diagnostic_error_class": "UnknownError",
+                                  "diagnostic_cause_classes": ["UnknownError"]})
+        self.assertNotIn("PRIVATE", json.dumps(fields))
+
+    def test_transcript_diagnostics_cyclic_cause(self) -> None:
+        original = RuntimeError("PRIVATE_MESSAGE_MARKER")
+        cause = PermissionError("PRIVATE_CAUSE_MARKER")
+        original.__cause__ = cause
+        cause.__cause__ = original
+        self.assertEqual(cli._transcript_failure_diagnostics(original), {
+            "diagnostic_error_class": "RuntimeError",
+            "diagnostic_cause_classes": ["PermissionError"],
+        })
+
+    def test_transcript_diagnostics_reject_untrusted_fields(self) -> None:
+        error = RuntimeError("PRIVATE_MESSAGE_MARKER")
+        error.error_phase = "transcript_store"
+        for name, causes in (("PRIVATE_CLASS_MARKER", []),
+                             ("RuntimeError", ["PRIVATE_CAUSE_MARKER"]),
+                             ("RuntimeError", ["OSError"] * 3),
+                             ("RuntimeError", ("OSError",))):
+            with self.subTest(name=name, causes=causes):
+                error.diagnostic_error_class = name
+                error.diagnostic_cause_classes = causes
+                self.assertEqual(cli._public_transcript_failure_fields(error),
+                                 {"error_phase": "transcript_store"})
+
+    def test_transcript_diagnostics_absent_outside_prepare_store(self) -> None:
+        with self.assertRaises(RuntimeError) as caught:
+            cli._raise_backend_sanitized_exception(
+                OSError("PRIVATE_MESSAGE_MARKER"), message="public failure",
+            )
+        self.assertEqual(cli._public_transcript_failure_fields(caught.exception), {})
+        self.assertFalse(hasattr(caught.exception, "diagnostic_error_class"))
+
+
 class CliTest(unittest.TestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -1108,6 +1174,20 @@ class CliTest(unittest.TestCase):
                 ensure_scope.assert_not_called()
                 apply_priority.assert_not_called()
                 run.assert_called_once_with()
+
+    def test_main_validated_status_uses_total_scope_deadline(self) -> None:
+        arguments = ["status", "--json"]
+        with (
+            mock.patch.object(cli.sys, "argv", ["speed-of-cinnamon", *arguments]),
+            mock.patch.object(cli, "ensure_soc_priority_scope") as ensure_scope,
+            mock.patch.object(cli, "apply_process_priority", return_value=(True, True)),
+            mock.patch.object(cli, "run", return_value=0),
+        ):
+            with self.assertRaises(SystemExit) as raised:
+                cli.main()
+
+        self.assertEqual(raised.exception.code, 0)
+        ensure_scope.assert_called_once_with(arguments, status_invocation=True)
 
     def test_main_normal_and_delimited_data_invocations_require_priority_scope(self) -> None:
         for arguments in (
@@ -4438,6 +4518,79 @@ class CliTest(unittest.TestCase):
         self.assertEqual(code, 1)
         self.assertIn("failed to write transcript file", payload["error"])
 
+    def test_transcribe_file_reports_transcript_prepare_error_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            marker = "PRIVATE_EXCEPTION_MARKER:/private/transcript-owner"
+            with (
+                mock.patch.object(cli, "validate_audio_file", return_value=audio),
+                mock.patch.object(cli, "_prepare_transient_transcript_path", side_effect=OSError(marker)),
+                mock.patch.object(cli, "transcribe") as transcribe,
+                mock.patch.object(cli, "_write_stored_transcript") as store,
+                mock.patch.object(cli, "insert_text") as insert,
+                mock.patch.object(cli, "_safe_log_event") as log_event,
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file", str(audio), "--transcriber", "command",
+                    "--transcriber-command", "printf FakeTranscript", "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            logged = repr(log_event.call_args_list)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], cli.TRANSIENT_TRANSCRIPT_WRITE_ERROR)
+        self.assertEqual(payload["error_phase"], "transcript_prepare")
+        self.assertEqual(payload["diagnostic_error_class"], "OSError")
+        self.assertEqual(payload["diagnostic_cause_classes"], [])
+        self.assertNotIn(marker, stdout.getvalue())
+        self.assertNotIn("FakeTranscript", stdout.getvalue())
+        self.assertNotIn(marker, logged)
+        self.assertNotIn("FakeTranscript", logged)
+        self.assertIn("transcript_prepare", logged)
+        transcribe.assert_not_called()
+        store.assert_not_called()
+        insert.assert_not_called()
+
+    def test_transcribe_file_reports_transcript_store_error_phase(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            marker = "PRIVATE_EXCEPTION_MARKER:/private/transcript-file"
+            with (
+                mock.patch.object(cli, "validate_audio_file", return_value=audio),
+                mock.patch.object(cli, "_prepare_transient_transcript_path", return_value=(None, None)),
+                mock.patch.object(cli, "transcribe", return_value="FakeTranscript") as transcribe,
+                mock.patch.object(cli, "_remove_transient_transcript_path", return_value=True),
+                mock.patch.object(cli, "_process_transcript", return_value=("FakeTranscript", {})) as process,
+                mock.patch.object(cli, "_write_stored_transcript", side_effect=OSError(marker)) as store,
+                mock.patch.object(cli, "insert_text") as insert,
+                mock.patch.object(cli, "_safe_log_event") as log_event,
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file", str(audio), "--transcriber", "command",
+                    "--transcriber-command", "printf FakeTranscript", "--json",
+                ])
+            payload = json.loads(stdout.getvalue())
+            logged = repr(log_event.call_args_list)
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["error"], cli.TRANSIENT_TRANSCRIPT_WRITE_ERROR)
+        self.assertEqual(payload["error_phase"], "transcript_store")
+        self.assertEqual(payload["diagnostic_error_class"], "OSError")
+        self.assertEqual(payload["diagnostic_cause_classes"], [])
+        self.assertNotIn(marker, stdout.getvalue())
+        self.assertNotIn("FakeTranscript", stdout.getvalue())
+        self.assertNotIn(marker, logged)
+        self.assertNotIn("FakeTranscript", logged)
+        self.assertIn("transcript_store", logged)
+        transcribe.assert_called_once()
+        process.assert_called_once()
+        store.assert_called_once()
+        insert.assert_not_called()
+
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="encrypted ok")
     @mock.patch("speed_of_cinnamon.cli.validate_audio_file")
     def test_transcribe_file_can_encrypt_stored_transcript_with_passphrase(
@@ -4501,6 +4654,77 @@ class CliTest(unittest.TestCase):
         self.assertNotEqual(plaintext_path, stale_plaintext_path)
         mocked_transcribe.assert_called_once()
         self.assertNotEqual(mocked_transcribe.call_args.kwargs["text_path"], plaintext_path)
+
+    def _run_crypto_backend_preflight(self, mode: str, backend_error: Exception | None) -> tuple[dict[str, object], list[str], mock.Mock, mock.Mock, mock.Mock]:
+        events: list[str] = []
+
+        def backend() -> None:
+            events.append("backend")
+            if backend_error is not None:
+                raise backend_error
+
+        def transcribe(**kwargs: object) -> str:
+            events.append("transcribe")
+            raise RuntimeError("synthetic processing stop")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            audio = Path(tmp) / "input.wav"
+            audio.write_bytes(b"audio")
+            stdout = io.StringIO()
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp}),
+                mock.patch.object(cli, "ensure_runtime_dirs"),
+                mock.patch.object(cli, "validate_audio_file", return_value=audio),
+                mock.patch.object(cli, "_prepare_transient_transcript_path", return_value=(None, None)),
+                mock.patch.object(cli, "_remove_transient_transcript_path"),
+                mock.patch.object(artifact_crypto, "_crypto_backend", side_effect=backend) as check,
+                mock.patch.object(cli, "transcribe", side_effect=transcribe) as processing,
+                mock.patch.object(cli, "_write_stored_transcript") as writer,
+                mock.patch.object(artifact_crypto, "_key_for_encryption") as key,
+                redirect_stdout(stdout),
+            ):
+                code = cli.run([
+                    "transcribe-file", str(audio), "--transcriber", "command",
+                    "--transcriber-command", "printf synthetic", "--artifact-encryption", mode, "--json",
+                ])
+            self.assertEqual(code, 1)
+            writer.assert_not_called()
+            key.assert_not_called()
+            return json.loads(stdout.getvalue()), events, check, processing, key
+
+    def test_crypto_backend_failfast_before_processing(self) -> None:
+        for mode in ("keyring", "passphrase"):
+            with self.subTest(mode=mode):
+                payload, events, check, processing, key = self._run_crypto_backend_preflight(
+                    mode, artifact_crypto.ArtifactCryptoError("secret/path must not escape"),
+                )
+                self.assertEqual(events, ["backend"])
+                check.assert_called_once_with()
+                processing.assert_not_called()
+                key.assert_not_called()
+                self.assertEqual(payload["error_phase"], "transcript_prepare")
+                self.assertEqual(payload["diagnostic_error_class"], "ArtifactCryptoError")
+                self.assertEqual(payload["diagnostic_cause_classes"], [])
+                self.assertEqual(payload["error"], "cryptography is required for artifact encryption; install python3-cryptography")
+                self.assertNotIn("secret/path", json.dumps(payload))
+
+    def test_crypto_backend_failfast_off_skips_backend(self) -> None:
+        _, events, check, processing, _ = self._run_crypto_backend_preflight(
+            "off", artifact_crypto.ArtifactCryptoError("unavailable"),
+        )
+        self.assertEqual(events, ["transcribe"])
+        check.assert_not_called()
+        processing.assert_called_once()
+
+    def test_crypto_backend_failfast_available_preserves_dispatch(self) -> None:
+        for mode in ("keyring", "passphrase"):
+            with self.subTest(mode=mode):
+                _, events, check, processing, _ = self._run_crypto_backend_preflight(mode, None)
+                self.assertEqual(events, ["backend", "transcribe"])
+                check.assert_called_once_with()
+                processing.assert_called_once()
+                self.assertEqual(processing.call_args.kwargs["backend"], "command")
+                self.assertEqual(processing.call_args.kwargs["command_template"], "printf synthetic")
 
     def test_stored_transcript_rolls_back_encrypted_file_when_plaintext_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -13716,42 +13940,114 @@ class CliTest(unittest.TestCase):
             process.wait()
 
     def test_start_locked_preserves_state_when_stale_recorder_group_cannot_be_stopped(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            tmp_path = Path(tmp)
-            state_dir = tmp_path / "speed-of-cinnamon"
-            recordings_dir = state_dir / "recordings"
-            state_dir.mkdir(parents=True)
-            state_dir.chmod(0o700)
-            recordings_dir.mkdir(parents=True)
-            audio = recordings_dir / "active.wav"
-            audio.write_bytes(b"audio")
-            state_file = state_dir / "state.json"
-            store = StateStore(state_file)
-            store.write(
-                RecordingState(
-                    status="recording",
-                    pid=1234,
-                    process_identity="stale-process-identity",
-                    audio_path="recordings/active.wav",
-                    inserted=True,
+        import contextlib
+        import signal
+
+        process = subprocess.Popen(["/bin/true"], start_new_session=True)
+        try:
+            deadline = time.monotonic() + 2
+            process_state = ""
+            while time.monotonic() < deadline:
+                try:
+                    stat_text = Path(f"/proc/{process.pid}/stat").read_text(encoding="utf-8")
+                    process_state = stat_text.rsplit(")", 1)[1].split()[0]
+                except OSError:
+                    process_state = "gone"
+                if process_state in {"Z", "X", "x"}:
+                    break
+                time.sleep(0.01)
+            self.assertIn(process_state, {"Z", "X", "x"})
+            process_identity = cli._recording_process_identity_for_pid(process.pid)
+            self.assertIsNotNone(process_identity)
+
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                state_dir = tmp_path / "speed-of-cinnamon"
+                recordings_dir = state_dir / "recordings"
+                state_dir.mkdir(parents=True)
+                state_dir.chmod(0o700)
+                recordings_dir.mkdir(parents=True)
+                audio = recordings_dir / "active.wav"
+                audio.write_bytes(b"audio")
+                state_file = state_dir / "state.json"
+                store = StateStore(state_file)
+                store.write(
+                    RecordingState(
+                        status="recording",
+                        pid=process.pid,
+                        process_identity=process_identity or "",
+                        audio_path="recordings/active.wav",
+                        inserted=True,
+                    )
                 )
-            )
-            with (
-                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
-                mock.patch.object(
-                    cli,
-                    "_reconcile_recording_process",
-                    return_value=cli._RECORDING_PROCESS_GROUP_ACTIVE_ERROR,
-                ),
-            ):
-                result = cli._command_start_locked(argparse.Namespace(), store)
 
-            final_state = store.read()
+                blocked_events: list[str] = []
+                original_kill = os.kill
+                original_killpg = os.killpg
 
-        self.assertEqual(result["status"], "recording")
-        self.assertIn("recording process group is still active", result["error"])
-        self.assertEqual(final_state.status, "recording")
-        self.assertEqual(final_state.error, "")
+                def guarded_kill(process_id: int, signal_number: int) -> None:
+                    if signal_number == 0:
+                        return original_kill(process_id, signal_number)
+                    blocked_events.append("pid_signal")
+                    raise AssertionError("mutating process signal is forbidden")
+
+                def guarded_killpg(group_id: int, signal_number: int) -> None:
+                    if signal_number == 0:
+                        return original_killpg(group_id, signal_number)
+                    blocked_events.append("group_signal")
+                    raise AssertionError("mutating group signal is forbidden")
+
+                def block_action(category: str):
+                    def block(*args, **kwargs):
+                        blocked_events.append(category)
+                        raise AssertionError(f"{category} is forbidden")
+                    return block
+
+                with contextlib.ExitStack() as guards:
+                    guards.enter_context(mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}))
+                    mocked_reconcile = guards.enter_context(
+                        mock.patch.object(
+                            cli,
+                            "_reconcile_recording_process",
+                            return_value=cli._RECORDING_PROCESS_GROUP_ACTIVE_ERROR,
+                        )
+                    )
+                    guards.enter_context(mock.patch.object(os, "kill", new=guarded_kill))
+                    guards.enter_context(mock.patch.object(os, "killpg", new=guarded_killpg))
+                    guards.enter_context(mock.patch.object(subprocess, "Popen", side_effect=block_action("subprocess_start")))
+                    guards.enter_context(mock.patch.object(cli, "choose_recorder", side_effect=block_action("recorder_selection")))
+                    guards.enter_context(mock.patch.object(cli, "start_recorder", side_effect=block_action("recorder_start")))
+                    if hasattr(signal, "pidfd_send_signal"):
+                        original_pidfd_send_signal = signal.pidfd_send_signal
+
+                        def guarded_pidfd_send_signal(descriptor, signal_number, *args, **kwargs):
+                            if signal_number == 0:
+                                return original_pidfd_send_signal(descriptor, signal_number, *args, **kwargs)
+                            blocked_events.append("pidfd_signal")
+                            raise AssertionError("mutating pidfd signal is forbidden")
+
+                        guards.enter_context(mock.patch.object(signal, "pidfd_send_signal", new=guarded_pidfd_send_signal))
+                    for spawn_name in ("posix_spawn", "posix_spawnp"):
+                        if hasattr(os, spawn_name):
+                            guards.enter_context(mock.patch.object(os, spawn_name, side_effect=block_action(spawn_name)))
+                    result = cli._command_start_locked(argparse.Namespace(), store)
+
+                mocked_reconcile.assert_called_once()
+                reconciled_state = mocked_reconcile.call_args.args[0]
+                self.assertEqual(reconciled_state.pid, process.pid)
+                self.assertEqual(reconciled_state.process_identity, process_identity)
+                self.assertEqual(blocked_events, [])
+                final_state = store.read()
+                self.assertEqual(result["status"], "recording")
+                self.assertIn("recording process group is still active", result["error"])
+                self.assertEqual(final_state.status, "recording")
+                self.assertEqual(final_state.error, "")
+                self.assertEqual(final_state.pid, process.pid)
+                self.assertEqual(final_state.process_identity, process_identity)
+                self.assertEqual(final_state.audio_path, "recordings/active.wav")
+                self.assertEqual(audio.read_bytes(), b"audio")
+        finally:
+            process.wait(timeout=2)
 
     def test_start_locked_preserves_reaped_recording_when_group_lives_without_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -13780,6 +14076,9 @@ class CliTest(unittest.TestCase):
         mocked_choose.assert_not_called()
 
     def test_start_locked_preserves_recording_state_without_pid(self) -> None:
+        import contextlib
+        import signal
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             recordings = tmp_path / "speed-of-cinnamon" / "recordings"
@@ -13790,11 +14089,56 @@ class CliTest(unittest.TestCase):
             store = StateStore(state_file)
             store.write(RecordingState(status="recording", audio_path=str(audio)))
 
-            result = cli._command_start_locked(argparse.Namespace(), store)
-            final_state = store.read()
+            blocked_events: list[str] = []
+            original_kill = os.kill
+            original_killpg = os.killpg
 
+            def guarded_kill(process_id: int, signal_number: int) -> None:
+                if signal_number == 0:
+                    return original_kill(process_id, signal_number)
+                blocked_events.append("pid_signal")
+                raise AssertionError("mutating process signal is forbidden")
+
+            def guarded_killpg(group_id: int, signal_number: int) -> None:
+                if signal_number == 0:
+                    return original_killpg(group_id, signal_number)
+                blocked_events.append("group_signal")
+                raise AssertionError("mutating group signal is forbidden")
+
+            def block_action(category: str):
+                def block(*args, **kwargs):
+                    blocked_events.append(category)
+                    raise AssertionError(f"{category} is forbidden")
+                return block
+
+            with contextlib.ExitStack() as guards:
+                guards.enter_context(mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}))
+                guards.enter_context(mock.patch.object(os, "kill", new=guarded_kill))
+                guards.enter_context(mock.patch.object(os, "killpg", new=guarded_killpg))
+                guards.enter_context(mock.patch.object(subprocess, "Popen", side_effect=block_action("subprocess_start")))
+                guards.enter_context(mock.patch.object(cli, "choose_recorder", side_effect=block_action("recorder_selection")))
+                guards.enter_context(mock.patch.object(cli, "start_recorder", side_effect=block_action("recorder_start")))
+                if hasattr(signal, "pidfd_send_signal"):
+                    original_pidfd_send_signal = signal.pidfd_send_signal
+
+                    def guarded_pidfd_send_signal(descriptor, signal_number, *args, **kwargs):
+                        if signal_number == 0:
+                            return original_pidfd_send_signal(descriptor, signal_number, *args, **kwargs)
+                        blocked_events.append("pidfd_signal")
+                        raise AssertionError("mutating pidfd signal is forbidden")
+
+                    guards.enter_context(mock.patch.object(signal, "pidfd_send_signal", new=guarded_pidfd_send_signal))
+                for spawn_name in ("posix_spawn", "posix_spawnp"):
+                    if hasattr(os, spawn_name):
+                        guards.enter_context(mock.patch.object(os, spawn_name, side_effect=block_action(spawn_name)))
+                result = cli._command_start_locked(argparse.Namespace(), store)
+                final_state = store.read()
+                audio_bytes = audio.read_bytes()
+
+        self.assertEqual(blocked_events, [])
+        self.assertEqual(audio_bytes, b"audio")
         self.assertEqual(result["status"], "recording")
-        self.assertIn("pid is missing", result["error"])
+        self.assertEqual(result["error"], "recording process identity is missing or invalid; recording state preserved")
         self.assertEqual(final_state.status, "recording")
         self.assertEqual(final_state.audio_path, str(audio))
         self.assertFalse(final_state.inserted)
@@ -13878,21 +14222,111 @@ class CliTest(unittest.TestCase):
         mocked_stop.assert_not_called()
 
     def test_start_locked_rejects_relative_recording_path_escape(self) -> None:
+        import os as fixture_os
+        import select as fixture_select
+        import signal as fixture_signal
+        import subprocess as fixture_subprocess
+        import sys as fixture_sys
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             state_dir = tmp_path / "speed-of-cinnamon"
             state_dir.mkdir(parents=True)
             state_dir.chmod(0o700)
-            (tmp_path / "escape.wav").write_bytes(b"audio")
+            escape_path = tmp_path / "escape.wav"
+            escape_path.write_bytes(b"audio")
             state_file = state_dir / "state.json"
             store = StateStore(state_file)
-            store.write(RecordingState(status="recording", audio_path="../escape.wav", inserted=True))
-            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}):
+            child = fixture_subprocess.Popen(
+                [
+                    fixture_sys.executable,
+                    "-I",
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(b'R'); sys.stdout.buffer.flush(); sys.stdin.buffer.read(1)",
+                ],
+                stdin=fixture_subprocess.PIPE,
+                stdout=fixture_subprocess.PIPE,
+                stderr=fixture_subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+            child_pid = child.pid
+            pidfd = None
+            try:
+                pidfd = fixture_os.pidfd_open(child_pid)
+                self.assertIsNotNone(child.stdin)
+                self.assertIsNotNone(child.stdout)
+                ready, _, _ = fixture_select.select([child.stdout], [], [], 2.0)
+                self.assertTrue(ready)
+                self.assertEqual(child.stdout.read(1), b"R")
+                process_identity = cli._recording_process_identity_for_pid(child_pid)
+                self.assertIsInstance(process_identity, str)
+                self.assertTrue(process_identity)
+            finally:
+                if child.stdin is not None:
+                    child.stdin.close()
+                if child.stdout is not None:
+                    child.stdout.close()
+                try:
+                    try:
+                        child.wait(timeout=2.0)
+                    except fixture_subprocess.TimeoutExpired:
+                        if pidfd is None:
+                            raise
+                        fixture_signal.pidfd_send_signal(pidfd, fixture_signal.SIGKILL)
+                        child.wait(timeout=2.0)
+                finally:
+                    if pidfd is not None:
+                        fixture_os.close(pidfd)
+            self.assertEqual(child.returncode, 0)
+            store.write(
+                RecordingState(
+                    status="recording",
+                    pid=child_pid,
+                    process_identity=process_identity,
+                    audio_path="../escape.wav",
+                    inserted=True,
+                )
+            )
+            blocked_actions = []
+            original_kill = fixture_os.kill
+            original_killpg = fixture_os.killpg
+
+            def guarded_kill(pid: int, signal_number: int) -> None:
+                if pid in {child_pid, -child_pid} and signal_number == 0:
+                    return original_kill(pid, signal_number)
+                blocked_actions.append("kill")
+                raise AssertionError("unexpected mutating or unowned PID signal")
+
+            def guarded_killpg(pgid: int, signal_number: int) -> None:
+                if pgid == child_pid and signal_number == 0:
+                    return original_killpg(pgid, signal_number)
+                blocked_actions.append("killpg")
+                raise AssertionError("unexpected mutating or unowned group signal")
+
+            def blocked_start_or_signal(*args: object, **kwargs: object) -> None:
+                blocked_actions.append("start_or_signal")
+                raise AssertionError("unexpected process start or PIDFD signal")
+
+            with (
+                mock.patch.dict(fixture_os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(fixture_os, "kill", side_effect=guarded_kill),
+                mock.patch.object(fixture_os, "killpg", side_effect=guarded_killpg),
+                mock.patch.object(fixture_signal, "pidfd_send_signal", side_effect=blocked_start_or_signal),
+                mock.patch.object(fixture_subprocess, "Popen", side_effect=blocked_start_or_signal),
+                mock.patch.object(fixture_os, "posix_spawn", side_effect=blocked_start_or_signal),
+                mock.patch.object(fixture_os, "posix_spawnp", side_effect=blocked_start_or_signal),
+                mock.patch.object(fixture_os, "fork", side_effect=blocked_start_or_signal),
+            ):
                 result = cli._command_start_locked(argparse.Namespace(), store)
             final_state = store.read()
+            self.assertEqual(blocked_actions, [])
             self.assertEqual(result["status"], "error")
+            self.assertEqual(result["message"], "recording state references an invalid artifact path")
             self.assertEqual(final_state.status, "error")
             self.assertFalse(final_state.inserted)
+            self.assertEqual(final_state.audio_path, "../escape.wav")
+            self.assertEqual(escape_path.read_bytes(), b"audio")
 
     def test_status_reports_microphone_level_for_relative_recording_path(self) -> None:
         identity = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa:12345"
@@ -19299,6 +19733,12 @@ class CliTest(unittest.TestCase):
 
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="ok")
     def test_toggle_accepts_transcriber_alias_openai(self, mocked_transcribe: mock.Mock) -> None:
+        import os as fixture_os
+        import select as fixture_select
+        import signal as fixture_signal
+        import subprocess as fixture_subprocess
+        import sys as fixture_sys
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             recordings = tmp_path / "speed-of-cinnamon" / "recordings"
@@ -19307,17 +19747,100 @@ class CliTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             state_file = tmp_path / "state.json"
             store = StateStore(state_file)
+            child = fixture_subprocess.Popen(
+                [
+                    fixture_sys.executable,
+                    "-I",
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(b'R'); sys.stdout.buffer.flush(); sys.stdin.buffer.read(1)",
+                ],
+                stdin=fixture_subprocess.PIPE,
+                stdout=fixture_subprocess.PIPE,
+                stderr=fixture_subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+            child_pid = child.pid
+            pidfd = None
+            try:
+                pidfd = fixture_os.pidfd_open(child_pid)
+                self.assertIsNotNone(child.stdin)
+                self.assertIsNotNone(child.stdout)
+                ready, _, _ = fixture_select.select([child.stdout], [], [], 2.0)
+                self.assertTrue(ready)
+                self.assertEqual(child.stdout.read(1), b"R")
+                process_identity = cli._recording_process_identity_for_pid(child_pid)
+                self.assertIsInstance(process_identity, str)
+                self.assertTrue(process_identity)
+            finally:
+                if child.stdin is not None:
+                    child.stdin.close()
+                if child.stdout is not None:
+                    child.stdout.close()
+                try:
+                    try:
+                        child.wait(timeout=2.0)
+                    except fixture_subprocess.TimeoutExpired:
+                        if pidfd is None:
+                            raise
+                        fixture_signal.pidfd_send_signal(pidfd, fixture_signal.SIGKILL)
+                        child.wait(timeout=2.0)
+                finally:
+                    if pidfd is not None:
+                        fixture_os.close(pidfd)
+            self.assertEqual(child.returncode, 0)
             store.write(
                 RecordingState(
                     status="recording",
-                    pid=123456789,
+                    pid=child_pid,
+                    process_identity=process_identity,
                     audio_path=str(audio),
                     language="en",
                 )
             )
+            blocked_actions = []
+            original_kill = fixture_os.kill
+            original_killpg = fixture_os.killpg
+
+            def guarded_kill(pid: int, signal_number: int) -> None:
+                if pid in {child_pid, -child_pid} and signal_number == 0:
+                    return original_kill(pid, signal_number)
+                blocked_actions.append(f"os.kill:{'mutating' if signal_number != 0 else 'unowned_probe'}")
+                raise AssertionError("unexpected mutating or unowned PID signal")
+
+            def guarded_killpg(pgid: int, signal_number: int) -> None:
+                if pgid == child_pid and signal_number == 0:
+                    return original_killpg(pgid, signal_number)
+                blocked_actions.append(f"os.killpg:{'mutating' if signal_number != 0 else 'unowned_probe'}")
+                raise AssertionError("unexpected mutating or unowned group signal")
+
+            def blocked_action(api: str):
+                def fail(*args: object, **kwargs: object) -> None:
+                    blocked_actions.append(api)
+                    raise AssertionError("unexpected process start or PIDFD signal")
+
+                return fail
+
             with mock.patch("speed_of_cinnamon.cli.remove_file", return_value=True):
                 stdout = io.StringIO()
-                with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                with (
+                    mock.patch.dict(fixture_os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                    mock.patch(
+                        "speed_of_cinnamon.cli.detect_silent_recording",
+                        return_value=cli.SilenceDetectionResult(
+                            False, False, 4.0, 0.0, 3.0, 0.0, "speech detected"
+                        ),
+                    ),
+                    mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=audio),
+                    mock.patch.object(fixture_os, "kill", side_effect=guarded_kill),
+                    mock.patch.object(fixture_os, "killpg", side_effect=guarded_killpg),
+                    mock.patch.object(fixture_signal, "pidfd_send_signal", side_effect=blocked_action("signal.pidfd_send_signal")),
+                    mock.patch.object(fixture_subprocess, "Popen", side_effect=blocked_action("subprocess.Popen")),
+                    mock.patch.object(fixture_os, "posix_spawn", side_effect=blocked_action("os.posix_spawn")),
+                    mock.patch.object(fixture_os, "posix_spawnp", side_effect=blocked_action("os.posix_spawnp")),
+                    mock.patch.object(fixture_os, "fork", side_effect=blocked_action("os.fork")),
+                    redirect_stdout(stdout),
+                ):
                     code = cli.run([
                         "toggle",
                         "--state-file",
@@ -19329,6 +19852,7 @@ class CliTest(unittest.TestCase):
                         "--json",
                     ])
             payload = json.loads(stdout.getvalue())
+            self.assertEqual(blocked_actions, [])
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "done")
         mocked_transcribe.assert_called_once_with(
@@ -19344,6 +19868,12 @@ class CliTest(unittest.TestCase):
 
     @mock.patch("speed_of_cinnamon.cli.transcribe", return_value="ok")
     def test_toggle_accepts_transcriber_alias_faster_whisper(self, mocked_transcribe: mock.Mock) -> None:
+        import os as fixture_os
+        import select as fixture_select
+        import signal as fixture_signal
+        import subprocess as fixture_subprocess
+        import sys as fixture_sys
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             recordings = tmp_path / "speed-of-cinnamon" / "recordings"
@@ -19352,17 +19882,108 @@ class CliTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             state_file = tmp_path / "state.json"
             store = StateStore(state_file)
+            child = fixture_subprocess.Popen(
+                [
+                    fixture_sys.executable,
+                    "-I",
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(b'R'); sys.stdout.buffer.flush(); sys.stdin.buffer.read(1)",
+                ],
+                stdin=fixture_subprocess.PIPE,
+                stdout=fixture_subprocess.PIPE,
+                stderr=fixture_subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+            child_pid = child.pid
+            pidfd = None
+            try:
+                pidfd = fixture_os.pidfd_open(child_pid)
+                self.assertIsNotNone(child.stdin)
+                self.assertIsNotNone(child.stdout)
+                ready, _, _ = fixture_select.select([child.stdout], [], [], 2.0)
+                self.assertTrue(ready)
+                self.assertEqual(child.stdout.read(1), b"R")
+                process_identity = cli._recording_process_identity_for_pid(child_pid)
+                self.assertIsInstance(process_identity, str)
+                self.assertTrue(process_identity)
+            finally:
+                if child.stdin is not None:
+                    child.stdin.close()
+                if child.stdout is not None:
+                    child.stdout.close()
+                try:
+                    try:
+                        child.wait(timeout=2.0)
+                    except fixture_subprocess.TimeoutExpired:
+                        if pidfd is None:
+                            raise
+                        fixture_signal.pidfd_send_signal(pidfd, fixture_signal.SIGKILL)
+                        child.wait(timeout=2.0)
+                finally:
+                    if pidfd is not None:
+                        fixture_os.close(pidfd)
+            self.assertEqual(child.returncode, 0)
             store.write(
                 RecordingState(
                     status="recording",
-                    pid=123456789,
+                    pid=child_pid,
+                    process_identity=process_identity,
                     audio_path=str(audio),
                     language="en",
                 )
             )
+            blocked_events: list[str] = []
+            original_kill = fixture_os.kill
+            original_killpg = fixture_os.killpg
+
+            def guarded_kill(pid: int, signal_number: int) -> None:
+                if pid in {child_pid, -child_pid} and signal_number == 0:
+                    return original_kill(pid, signal_number)
+                category = "mutating" if signal_number != 0 else "unowned_probe"
+                blocked_events.append(f"os.kill:{category}")
+                raise AssertionError("unexpected PID signal")
+
+            def guarded_killpg(pgid: int, signal_number: int) -> None:
+                if pgid == child_pid and signal_number == 0:
+                    return original_killpg(pgid, signal_number)
+                category = "mutating" if signal_number != 0 else "unowned_probe"
+                blocked_events.append(f"os.killpg:{category}")
+                raise AssertionError("unexpected process-group signal")
+
+            def guarded_pidfd_signal(*args: object, **kwargs: object) -> None:
+                signal_number = args[1] if len(args) > 1 else kwargs.get("sig")
+                category = "signal0" if signal_number == 0 else "mutating"
+                blocked_events.append(f"signal.pidfd_send_signal:{category}")
+                raise AssertionError("unexpected PIDFD signal")
+
+            def blocked_start(api: str):
+                def fail(*args: object, **kwargs: object) -> None:
+                    blocked_events.append(api)
+                    raise AssertionError("unexpected process start")
+
+                return fail
+
             with mock.patch("speed_of_cinnamon.cli.remove_file", return_value=True):
                 stdout = io.StringIO()
-                with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+                with (
+                    mock.patch.dict(fixture_os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                    mock.patch(
+                        "speed_of_cinnamon.cli.detect_silent_recording",
+                        return_value=cli.SilenceDetectionResult(
+                            False, False, 4.0, 0.0, 3.0, 0.0, "speech detected"
+                        ),
+                    ),
+                    mock.patch("speed_of_cinnamon.cli.trim_recording_silence", return_value=audio),
+                    mock.patch.object(fixture_os, "kill", side_effect=guarded_kill),
+                    mock.patch.object(fixture_os, "killpg", side_effect=guarded_killpg),
+                    mock.patch.object(fixture_signal, "pidfd_send_signal", side_effect=guarded_pidfd_signal),
+                    mock.patch.object(fixture_subprocess, "Popen", side_effect=blocked_start("subprocess.Popen")),
+                    mock.patch.object(fixture_os, "posix_spawn", side_effect=blocked_start("os.posix_spawn")),
+                    mock.patch.object(fixture_os, "posix_spawnp", side_effect=blocked_start("os.posix_spawnp")),
+                    mock.patch.object(fixture_os, "fork", side_effect=blocked_start("os.fork")),
+                    redirect_stdout(stdout),
+                ):
                     code = cli.run([
                         "toggle",
                         "--state-file",
@@ -19373,7 +19994,11 @@ class CliTest(unittest.TestCase):
                         "faster-whisper",
                         "--json",
                     ])
-        payload = json.loads(stdout.getvalue())
+            payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            self.assertEqual(blocked_events, [])
+            self.assertEqual(final_state.status, "done")
+            self.assertEqual(audio.read_bytes(), b"audio")
         self.assertEqual(code, 0)
         self.assertEqual(payload["status"], "done")
         mocked_transcribe.assert_called_once_with(
@@ -26395,20 +27020,88 @@ class CliTest(unittest.TestCase):
         self.assertEqual(final_state.transcript_path, "")
 
     def test_start_does_not_overwrite_expired_recording(self) -> None:
+        process = subprocess.Popen(["/bin/true"], start_new_session=True)
+        try:
+            deadline = time.monotonic() + 2
+            process_state = ""
+            while time.monotonic() < deadline:
+                try:
+                    stat_text = Path(f"/proc/{process.pid}/stat").read_text(encoding="utf-8")
+                    process_state = stat_text.rsplit(")", 1)[1].split()[0]
+                except OSError:
+                    process_state = "gone"
+                if process_state in {"Z", "X", "x"}:
+                    break
+                time.sleep(0.01)
+            self.assertIn(process_state, {"Z", "X", "x"})
+
+            with tempfile.TemporaryDirectory() as tmp:
+                tmp_path = Path(tmp)
+                audio = tmp_path / "expired.wav"
+                audio.write_bytes(b"audio")
+                state_file = tmp_path / "state.json"
+                process_identity = cli._recording_process_identity_for_pid(process.pid)
+                self.assertIsNotNone(process_identity)
+                store = StateStore(state_file)
+                store.write(RecordingState(status="recording", pid=process.pid, process_identity=process_identity or "", audio_path=str(audio)))
+                stdout = io.StringIO()
+                with (
+                    mock.patch.object(cli, "choose_recorder") as mocked_choose,
+                    mock.patch.object(cli, "stop_process") as mocked_stop,
+                    redirect_stdout(stdout),
+                ):
+                    code = cli.run(["start", "--state-file", str(state_file), "--json"])
+                payload = json.loads(stdout.getvalue())
+                final_state = store.read()
+                audio_bytes = audio.read_bytes()
+            self.assertEqual(code, 0)
+            self.assertEqual(payload["status"], "recorded")
+            self.assertTrue(payload["audio_path_present"])
+            self.assertNotIn("audio_path", payload)
+            self.assertEqual(final_state.status, "recorded")
+            self.assertEqual(final_state.audio_path, str(audio))
+            self.assertEqual(audio_bytes, b"audio")
+            mocked_choose.assert_not_called()
+            mocked_stop.assert_called_once()
+            self.assertEqual(mocked_stop.call_args.args[0], process.pid)
+            self.assertEqual(mocked_stop.call_args.kwargs["expected_process_identity"], process_identity)
+        finally:
+            process.wait(timeout=2)
+
+    def test_start_preserves_recording_without_process_identity(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             audio = tmp_path / "expired.wav"
             audio.write_bytes(b"audio")
             state_file = tmp_path / "state.json"
-            StateStore(state_file).write(RecordingState(status="recording", pid=999999999, audio_path=str(audio)))
+            store = StateStore(state_file)
+            store.write(RecordingState(status="recording", pid=999999999, audio_path=str(audio)))
             stdout = io.StringIO()
-            with redirect_stdout(stdout):
+            with (
+                mock.patch.object(cli, "process_is_alive", return_value=False) as mocked_alive,
+                mock.patch.object(cli, "process_group_has_live_processes") as mocked_group,
+                mock.patch.object(cli, "stop_process") as mocked_stop,
+                mock.patch.object(cli, "choose_recorder") as mocked_choose,
+                redirect_stdout(stdout),
+            ):
                 code = cli.run(["start", "--state-file", str(state_file), "--json"])
             payload = json.loads(stdout.getvalue())
-        self.assertEqual(code, 0)
-        self.assertEqual(payload["status"], "recorded")
-        self.assertTrue(payload["audio_path_present"])
-        self.assertNotIn("audio_path", payload)
+            final_state = store.read()
+            audio_bytes = audio.read_bytes()
+        expected_message = "recording process identity is missing or invalid; recording state preserved"
+        self.assertEqual(code, 1)
+        self.assertEqual(payload["status"], "recording")
+        self.assertEqual(payload["message"], expected_message)
+        self.assertEqual(payload["error"], expected_message)
+        self.assertEqual(final_state.status, "recording")
+        self.assertEqual(final_state.pid, 999999999)
+        self.assertEqual(final_state.process_identity, "")
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertEqual(audio_bytes, b"audio")
+        mocked_alive.assert_called_once_with(999999999)
+        mocked_group.assert_not_called()
+        mocked_stop.assert_not_called()
+        mocked_choose.assert_not_called()
 
     def test_start_does_not_overwrite_pending_recording_states(self) -> None:
         for status in ("recorded", "processing"):

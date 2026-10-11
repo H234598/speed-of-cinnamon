@@ -2345,6 +2345,34 @@ function makeOwnedStatusPollHarness(status) {
   };
 }
 
+test("status budget covers scope and state phases without changing Ollama", () => {
+  const statusMatch = appletSource.match(/^const STATUS_COMMAND_TIMEOUT_MS = (\d+);$/m);
+  const ollamaMatch = appletSource.match(/^const OLLAMA_COMMAND_TIMEOUT_MS = (\d+);$/m);
+  assert.ok(statusMatch);
+  assert.ok(ollamaMatch);
+  const statusTimeout = Number(statusMatch[1]);
+  assert.ok(statusTimeout > (30 + 2 + 2) * 1000);
+  assert.equal(Number(ollamaMatch[1]), 10000);
+  assert.ok(appletSource.includes('timeoutMs: OLLAMA_COMMAND_TIMEOUT_MS, resourceGroup: "ollama"'));
+
+  const harness = makeOwnedStatusPollHarness("recording");
+  const { applet } = harness;
+  applet._refreshStatus = loadAppletMethod(
+    "_refreshStatus", "_hasCancelableRecordingWork", { value: 0 },
+    { MAX_CANCEL_RECOVERY_ATTEMPTS: 3, STATUS_COMMAND_TIMEOUT_MS: statusTimeout }
+  );
+  const originalSpawn = applet._spawnJson;
+  applet._spawnJson = (args, callback, options) => {
+    assert.equal(options.timeoutMs, statusTimeout);
+    assert.equal(options.resourceGroup, "status");
+    return originalSpawn.call(applet, args, callback, options);
+  };
+  assert.equal(applet._refreshStatus(), false);
+  assert.equal(harness.statusSpawnCalls(), 1);
+  harness.statusCallback()({ status: "recording" });
+  assert.equal(applet._statusCommandRunning, false);
+});
+
 test("running status command retires poll until its completion schedules one replacement", () => {
   const harness = makeOwnedStatusPollHarness("recording");
   const { applet } = harness;
@@ -2555,6 +2583,7 @@ test("clipboard-paste-submit fallback does not append auto-submit newline", () =
     { MAX_TEXT_INSERT_CHARS: 120000 }
   );
   const clipboardWrites = [];
+  let pasteCalls = 0;
   const applet = {
     insertMethod: "clipboard-paste-submit",
     sanitizeSpecialChars: false,
@@ -2575,6 +2604,7 @@ test("clipboard-paste-submit fallback does not append auto-submit newline", () =
     _resolveOutputActions: resolveOutputActions,
     _preparedTranscriptText: preparedTranscriptText,
     _copyAndMaybePasteTranscriptText: copyAndMaybePaste,
+    _pasteClipboardAfterFocus: () => { pasteCalls += 1; return false; },
     _setClipboardText(text) {
       clipboardWrites.push(text);
       return true;
@@ -2587,6 +2617,195 @@ test("clipboard-paste-submit fallback does not append auto-submit newline", () =
   assert.equal(insertTranscriptText.call(applet, "hello"), true);
   assert.deepEqual(clipboardWrites, ["hello"]);
   assert.equal(clipboardWrites[0].endsWith("\n"), false);
+  assert.equal(pasteCalls, 0);
+});
+
+test("clipboard writer backend waits for verified xclip copy and safe fallback", () => {
+  const clock = { value: 0 };
+  const setClipboardText = loadAppletMethod(
+    "_setClipboardText", "_copyClipboardText", clock,
+    { MAX_SPAWN_JSON_BYTES: 262144, utf8ByteLength: (value) => Buffer.byteLength(value) }
+  );
+  const writes = [];
+  const completions = [];
+  let ownerCompletion;
+  const applet = {
+    clipboardBackend: "gtk",
+    clipboard: { set_text: (_type, text) => { writes.push(text); return true; } },
+    _lifecycleAllowsWork: () => true,
+    _normalizeClipboardBackend: (value) => value,
+    _clipboardXclipWriterContext: () => ({ path: "/usr/bin/xclip", env: {} }),
+    _startClipboardXclipOwner: (_text, _context, callback) => { ownerCompletion = callback; },
+    _clearClipboardOverwriteApproval() {},
+    _clipboardXclipOwner: null,
+  };
+  assert.equal(setClipboardText.call(applet, "gtk", (ok) => completions.push(ok)), true);
+  assert.deepEqual(writes, ["gtk"]);
+  assert.deepEqual(completions, []);
+
+  applet.clipboardBackend = "xclip-fallback";
+  assert.equal(setClipboardText.call(applet, "gtk-first"), true);
+  assert.deepEqual(writes, ["gtk", "gtk-first"]);
+  assert.equal(ownerCompletion, undefined);
+
+  applet.clipboardBackend = "xclip-preferred";
+  assert.equal(setClipboardText.call(applet, "preferred", (ok) => completions.push(ok)), null);
+  assert.deepEqual(writes, ["gtk", "gtk-first"]);
+  ownerCompletion(true, false);
+  assert.deepEqual(completions, [true]);
+  assert.deepEqual(writes, ["gtk", "gtk-first"]);
+
+  applet.clipboard = { set_text: (_type, text) => { writes.push(text); return true; } };
+  assert.equal(setClipboardText.call(applet, "fallback", (ok) => completions.push(ok)), null);
+  ownerCompletion(false, false);
+  assert.deepEqual(writes, ["gtk", "gtk-first"]);
+  assert.deepEqual(completions, [true, false]);
+
+  assert.equal(setClipboardText.call(applet, "safe-fallback", (ok) => completions.push(ok)), null);
+  ownerCompletion(false, true);
+  assert.deepEqual(writes, ["gtk", "gtk-first", "safe-fallback"]);
+  assert.deepEqual(completions, [true, false, true]);
+});
+
+function makeLateXclipOwnerHarness() {
+  const clock = { value: 0 };
+  const stderrCallbacks = [];
+  const copyResults = [];
+  const gtkWrites = [];
+  const stoppedProcesses = [];
+  let verificationCallback;
+  let exitCallback;
+  const stderrPipe = {
+    read_bytes_async(_size, _priority, _cancellable, callback) {
+      stderrCallbacks.push(callback);
+    },
+    read_bytes_finish(result) {
+      if (result.error) throw result.error;
+      return {
+        get_size: () => result.data.length,
+        get_data: () => result.data,
+      };
+    },
+  };
+  const stdinPipe = {
+    write_all_async(_bytes, _priority, _cancellable, callback) {
+      callback(this, {});
+    },
+    write_all_finish: () => true,
+    close: () => true,
+  };
+  const process = {
+    get_stderr_pipe: () => stderrPipe,
+    get_stdin_pipe: () => stdinPipe,
+    wait_async(_cancellable, callback) {
+      exitCallback = callback;
+    },
+    wait_finish: () => true,
+  };
+  const Gio = {
+    SubprocessFlags: { STDIN_PIPE: 1, STDERR_PIPE: 2 },
+    SubprocessLauncher: function() {
+      return {
+        set_environ() {},
+        spawnv: () => process,
+      };
+    },
+  };
+  const context = {
+    ByteArray: { fromString: (value) => Buffer.from(value, "utf8") },
+    CLIPBOARD_COMMAND_TIMEOUT_MS: 100,
+    GLib: { PRIORITY_DEFAULT: 0 },
+    Gio,
+    MAX_SPAWN_JSON_BYTES: 262144,
+    utf8ByteLength: (value) => Buffer.byteLength(value),
+  };
+  const startClipboardXclipOwner = loadAppletMethod(
+    "_startClipboardXclipOwner", "_setClipboardText", clock, context
+  );
+  const stopClipboardXclipOwner = loadAppletMethod(
+    "_stopClipboardXclipOwner", "_startClipboardXclipOwner", clock, context
+  );
+  const setClipboardText = loadAppletMethod(
+    "_setClipboardText", "_copyClipboardText", clock, context
+  );
+  const applet = {
+    clipboardBackend: "xclip-preferred",
+    clipboard: { set_text(_type, text) { gtkWrites.push(text); return true; } },
+    spawnGeneration: 1,
+    _resourceRegistry: { processes: { 41: { processGroupIdentity: "own-group" } } },
+    _clipboardXclipOwner: null,
+    _clipboardWriteSerial: 0,
+    _lifecycleAllowsWork: () => true,
+    _normalizeClipboardBackend: (value) => value,
+    _clipboardXclipWriterContext: () => ({ path: "/usr/bin/xclip", env: {} }),
+    _wrapSubprocessArgs: (args) => args,
+    _registerProcess: () => 41,
+    _stopClipboardXclipOwner: stopClipboardXclipOwner,
+    _startClipboardXclipOwner: startClipboardXclipOwner,
+    _scheduleTrackedTimer: () => true,
+    _clearTrackedTimer() {},
+    _terminateProcess(ownerProcess) { stoppedProcesses.push(ownerProcess); },
+    _processGroupState: () => "stopped",
+    _unregisterProcess: () => true,
+    _runBoundedSubprocess(_args, _env, _options, callback) {
+      verificationCallback = callback;
+    },
+    _clearClipboardOverwriteApproval() {},
+  };
+  const sendStderr = (data) => {
+    assert.ok(stderrCallbacks.length > 0);
+    stderrCallbacks.shift()(stderrPipe, { data: Buffer.from(data) });
+  };
+  const sendStderrError = () => {
+    assert.ok(stderrCallbacks.length > 0);
+    stderrCallbacks.shift()(stderrPipe, { error: new Error("private reader failure") });
+  };
+  const confirmCopy = () => {
+    assert.equal(setClipboardText.call(applet, "dummy", (copied) => copyResults.push(copied)), null);
+    const owner = applet._clipboardXclipOwner;
+    assert.ok(owner);
+    sendStderr("Waiting for selection requests, Control-C to quit\n");
+    assert.equal(typeof verificationCallback, "function");
+    verificationCallback("dummy", "", { completed: true });
+    assert.deepEqual(copyResults, [true]);
+    assert.equal(owner.completed, true);
+    return owner;
+  };
+  const confirmExit = () => {
+    assert.equal(typeof exitCallback, "function");
+    exitCallback(process, {});
+  };
+  return { applet, process, copyResults, gtkWrites, stoppedProcesses,
+    sendStderr, sendStderrError, confirmCopy, confirmExit };
+}
+
+test("xclip owner stops after post-ack stderr overflow without another copy callback", () => {
+  const harness = makeLateXclipOwnerHarness();
+  const owner = harness.confirmCopy();
+  harness.sendStderr(Buffer.alloc(128, 65));
+  harness.sendStderr(Buffer.alloc(1, 65));
+  assert.deepEqual(harness.stoppedProcesses, [harness.process]);
+  assert.equal(owner.stopping, true);
+  assert.deepEqual(harness.copyResults, [true]);
+  assert.deepEqual(harness.gtkWrites, []);
+  harness.confirmExit();
+  assert.equal(owner.cleaned, true);
+  assert.deepEqual(harness.copyResults, [true]);
+  assert.deepEqual(harness.gtkWrites, []);
+});
+
+test("xclip owner stops after post-ack stderr read error without GTK fallback", () => {
+  const harness = makeLateXclipOwnerHarness();
+  const owner = harness.confirmCopy();
+  harness.sendStderrError();
+  assert.deepEqual(harness.stoppedProcesses, [harness.process]);
+  assert.equal(owner.stopping, true);
+  assert.deepEqual(harness.copyResults, [true]);
+  assert.deepEqual(harness.gtkWrites, []);
+  harness.confirmExit();
+  assert.equal(owner.cleaned, true);
+  assert.deepEqual(harness.copyResults, [true]);
+  assert.deepEqual(harness.gtkWrites, []);
 });
 
 test("Wayland focus evidence survives a dynamic Codex title for one paste and submit", () => {
@@ -7529,6 +7748,120 @@ test("spawnText forwards bounded backend options and suppresses stale callbacks"
   backendCalls[2].callback("ignored output", errorResult);
   assert.deepEqual(errorResults, [["", errorResult]]);
   assert.deepEqual(lifecycleErrors, []);
+});
+
+test("recording command invalidates pending status generation before dispatch", () => {
+  for (const action of ["start", "stop"]) {
+    const harness = makeRecordingApplet({ realStopPayload: true });
+    const { applet, requests } = harness;
+    if (action === "stop") {
+      applet.status = "recording";
+      applet.recordingArtifactsPresent = true;
+    }
+    applet._statusRefreshToken = 41;
+    applet._statusCommandToken = {};
+    applet._statusCommandRunning = true;
+
+    const spawnJson = applet._spawnJson;
+    let dispatchSnapshot = null;
+    applet._spawnJson = function(args, callback) {
+      if (args[0] === action) {
+        dispatchSnapshot = {
+          generation: this._statusRefreshToken,
+          owner: this._statusCommandToken,
+          inflight: this._statusCommandRunning,
+        };
+      }
+      return spawnJson.call(this, args, callback);
+    };
+
+    if (applet._toggleRecording(action) !== true)
+      throw new Error(`${action}: recording command was not accepted`);
+    if (requests.filter(request => request.args[0] === action).length !== 1)
+      throw new Error(`${action}: expected exactly one recording dispatch`);
+    if (dispatchSnapshot === null)
+      throw new Error(`${action}: missing recording dispatch snapshot`);
+    if (!(dispatchSnapshot.generation > 41))
+      throw new Error(`${action}: pending status generation survived dispatch`);
+    if (dispatchSnapshot.owner !== null || dispatchSnapshot.inflight !== false)
+      throw new Error(`${action}: pending status owner survived dispatch`);
+  }
+});
+
+test("late status payload cannot overwrite newer recording command state", () => {
+  for (const action of ["start", "stop"]) {
+    const harness = makeRecordingApplet({ realStopPayload: true });
+    const { applet, requests } = harness;
+    applet._refreshStatus = loadAppletMethod(
+      "_refreshStatus", "_hasCancelableRecordingWork", { value: 1000 },
+      { STATUS_COMMAND_TIMEOUT_MS: 1000 }
+    );
+    applet._statusArgs = () => ["status"];
+    applet._refreshStatus();
+    const oldStatusGeneration = applet._statusRefreshToken;
+    const statusRequests = requests.filter(request => request.args[0] === "status");
+    if (statusRequests.length !== 1)
+      throw new Error(`${action}: expected exactly one pending status request`);
+    const staleStatusRequest = statusRequests[0];
+
+    if (action === "stop") {
+      applet.status = "recording";
+      applet.recordingArtifactsPresent = true;
+    }
+    if (applet._toggleRecording(action) !== true)
+      throw new Error(`${action}: recording command was not accepted`);
+    const commandRequests = requests.filter(request => request.args[0] === action);
+    if (commandRequests.length !== 1)
+      throw new Error(`${action}: expected exactly one recording request`);
+    const commandStatus = action === "start" ? "recording" : "processing";
+    commandRequests[0].callback({ status: commandStatus });
+    if (applet.status !== commandStatus)
+      throw new Error(`${action}: newer command payload was not applied`);
+
+    const state = {
+      status: applet.status,
+      transcript: applet.lastTranscript,
+      message: applet.lastMessage,
+    };
+    const effectNames = ["insertCalls", "relistenCalls", "pollCalls", "scheduledTimers", "requests"];
+    const effectCounts = Object.fromEntries(
+      effectNames.map(name => [name, harness[name].length])
+    );
+    const realApplyPayload = applet._applyPayload;
+    const staleApplyCalls = [];
+    applet._applyPayload = function(...args) {
+      const call = { args, threw: false };
+      staleApplyCalls.push(call);
+      try {
+        return realApplyPayload.apply(this, args);
+      } catch (error) {
+        call.threw = true;
+        call.error = error;
+        throw error;
+      }
+    };
+    const staleStatusPayload = { status: "done", transcript: "stale status" };
+    staleStatusRequest.callback(staleStatusPayload);
+
+    if (staleApplyCalls.length !== 1)
+      throw new Error(`${action}: late status did not call the real payload handler exactly once`);
+    const staleApply = staleApplyCalls[0];
+    if (staleApply.args[0] !== staleStatusPayload)
+      throw new Error(`${action}: late status handler received a different payload`);
+    if (staleApply.args[1] !== oldStatusGeneration)
+      throw new Error(`${action}: late status handler received the wrong generation`);
+    if (staleApply.threw !== false)
+      throw new Error(`${action}: late status handler threw instead of rejecting the stale generation`);
+
+    if (!Object.is(applet.status, state.status) ||
+        !Object.is(applet.lastTranscript, state.transcript) ||
+        !Object.is(applet.lastMessage, state.message))
+      throw new Error(`${action}: late status payload changed newer recording state`);
+    for (const name of effectNames) {
+      if (harness[name].length !== effectCounts[name])
+        throw new Error(`${action}: late status payload changed ${name}`);
+    }
+  }
 });
 
 test("stale text and status callbacks cannot clear newer tokens", () => {

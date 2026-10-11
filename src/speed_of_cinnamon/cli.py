@@ -26,7 +26,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import NoReturn
 
-from . import __version__, remote_http
+from . import __version__, artifact_crypto, remote_http
 from . import doctor
 from .backup import BackupError, BackupInput, create_backup, restore_backup, restore_dry_run, verify_backup
 from .alarms import (
@@ -2473,12 +2473,80 @@ def _raise_sanitized_transient_exception(
         raise
 
 
-def _raise_backend_sanitized_exception(error: BaseException, *, message: str) -> NoReturn:
-    _raise_sanitized_transient_exception(
-        error,
-        message=message,
-        system_exit_as_runtime=True,
+_TRANSCRIPT_DIAGNOSTIC_CLASSES = (
+    (OSError, "OSError"),
+    (PermissionError, "PermissionError"),
+    (FileNotFoundError, "FileNotFoundError"),
+    (FileExistsError, "FileExistsError"),
+    (NotADirectoryError, "NotADirectoryError"),
+    (IsADirectoryError, "IsADirectoryError"),
+    (RuntimeError, "RuntimeError"),
+    (ValueError, "ValueError"),
+    (TypeError, "TypeError"),
+    (UnicodeEncodeError, "UnicodeEncodeError"),
+    (ArtifactCryptoError, "ArtifactCryptoError"),
+)
+_TRANSCRIPT_DIAGNOSTIC_NAMES = frozenset(
+    name for _, name in _TRANSCRIPT_DIAGNOSTIC_CLASSES
+) | {"UnknownError"}
+
+
+def _transcript_failure_diagnostics(error: BaseException) -> dict[str, object]:
+    def public_class(value: BaseException) -> str:
+        return next((name for kind, name in _TRANSCRIPT_DIAGNOSTIC_CLASSES
+                     if type(value) is kind), "UnknownError")
+
+    causes: list[str] = []
+    seen = {id(error)}
+    cause = BaseException.__cause__.__get__(error)
+    while cause is not None and len(causes) < 2 and id(cause) not in seen:
+        seen.add(id(cause))
+        causes.append(public_class(cause))
+        cause = BaseException.__cause__.__get__(cause)
+    return {"diagnostic_error_class": public_class(error),
+            "diagnostic_cause_classes": causes}
+
+
+def _public_transcript_failure_fields(error: BaseException) -> dict[str, object]:
+    phase = getattr(error, "error_phase", None)
+    if type(phase) is not str or phase not in {"transcript_prepare", "transcript_store"}:
+        return {}
+    fields: dict[str, object] = {"error_phase": phase}
+    name = getattr(error, "diagnostic_error_class", None)
+    causes = getattr(error, "diagnostic_cause_classes", None)
+    if (type(name) is str and name in _TRANSCRIPT_DIAGNOSTIC_NAMES
+            and type(causes) is list and len(causes) <= 2
+            and all(type(cause) is str and cause in _TRANSCRIPT_DIAGNOSTIC_NAMES
+                    for cause in causes)):
+        fields.update(diagnostic_error_class=name, diagnostic_cause_classes=list(causes))
+    return fields
+
+
+def _raise_backend_sanitized_exception(
+    error: BaseException, *, message: str, error_phase: str | None = None
+) -> NoReturn:
+    diagnostics = (
+        _transcript_failure_diagnostics(error)
+        if type(error_phase) is str and error_phase in {"transcript_prepare", "transcript_store"}
+        else {}
     )
+    try:
+        _raise_sanitized_transient_exception(
+            error,
+            message=message,
+            system_exit_as_runtime=True,
+        )
+    except BaseException as sanitized:
+        if (
+            isinstance(sanitized, Exception)
+            and type(error_phase) is str
+            and error_phase in {"transcript_prepare", "transcript_store"}
+        ):
+            sanitized.error_phase = error_phase
+            for name, value in diagnostics.items():
+                setattr(sanitized, name, value)
+            _clear_transient_exception_metadata(sanitized)
+        raise
 
 
 def _raise_foreign_backend_sanitized_exception(
@@ -7465,7 +7533,9 @@ def _command_start_locked(
         try:
             recording_active = _recording_process_verified_active(current)
         except RuntimeError as exc:
-            error_text = f"{exc}; recording state preserved"
+            error_text = str(exc)
+            if not error_text.endswith("; recording state preserved"):
+                error_text += "; recording state preserved"
             store.update(status="recording", error=error_text, inserted=False)
             return {"status": "recording", "message": error_text, "error": error_text}
         if recording_active:
@@ -16546,6 +16616,15 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     audio_path = validate_audio_file(audio_path)
     text_path = _transcript_path_for_audio(audio_path)
     artifact_encryption = _artifact_encryption_mode(args)
+    if artifact_encryption != ARTIFACT_ENCRYPTION_OFF:
+        try:
+            artifact_crypto._crypto_backend()
+        except ArtifactCryptoError as exc:
+            _raise_backend_sanitized_exception(
+                exc,
+                message="cryptography is required for artifact encryption; install python3-cryptography",
+                error_phase="transcript_prepare",
+            )
     transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
     preparation_error: BaseException | None = None
     transient_text_fd: int | None = None
@@ -16561,6 +16640,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         _raise_backend_sanitized_exception(
             preparation_error,
             message=TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+            error_phase="transcript_prepare",
         )
     transcription_error: BaseException | None = None
     cleanup_error: BaseException | None = None
@@ -16657,6 +16737,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
             _raise_backend_sanitized_exception(
                 exc,
                 message=TRANSIENT_TRANSCRIPT_WRITE_ERROR,
+                error_phase="transcript_store",
             )
     keep_transcripts = _coerce_int(
         getattr(args, "keep_transcripts", DEFAULT_KEEP_TRANSCRIPTS),
@@ -17270,6 +17351,7 @@ def run(argv: list[str] | None = None, *, bootstrap_error: str | None = None) ->
         secret_values = _known_cli_secret_values(args)
         error_message = _redact_error_for_user(str(exc), secret_values=secret_values)
         failure_fields = _classified_public_error_fields(exc, error_message)
+        failure_fields.update(_public_transcript_failure_fields(exc))
         promote_status_error_logging()
         _safe_log_event(
             "error",
@@ -17326,7 +17408,14 @@ def main() -> None:
     if _is_metadata_only_invocation(arguments):
         sys.exit(run())
     try:
-        scoped = ensure_soc_priority_scope(arguments)
+        if arguments and arguments[0] == "status":
+            parsed_arguments = build_parser().parse_args(arguments)
+            scoped = ensure_soc_priority_scope(
+                arguments,
+                status_invocation=parsed_arguments.handler is command_status,
+            )
+        else:
+            scoped = ensure_soc_priority_scope(arguments)
     except PriorityScopeError as exc:
         sys.exit(run(bootstrap_error=str(exc)))
     if scoped:

@@ -201,7 +201,8 @@ function _decodeSubprocessOutputChunks(chunks) {
   return ByteArray.toString(contents);
 }
 const CLI_COMMAND_TIMEOUT_MS = 300000;
-const STATUS_COMMAND_TIMEOUT_MS = 10000;
+const STATUS_COMMAND_TIMEOUT_MS = 40000;
+const OLLAMA_COMMAND_TIMEOUT_MS = 10000;
 const DOCTOR_COMMAND_TIMEOUT_MS = 20000;
 const BENCHMARK_COMMAND_TIMEOUT_MS = 1800000;
 const OLLAMA_INSTALL_POLL_SECONDS = 5;
@@ -8894,11 +8895,11 @@ MyApplet.prototype = {
   },
 
   _copyShortcutReference: function() {
-    if (!this._setClipboardText(this._shortcutReferenceText())) {
-      this._setStatusPreservingRecording("error", _("Could not copy shortcut reference"), this.lastTranscript);
-      return;
-    }
-    this._setStatusPreservingRecording("done", _("Copied shortcut reference"), this.lastTranscript);
+    this._copyClipboardText(this._shortcutReferenceText(), (copied, current) => {
+      if (current === false) return;
+      this._setStatusPreservingRecording(copied ? "done" : "error", copied
+        ? _("Copied shortcut reference") : _("Could not copy shortcut reference"), this.lastTranscript);
+    });
   },
 
   _openShortcutSettings: function() {
@@ -10105,13 +10106,13 @@ MyApplet.prototype = {
         let planText = typeof payload.text === "string" && payload.text.trim() !== ""
           ? payload.text
           : JSON.stringify(payload, null, 2);
-        if (!this._setClipboardText(planText)) {
+        this._copyClipboardText(planText, (copied, current) => {
+          if (this.setupDiagnosticsToken !== actionToken) return;
           this.setupDiagnosticsToken = null;
-          this._setStatus("error", _("Could not copy setup plan"), this.lastTranscript);
-          return;
-        }
-        this.setupDiagnosticsToken = null;
-        this._setStatus("done", _("Copied setup plan"), this.lastTranscript);
+          if (current === false) return;
+          this._setStatus(copied ? "done" : "error", copied
+            ? _("Copied setup plan") : _("Could not copy setup plan"), this.lastTranscript);
+        });
       } catch (error) {
         this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy setup plan"));
       }
@@ -10180,13 +10181,13 @@ MyApplet.prototype = {
           return;
         }
 
-        if (!this._setClipboardText(text)) {
+        this._copyClipboardText(text, (copied, current) => {
+          if (this.setupDiagnosticsToken !== actionToken) return;
           this.setupDiagnosticsToken = null;
-          this._setStatus("error", _("Could not copy setup commands"), this.lastTranscript);
-          return;
-        }
-        this.setupDiagnosticsToken = null;
-        this._setStatus("done", _("Copied setup commands"), this.lastTranscript);
+          if (current === false) return;
+          this._setStatus(copied ? "done" : "error", copied
+            ? _("Copied setup commands") : _("Could not copy setup commands"), this.lastTranscript);
+        });
       } catch (error) {
         this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy setup commands"));
       }
@@ -10228,13 +10229,13 @@ MyApplet.prototype = {
           this._setStatus("error", this._sanitizeErrorMessage(payload.error), this.lastTranscript);
           return;
         }
-        if (!this._setClipboardText(JSON.stringify(payload, null, 2))) {
+        this._copyClipboardText(JSON.stringify(payload, null, 2), (copied, current) => {
+          if (this.setupDiagnosticsToken !== actionToken) return;
           this.setupDiagnosticsToken = null;
-          this._setStatus("error", _("Could not copy diagnostics"), this.lastTranscript);
-          return;
-        }
-        this.setupDiagnosticsToken = null;
-        this._setStatus("done", _("Copied diagnostics"), this.lastTranscript);
+          if (current === false) return;
+          this._setStatus(copied ? "done" : "error", copied
+            ? _("Copied diagnostics") : _("Could not copy diagnostics"), this.lastTranscript);
+        });
       } catch (error) {
         this._failSetupDiagnosticsAction(actionToken, error, _("Could not copy diagnostics"));
       }
@@ -10257,14 +10258,16 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording("ready", _("No error message available"), this.lastTranscript);
       return;
     }
-    if (!this._setClipboardText(message)) {
-      this._setStatusPreservingRecording("error", _("Could not copy last error message"), this.lastTranscript);
-      // Keep original diagnostic available after a failed copy attempt.
-      this.lastErrorMessage = message;
-      this._setMenuItemSensitiveSafely(this.copyLastErrorItem, true);
-      return;
-    }
-    this._setStatusPreservingRecording("done", _("Copied last error message"), this.lastTranscript);
+    this._copyClipboardText(message, (copied, current) => {
+      if (current === false) return;
+      if (!copied) {
+        this._setStatusPreservingRecording("error", _("Could not copy last error message"), this.lastTranscript);
+        this.lastErrorMessage = message;
+        this._setMenuItemSensitiveSafely(this.copyLastErrorItem, true);
+        return;
+      }
+      this._setStatusPreservingRecording("done", _("Copied last error message"), this.lastTranscript);
+    });
   },
 
   _saveDiagnostics: function() {
@@ -10641,18 +10644,19 @@ MyApplet.prototype = {
           return;
         }
         let results = Array.isArray(payload.results) ? payload.results : [];
-        if (!this._setClipboardText(JSON.stringify(payload, null, 2))) {
-          this.benchmarkFlowToken = null;
-          this._setStatus("error", _("Could not copy benchmark results"), this.lastTranscript);
-          return;
-        }
         let fastest = typeof payload.fastest_model === "string" ? payload.fastest_model.trim() : "";
         let message = this._payloadMessage(payload, _("Benchmark complete"));
         if (fastest !== "") {
           message += "; " + _("fastest: ") + fastest;
         }
-        this.benchmarkFlowToken = null;
-        this._setStatus("done", message + _("; copied results") + " (" + String(results.length) + ")", this.lastTranscript);
+        this._copyClipboardText(JSON.stringify(payload, null, 2), (copied, current) => {
+          if (this.benchmarkFlowToken !== flowToken) return;
+          this.benchmarkFlowToken = null;
+          if (current === false) return;
+          this._setStatus(copied ? "done" : "error", copied
+            ? message + _("; copied results") + " (" + String(results.length) + ")"
+            : _("Could not copy benchmark results"), this.lastTranscript);
+        });
       } catch (error) {
         if (this.benchmarkFlowToken === flowToken) {
           this.benchmarkFlowToken = null;
@@ -11017,11 +11021,11 @@ MyApplet.prototype = {
       "speed-of-cinnamon alarms list --json",
       "speed-of-cinnamon alarms check --mark --json"
     ].join("\n");
-    if (!this._setClipboardText(text)) {
-      this._setStatusPreservingRecording("error", _("Could not copy alarm commands"), this.lastTranscript);
-      return;
-    }
-    this._setStatusPreservingRecording("done", _("Copied alarm commands"), this.lastTranscript);
+    this._copyClipboardText(text, (copied, current) => {
+      if (current === false) return;
+      this._setStatusPreservingRecording(copied ? "done" : "error", copied
+        ? _("Copied alarm commands") : _("Could not copy alarm commands"), this.lastTranscript);
+    });
   },
 
   _setAlarmEnabled: function(id, enabled) {
@@ -16034,7 +16038,10 @@ MyApplet.prototype = {
     try {
       let launcher = new Gio.SubprocessLauncher({ flags: flags });
       env = env || {};
-      for (let key in env) {
+      if (options.replaceEnvironment === true) {
+        launcher.set_environ(Object.keys(env).map((key) => key + "=" + String(env[key])));
+      }
+      for (let key in options.replaceEnvironment === true ? {} : env) {
         if (Object.prototype.hasOwnProperty.call(env, key)) {
           launcher.setenv(key, String(env[key] || ""), true);
         }
@@ -17189,7 +17196,7 @@ MyApplet.prototype = {
           }
           this._setStatus("error", _("Ollama status check failed: ") + safeError, this.lastTranscript);
         }
-      }, { timeoutMs: STATUS_COMMAND_TIMEOUT_MS, resourceGroup: "ollama" });
+      }, { timeoutMs: OLLAMA_COMMAND_TIMEOUT_MS, resourceGroup: "ollama" });
       if (!pollProcess && this.ollamaInstallWatchToken === watchToken) {
         this.ollamaInstallWatchToken = null;
         if (!this._clearOllamaModelFlowOrReport()) {
@@ -18901,24 +18908,369 @@ MyApplet.prototype = {
     this._clipboardOverwriteApproval = null;
   },
 
-  _setClipboardText: function(text) {
+  _clipboardXclipWriterContext: function() {
+    try {
+      let display = GLib.getenv("DISPLAY");
+      if (typeof display !== "string" || !/^(?:unix\/)?\:[0-9]{1,4}(?:\.[0-9]{1,2})?$/.test(display)) {
+        return null;
+      }
+      let uid = Number(new Gio.Credentials().get_unix_user());
+      if (!Number.isSafeInteger(uid) || uid < 1) {
+        return null;
+      }
+      let safeInfo = (path, kind, owner, privateFile) => {
+        if (typeof path !== "string" || path.charAt(0) !== "/" ||
+            path.split("/").some((part) => part === "." || part === "..")) {
+          return null;
+        }
+        let info = Gio.File.new_for_path(path).query_info(
+          "standard::type,unix::uid,unix::mode,unix::nlink",
+          Gio.FileQueryInfoFlags.NOFOLLOW_SYMLINKS, null
+        );
+        if (!info || info.get_file_type() !== kind ||
+            (owner !== null && info.get_attribute_uint32("unix::uid") !== owner)) {
+          return null;
+        }
+        let mode = info.get_attribute_uint32("unix::mode");
+        if (!Number.isSafeInteger(mode) || (mode & 0o022) !== 0 ||
+            (privateFile && ((mode & 0o066) !== 0 || (mode & 0o400) === 0 ||
+              info.get_attribute_uint32("unix::nlink") !== 1))) {
+          return null;
+        }
+        return info;
+      };
+      let safeParents = (path, home, rootOnly) => {
+        let current = GLib.path_get_dirname(path);
+        while (true) {
+          let info = safeInfo(current, Gio.FileType.DIRECTORY, null, false);
+          let owner = info ? info.get_attribute_uint32("unix::uid") : null;
+          if (!info || (rootOnly ? owner !== 0 :
+              (current === home ? owner !== uid : owner !== 0 && owner !== uid))) {
+            return false;
+          }
+          if (current === "/") {
+            return true;
+          }
+          current = GLib.path_get_dirname(current);
+        }
+      };
+      let xclip = "/usr/bin/xclip";
+      if (!safeInfo(xclip, Gio.FileType.REGULAR, 0, false) ||
+          !safeParents(xclip, null, true) || !GLib.file_test(xclip, GLib.FileTest.IS_EXECUTABLE)) {
+        return null;
+      }
+      let authority = GLib.getenv("XAUTHORITY");
+      let home = null;
+      if (authority === null || authority === undefined) {
+        home = GLib.getenv("HOME");
+        if (typeof home !== "string" || home.charAt(0) !== "/" ||
+            !safeInfo(home, Gio.FileType.DIRECTORY, uid, false) || !safeParents(home, home, false)) {
+          return null;
+        }
+        authority = GLib.build_filenamev([home, ".Xauthority"]);
+      }
+      if (typeof authority !== "string" || authority === "" ||
+          !safeInfo(authority, Gio.FileType.REGULAR, uid, true) ||
+          !safeParents(authority, home, false)) {
+        return null;
+      }
+      return { path: xclip, env: { DISPLAY: display, XAUTHORITY: authority, LC_ALL: "C" } };
+    } catch (_error) {
+      return null;
+    }
+  },
+
+  _stopClipboardXclipOwner: function(owner, callback) {
+    if (!owner) {
+      callback(true);
+      return;
+    }
+    if (owner.exited) {
+      callback(owner.cleaned === true);
+      return;
+    }
+    owner.stopCallbacks.push(callback);
+    if (owner.stopping) {
+      return;
+    }
+    owner.stopping = true;
+    this._terminateProcess(owner.process, "clipboard-owner");
+    let timerKey = "clipboard-owner-stop-" + owner.token;
+    if (!this._scheduleTrackedTimer(timerKey, CLIPBOARD_COMMAND_TIMEOUT_MS, () => {
+      let callbacks = owner.stopCallbacks.splice(0);
+      callbacks.forEach((complete) => complete(false));
+      return false;
+    }, false, undefined, "clipboard-owner")) {
+      let callbacks = owner.stopCallbacks.splice(0);
+      callbacks.forEach((complete) => complete(false));
+      return;
+    }
+    owner.stopTimer = timerKey;
+  },
+
+  _startClipboardXclipOwner: function(text, context, callback) {
+    let process = null;
+    let token = null;
+    let generation = this.spawnGeneration;
+    try {
+      let launcher = new Gio.SubprocessLauncher({ flags: Gio.SubprocessFlags.STDIN_PIPE | Gio.SubprocessFlags.STDERR_PIPE });
+      launcher.set_environ(Object.keys(context.env).map((key) => key + "=" + context.env[key]));
+      process = launcher.spawnv(this._wrapSubprocessArgs([
+        context.path, "-quiet", "-selection", "clipboard", "-in"
+      ]));
+      token = this._registerProcess(process, generation, "clipboard-owner");
+    } catch (_error) {
+      if (process) {
+        this._terminateProcess(process, "clipboard-owner");
+        this._trackOrphanedProcess(process, generation, "clipboard-owner", token, false);
+        this._scheduleProcessCleanupRetry();
+        callback(false, false);
+      } else {
+        callback(false, true);
+      }
+      return;
+    }
+    let owner = {
+      process: process, token: token, exited: false, cleaned: false, stopping: false,
+      stopCallbacks: [], stopTimer: null, ack: "", ready: false, completed: false,
+    };
+    owner.identity = this._resourceRegistry.processes[token].processGroupIdentity;
+    this._clipboardXclipOwner = owner;
+    let timeoutKey = "clipboard-owner-ready-" + token;
+    let complete = (success, safelyStopped) => {
+      if (owner.completed) {
+        return;
+      }
+      owner.completed = true;
+      this._clearTrackedTimer(timeoutKey, undefined, false, "clipboard-owner");
+      callback(success === true, safelyStopped === true);
+    };
+    let fail = () => {
+      if (owner.stopping) {
+        return;
+      }
+      this._stopClipboardXclipOwner(owner, (stopped) => complete(false, stopped));
+    };
+    try {
+      process.wait_async(null, (source, result) => {
+        let waited = false;
+        try {
+          waited = source.wait_finish(result) === true;
+        } catch (_error) {
+          waited = false;
+        }
+        owner.exited = true;
+        owner.cleaned = waited && owner.identity &&
+          this._processGroupState(owner.identity) === "stopped" &&
+          this._unregisterProcess(token, "clipboard-owner");
+        if (this._clipboardXclipOwner === owner) {
+          this._clipboardXclipOwner = null;
+        }
+        if (owner.stopTimer) {
+          this._clearTrackedTimer(owner.stopTimer, undefined, false, "clipboard-owner");
+        }
+        let callbacks = owner.stopCallbacks.splice(0);
+        callbacks.forEach((done) => done(owner.cleaned));
+        if (!owner.completed) {
+          complete(false, owner.cleaned);
+        }
+      });
+      if (!this._scheduleTrackedTimer(timeoutKey, CLIPBOARD_COMMAND_TIMEOUT_MS * 2, () => {
+        fail();
+        return false;
+      }, false, undefined, "clipboard-owner")) {
+        fail();
+        return;
+      }
+      let readAck = () => {
+        let stream = process.get_stderr_pipe();
+        stream.read_bytes_async(128, GLib.PRIORITY_DEFAULT, null, (source, result) => {
+          if (owner.completed || owner.stopping) {
+            return;
+          }
+          try {
+            let bytes = source.read_bytes_finish(result);
+            let data = bytes.get_data();
+            if (!bytes.get_size()) {
+              fail();
+              return;
+            }
+            for (let byte of data) {
+              if (byte > 127 || owner.ack.length >= 128) {
+                fail();
+                return;
+              }
+              owner.ack += String.fromCharCode(byte);
+            }
+            if (owner.ack === "Waiting for selection requests, Control-C to quit\n") {
+              owner.ready = true;
+              let drainStderr = (total) => {
+                stream.read_bytes_async(128, GLib.PRIORITY_DEFAULT, null, (drainSource, drainResult) => {
+                  try {
+                    let drained = drainSource.read_bytes_finish(drainResult);
+                    let count = drained.get_size();
+                    if (!count) return;
+                    if (total + count > 128) {
+                      fail();
+                      return;
+                    }
+                    drainStderr(total + count);
+                  } catch (_error) {
+                    fail();
+                  }
+                });
+              };
+              drainStderr(0);
+              this._runBoundedSubprocess(
+                [context.path, "-selection", "clipboard", "-out"], context.env,
+                { replaceEnvironment: true, resourceGroup: "clipboard-verify",
+                  timeoutMs: CLIPBOARD_COMMAND_TIMEOUT_MS, maxStdoutBytes: utf8ByteLength(text) + 1,
+                  maxStderrBytes: 128 },
+                (stdout, _stderr, verification) => {
+                  if (owner.completed || owner.stopping) {
+                    return;
+                  }
+                  if (verification && verification.completed === true && stdout === text &&
+                      !owner.exited && this._clipboardXclipOwner === owner) {
+                    complete(true, false);
+                  } else {
+                    owner.ready = false;
+                    fail();
+                  }
+                }
+              );
+              return;
+            }
+            if ("Waiting for selection requests, Control-C to quit\n".indexOf(owner.ack) !== 0) {
+              fail();
+              return;
+            }
+            readAck();
+          } catch (_error) {
+            fail();
+          }
+        });
+      };
+      let stdin = process.get_stdin_pipe();
+      stdin.write_all_async(ByteArray.fromString(text), GLib.PRIORITY_DEFAULT, null, (stream, result) => {
+        if (owner.completed || owner.stopping) {
+          return;
+        }
+        try {
+          let written = stream.write_all_finish(result);
+          if ((Array.isArray(written) ? written[0] : written) === false || stream.close(null) === false) {
+            throw new Error("Clipboard owner input failed");
+          }
+          readAck();
+        } catch (_error) {
+          fail();
+        }
+      });
+    } catch (_error) {
+      fail();
+    }
+  },
+
+  _setClipboardText: function(text, completionCallback, operationGuard) {
     if (typeof text !== "string" || !this._lifecycleAllowsWork()) {
       return false;
     }
-    try {
-      if (!this.clipboard || !this.clipboard.set_text) {
+    let serial = (this._clipboardWriteSerial || 0) + 1;
+    this._clipboardWriteSerial = serial;
+    let complete = (result) => {
+      if (typeof completionCallback === "function") {
+        completionCallback(result === true, this._clipboardWriteSerial === serial &&
+          (typeof operationGuard !== "function" || operationGuard()));
+      }
+    };
+    let gtk = () => {
+      try {
+        if (!this.clipboard || !this.clipboard.set_text ||
+            this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text) === false) {
+          return false;
+        }
+        this._clearClipboardOverwriteApproval();
+        return true;
+      } catch (error) {
+        this._recordLifecycleError("clipboard-set", error);
         return false;
       }
-      let result = this.clipboard.set_text(St.ClipboardType.CLIPBOARD, text);
-      if (result === false) {
-        throw new Error("Clipboard text could not be set");
+    };
+    let backend = this._normalizeClipboardBackend(this.clipboardBackend);
+    let context = backend === "gtk" || utf8ByteLength(text) > MAX_SPAWN_JSON_BYTES
+      ? null : this._clipboardXclipWriterContext();
+    let start = () => {
+      if (this._clipboardWriteSerial !== serial ||
+          (typeof operationGuard === "function" && !operationGuard())) {
+        complete(false);
+        return;
       }
-      this._clearClipboardOverwriteApproval();
+      if (backend === "gtk" || (backend === "xclip-preferred" && !context)) {
+        complete(gtk());
+        return;
+      }
+      if (backend === "xclip-fallback" && gtk()) {
+        complete(true);
+        return;
+      }
+      if (!context) {
+        complete(false);
+        return;
+      }
+      this._startClipboardXclipOwner(text, context, (copied, safelyStopped) => {
+        if (copied) {
+          this._clearClipboardOverwriteApproval();
+          complete(true);
+        } else if (backend === "xclip-preferred" && safelyStopped &&
+            this._clipboardWriteSerial === serial &&
+            (typeof operationGuard !== "function" || operationGuard())) {
+          complete(gtk());
+        } else {
+          complete(false);
+        }
+      });
+    };
+    let owner = this._clipboardXclipOwner;
+    if (owner) {
+      this._stopClipboardXclipOwner(owner, (stopped) => {
+        if (stopped) {
+          start();
+        } else {
+          complete(false);
+        }
+      });
+      return null;
+    }
+    if (backend === "gtk" || (backend === "xclip-preferred" && !context)) {
+      return gtk();
+    }
+    if (backend === "xclip-fallback" && gtk()) {
       return true;
-    } catch (error) {
-      this._recordLifecycleError("clipboard-set", error);
+    }
+    if (!context) {
       return false;
     }
+    this._startClipboardXclipOwner(text, context, (copied, safelyStopped) => {
+      if (copied) {
+        this._clearClipboardOverwriteApproval();
+        complete(true);
+      } else if (backend === "xclip-preferred" && safelyStopped &&
+          this._clipboardWriteSerial === serial &&
+          (typeof operationGuard !== "function" || operationGuard())) {
+        complete(gtk());
+      } else {
+        complete(false);
+      }
+    });
+    return null;
+  },
+
+  _copyClipboardText: function(text, callback, operationGuard) {
+    let result = this._setClipboardText(text, callback, operationGuard);
+    if (result !== null && typeof callback === "function") {
+      callback(result === true, true);
+    }
+    return result;
   },
 
   _describeNonTextClipboardPayload: function(completionCallback) {
@@ -18951,36 +19303,44 @@ MyApplet.prototype = {
         completionCallback(result === true);
       }
     };
+    let copy = (callback) => {
+      let result = this._setClipboardText(text, callback, isCurrentOperation);
+      if (result !== null) {
+        callback(result === true, true);
+      }
+      return result;
+    };
     if (!isCurrentOperation()) {
       completeOnce(false);
       return false;
     }
     if (method === "clipboard") {
-      if (!this._setClipboardText(text)) {
-        this._setStatus("error", _("Could not copy to clipboard"), transcript);
-        completeOnce(false);
-        return false;
-      }
-      this._setStatus("done", _("Copied to clipboard"), transcript);
-      return true;
+      return copy((copied, current) => {
+        if (current === false) { completeOnce(false); return; }
+        this._setStatus(copied ? "done" : "error",
+          copied ? _("Copied to clipboard") : _("Could not copy to clipboard"), transcript);
+        completeOnce(copied);
+      });
     }
     if (!canPasteWithKeyboard) {
-      if (!this._setClipboardText(text)) {
-        this._setStatus("error", _("Could not copy to clipboard"), transcript);
-        completeOnce(false);
-        return false;
-      }
-      this._setStatus("done", _("Copied to clipboard; install xdotool or wtype for automatic paste"), transcript);
-      return true;
+      return copy((copied, current) => {
+        if (current === false) { completeOnce(false); return; }
+        this._setStatus(copied ? "done" : "error", copied
+          ? _("Copied to clipboard; install xdotool or wtype for automatic paste")
+          : _("Could not copy to clipboard"), transcript);
+        completeOnce(copied);
+      });
     }
     if (!this._closeMenuForKeyboardInsert()) {
-      if (this._setClipboardText(text)) {
-        this._setStatus("error", _("Copied to clipboard; paste failed: applet menu could not be closed"), transcript);
-      } else {
-        this._setStatus("error", _("Could not copy to clipboard"), transcript);
-      }
-      completeOnce(false);
-      return false;
+      let result = copy((copied, current) => {
+        if (current !== false) {
+          this._setStatus("error", copied
+            ? _("Copied to clipboard; paste failed: applet menu could not be closed")
+            : _("Could not copy to clipboard"), transcript);
+        }
+        completeOnce(false);
+      });
+      return result === null ? null : false;
     }
     let writeClipboardAndPaste = (restored) => {
       try {
@@ -18989,24 +19349,31 @@ MyApplet.prototype = {
           return;
         }
         if (!restored) {
-          if (this._setClipboardText(text)) {
-            this._setStatus("error", _("Copied to clipboard; paste failed: target window could not be restored"), transcript);
-          } else {
-            this._setStatus("error", _("Could not copy to clipboard"), transcript);
-          }
-          completeOnce(false);
+          copy((copied, current) => {
+            if (current !== false) {
+              this._setStatus("error", copied
+                ? _("Copied to clipboard; paste failed: target window could not be restored")
+                : _("Could not copy to clipboard"), transcript);
+            }
+            completeOnce(false);
+          });
           return;
         }
         if (!isCurrentOperation()) {
           completeOnce(false);
           return;
         }
-        if (!this._setClipboardText(text)) {
-          this._setStatus("error", _("Could not copy to clipboard"), transcript);
-          completeOnce(false);
-          return;
-        }
-        if (!this._pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {
+        copy((copied, current) => {
+          if (current === false || !isCurrentOperation()) {
+            completeOnce(false);
+            return;
+          }
+          if (!copied) {
+            this._setStatus("error", _("Could not copy to clipboard"), transcript);
+            completeOnce(false);
+            return;
+          }
+          if (!this._pasteClipboardAfterFocus(submitWithReturn, text, (completed) => {
           let pasteCompleted = false;
           try {
             pasteCompleted = completed === true && isCurrentOperation();
@@ -19018,10 +19385,11 @@ MyApplet.prototype = {
             this._recordLifecycleError("keyboard-insert-status", error);
           }
           completeOnce(pasteCompleted);
-        }, isCurrentOperation, keyboardProgram)) {
-          this._setStatus("error", _("Copied to clipboard; automatic paste command could not be started"), transcript);
-          completeOnce(false);
-        }
+          }, isCurrentOperation, keyboardProgram)) {
+            this._setStatus("error", _("Copied to clipboard; automatic paste command could not be started"), transcript);
+            completeOnce(false);
+          }
+        });
       } catch (error) {
         this._completeKeyboardInsertFailure(completeOnce, _("Keyboard insert failed"), error);
       }
@@ -20729,11 +21097,11 @@ MyApplet.prototype = {
       this._setStatusPreservingRecording(this.status, _("No transcript yet"), this.lastTranscript);
       return;
     }
-    if (!this._setClipboardText(this._preparedTranscriptText(this.lastTranscript, true))) {
-      this._setStatusPreservingRecording("error", _("Could not copy last transcript"), this.lastTranscript);
-      return;
-    }
-    this._setStatusPreservingRecording("done", _("Copied last transcript"), this.lastTranscript);
+    this._copyClipboardText(this._preparedTranscriptText(this.lastTranscript, true), (copied, current) => {
+      if (current === false) return;
+      this._setStatusPreservingRecording(copied ? "done" : "error", copied
+        ? _("Copied last transcript") : _("Could not copy last transcript"), this.lastTranscript);
+    });
   },
 
   _insertLastTranscript: function() {
@@ -20867,11 +21235,11 @@ MyApplet.prototype = {
       return;
     }
     let statusTranscript = this._hasActiveRecordingState() ? "" : text;
-    if (!this._setClipboardText(this._preparedTranscriptText(text, true))) {
-      this._setStatusPreservingRecording("error", _("Could not copy transcript"), statusTranscript);
-      return;
-    }
-    this._setStatusPreservingRecording("done", _("Copied transcript"), statusTranscript);
+    this._copyClipboardText(this._preparedTranscriptText(text, true), (copied, current) => {
+      if (current === false) return;
+      this._setStatusPreservingRecording(copied ? "done" : "error", copied
+        ? _("Copied transcript") : _("Could not copy transcript"), statusTranscript);
+    });
   },
 
   _insertHistoryTranscript: function(text) {

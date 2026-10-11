@@ -48,13 +48,26 @@ class PathsTest(unittest.TestCase):
             self.assertTrue(private_root.is_dir())
 
     def test_xdg_path_rejects_non_text_environment_values(self) -> None:
+        environment_type = type(paths.os.environ)
+        original_getitem = environment_type.__getitem__
+        xdg_names = {"XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"}
+        observed_names: set[str] = set()
+
+        def non_text_xdg_value(environment, name):
+            if name in xdg_names:
+                observed_names.add(name)
+                return 123
+            return original_getitem(environment, name)
+
         with (
             mock.patch.dict(paths.os.environ, {"XDG_STATE_HOME": ""}, clear=False),
-            mock.patch("speed_of_cinnamon.paths.os.environ.__getitem__", return_value=123),
+            mock.patch.object(environment_type, "__getitem__", non_text_xdg_value),
         ):
+            self.assertEqual(paths.os.environ["HOME"], original_getitem(paths.os.environ, "HOME"))
             self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
             self.assertEqual(paths.xdg_state_home(), Path.home() / ".local" / "state")
             self.assertEqual(paths.xdg_cache_home(), Path.home() / ".cache")
+        self.assertEqual(observed_names, xdg_names)
 
     def test_xdg_path_accepts_literal_backslash_escape_sequences(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -158,7 +171,11 @@ class PathsTest(unittest.TestCase):
             with (
                 mock.patch("speed_of_cinnamon.paths.Path.home", return_value=symlink_home),
                 mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)),
-                mock.patch.dict(paths.os.environ, {"XDG_STATE_HOME": ""}, clear=False),
+                mock.patch.dict(
+                    paths.os.environ,
+                    {"XDG_STATE_HOME": "", "XDG_DATA_HOME": "", "XDG_CACHE_HOME": ""},
+                    clear=False,
+                ),
             ):
                 self.assertEqual(paths.xdg_data_home(), private_root / ".local" / "share")
                 self.assertEqual(paths.xdg_state_home(), private_root / ".local" / "state")
@@ -207,7 +224,7 @@ class PathsTest(unittest.TestCase):
 
             with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=home_link), mock.patch(
                 "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)
-            ):
+            ), mock.patch.dict(os.environ, {"XDG_CACHE_HOME": ""}):
                 with self.assertRaises(RuntimeError):
                     paths.xdg_cache_home()
 
@@ -225,6 +242,7 @@ class PathsTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.paths.Path.home", return_value=home_link),
                 mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)),
                 mock.patch("speed_of_cinnamon.paths.os.O_NOFOLLOW", None, create=True),
+                mock.patch.dict(os.environ, {"XDG_CACHE_HOME": ""}),
             ):
                 with self.assertRaisesRegex(RuntimeError, "secure temporary directory open is not supported"):
                     paths.xdg_cache_home()

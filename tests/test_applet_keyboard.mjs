@@ -39,6 +39,10 @@ function loadSpawnKeyboardArgs(clock) {
   return loadAppletMethod("_spawnKeyboardArgs", "_finishAppletTextInsert", clock);
 }
 
+function loadProcessCleanupStatus(clock) {
+  return loadAppletMethod("_processCleanupStatus", "_processCleanupSucceeded", clock);
+}
+
 test("built-in Auto-Submit marker rejects title when class is unknown", () => {
   const clock = { value: 0 };
   const matchesMarker = loadAppletMethod(
@@ -206,6 +210,7 @@ test("text-output settings changes preserve an in-flight backup owner", () => {
     autoBackupToken: backupToken,
     autoBackupPending: true,
     _historyMenuFingerprint: "old",
+    _processCleanupStatus: loadProcessCleanupStatus(clock),
     _terminateProcessesByGroup: () => true,
     _cancelTextInsertForSettingsChange() {},
     _normalizeTypingDelayMs: (value) => value,
@@ -900,7 +905,8 @@ function makeApplet(clock) {
     failNextTimer: false,
     queueProcessCallbacks: false,
     targetWindowMatches: true,
-    _resourceRegistry: { timers: {} },
+    pasteTimerOwner: null,
+    _resourceRegistry: { timers: {}, timerOwners: {} },
     clipboard: {
       get_text(_type, callback) {
         reads.push(callback);
@@ -930,19 +936,33 @@ function makeApplet(clock) {
         propertyName ? this[propertyName] : 0
       );
       if (previousId) {
-        timers.delete(previousId);
-        if (this._resourceRegistry.timers[name] === previousId) {
-          delete this._resourceRegistry.timers[name];
+        const previousOwner = this._resourceRegistry.timerOwners[name] || (
+          propertyName ? this[`${propertyName}Owner`] : null
+        );
+        const previousEntry = timers.get(previousId);
+        if (!previousOwner || !previousEntry || previousEntry.owner !== previousOwner) {
+          return 0;
         }
-        if (propertyName && this[propertyName] === previousId) {
+        timers.delete(previousId);
+        if (this._resourceRegistry.timers[name] === previousId &&
+            this._resourceRegistry.timerOwners[name] === previousOwner) {
+          delete this._resourceRegistry.timers[name];
+          delete this._resourceRegistry.timerOwners[name];
+        }
+        if (propertyName && this[propertyName] === previousId &&
+            this[`${propertyName}Owner`] === previousOwner) {
           this[propertyName] = 0;
+          this[`${propertyName}Owner`] = null;
         }
       }
       const id = nextTimerId++;
-      timers.set(id, { callback, delay, name, propertyName });
+      const owner = Object.freeze({});
+      timers.set(id, { callback, delay, name, propertyName, owner });
       this._resourceRegistry.timers[name] = id;
+      this._resourceRegistry.timerOwners[name] = owner;
       if (propertyName) {
         this[propertyName] = id;
+        this[`${propertyName}Owner`] = owner;
       }
       assert.equal(
         [...timers.values()].filter((entry) => entry.name === name).length,
@@ -954,14 +974,25 @@ function makeApplet(clock) {
       clearPasteTimerCalls += 1;
       const id = this.pasteTimer;
       if (!id) {
+        this.pasteTimerOwner = null;
         return true;
       }
-      timers.delete(id);
-      if (this._resourceRegistry.timers.paste === id) {
-        delete this._resourceRegistry.timers.paste;
+      const owner = this.pasteTimerOwner;
+      const entry = timers.get(id);
+      if (!owner || !entry || entry.owner !== owner ||
+          this._resourceRegistry.timers.paste !== id ||
+          this._resourceRegistry.timerOwners.paste !== owner) {
+        return false;
       }
-      if (this.pasteTimer === id) {
+      timers.delete(id);
+      if (this._resourceRegistry.timers.paste === id &&
+          this._resourceRegistry.timerOwners.paste === owner) {
+        delete this._resourceRegistry.timers.paste;
+        delete this._resourceRegistry.timerOwners.paste;
+      }
+      if (this.pasteTimer === id && this.pasteTimerOwner === owner) {
         this.pasteTimer = 0;
+        this.pasteTimerOwner = null;
       }
       return true;
     },
@@ -999,12 +1030,18 @@ function makeApplet(clock) {
       assert.ok(entry, `missing timer ${id}`);
       const keep = entry.callback();
       if (keep === false) {
-        timers.delete(id);
-        if (this._resourceRegistry.timers[entry.name] === id) {
-          delete this._resourceRegistry.timers[entry.name];
+        if (timers.get(id) === entry) {
+          timers.delete(id);
         }
-        if (entry.propertyName && this[entry.propertyName] === id) {
+        if (this._resourceRegistry.timers[entry.name] === id &&
+            this._resourceRegistry.timerOwners[entry.name] === entry.owner) {
+          delete this._resourceRegistry.timers[entry.name];
+          delete this._resourceRegistry.timerOwners[entry.name];
+        }
+        if (entry.propertyName && this[entry.propertyName] === id &&
+            this[`${entry.propertyName}Owner`] === entry.owner) {
           this[entry.propertyName] = 0;
+          this[`${entry.propertyName}Owner`] = null;
         }
       }
       return keep;
@@ -1270,6 +1307,183 @@ test("GTK clipboard target probe times out into configured xclip fallback", () =
     ["-selection", "clipboard", "-t", "TARGETS", "-out"],
   ]]);
   assert.equal(clearedTimers, 1);
+});
+
+test("GTK clipboard unknown snapshot blocks paste before writer and dialog", () => {
+  const clock = { value: 0 };
+  let targetRequests = 0;
+  const gtkContext = {
+    CLIPBOARD_COMMAND_TIMEOUT_MS: 1500,
+    CLIPBOARD_MAX_TARGETS: 16,
+    Gdk: {
+      Display: { get_default: () => ({}) },
+      Atom: { intern: () => "CLIPBOARD" },
+    },
+    Gtk: {
+      Clipboard: {
+        get_for_display: () => ({ request_targets: () => { targetRequests += 1; } }),
+      },
+    },
+  };
+  const nativeTargetSnapshot = loadAppletMethod(
+    "_clipboardNativeTargetSnapshotAsync", "_clipboardPayloadSnapshotAsync", clock, gtkContext
+  );
+  const payloadSnapshot = loadAppletMethod(
+    "_clipboardPayloadSnapshotAsync", "_clipboardPayloadFingerprintFromTargetsAsync", clock, gtkContext
+  );
+  const unknownSnapshot = loadAppletMethod(
+    "_clipboardUnknownPayloadSnapshot", "_clipboardPayloadSnapshot", clock
+  );
+  const confirmOverwrite = loadAppletMethod(
+    "_confirmClipboardOverwriteForPaste", "_pasteClipboardAfterFocus", clock
+  );
+  const insertTranscriptText = loadAppletMethod(
+    "_insertTranscriptText", "_restartRelistenRecording", clock
+  );
+  const resolveOutputActions = loadAppletMethod(
+    "_resolveOutputActions", "_migrateInsertMethodSemantics", clock
+  );
+  const preparedTranscriptText = loadAppletMethod(
+    "_preparedTranscriptText", "_sanitizeSpecialChars", clock,
+    { MAX_TEXT_INSERT_CHARS: 120000 }
+  );
+  let timerCallback;
+  let readerCalls = 0;
+  let gateCalls = 0;
+  let writerCalls = 0;
+  let dialogCalls = 0;
+  let pasteCalls = 0;
+  let externalCalls = 0;
+  let observedSnapshot;
+  let outputActions;
+  const statuses = [];
+  const completions = [];
+  const applet = {
+    clipboardBackend: "gtk",
+    insertMethod: "clipboard-paste",
+    sanitizeSpecialChars: false,
+    appendSpace: false,
+    textInsertCancellationFailed: false,
+    textInsertToken: null,
+    clipboardOverwriteDialog: null,
+    autoInsertConflictToken: null,
+    autoRelistenPending: false,
+    targetWindowGeneration: 1,
+    lastTranscript: "",
+    _lifecycleAllowsWork: () => true,
+    _hasPendingTextInsertResources: () => false,
+    _normalizeOutputMethod: (value) => value,
+    _normalizeClipboardBackend: (value) => value,
+    _windowTitleMatchesAutoPaste: () => true,
+    _preferredKeyboardProgram: () => "xdotool",
+    _isEmptyTranscriptText: (value) => String(value || "").trim() === "",
+    _resolveOutputActions(...args) {
+      outputActions = resolveOutputActions.apply(this, args);
+      return outputActions;
+    },
+    _preparedTranscriptText: preparedTranscriptText,
+    _guardStateCallback: (_name, callback) => callback,
+    _clipboardUnknownPayloadSnapshot: unknownSnapshot,
+    _clipboardNativeTargetSnapshotAsync(...args) {
+      return nativeTargetSnapshot.apply(this, args);
+    },
+    _clipboardPayloadSnapshotAsync(callback) {
+      readerCalls += 1;
+      return payloadSnapshot.call(this, (snapshot) => {
+        observedSnapshot = snapshot;
+        callback(snapshot);
+      });
+    },
+    _clipboardProgramSpec: () => { externalCalls += 1; return null; },
+    _confirmClipboardOverwriteForPaste(...args) {
+      gateCalls += 1;
+      return confirmOverwrite.apply(this, args);
+    },
+    _hasValidClipboardOverwriteApproval: () => false,
+    _clearClipboardOverwriteApproval() {},
+    _copyAndMaybePasteTranscriptText: () => { throw new Error("unexpected clipboard copy or paste"); },
+    _setClipboardText: () => { writerCalls += 1; return true; },
+    _newSafeDialog: () => { dialogCalls += 1; return null; },
+    _pasteClipboardAfterFocus: () => { pasteCalls += 1; return false; },
+    _scheduleTrackedTimer: (_name, delay, callback) => {
+      assert.equal(delay, 1500);
+      timerCallback = callback;
+      return 42;
+    },
+    _clearTrackedTimer: () => true,
+    _recordLifecycleError: (name, error) => { throw error || new Error(name); },
+    _setStatus: (status, message, transcript) => { statuses.push({ status, message, transcript }); },
+    _setStatusPreservingRecording: () => { throw new Error("unexpected status guard"); },
+  };
+
+  assert.equal(insertTranscriptText.call(applet, "hello", (result) => completions.push(result)), null);
+  assert.equal(outputActions.paste, true);
+  assert.equal(targetRequests, 1);
+  assert.equal(typeof timerCallback, "function");
+  assert.equal(timerCallback(), false);
+  assert.equal(readerCalls, 1);
+  assert.equal(externalCalls, 1);
+  assert.equal(observedSnapshot.signature, "unknown");
+  assert.equal(observedSnapshot.payloadFingerprint, "unknown");
+  assert.equal(gateCalls, 1);
+  assert.deepEqual(completions, [false]);
+  assert.deepEqual(statuses, [{
+    status: "ready", message: "Clipboard state unavailable; overwrite cancelled", transcript: "hello",
+  }]);
+  assert.equal(writerCalls, 0);
+  assert.equal(dialogCalls, 0);
+  assert.equal(pasteCalls, 0);
+});
+
+test("xclip writer auth requires local display and private owned authority", () => {
+  const clock = { value: 0 };
+  const files = new Map([
+    ["/", ["DIRECTORY", 0, 0o755, 1]],
+    ["/usr", ["DIRECTORY", 0, 0o755, 1]],
+    ["/usr/bin", ["DIRECTORY", 0, 0o755, 1]],
+    ["/usr/bin/xclip", ["REGULAR", 0, 0o755, 1]],
+    ["/home", ["DIRECTORY", 0, 0o755, 1]],
+    ["/home/tester", ["DIRECTORY", 1000, 0o700, 1]],
+    ["/home/tester/.Xauthority", ["REGULAR", 1000, 0o600, 1]],
+  ]);
+  const environment = { DISPLAY: ":70", HOME: "/home/tester" };
+  const Gio = {
+    Credentials: function() { this.get_unix_user = () => 1000; },
+    FileType: { DIRECTORY: "DIRECTORY", REGULAR: "REGULAR" },
+    FileQueryInfoFlags: { NOFOLLOW_SYMLINKS: 1 },
+    File: { new_for_path: (name) => ({ query_info: () => {
+      const entry = files.get(name);
+      if (!entry) throw new Error("missing test artifact");
+      return {
+        get_file_type: () => entry[0],
+        get_attribute_uint32: (key) => entry[{ "unix::uid": 1, "unix::mode": 2, "unix::nlink": 3 }[key]],
+      };
+    } }) },
+  };
+  const GLib = {
+    getenv: (name) => Object.hasOwn(environment, name) ? environment[name] : null,
+    path_get_dirname: (name) => path.dirname(name),
+    build_filenamev: (parts) => path.join(...parts),
+    file_test: (name) => name === "/usr/bin/xclip",
+    FileTest: { IS_EXECUTABLE: 1 },
+  };
+  const writerContext = loadAppletMethod(
+    "_clipboardXclipWriterContext", "_stopClipboardXclipOwner", clock, { Gio, GLib }
+  );
+  const context = writerContext.call({});
+  assert.equal(context.path, "/usr/bin/xclip");
+  assert.deepEqual({ ...context.env }, {
+    DISPLAY: ":70", XAUTHORITY: "/home/tester/.Xauthority", LC_ALL: "C",
+  });
+  environment.XAUTHORITY = "";
+  assert.equal(writerContext.call({}), null);
+  environment.XAUTHORITY = "/home/tester/.Xauthority";
+  assert.equal(writerContext.call({}).env.XAUTHORITY, environment.XAUTHORITY);
+  environment.DISPLAY = "remote:70";
+  assert.equal(writerContext.call({}), null);
+  environment.DISPLAY = ":70";
+  files.set("/home/tester/.Xauthority", ["REGULAR", 1000, 0o644, 1]);
+  assert.equal(writerContext.call({}), null);
 });
 
 test("parallel GTK clipboard probes keep independent tracked timers", () => {
@@ -1967,6 +2181,7 @@ function makeAsyncTargetRememberApplet(clock) {
         global: { display: { focus_window: null } },
       }
     ),
+    _processCleanupStatus: loadProcessCleanupStatus(clock),
     _terminateProcessesByGroup: () => true,
     _isUsableTargetWindow: () => false,
     _isWaylandSession: () => false,
@@ -2028,6 +2243,7 @@ test("X11 target capture prefers active XID over stale Cinnamon focus", () => {
       { value: 1000 },
       { global: { display: { focus_window: staleWindow } } }
     ),
+    _processCleanupStatus: loadProcessCleanupStatus({ value: 1000 }),
     _terminateProcessesByGroup: () => true,
     _isUsableTargetWindow: (window) => window === staleWindow,
     _isWaylandSession: () => false,

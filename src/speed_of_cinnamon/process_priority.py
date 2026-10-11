@@ -163,6 +163,7 @@ _SCOPE_EXEC_ELF_MAGIC = b"\x7fELF"
 _SCOPE_EXEC_ENTER_TIMEOUT_SECONDS = 10.0
 _SCOPE_EXEC_REAP_TIMEOUT_SECONDS = 2.0
 _SCOPE_EXEC_POLL_SECONDS = 0.05
+_SOC_STATUS_SCOPE_TOTAL_TIMEOUT_SECONDS = 30.0
 _SCOPE_EXEC_FD_EXEC_SUPPORTED = os.execve in getattr(os, "supports_fd", ())
 _SCOPE_EXEC_FORWARDED_SIGNALS = (
     signal.SIGINT,
@@ -6892,10 +6893,18 @@ def _supervise_scope_attempt(
     listener: socket.socket,
     nonce: str,
     signal_forwarder: _ScopeExecSignalForwarder | None = None,
+    *,
+    total_timeout_seconds: float | None = None,
 ) -> _ScopeExecAttemptOutcome:
     selector = selectors.DefaultSelector()
     state = "none"
-    deadline = time.monotonic() + _SCOPE_EXEC_ENTER_TIMEOUT_SECONDS
+    started_at = time.monotonic()
+    deadline = started_at + _SCOPE_EXEC_ENTER_TIMEOUT_SECONDS
+    total_deadline = (
+        started_at + total_timeout_seconds
+        if total_timeout_seconds is not None
+        else None
+    )
     try:
         selector.register(listener, selectors.EVENT_READ)
         while True:
@@ -6936,7 +6945,13 @@ def _supervise_scope_attempt(
                     continue
                 poll_seconds = min(_SCOPE_EXEC_POLL_SECONDS, remaining)
             else:
-                poll_seconds = _SCOPE_EXEC_POLL_SECONDS
+                if total_deadline is None:
+                    poll_seconds = _SCOPE_EXEC_POLL_SECONDS
+                else:
+                    remaining = total_deadline - time.monotonic()
+                    if remaining <= 0:
+                        return _ScopeExecAttemptOutcome(None, state, True)
+                    poll_seconds = min(_SCOPE_EXEC_POLL_SECONDS, remaining)
             selector.select(poll_seconds)
     finally:
         selector.close()
@@ -6966,11 +6981,14 @@ def _ensure_soc_priority_scope_for_module(
     *,
     module_name: str,
     normalize_marker_affinity: bool,
+    status_invocation: bool = False,
 ) -> bool:
     if module_name not in {
         "speed_of_cinnamon.cli",
         "speed_of_cinnamon.resource_gate",
-    } or not isinstance(normalize_marker_affinity, bool):
+    } or not isinstance(normalize_marker_affinity, bool) or not isinstance(status_invocation, bool):
+        raise PriorityScopeError("SOC CLI launch specification is invalid")
+    if status_invocation and module_name != "speed_of_cinnamon.cli":
         raise PriorityScopeError("SOC CLI launch specification is invalid")
 
     if os.environ.get(SOC_PRIORITY_SCOPE_MARKER) == "1":
@@ -7012,6 +7030,8 @@ def _ensure_soc_priority_scope_for_module(
     except _ScopeToolUnavailable:
         if not _scope_exec_launch_spec_is_unchanged(target):
             raise PriorityScopeError("SOC CLI launch specification changed") from None
+        if status_invocation:
+            raise PriorityScopeError("SOC status supervision is unavailable") from None
         return False
     supervisor = _scope_exec_supervisor_spec(command)
     if supervisor is None or supervisor.target != target:
@@ -7021,6 +7041,8 @@ def _ensure_soc_priority_scope_for_module(
     except _ScopeExecChannelUnavailable:
         if not _scope_exec_supervisor_spec_is_unchanged(supervisor):
             raise PriorityScopeError("SOC CLI launch specification changed") from None
+        if status_invocation:
+            raise PriorityScopeError("SOC status supervision is unavailable") from None
         return False
     environment = os.environ.copy()
     environment[SOC_PRIORITY_SCOPE_MARKER] = "1"
@@ -7075,12 +7097,21 @@ def _ensure_soc_priority_scope_for_module(
                     signal_to_propagate = preexisting_signal
                 else:
                     try:
-                        outcome = _supervise_scope_attempt(
-                            process,
-                            listener,
-                            nonce,
-                            signal_forwarder,
-                        )
+                        if status_invocation:
+                            outcome = _supervise_scope_attempt(
+                                process,
+                                listener,
+                                nonce,
+                                signal_forwarder,
+                                total_timeout_seconds=_SOC_STATUS_SCOPE_TOTAL_TIMEOUT_SECONDS,
+                            )
+                        else:
+                            outcome = _supervise_scope_attempt(
+                                process,
+                                listener,
+                                nonce,
+                                signal_forwarder,
+                            )
                     except BaseException:
                         preexisting_signal = (
                             signal_forwarder.begin_error_cleanup()
@@ -7102,7 +7133,7 @@ def _ensure_soc_priority_scope_for_module(
                             preexisting_signal = (
                                 signal_forwarder.begin_error_cleanup()
                             )
-                            _terminate_scope_attempt(
+                            reaped_returncode = _terminate_scope_attempt(
                                 process,
                                 process_group_id=(
                                     signal_forwarder.process_group_id
@@ -7114,6 +7145,14 @@ def _ensure_soc_priority_scope_for_module(
                                 ),
                             )
                             if preexisting_signal is None:
+                                if status_invocation and outcome.latch_state == "entered":
+                                    if reaped_returncode is None:
+                                        raise PriorityScopeError(
+                                            "SOC status command cleanup failed"
+                                        )
+                                    raise PriorityScopeError(
+                                        "SOC status command timed out"
+                                    )
                                 raise PriorityScopeError(
                                     "SOC priority scope attempt timed out"
                                 )
@@ -7145,6 +7184,8 @@ def _ensure_soc_priority_scope_for_module(
     if signal_to_propagate is not None:
         _raise_scope_attempt_signal(signal_to_propagate)
     if fallback_allowed:
+        if status_invocation:
+            raise PriorityScopeError("SOC status supervision is unavailable")
         return False
     if outcome is None:
         raise PriorityScopeError("SOC priority scope child status is unavailable")
@@ -7156,18 +7197,23 @@ def _ensure_soc_priority_scope_for_module(
     ):
         if not _scope_exec_supervisor_spec_is_unchanged(supervisor):
             raise PriorityScopeError("SOC CLI launch specification changed")
+        if status_invocation:
+            raise PriorityScopeError("SOC status supervision is unavailable")
         return False
     _propagate_scope_attempt_returncode(outcome.returncode)
     raise PriorityScopeError("SOC priority scope child status is unavailable")
 
 
-def ensure_soc_priority_scope(argv: Sequence[str]) -> bool:
+def ensure_soc_priority_scope(
+    argv: Sequence[str], *, status_invocation: bool = False
+) -> bool:
     """Supervise one verified high-weight CLI scope or permit one safe fallback."""
 
     return _ensure_soc_priority_scope_for_module(
         argv,
         module_name="speed_of_cinnamon.cli",
         normalize_marker_affinity=True,
+        status_invocation=status_invocation,
     )
 
 

@@ -972,41 +972,112 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                     foreign.kill()
                 foreign.wait(timeout=2)
 
+    @classmethod
+    def _bind_handshake_child_pidfd(
+        cls,
+        record_reader: int,
+        root: subprocess.Popen[str],
+        *,
+        deadline: float,
+    ) -> tuple[int, tuple[int, int, int, int], tuple[int, int, int, int], int]:
+        import select
+
+        remaining = deadline - time.monotonic()
+        if remaining <= 0 or not select.select([record_reader], [], [], remaining)[0]:
+            raise RuntimeError("fixture child record timed out")
+        record = os.read(record_reader, 64)
+        if not re.fullmatch(rb"[1-9][0-9]*\n", record):
+            raise RuntimeError("fixture child record is incomplete")
+        child_pid = int(record[:-1])
+        root_identity = cls._read_process_identity(root.pid)
+        child_identity = cls._read_process_identity(child_pid)
+        if (
+            root.poll() is not None
+            or root_identity is None
+            or child_identity is None
+            or child_identity[3] != root.pid
+            or child_identity[1:3] != (child_pid, child_pid)
+        ):
+            raise RuntimeError("fixture child is not bound to the live leader")
+        child_pidfd = os.pidfd_open(child_pid, 0)
+        try:
+            if (
+                root.poll() is not None
+                or cls._read_process_identity(root.pid) != root_identity
+                or cls._read_process_identity(child_pid) != child_identity
+            ):
+                raise RuntimeError("fixture child identity changed after PIDFD open")
+        except BaseException:
+            os.close(child_pidfd)
+            raise
+        return child_pid, child_identity, root_identity, child_pidfd
+
     def test_timeout_cleanup_revalidates_parent_after_pidfd_open(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             process_file = Path(tmp) / "processes"
             baseline: set[int] = set()
             root: subprocess.Popen[str] | None = None
             child_pid: int | None = None
+            child_pidfd: int | None = None
+            record_reader: int | None = None
+            record_writer: int | None = None
+            ack_reader: int | None = None
+            ack_writer: int | None = None
             original_reader = RpmLifecycleSupervisorTest._read_process_identity
             child_reads = [0]
             self._set_test_subreaper(True)
             try:
                 baseline = self._read_direct_child_ids()
+                record_reader, record_writer = os.pipe2(os.O_CLOEXEC)
+                ack_reader, ack_writer = os.pipe2(os.O_CLOEXEC)
                 root = subprocess.Popen(
                     [
                         sys.executable,
                         "-c",
                         (
-                            "import os,signal,sys,time; "
-                            "child=os.fork(); "
-                            "os.setsid() if child == 0 else None; "
-                            "signal.signal(signal.SIGTERM, signal.SIG_IGN) if child == 0 else None; "
-                            "(lambda f: (f.write(str(os.getpid()) + '\\n'), f.close()))(open(sys.argv[1], 'w')) if child == 0 else None; "
-                            "time.sleep(60)"
+                            "import os,select,signal,sys,time\n"
+                            "record_fd=int(sys.argv[1]); ack_fd=int(sys.argv[2])\n"
+                            "child=os.fork()\n"
+                            "if child:\n"
+                            "    os.close(record_fd); os.close(ack_fd)\n"
+                            "    os.waitpid(child, 0)\n"
+                            "else:\n"
+                            "    signal.alarm(5)\n"
+                            "    os.setsid()\n"
+                            "    signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+                            "    os.write(record_fd, (str(os.getpid()) + '\\n').encode('ascii'))\n"
+                            "    os.close(record_fd)\n"
+                            "    if not select.select([ack_fd], [], [], 4)[0] or os.read(ack_fd, 1) != b'1':\n"
+                            "        os._exit(0)\n"
+                            "    os.close(ack_fd); signal.alarm(0)\n"
+                            "    time.sleep(60)\n"
                         ),
-                        str(process_file),
+                        str(record_writer),
+                        str(ack_reader),
                     ],
                     start_new_session=True,
                     stdin=subprocess.DEVNULL,
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
+                    pass_fds=(record_writer, ack_reader),
                 )
-                record_deadline = time.monotonic() + 1
-                while time.monotonic() < record_deadline and not process_file.exists():
-                    time.sleep(0.01)
-                child_pid = int(process_file.read_text(encoding="ascii"))
-                root_identity = self._read_process_identity(root.pid)
+                os.close(record_writer)
+                record_writer = None
+                os.close(ack_reader)
+                ack_reader = None
+                child_pid, _child_identity, root_identity, child_pidfd = (
+                    self._bind_handshake_child_pidfd(
+                        record_reader,
+                        root,
+                        deadline=time.monotonic() + 2,
+                    )
+                )
+                os.close(record_reader)
+                record_reader = None
+                os.write(ack_writer, b"1")
+                os.close(ack_writer)
+                ack_writer = None
+                process_file.write_text(f"{child_pid}\n", encoding="ascii")
 
                 def change_parent_after_pidfd(process_id: int) -> tuple[int, int, int, int] | None:
                     identity = original_reader(process_id)
@@ -1033,15 +1104,101 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                 RpmLifecycleSupervisorTest._read_process_identity = staticmethod(
                     original_reader
                 )
+                primary_error = sys.exc_info()[1]
+                cleanup_errors: list[BaseException] = []
+                for descriptor in (record_reader, record_writer, ack_reader, ack_writer):
+                    if descriptor is not None:
+                        try:
+                            os.close(descriptor)
+                        except BaseException as error:
+                            cleanup_errors.append(error)
                 try:
                     if root is not None:
-                        if root.poll() is None:
-                            root.kill()
-                        root.wait(timeout=2)
-                    if child_pid is not None:
-                        self._cleanup_for_finally([child_pid])
+                        if child_pidfd is None:
+                            try:
+                                root.wait(timeout=6)
+                            except subprocess.TimeoutExpired:
+                                root.send_signal(signal.SIGKILL)
+                                root.wait(timeout=2)
+                                raise RuntimeError(
+                                    "unbound fixture child was not naturally reaped"
+                                )
+                        else:
+                            if root.poll() is None:
+                                root.send_signal(signal.SIGKILL)
+                            root.wait(timeout=2)
+                except BaseException as error:
+                    cleanup_errors.append(error)
+                try:
+                    if child_pidfd is not None:
+                        try:
+                            signal.pidfd_send_signal(child_pidfd, signal.SIGKILL, None, 0)
+                        except ProcessLookupError:
+                            pass
+                        reap_deadline = time.monotonic() + 2
+                        while time.monotonic() < reap_deadline:
+                            result = os.waitid(
+                                os.P_PIDFD, child_pidfd, os.WEXITED | os.WNOHANG
+                            )
+                            if result is not None and result.si_pid == child_pid:
+                                break
+                            time.sleep(min(0.02, max(0, reap_deadline - time.monotonic())))
+                        else:
+                            raise RuntimeError("bound fixture child was not reaped")
+                except BaseException as error:
+                    cleanup_errors.append(error)
                 finally:
-                    self._set_test_subreaper(False)
+                    if child_pidfd is not None:
+                        try:
+                            os.close(child_pidfd)
+                        except BaseException as error:
+                            cleanup_errors.append(error)
+                    try:
+                        self._set_test_subreaper(False)
+                    except BaseException as error:
+                        cleanup_errors.append(error)
+                if cleanup_errors:
+                    detail = "; ".join(str(error) for error in cleanup_errors[:4])
+                    if primary_error is not None:
+                        primary_error.add_note(f"fixture cleanup failed: {detail}")
+                    else:
+                        raise AssertionError(f"fixture cleanup failed: {detail}") from cleanup_errors[0]
+
+    def test_timeout_cleanup_rejects_incomplete_child_handshake_without_signal(self) -> None:
+        from unittest import mock
+
+        for payload in (b"", b"123"):
+            with self.subTest(payload_length=len(payload)):
+                record_reader, record_writer = os.pipe2(os.O_CLOEXEC)
+                try:
+                    if payload:
+                        os.write(record_writer, payload)
+                    os.close(record_writer)
+                    record_writer = -1
+                    with (
+                        mock.patch.object(os, "pidfd_open") as pidfd_open,
+                        mock.patch.object(signal, "pidfd_send_signal") as pidfd_signal,
+                        mock.patch.object(os, "kill") as pid_signal,
+                        mock.patch.object(os, "killpg") as group_signal,
+                        mock.patch.object(subprocess.Popen, "send_signal") as leader_signal,
+                    ):
+                        with self.assertRaisesRegex(
+                            RuntimeError, "fixture child record is incomplete"
+                        ):
+                            self._bind_handshake_child_pidfd(
+                                record_reader,
+                                mock.Mock(spec=subprocess.Popen),
+                                deadline=time.monotonic() + 0.1,
+                            )
+                        pidfd_open.assert_not_called()
+                        pidfd_signal.assert_not_called()
+                        pid_signal.assert_not_called()
+                        group_signal.assert_not_called()
+                        leader_signal.assert_not_called()
+                finally:
+                    os.close(record_reader)
+                    if record_writer >= 0:
+                        os.close(record_writer)
 
     def test_test_cleanup_error_does_not_mask_assertion_and_is_visible_alone(self) -> None:
         original_waitpid = os.waitpid
