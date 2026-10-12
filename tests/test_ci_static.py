@@ -103,6 +103,107 @@ def _called_subprocess_name(func: ast.AST, module_names: set[str], direct_call_n
     return None
 
 
+def _literal_subprocess_keywords(keywords: list[ast.keyword]) -> list[ast.keyword] | None:
+    resolved: list[ast.keyword] = []
+    seen: set[str] = set()
+    for keyword in keywords:
+        if keyword.arg is not None:
+            entries = [(keyword.arg, keyword.value)]
+        else:
+            if not isinstance(keyword.value, ast.Dict):
+                return None
+            entries = []
+            for key, value in zip(keyword.value.keys, keyword.value.values):
+                if not isinstance(key, ast.Constant) or type(key.value) is not str:
+                    return None
+                entries.append((key.value, value))
+        for name, value in entries:
+            if name in seen:
+                return None
+            seen.add(name)
+            resolved.append(ast.keyword(arg=name, value=value))
+    return resolved
+
+
+def _direct_safe_producers(body: list[ast.stmt]) -> tuple[set[str], set[str]]:
+    commands: set[str] = set()
+    environments: set[str] = set()
+    for statement in body:
+        if isinstance(statement, ast.Assign):
+            targets = [target.id for target in statement.targets if isinstance(target, ast.Name)]
+            value = statement.value
+        elif isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name) and statement.value is not None:
+            targets = [statement.target.id]
+            value = statement.value
+        else:
+            continue
+        if _is_command_sequence(value):
+            commands.update(targets)
+        if _is_filtered_environment_call(value):
+            environments.update(targets)
+    return commands, environments
+
+
+def _sibling_producer_veto(
+    path: Path,
+    tree: ast.AST,
+    module_names: set[str],
+    direct_call_names: set[str],
+    safe_command_names: set[str],
+    safe_env_names: set[str],
+) -> list[str]:
+    if not isinstance(tree, ast.Module):
+        return []
+    module_commands, module_environments = _direct_safe_producers(tree.body)
+    functions = [statement for statement in tree.body if isinstance(statement, ast.FunctionDef)]
+    producers = {function: _direct_safe_producers(function.body) for function in functions}
+    command_sources: dict[str, set[ast.FunctionDef]] = {}
+    environment_sources: dict[str, set[ast.FunctionDef]] = {}
+    for function, (commands, environments) in producers.items():
+        for name in commands:
+            command_sources.setdefault(name, set()).add(function)
+        for name in environments:
+            environment_sources.setdefault(name, set()).add(function)
+
+    vetoes: list[str] = []
+    for function in functions:
+        own_commands, own_environments = producers[function]
+        for statement in function.body:
+            if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+                continue
+            call = statement.value
+            if _called_subprocess_name(call.func, module_names, direct_call_names) != "Popen":
+                continue
+            keywords = _literal_subprocess_keywords(call.keywords)
+            if keywords is None:
+                continue
+            command = call.args[0] if call.args else next(
+                (keyword.value for keyword in keywords if keyword.arg == "args"), None
+            )
+            environment = next(
+                (keyword.value for keyword in keywords if keyword.arg == "env"), None
+            )
+            if isinstance(command, ast.Name):
+                name = command.id
+                if (
+                    name in safe_command_names
+                    and name not in own_commands
+                    and name not in module_commands
+                    and any(source is not function for source in command_sources.get(name, ()))
+                ):
+                    vetoes.append(f"{path}: Popen command safety comes only from a sibling function")
+            if isinstance(environment, ast.Name):
+                name = environment.id
+                if (
+                    name in safe_env_names
+                    and name not in own_environments
+                    and name not in module_environments
+                    and any(source is not function for source in environment_sources.get(name, ()))
+                ):
+                    vetoes.append(f"{path}: Popen env safety comes only from a sibling function")
+    return vetoes
+
+
 def _subprocess_security_offenders(path: Path, tree: ast.AST) -> list[str]:
     offenders: list[str] = []
     module_names, direct_call_names = _subprocess_aliases(tree)
@@ -115,7 +216,12 @@ def _subprocess_security_offenders(path: Path, tree: ast.AST) -> list[str]:
         if call_name is None:
             continue
 
-        for kw in node.keywords:
+        keywords = _literal_subprocess_keywords(node.keywords)
+        if keywords is None:
+            offenders.append(f"{path}: {call_name} keyword expansion must be a unique string-keyed literal dict")
+            keywords = [keyword for keyword in node.keywords if keyword.arg is not None]
+
+        for kw in keywords:
             if kw.arg == "shell":
                 if not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
                     offenders.append(f"{path}: {call_name} with unsupported shell value")
@@ -124,11 +230,13 @@ def _subprocess_security_offenders(path: Path, tree: ast.AST) -> list[str]:
                 if not _is_safe_env_argument(kw.value, safe_env_names):
                     offenders.append(f"{path}: {call_name} env must be a prepared value or string literal dict")
 
+        if node.args and any(keyword.arg == "args" for keyword in keywords):
+            offenders.append(f"{path}: {call_name} args specified both positionally and by keyword")
         command = None
         if node.args:
             command = node.args[0]
         else:
-            for kw in node.keywords:
+            for kw in keywords:
                 if kw.arg == "args":
                     command = kw.value
                     break
@@ -138,6 +246,12 @@ def _subprocess_security_offenders(path: Path, tree: ast.AST) -> list[str]:
             offenders.append(f"{path}: {call_name} first arg is f-string")
         elif not _is_command_sequence(command, safe_command_names):
             offenders.append(f"{path}: {call_name} command must be list/tuple")
+    offenders.extend(
+        _sibling_producer_veto(
+            path, tree, module_names, direct_call_names,
+            safe_command_names, safe_env_names,
+        )
+    )
     return offenders
 
 
@@ -339,10 +453,157 @@ class CiStaticTest(unittest.TestCase):
         absence_end = source.index("def _reconcile_recording_process(state: RecordingState)", absence_start)
         absence_block = source[absence_start:absence_end]
         self.assertIn("_recording_process_absence_probe(pid)", absence_block)
-        self.assertIn("stop_process(pid, expected_process_identity=expected_identity)", helper_block)
-        self.assertIn("recording state preserved", helper_block)
-
         source_tree = ast.parse(source)
+        reconcile_helpers = [
+            node for node in ast.walk(source_tree)
+            if isinstance(node, ast.FunctionDef) and node.name == "_reconcile_recording_process"
+        ]
+        self.assertEqual(len(reconcile_helpers), 1)
+        def check_reconcile_identity(reconcile_helper: ast.FunctionDef) -> None:
+            identity_bindings = [
+                node for node in reconcile_helper.body
+                if isinstance(node, ast.Assign)
+                and ast.unparse(node) == "expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)"
+            ]
+            self.assertEqual(len(identity_bindings), 1)
+            identity_guards = [
+                node for node in reconcile_helper.body
+                if isinstance(node, ast.If)
+                and ast.unparse(node.test) == "expected_identity is None"
+            ]
+            self.assertEqual(len(identity_guards), 1)
+            self.assertEqual(len(identity_guards[0].body), 1)
+            invalid_return = identity_guards[0].body[0]
+            self.assertIsInstance(invalid_return, ast.Return)
+            self.assertIsInstance(invalid_return.value, ast.Name)
+            self.assertEqual(invalid_return.value.id, "_RECORDING_PROCESS_IDENTITY_INVALID_ERROR")
+            leader_branches = [
+                node for node in reconcile_helper.body
+                if isinstance(node, ast.If) and ast.unparse(node.test) == "leader_alive"
+            ]
+            self.assertEqual(len(leader_branches), 1)
+            leader_branch = leader_branches[0]
+            mismatch_guards = [
+                node for node in leader_branch.body
+                if isinstance(node, ast.If)
+                and ast.unparse(node.test) == "identity_relation != _PROCESS_IDENTITY_SAME"
+                and len(node.body) == 1
+                and isinstance(node.body[0], ast.Return)
+            ]
+            self.assertEqual(len(mismatch_guards), 1)
+            stop_bindings = [
+                node for node in leader_branch.body
+                if isinstance(node, ast.AnnAssign)
+                and isinstance(node.target, ast.Name)
+                and node.target.id == "stop_kwargs"
+            ]
+            self.assertEqual(len(stop_bindings), 1)
+            stop_binding = stop_bindings[0]
+            self.assertIsInstance(stop_binding.value, ast.Dict)
+            self.assertTrue(all(
+                isinstance(key, ast.Constant) and isinstance(key.value, str)
+                for key in stop_binding.value.keys
+            ))
+            identity_values = [
+                value for key, value in zip(stop_binding.value.keys, stop_binding.value.values)
+                if key.value == "expected_process_identity"
+            ]
+            self.assertEqual(len(identity_values), 1)
+            self.assertIsInstance(identity_values[0], ast.Name)
+            self.assertEqual(identity_values[0].id, "expected_identity")
+            stop_call_statements = [
+                statement for statement in leader_branch.body
+                if any(
+                    isinstance(node, ast.Call)
+                    and ast.unparse(node) == "stop_process(pid, **stop_kwargs)"
+                    for node in ast.walk(statement)
+                )
+            ]
+            self.assertEqual(len(stop_call_statements), 1)
+            self.assertLess(reconcile_helper.body.index(identity_bindings[0]), reconcile_helper.body.index(identity_guards[0]))
+            self.assertLess(reconcile_helper.body.index(identity_guards[0]), reconcile_helper.body.index(leader_branch))
+            self.assertLess(leader_branch.body.index(mismatch_guards[0]), leader_branch.body.index(stop_binding))
+            self.assertLess(leader_branch.body.index(stop_binding), leader_branch.body.index(stop_call_statements[0]))
+            scope_branches = [
+                node for node in reconcile_helper.body
+                if isinstance(node, ast.If) and ast.unparse(node.test) == "state.recorder_scope and (not scope_gone)"
+            ]
+            self.assertEqual(len(scope_branches), 1)
+            self.assertLess(reconcile_helper.body.index(identity_guards[0]), reconcile_helper.body.index(scope_branches[0]))
+            scope_calls = [
+                node for node in ast.walk(scope_branches[0])
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "stop_process"
+            ]
+            self.assertEqual(len(scope_calls), 1)
+            self.assertEqual([ast.unparse(arg) for arg in scope_calls[0].args], ["pid"])
+            self.assertEqual(len(scope_calls[0].keywords), 2)
+            self.assertEqual(
+                {keyword.arg: ast.unparse(keyword.value) for keyword in scope_calls[0].keywords},
+                {"expected_process_identity": "expected_identity", "expected_recorder_scope": "state.recorder_scope"},
+            )
+        check_reconcile_identity(reconcile_helpers[0])
+        from copy import deepcopy
+
+        synthetic_reconcile = ast.parse(
+            "def _reconcile_recording_process(state):\n"
+            "    expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)\n"
+            "    if expected_identity is None:\n"
+            "        return _RECORDING_PROCESS_IDENTITY_INVALID_ERROR\n"
+            "    if leader_alive:\n"
+            "        if identity_relation != _PROCESS_IDENTITY_SAME:\n"
+            "            return _RECORDING_PROCESS_IDENTITY_INVALID_ERROR\n"
+            "        stop_kwargs: dict[str, object] = {\"expected_process_identity\": expected_identity, "
+            "\"expected_recorder_scope\": state.recorder_scope}\n"
+            "        if not stop_process(pid, **stop_kwargs):\n"
+            "            return _RECORDING_PROCESS_IDENTITY_INVALID_ERROR\n"
+            "    if state.recorder_scope and not scope_gone:\n"
+            "        if not stop_process(pid, expected_process_identity=expected_identity, "
+            "expected_recorder_scope=state.recorder_scope):\n"
+            "            return _RECORDING_PROCESS_IDENTITY_INVALID_ERROR\n"
+        ).body[0]
+        check_reconcile_identity(synthetic_reconcile)
+        for mutation in (
+            "wrong_identity_value", "duplicate_identity_override", "dict_unpack",
+            "invalid_guard_return", "late_binding", "scope_before_guard",
+        ):
+            with self.subTest(mutation=mutation):
+                variant = deepcopy(synthetic_reconcile)
+                binding = next(node for node in variant.body if isinstance(node, ast.Assign))
+                guard = next(
+                    node for node in variant.body
+                    if isinstance(node, ast.If) and ast.unparse(node.test) == "expected_identity is None"
+                )
+                leader = next(
+                    node for node in variant.body
+                    if isinstance(node, ast.If) and ast.unparse(node.test) == "leader_alive"
+                )
+                scope = next(
+                    node for node in variant.body
+                    if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == "state.recorder_scope and (not scope_gone)"
+                )
+                mapping = next(node for node in leader.body if isinstance(node, ast.AnnAssign)).value
+                if mutation == "wrong_identity_value":
+                    mapping.values[0] = ast.Name(id="wrong_identity", ctx=ast.Load())
+                elif mutation == "duplicate_identity_override":
+                    mapping.keys.append(ast.Constant(value="expected_process_identity"))
+                    mapping.values.append(ast.Name(id="wrong_identity", ctx=ast.Load()))
+                elif mutation == "dict_unpack":
+                    mapping.keys.append(None)
+                    mapping.values.append(ast.Name(id="extra_kwargs", ctx=ast.Load()))
+                elif mutation == "invalid_guard_return":
+                    guard.body[0].value = ast.Constant(value=None)
+                elif mutation == "late_binding":
+                    variant.body.remove(binding)
+                    variant.body.insert(variant.body.index(leader) + 1, binding)
+                else:
+                    variant.body.remove(scope)
+                    variant.body.insert(variant.body.index(guard), scope)
+                with self.assertRaises(AssertionError):
+                    check_reconcile_identity(variant)
+        self.assertIn("recording state preserved", helper_block)
         absence_helper = next(
             node
             for node in ast.walk(source_tree)
@@ -499,6 +760,135 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertTrue(any("unsupported shell value" in offender for offender in offenders))
         self.assertTrue(any("Popen first arg is string constant" in offender for offender in offenders))
+
+    def test_subprocess_static_scan_rejects_sibling_only_safe_names(self) -> None:
+        command_veto = "sample.py: Popen command safety comes only from a sibling function"
+        env_veto = "sample.py: Popen env safety comes only from a sibling function"
+        cases = (
+            (
+                "sibling_command",
+                "def seed():\n"
+                "    argv = ['/bin/true']\n"
+                "def target():\n"
+                "    argv = 'placeholder'\n"
+                "    subprocess.Popen(argv, shell=False)\n",
+                (command_veto,),
+            ),
+            (
+                "sibling_environment",
+                "def seed():\n"
+                "    environment = _filtered_environment({'LANG': 'C'})\n"
+                "def target():\n"
+                "    environment = os.environ.copy()\n"
+                "    subprocess.Popen(['/bin/true'], env=environment)\n",
+                (env_veto,),
+            ),
+            (
+                "combined_siblings",
+                "def seed():\n"
+                "    argv = ['/bin/true']\n"
+                "    environment = _filtered_environment({'LANG': 'C'})\n"
+                "def target():\n"
+                "    argv = 'placeholder'\n"
+                "    environment = os.environ.copy()\n"
+                "    subprocess.Popen(argv, env=environment, shell=False)\n",
+                (command_veto, env_veto),
+            ),
+            (
+                "same_function_command",
+                "def target():\n"
+                "    argv = ['/bin/true']\n"
+                "    subprocess.Popen(argv, shell=False)\n",
+                (),
+            ),
+            (
+                "same_function_environment",
+                "def target():\n"
+                "    environment = _filtered_environment({'LANG': 'C'})\n"
+                "    subprocess.Popen(['/bin/true'], env=environment)\n",
+                (),
+            ),
+            (
+                "module_producers",
+                "argv = ['/bin/true']\n"
+                "environment = _filtered_environment({'LANG': 'C'})\n"
+                "def target():\n"
+                "    subprocess.Popen(argv, env=environment)\n",
+                (),
+            ),
+            (
+                "literal_dict_name_stays_unsafe",
+                "def target():\n"
+                "    environment = {'LANG': 'C'}\n"
+                "    subprocess.Popen(['/bin/true'], env=environment)\n",
+                ("sample.py: Popen env must be a prepared value or string literal dict",),
+            ),
+            (
+                "normalized_args_and_environment",
+                "def seed():\n"
+                "    argv = ['/bin/true']\n"
+                "    environment = _filtered_environment({'LANG': 'C'})\n"
+                "def target():\n"
+                "    argv = 'placeholder'\n"
+                "    environment = os.environ.copy()\n"
+                "    subprocess.Popen(args=argv, **{'env': environment})\n",
+                (command_veto, env_veto),
+            ),
+            (
+                "unknown_keywords_stay_unsafe",
+                "def target():\n"
+                "    subprocess.Popen(['/bin/true'], **kwargs)\n",
+                ("sample.py: Popen keyword expansion must be a unique string-keyed literal dict",),
+            ),
+        )
+        for name, source, expected in cases:
+            with self.subTest(name=name):
+                tree = ast.parse("import os\nimport subprocess\n" + source)
+                original_ast = ast.dump(tree, include_attributes=True)
+                offenders = _subprocess_security_offenders(Path("sample.py"), tree)
+                self.assertEqual(ast.dump(tree, include_attributes=True), original_ast)
+                if expected:
+                    for offender in expected:
+                        self.assertIn(offender, offenders)
+                else:
+                    self.assertEqual(offenders, [])
+
+    def test_subprocess_static_scan_checks_literal_keyword_expansions(self) -> None:
+        cases = (
+            (
+                "shell_and_ambient_env",
+                'subprocess.Popen(["/bin/true"], **{"shell": True, "env": os.environ.copy()})',
+                ("unsupported shell value", "env must be a prepared value"),
+            ),
+            ("shell_true", 'subprocess.Popen(["/bin/true"], **{"shell": True})', ("unsupported shell value",)),
+            ("ambient_env", 'subprocess.Popen(["/bin/true"], **{"env": os.environ.copy()})', ("env must be a prepared value",)),
+            ("unknown_mapping", 'subprocess.Popen(["/bin/true"], **kwargs)', ("keyword expansion must be",)),
+            ("mapping_call", 'subprocess.Popen(["/bin/true"], **dict(shell=False))', ("keyword expansion must be",)),
+            ("nested_unpack", 'subprocess.Popen(["/bin/true"], **{**other})', ("keyword expansion must be",)),
+            ("dynamic_key", 'subprocess.Popen(["/bin/true"], **{key: False})', ("keyword expansion must be",)),
+            ("nonstring_key", 'subprocess.Popen(["/bin/true"], **{1: False})', ("keyword expansion must be",)),
+            ("duplicate_dict_key", 'subprocess.Popen(["/bin/true"], **{"shell": False, "shell": True})', ("keyword expansion must be",)),
+            ("duplicate_explicit_key", 'subprocess.Popen(["/bin/true"], shell=False, **{"shell": True})', ("keyword expansion must be",)),
+            ("string_args", 'subprocess.Popen(**{"args": "echo unsafe"})', ("first arg is string constant",)),
+            ("ambiguous_args", 'subprocess.Popen(["/bin/true"], **{"args": ["/bin/false"]})', ("args specified both",)),
+            ("safe_literal", 'subprocess.Popen(["/bin/true"], **{"shell": False, "env": {"LANG": "C"}})', ()),
+            ("empty_mapping", 'subprocess.Popen(["/bin/true"], **{})', ()),
+            ("explicit_and_empty", 'subprocess.Popen(["/bin/true"], shell=False, **{})', ()),
+            ("disjoint_mappings", 'subprocess.Popen(["/bin/true"], **{"shell": False}, **{"env": {"LANG": "C"}})', ()),
+            ("filtered_environment", 'subprocess.Popen(["/bin/true"], **{"env": _filtered_environment({"LANG": "C"})})', ()),
+            ("list_args", 'subprocess.Popen(**{"args": ["/bin/true"], "shell": False})', ()),
+        )
+        for name, source, expected in cases:
+            with self.subTest(name=name):
+                tree = ast.parse("import subprocess\n" + source)
+                original_ast = ast.dump(tree, include_attributes=True)
+                offenders = _subprocess_security_offenders(Path("sample.py"), tree)
+                self.assertEqual(ast.dump(tree, include_attributes=True), original_ast)
+                if expected:
+                    for fragment in expected:
+                        self.assertTrue(any(fragment in offender for offender in offenders), offenders)
+                else:
+                    self.assertEqual(offenders, [])
 
     def test_shell_and_workflow_files_avoid_high_risk_shell_patterns(self) -> None:
         roots = [REPO_ROOT / "scripts", REPO_ROOT / ".github" / "workflows"]
@@ -831,7 +1221,12 @@ class CiStaticTest(unittest.TestCase):
         offenders: list[str] = []
         for path in sorted((REPO_ROOT / "scripts").glob("*.sh")):
             text = path.read_text(encoding="utf-8")
-            if not text.startswith("#!/usr/bin/env bash\n"):
+            expected_shebang = (
+                "#!/usr/bin/env -S BASH_ENV= ENV= /bin/bash --noprofile --norc -p\n"
+                if path.name == "build-rpm.sh"
+                else "#!/usr/bin/env bash\n"
+            )
+            if not text.startswith(expected_shebang):
                 offenders.append(f"{path}: missing bash shebang")
             if "set -euo pipefail" not in text:
                 offenders.append(f"{path}: missing set -euo pipefail")
@@ -1164,6 +1559,7 @@ class CiStaticTest(unittest.TestCase):
             "137a38d0ac84d46cb667231bc00b2ab3f17ab5b9",
             "63059a082f35713189f4efeb5d9f95a0349a66a0",
             "c306b77cad968f5e25ec40b67f38c574f12c244d",
+            "a2b9e0a52cf5f5310ea11a6e7b5e7723dda8d98c",
         ):
             self.assertIn(commit, verifier)
         self.assertIn('(author_name, author_email) == (expected_name, expected_email)', verifier)
@@ -1242,6 +1638,14 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('python3 - "${workflows[@]}"', lint_workflows)
         self.assertNotIn("glob.glob", lint_workflows)
         self.assertIn('if [[ "${#workflows[@]}" -eq 0 ]]; then', lint_workflows)
+
+    def test_fedora_dependencies_include_artifact_crypto_backend(self) -> None:
+        dependencies = (REPO_ROOT / "scripts" / "install-fedora-deps.sh").read_text(encoding="utf-8")
+        command = '"${sudo_cmd}" "${dnf_cmd}" install -y \\\n'
+        self.assertEqual(dependencies.count(command), 1)
+        install_block = dependencies.split(command, 1)[1].split("\n\n", 1)[0]
+        packages = install_block.replace("\\\n", " ").split()
+        self.assertIn("python3-cryptography", packages)
 
     def test_man_pages_and_wiki_are_packaged(self) -> None:
         spec = (REPO_ROOT / "packaging" / "speed-of-cinnamon.spec").read_text(encoding="utf-8")
@@ -1408,7 +1812,7 @@ class CiStaticTest(unittest.TestCase):
         verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
         verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
         verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(encoding="utf-8")
-        snapshot_copy = verify_dist.index('"${safe_fs_cmd[@]}" copy-file verify-dist "${tarball}" "${tarball_snapshot}" 0644')
+        snapshot_copy = verify_dist.index('if ! snapshot_archive_bounded "${tarball}" "${tarball_snapshot}" "${MAX_DIST_ARCHIVE_BYTES}" "${tmp_dir_identity}"; then')
         tar_listing = verify_dist.index('run_tar_bounded -tzf "${tarball_snapshot}"')
         tarfile_open = verify_dist.index('tarfile.open(tarball_snapshot, "r:gz")')
 
@@ -1418,10 +1822,18 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("archive snapshot must not be hardlinked", verify_dist)
         self.assertIn('tarball_input="$1"', verify_dist)
         self.assertIn("archive path contains control characters", verify_dist)
-        self.assertIn("archive must not be a symlink", verify_dist)
+        self.assertIn('if [[ -L "$expected_tarball" || ! -f "$expected_tarball" ]]; then', verify_dist)
+        self.assertIn('open_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)', verify_dist)
+        self.assertIn('source_fd = os.open(source_name, open_flags)', verify_dist)
+        self.assertIn('not stat.S_ISREG(source_stat.st_mode)', verify_dist)
+        self.assertIn('source_stat.st_size > max_bytes', verify_dist)
+        self.assertIn('identity(parent_stat) != destination_identity', verify_dist)
+        self.assertIn('os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW', verify_dist)
+        self.assertIn('if signature(os.fstat(source_fd)) != source_signature:', verify_dist)
         self.assertIn("archive missing or invalid", verify_dist)
         self.assertIn("failed to resolve archive path", verify_dist)
-        self.assertIn('realpath "${tarball_input}" 2>/dev/null', verify_dist)
+        self.assertIn('if ! requested_tarball="$(run_command_bounded realpath -m -- "$requested_tarball_input")"; then', verify_dist)
+        self.assertIn('if [[ "$requested_tarball" != "$expected_tarball" ]]; then', verify_dist)
         self.assertNotIn('tar -tzf "${tarball}"', verify_dist)
         self.assertNotIn('tarfile.open(tarball, "r:gz")', verify_dist)
         self.assertIn('readonly MAX_DIST_ARCHIVE_BYTES=$((128 * 1024 * 1024))', verify_dist)
@@ -2078,10 +2490,14 @@ class CiStaticTest(unittest.TestCase):
             'stage_topdir="$(mktemp -d "${rpmbuild_tmpdir}/.$(basename "${final_topdir}").stage.XXXXXX")"',
             build_rpm,
         )
-        self.assertIn('--define "_topdir ${stage_topdir}"', build_rpm)
+        self.assertIn('stage_fd = open_bound_directory(stage_path, stage_identity, "RPM staging directory")', build_rpm)
+        self.assertIn('for descriptor in bound_fds:', build_rpm)
+        self.assertIn('os.set_inheritable(descriptor, True)', build_rpm)
+        self.assertIn('f"_topdir {procfd(stage_fd)}"', build_rpm)
+        self.assertIn('os.execv(rpmbuild_path, command)', build_rpm)
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', build_rpm)
         self.assertIn('require_regular_source_file "${safe_fs}" "safe local filesystem helper"', build_rpm)
-        self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_rpm)
+        self.assertIn('safe_fs_cmd=("${lifecycle_python}" -I -B "${safe_fs}")', build_rpm)
         self.assertIn('"${safe_fs_cmd[@]}" mkdirs build-rpm "${dist_dir}"', build_rpm)
         self.assertIn('for rpm_stage_dir in BUILD BUILDROOT RPMS SOURCES SPECS SRPMS; do', build_rpm)
         self.assertIn('rpmbuild_tmpdir_abs="$(realpath "${rpmbuild_tmpdir}")', build_rpm)
@@ -2093,15 +2509,39 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("import fcntl", build_rpm)
         self.assertIn("import stat", build_rpm)
         self.assertIn("parent_fd = os.open(lock_parent, parent_flags)", build_rpm)
-        self.assertIn('lock_fd = os.open(lock_name, flags, 0o600, dir_fd=parent_fd)', build_rpm)
+        self.assertIn('if parent_stat.st_uid != os.geteuid() or parent_stat.st_mode & 0o022:', build_rpm)
+        self.assertIn('fcntl.flock(parent_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)', build_rpm)
+        self.assertIn('revalidate_parent("finalization lock parent after flock")', build_rpm)
         self.assertNotIn("lock_fd = os.open(lock_path, flags, 0o600)", build_rpm)
         self.assertNotIn("spec_path.write_text", build_rpm)
         self.assertIn("os.replace(tmp_name, spec_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)", build_rpm)
         self.assertIn("os.fsync(parent_fd)", build_rpm)
-        self.assertIn('activate_with_finalize_lock "${dist_finalize_lock}" "${stage_topdir}" "${final_topdir}"', build_rpm)
-        self.assertIn('[sys.executable, safe_fs, "install-tree", "build-rpm", staging_path, final_path, "RPM build directory"]', build_rpm)
-        self.assertIn('"${safe_fs_cmd[@]}" remove build-rpm "${stage_topdir}" --kind dir', build_rpm)
-        self.assertIn('"${safe_fs_cmd[@]}" remove build-rpm "${rpmbuild_tmpdir}" --kind dir', build_rpm)
+        self.assertIn('if (( rpmbuild_status != 0 )); then', build_rpm)
+        self.assertIn('if ! finalization_result="$(activate_with_finalize_lock', build_rpm)
+        self.assertIn('  "${dist_finalize_lock}" "${stage_topdir}" "${final_topdir}"', build_rpm)
+        self.assertLess(
+            build_rpm.index('if (( rpmbuild_status != 0 )); then'),
+            build_rpm.index('if ! finalization_result="$(activate_with_finalize_lock'),
+        )
+        self.assertIn(
+            'run_safe_fs(\n'
+            '            "install-tree",\n'
+            '            "build-rpm",\n'
+            '            staging_path,\n'
+            '            publish_path,\n'
+            '            "RPM build directory",',
+            build_rpm,
+        )
+        self.assertIn('run_cleanup_safe_fs remove build-rpm "${stage_topdir}"', build_rpm)
+        stage_cleanup_start = build_rpm.index('run_cleanup_safe_fs remove build-rpm "${stage_topdir}"')
+        stage_cleanup = build_rpm[stage_cleanup_start:stage_cleanup_start + 200]
+        self.assertIn('--kind dir', stage_cleanup)
+        self.assertIn('--expected-identity "${stage_topdir_identity}"', stage_cleanup)
+        self.assertIn('run_cleanup_safe_fs remove build-rpm "${rpmbuild_tmpdir}"', build_rpm)
+        workspace_cleanup_start = build_rpm.index('run_cleanup_safe_fs remove build-rpm "${rpmbuild_tmpdir}"')
+        workspace_cleanup = build_rpm[workspace_cleanup_start:workspace_cleanup_start + 200]
+        self.assertIn('--kind dir', workspace_cleanup)
+        self.assertIn('--expected-identity "${rpmbuild_tmpdir_identity}"', workspace_cleanup)
         self.assertNotIn('mv -T -- "${stage_topdir}" "${final_topdir}"', build_rpm)
         self.assertNotIn('rm -rf "${topdir}"', build_rpm)
         self.assertNotIn('rm -rf -- "${stage_topdir}"', build_rpm)

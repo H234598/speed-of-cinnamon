@@ -16,7 +16,7 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from speed_of_cinnamon import command_chain, process_priority
+from speed_of_cinnamon import command_chain, process_priority, state
 
 
 def _mountinfo_device(path: Path) -> str:
@@ -148,6 +148,34 @@ def _fake_scope_process(returncode: int | None) -> mock.Mock:
     process.poll.return_value = returncode
     process.wait.return_value = returncode
     return process
+
+
+def _start_scope_with_internal_latch(
+    arguments: list[str],
+    *,
+    environment: dict[str, str] | None = None,
+) -> tuple[subprocess.Popen[bytes], socket.socket, str]:
+    listener, address, nonce = process_priority._create_scope_exec_latch()
+    launch_environment = (
+        os.environ.copy() if environment is None else environment.copy()
+    )
+    launch_environment[process_priority.SOC_PRIORITY_SCOPE_MARKER] = "1"
+    launch_environment[process_priority._SCOPE_EXEC_LATCH_ADDRESS_ENV] = address
+    launch_environment[process_priority._SCOPE_EXEC_LATCH_NONCE_ENV] = nonce
+    try:
+        process = subprocess.Popen(  # nosec B603
+            process_priority.build_soc_priority_scope_command(arguments),
+            env=launch_environment,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            close_fds=True,
+            start_new_session=True,
+            shell=False,
+        )
+    except BaseException:
+        listener.close()
+        raise
+    return process, listener, nonce
 
 
 def _scope_latch_datagram(
@@ -2920,6 +2948,45 @@ class ProcessPriorityTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(captured["descriptor"])
 
+    def test_scope_exec_file_identity_rejects_invalid_nofollow_before_open(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            target = Path(temporary) / "scope-target"
+            target.write_bytes(b"\x7fELFbound")
+            canonical = os.fspath(target.resolve(strict=True))
+            original_nofollow = process_priority.os.O_NOFOLLOW
+            self.assertIs(type(original_nofollow), int)
+            self.assertGreater(original_nofollow, 0)
+            self.assertIsNotNone(
+                process_priority._scope_exec_file_identity(canonical, executable=False)
+            )
+            with mock.patch.object(
+                process_priority.os,
+                "open",
+                side_effect=AssertionError("source file opened without O_NOFOLLOW"),
+            ) as opened:
+                try:
+                    delattr(process_priority.os, "O_NOFOLLOW")
+                    self.assertIsNone(
+                        process_priority._scope_exec_file_identity(canonical, executable=False)
+                    )
+                    opened.assert_not_called()
+                finally:
+                    process_priority.os.O_NOFOLLOW = original_nofollow
+                for label, flag in (
+                    ("zero", 0),
+                    ("negative", -1),
+                    ("boolean", True),
+                    ("string", "invalid"),
+                    ("none", None),
+                ):
+                    with self.subTest(flag=label), mock.patch.object(
+                        process_priority.os, "O_NOFOLLOW", flag
+                    ):
+                        self.assertIsNone(
+                            process_priority._scope_exec_file_identity(canonical, executable=False)
+                        )
+                        opened.assert_not_called()
+
     def test_scope_exec_target_requires_exact_bounded_elf_magic(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3186,6 +3253,655 @@ class ProcessPriorityTests(unittest.TestCase):
             ),
         ):
             self.assertEqual(process_priority._current_io_priority(), ("3", 0))
+
+    def test_current_io_priority_direct_uses_ioprio_get_without_spawning(self) -> None:
+        syscall = mock.Mock(return_value=3 << process_priority._IOPRIO_CLASS_SHIFT)
+        libc = mock.Mock()
+        libc.syscall = syscall
+        with (
+            mock.patch.object(process_priority.sys, "platform", "linux"),
+            mock.patch.object(
+                process_priority.os,
+                "uname",
+                return_value=mock.Mock(machine="x86_64"),
+            ),
+            mock.patch.object(
+                process_priority.ctypes,
+                "CDLL",
+                return_value=libc,
+            ),
+            mock.patch.object(
+                process_priority.subprocess,
+                "Popen",
+                side_effect=AssertionError("ioprio query must not spawn"),
+            ) as popen,
+        ):
+            self.assertEqual(
+                process_priority._current_io_priority_direct(),
+                ("3", 0),
+            )
+        popen.assert_not_called()
+        syscall.assert_called_once_with(
+            process_priority._X86_64_IOPRIO_GET,
+            process_priority._IOPRIO_WHO_PROCESS,
+            0,
+        )
+        self.assertIs(syscall.restype, process_priority.ctypes.c_long)
+
+    def test_local_model_direct_nproc_limit_is_load_adaptive_and_bounded(self) -> None:
+        baseline = process_priority._LOCAL_MODEL_DIRECT_NPROC_LIMIT
+        reserve = (
+            process_priority._LOCAL_MODEL_DIRECT_NPROC_MODEL_HEADROOM
+            + process_priority._LOCAL_MODEL_DIRECT_NPROC_RACE_MARGIN
+        )
+        ceiling = process_priority._LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT
+
+        self.assertEqual(
+            process_priority._local_model_direct_nproc_limit(
+                100,
+                process_priority.resource.RLIM_INFINITY,
+            ),
+            baseline,
+        )
+        high_load = baseline + 755
+        self.assertEqual(
+            process_priority._local_model_direct_nproc_limit(
+                high_load,
+                process_priority.resource.RLIM_INFINITY,
+            ),
+            high_load + reserve,
+        )
+        desired = high_load + reserve
+        self.assertEqual(
+            process_priority._local_model_direct_nproc_limit(high_load, desired),
+            desired,
+        )
+        self.assertIsNone(
+            process_priority._local_model_direct_nproc_limit(
+                high_load,
+                desired - 1,
+            )
+        )
+        self.assertIsNone(
+            process_priority._local_model_direct_nproc_limit(
+                ceiling - reserve + 1,
+                process_priority.resource.RLIM_INFINITY,
+            )
+        )
+        for invalid_count in (None, True, 0, -1):
+            with self.subTest(current_uid_tasks=invalid_count):
+                self.assertIsNone(
+                    process_priority._local_model_direct_nproc_limit(
+                        invalid_count,
+                        process_priority.resource.RLIM_INFINITY,
+                    )
+                )
+
+    def test_current_uid_task_count_handles_snapshot_race_and_errors(self) -> None:
+        uid = os.getuid()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            proc_root = Path(temporary_directory)
+
+            def add_process(
+                pid: str,
+                owner: int,
+                tasks: tuple[str, ...],
+                starttime: int,
+            ) -> None:
+                root = proc_root / pid
+                (root / "task").mkdir(parents=True)
+                (root / "status").write_text(
+                    f"Name:\ttest\nUid:\t{owner}\t{owner}\t{owner}\t{owner}\n",
+                    encoding="ascii",
+                )
+                stat_fields = ["S", *(["0"] * 18), str(starttime)]
+                (root / "stat").write_text(
+                    f"{pid} (test) {' '.join(stat_fields)}\n",
+                    encoding="ascii",
+                )
+                for task in tasks:
+                    (root / "task" / task).mkdir()
+
+            add_process("100", uid, ("100", "101"), 1000)
+            add_process("200", uid, ("200",), 2000)
+            add_process("300", uid + 1, ("300", "301"), 3000)
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.os,
+                    "listdir",
+                    side_effect=AssertionError("proc scan must stream"),
+                ) as listdir,
+            ):
+                self.assertEqual(process_priority._current_uid_task_count(), 3)
+            listdir.assert_not_called()
+
+            real_open = os.open
+
+            def exited_open(
+                path: object,
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                if os.fspath(path) == "200" and dir_fd is not None:
+                    raise FileNotFoundError(errno.ENOENT, "exited")
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.os,
+                    "open",
+                    side_effect=exited_open,
+                ),
+            ):
+                self.assertEqual(process_priority._current_uid_task_count(), 2)
+
+            def denied_open(
+                path: object,
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                if os.fspath(path) == "200" and dir_fd is not None:
+                    raise PermissionError(errno.EACCES, "denied")
+                return real_open(path, flags, mode, dir_fd=dir_fd)
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.os,
+                    "open",
+                    side_effect=denied_open,
+                ),
+            ):
+                self.assertIsNone(process_priority._current_uid_task_count())
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority,
+                    "_LOCAL_MODEL_DIRECT_PROC_SCAN_MAX_PIDS",
+                    1,
+                ),
+            ):
+                self.assertIsNone(process_priority._current_uid_task_count())
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority,
+                    "_LOCAL_MODEL_DIRECT_PROC_SCAN_MAX_TASKS",
+                    1,
+                ),
+            ):
+                self.assertIsNone(process_priority._current_uid_task_count())
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.time,
+                    "monotonic",
+                    side_effect=(0.0, 3.0),
+                ),
+            ):
+                self.assertIsNone(process_priority._current_uid_task_count())
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.time,
+                    "monotonic",
+                    side_effect=(*([0.0] * 7), 3.0),
+                ),
+            ):
+                self.assertIsNone(process_priority._current_uid_task_count())
+
+            with mock.patch.object(process_priority, "_PROC_ROOT", proc_root):
+                (proc_root / "100" / "status").write_text(
+                    "Name:\ttest\nUid:\tnot-a-number\n",
+                    encoding="ascii",
+                )
+                self.assertIsNone(process_priority._current_uid_task_count())
+
+        with mock.patch.object(
+            process_priority.os,
+            "open",
+            side_effect=OSError(errno.EIO, "unreadable proc"),
+        ):
+            self.assertIsNone(process_priority._current_uid_task_count())
+
+    def test_current_uid_task_count_is_stable_across_real_proc_churn(self) -> None:
+        counts = [process_priority._current_uid_task_count() for _ in range(24)]
+        self.assertTrue(all(type(count) is int and count > 0 for count in counts))
+
+    def test_current_uid_task_count_rejects_pid_identity_change_without_reopen(self) -> None:
+        uid = os.getuid()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            proc_root = Path(temporary_directory)
+            process_root = proc_root / "100"
+            (process_root / "task" / "100").mkdir(parents=True)
+            (process_root / "status").write_text(
+                f"Name:\ttest\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n",
+                encoding="ascii",
+            )
+            (process_root / "stat").write_text(
+                f"100 (test) {' '.join(['S', *(['0'] * 18), '1000'])}\n",
+                encoding="ascii",
+            )
+            real_open = os.open
+            pid_open_fds: list[int] = []
+            identity_fds: list[int] = []
+
+            def tracked_open(
+                path: object,
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                opened_fd = real_open(path, flags, mode, dir_fd=dir_fd)
+                if os.fspath(path) == "100" and dir_fd is not None:
+                    pid_open_fds.append(opened_fd)
+                return opened_fd
+
+            def changing_identity(
+                process_fd: int,
+                expected_pid: int,
+            ) -> tuple[int, int, int, int]:
+                self.assertEqual(expected_pid, 100)
+                identity_fds.append(process_fd)
+                directory_stat = os.fstat(process_fd)
+                starttime = 1000 if len(identity_fds) == 1 else 1001
+                return (
+                    directory_stat.st_dev,
+                    directory_stat.st_ino,
+                    expected_pid,
+                    starttime,
+                )
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority,
+                    "_proc_process_identity",
+                    side_effect=changing_identity,
+                ),
+                mock.patch.object(
+                    process_priority.os,
+                    "open",
+                    side_effect=tracked_open,
+                ),
+            ):
+                self.assertIsNone(process_priority._current_uid_task_count())
+
+            self.assertEqual(len(pid_open_fds), 1)
+            self.assertEqual(identity_fds, [pid_open_fds[0], pid_open_fds[0]])
+
+    def test_current_uid_task_count_skips_only_proven_bound_exit(self) -> None:
+        uid = os.getuid()
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            proc_root = Path(temporary_directory)
+            for pid in ("100", "200"):
+                process_root = proc_root / pid
+                (process_root / "task" / pid).mkdir(parents=True)
+                (process_root / "status").write_text(
+                    f"Name:\ttest\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n",
+                    encoding="ascii",
+                )
+                (process_root / "stat").write_text(
+                    f"{pid} (test) {' '.join(['S', *(['0'] * 18), pid])}\n",
+                    encoding="ascii",
+                )
+
+            real_open = os.open
+            real_identity = process_priority._proc_process_identity
+            real_read = process_priority._read_proc_file_at
+            disappearing_identity: list[tuple[int, int] | None] = [None]
+            identity_calls = [0]
+
+            def tracked_open(
+                path: object,
+                flags: int,
+                mode: int = 0o777,
+                *,
+                dir_fd: int | None = None,
+            ) -> int:
+                opened_fd = real_open(path, flags, mode, dir_fd=dir_fd)
+                if os.fspath(path) == "200" and dir_fd is not None:
+                    descriptor_stat = os.fstat(opened_fd)
+                    disappearing_identity[0] = (
+                        descriptor_stat.st_dev,
+                        descriptor_stat.st_ino,
+                    )
+                return opened_fd
+
+            def vanished_identity(
+                process_fd: int,
+                expected_pid: int,
+            ) -> tuple[int, int, int, int] | None:
+                if expected_pid != 200:
+                    return real_identity(process_fd, expected_pid)
+                identity_calls[0] += 1
+                if identity_calls[0] == 1:
+                    return real_identity(process_fd, expected_pid)
+                raise ProcessLookupError(errno.ESRCH, "exited")
+
+            def missing_status(
+                directory_fd: int,
+                name: str,
+                maximum_bytes: int,
+            ) -> bytes:
+                descriptor_stat = os.fstat(directory_fd)
+                if (
+                    disappearing_identity[0]
+                    == (descriptor_stat.st_dev, descriptor_stat.st_ino)
+                    and name == "status"
+                ):
+                    raise FileNotFoundError(errno.ENOENT, "exited")
+                return real_read(directory_fd, name, maximum_bytes)
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.os,
+                    "open",
+                    side_effect=tracked_open,
+                ),
+                mock.patch.object(
+                    process_priority,
+                    "_proc_process_identity",
+                    side_effect=vanished_identity,
+                ),
+                mock.patch.object(
+                    process_priority,
+                    "_read_proc_file_at",
+                    side_effect=missing_status,
+                ),
+            ):
+                self.assertEqual(process_priority._current_uid_task_count(), 1)
+
+            disappearing_identity[0] = None
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.os,
+                    "open",
+                    side_effect=tracked_open,
+                ),
+                mock.patch.object(
+                    process_priority,
+                    "_read_proc_file_at",
+                    side_effect=missing_status,
+                ),
+            ):
+                self.assertIsNone(process_priority._current_uid_task_count())
+
+    def test_descendant_scan_binds_generation_and_thread_exit(self) -> None:
+        supervisor_pid = 100
+        root_pid = 200
+        child_pid = 300
+        root_start = 2000
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            proc_root = Path(temporary_directory)
+
+            def add_process(
+                pid: int,
+                starttime: int,
+                children: str,
+                *,
+                include_task: bool = True,
+            ) -> None:
+                process_root = proc_root / str(pid)
+                process_root.mkdir(parents=True)
+                stat_fields = ["S", *(["0"] * 18), str(starttime)]
+                (process_root / "stat").write_text(
+                    f"{pid} (test) {' '.join(stat_fields)}\n",
+                    encoding="ascii",
+                )
+                if include_task:
+                    thread_root = process_root / "task" / str(pid)
+                    thread_root.mkdir(parents=True)
+                    (thread_root / "stat").write_text(
+                        f"{pid} (test) {' '.join(stat_fields)}\n",
+                        encoding="ascii",
+                    )
+                    (thread_root / "children").write_text(
+                        children,
+                        encoding="ascii",
+                    )
+
+            add_process(supervisor_pid, 1000, f"{root_pid} ")
+            add_process(root_pid, root_start, f"{child_pid} ")
+            add_process(child_pid, 3000, "", include_task=False)
+            real_identity = process_priority._proc_process_identity
+            child_identity_calls = [0]
+
+            def replaced_child_identity(
+                process_fd: int,
+                expected_pid: int,
+            ) -> tuple[int, int, int, int] | None:
+                identity = real_identity(process_fd, expected_pid)
+                if expected_pid == child_pid and identity is not None:
+                    child_identity_calls[0] += 1
+                    if child_identity_calls[0] > 1:
+                        return (*identity[:3], identity[3] + 1)
+                return identity
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.os,
+                    "getpid",
+                    return_value=supervisor_pid,
+                ),
+                mock.patch.object(
+                    process_priority,
+                    "_proc_process_identity",
+                    side_effect=replaced_child_identity,
+                ),
+            ):
+                self.assertTrue(
+                    process_priority._local_model_direct_descendants_within_limit(
+                        root_pid,
+                        root_start,
+                        3,
+                        time.monotonic() + 2.0,
+                    )
+                )
+            self.assertEqual(child_identity_calls[0], 2)
+
+            root_thread = proc_root / str(root_pid) / "task" / str(root_pid)
+            (root_thread / "children").unlink()
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.os,
+                    "getpid",
+                    return_value=supervisor_pid,
+                ),
+            ):
+                self.assertFalse(
+                    process_priority._local_model_direct_descendants_within_limit(
+                        root_pid,
+                        root_start,
+                        3,
+                        time.monotonic() + 2.0,
+                    )
+                )
+
+            (root_thread / "children").write_text("", encoding="ascii")
+            exited_thread = root_thread.parent / "201"
+            exited_thread.mkdir()
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.os,
+                    "getpid",
+                    return_value=supervisor_pid,
+                ),
+            ):
+                self.assertTrue(
+                    process_priority._local_model_direct_descendants_within_limit(
+                        root_pid,
+                        root_start,
+                        3,
+                        time.monotonic() + 2.0,
+                    )
+                )
+
+            root_identity_calls = [0]
+            deadline_expired = [False]
+
+            def expire_after_root_identity(
+                process_fd: int,
+                expected_pid: int,
+            ) -> tuple[int, int, int, int] | None:
+                identity = real_identity(process_fd, expected_pid)
+                if expected_pid == root_pid:
+                    root_identity_calls[0] += 1
+                    if root_identity_calls[0] == 3:
+                        deadline_expired[0] = True
+                return identity
+
+            def monotonic() -> float:
+                return 2.0 if deadline_expired[0] else 0.0
+
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(
+                    process_priority.os,
+                    "getpid",
+                    return_value=supervisor_pid,
+                ),
+                mock.patch.object(
+                    process_priority,
+                    "_proc_process_identity",
+                    side_effect=expire_after_root_identity,
+                ),
+                mock.patch.object(
+                    process_priority.time,
+                    "monotonic",
+                    side_effect=monotonic,
+                ),
+            ):
+                self.assertFalse(
+                    process_priority._local_model_direct_descendants_within_limit(
+                        root_pid,
+                        root_start,
+                        3,
+                        10.0,
+                    )
+                )
+
+    def test_local_model_direct_security_recounts_headroom_after_setrlimit(self) -> None:
+        initial_tasks = 5000
+        nproc_hard = process_priority._LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT
+        nproc_limit = process_priority._local_model_direct_nproc_limit(
+            initial_tasks,
+            nproc_hard,
+        )
+        self.assertIsNotNone(nproc_limit)
+        raced_tasks = (
+            nproc_limit
+            - process_priority._LOCAL_MODEL_DIRECT_NPROC_MODEL_HEADROOM
+            + 1
+        )
+        parent_pid = 1234
+
+        def prctl(option: int, *arguments: object) -> int:
+            if option == process_priority._PR_GET_PDEATHSIG:
+                arguments[0]._obj.value = process_priority.signal.SIGKILL
+            return 0
+
+        with (
+            mock.patch.object(
+                process_priority,
+                "_local_model_direct_prctl",
+                side_effect=prctl,
+            ),
+            mock.patch.object(
+                process_priority.os,
+                "getppid",
+                return_value=parent_pid,
+            ),
+            mock.patch.object(
+                process_priority.resource,
+                "getrlimit",
+                return_value=(nproc_hard, nproc_hard),
+            ),
+            mock.patch.object(process_priority.resource, "setrlimit") as setrlimit,
+            mock.patch.object(
+                process_priority,
+                "_current_uid_task_count",
+                side_effect=(initial_tasks, raced_tasks),
+            ) as task_count,
+            mock.patch.object(
+                process_priority,
+                "_install_local_model_direct_seccomp",
+            ) as install_seccomp,
+            mock.patch.object(
+                process_priority.subprocess,
+                "Popen",
+                side_effect=AssertionError("recount must remain fork-free"),
+            ) as popen,
+        ):
+            self.assertFalse(
+                process_priority._arm_local_model_direct_target_security(
+                    parent_pid,
+                    4321,
+                    (4321,),
+                )
+            )
+
+        self.assertEqual(task_count.call_count, 2)
+        setrlimit.assert_any_call(
+            process_priority.resource.RLIMIT_NPROC,
+            (nproc_limit, nproc_limit),
+        )
+        install_seccomp.assert_not_called()
+        popen.assert_not_called()
+
+    def test_current_io_priority_direct_fails_closed_for_unsupported_or_invalid_abi(self) -> None:
+        libc = mock.Mock()
+        libc.syscall = mock.Mock()
+        with (
+            mock.patch.object(process_priority.sys, "platform", "linux"),
+            mock.patch.object(
+                process_priority.os,
+                "uname",
+                return_value=mock.Mock(machine="aarch64"),
+            ),
+            mock.patch.object(process_priority.ctypes, "CDLL", return_value=libc) as cdll,
+        ):
+            self.assertIsNone(process_priority._current_io_priority_direct())
+        cdll.assert_not_called()
+
+        with (
+            mock.patch.object(process_priority.sys, "platform", "linux"),
+            mock.patch.object(
+                process_priority.os,
+                "uname",
+                return_value=mock.Mock(machine="x86_64"),
+            ),
+            mock.patch.object(process_priority.ctypes, "CDLL", return_value=libc),
+        ):
+            for invalid in (-1, 4 << process_priority._IOPRIO_CLASS_SHIFT, 8):
+                with self.subTest(encoded=invalid):
+                    libc.syscall.return_value = invalid
+                    self.assertIsNone(process_priority._current_io_priority_direct())
+
+        with mock.patch.object(process_priority.ctypes, "CDLL") as cdll:
+            self.assertIsNone(
+                process_priority._current_io_priority_direct(
+                    absolute_deadline=time.monotonic() - 1.0,
+                )
+            )
+        cdll.assert_not_called()
 
     def test_ionice_output_reader_rejects_oversized_output(self) -> None:
         output = process_priority._read_ionice_output_bounded(
@@ -5412,7 +6128,7 @@ class ProcessPriorityTests(unittest.TestCase):
                 "which",
                 return_value="/usr/bin/systemd-run",
             ),
-            mock.patch.object(process_priority.subprocess, "Popen", return_value=process),
+            mock.patch.object(process_priority.subprocess, "Popen", return_value=process) as popen,
             mock.patch.object(
                 process_priority,
                 "_create_scope_exec_latch",
@@ -5450,6 +6166,7 @@ class ProcessPriorityTests(unittest.TestCase):
                 process_priority.ensure_soc_priority_scope(["status"])
 
         self.assertIsNone(forwarder.primary_signal)
+        popen.assert_called_once()
         self.assertEqual(
             forward_signal.call_args_list,
             [
@@ -5469,6 +6186,77 @@ class ProcessPriorityTests(unittest.TestCase):
         )
         self.assertEqual(monotonic.call_count, 4)
         execvpe.assert_not_called()
+
+    def test_soc_status_total_deadline_reaps_entered_child_without_retry(self) -> None:
+        self.assertGreater(
+            process_priority._SOC_STATUS_SCOPE_TOTAL_TIMEOUT_SECONDS,
+            process_priority._SCOPE_EXEC_ENTER_TIMEOUT_SECONDS
+            + 2 * state.STATE_LOCK_TIMEOUT_SECONDS,
+        )
+        for cleanup_failed in (False, True):
+            with self.subTest(cleanup_failed=cleanup_failed):
+                process = _fake_scope_process(None)
+                if cleanup_failed:
+                    process.wait.side_effect = subprocess.TimeoutExpired("status", 2)
+                else:
+                    process.wait.return_value = 1
+                nonce = "b" * 64
+                listener = _scope_latch_listener(_scope_latch_datagram(nonce))
+                selector = mock.Mock()
+                forwarder = process_priority._ScopeExecSignalForwarder()
+                clock_values = (0.0, 29.95, 30.0, 30.0, 30.0)
+                with (
+                    mock.patch.dict(
+                        process_priority.os.environ,
+                        {process_priority.SOC_PRIORITY_SCOPE_MARKER: ""},
+                        clear=False,
+                    ),
+                    mock.patch.object(
+                        process_priority.shutil, "which", return_value="/usr/bin/systemd-run"
+                    ),
+                    mock.patch.object(
+                        process_priority.subprocess, "Popen", return_value=process
+                    ) as popen,
+                    mock.patch.object(
+                        process_priority,
+                        "_create_scope_exec_latch",
+                        return_value=(listener, "a" * 32, nonce),
+                    ),
+                    mock.patch.object(
+                        process_priority,
+                        "_ScopeExecSignalForwarder",
+                        return_value=forwarder,
+                    ),
+                    mock.patch.object(
+                        process_priority.selectors, "DefaultSelector", return_value=selector
+                    ),
+                    mock.patch.object(
+                        process_priority.time, "monotonic", side_effect=clock_values
+                    ),
+                    mock.patch.object(process_priority.os, "getpgid", return_value=4242),
+                    mock.patch.object(
+                        process_priority, "_signal_scope_attempt_group", return_value=True
+                    ) as forward_signal,
+                    mock.patch.object(process_priority.os, "execvpe") as execvpe,
+                ):
+                    expected = (
+                        "SOC status command cleanup failed"
+                        if cleanup_failed
+                        else "SOC status command timed out"
+                    )
+                    with self.assertRaisesRegex(process_priority.PriorityScopeError, expected):
+                        process_priority.ensure_soc_priority_scope(
+                            ["status"], status_invocation=True
+                        )
+                popen.assert_called_once()
+                selector.close.assert_called_once_with()
+                self.assertEqual(selector.select.call_count, 1)
+                self.assertEqual(
+                    [call.args[1] for call in forward_signal.call_args_list],
+                    [signal.SIGTERM, signal.SIGKILL] if cleanup_failed else [signal.SIGTERM],
+                )
+                self.assertEqual(process.wait.call_count, 2 if cleanup_failed else 1)
+                execvpe.assert_not_called()
 
     def test_soc_scope_supervisor_propagates_signal_after_reaping(self) -> None:
         process = _fake_scope_process(-signal.SIGTERM)
@@ -6154,33 +6942,41 @@ class ProcessPriorityTests(unittest.TestCase):
             "print(json.dumps({'affinity': sorted(os.sched_getaffinity(0)), "
             "'allowed': sorted(p._scope_exec_allowed_cpus())}))"
         )
-        command = process_priority.build_soc_priority_scope_command(
-            [sys.executable, "-c", probe]
-        )
-        launcher = (
-            "import os; "
-            f"command={command!r}; "
-            f"os.sched_setaffinity(0, {{{min(current)}}}); "
-            "os.execv(command[0], command)"
-        )
         environment = os.environ.copy()
         environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1] / "src")
-        result = subprocess.run(  # nosec B603
-            [sys.executable, "-c", launcher],
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=environment,
-            timeout=5.0,
-            shell=False,
-        )
-        if result.returncode != 0 and _scope_manager_unavailable(result.stderr):
+        process: subprocess.Popen[bytes] | None = None
+        listener: socket.socket | None = None
+        try:
+            os.sched_setaffinity(0, {min(current)})
+            process, listener, nonce = _start_scope_with_internal_latch(
+                [sys.executable, "-c", probe],
+                environment=environment,
+            )
+        finally:
+            os.sched_setaffinity(0, current)
+        try:
+            outcome = process_priority._supervise_scope_attempt(
+                process,
+                listener,
+                nonce,
+            )
+            stdout, stderr = process.communicate(timeout=2.0)
+        finally:
+            listener.close()
+            if process.poll() is None:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=2.0)
+        if outcome.returncode != 0 and _scope_manager_unavailable(stderr):
             self.skipTest(
                 "user systemd scope unavailable: "
-                f"{result.stderr.decode(errors='replace')}"
+                f"{stderr.decode(errors='replace')}"
             )
-        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
-        payload = json.loads(result.stdout.decode("ascii"))
+        self.assertEqual(
+            outcome,
+            process_priority._ScopeExecAttemptOutcome(0, "entered", False),
+            stderr.decode(errors="replace"),
+        )
+        payload = json.loads(stdout.decode("ascii"))
         self.assertEqual(payload["affinity"], payload["allowed"])
         self.assertGreater(len(payload["allowed"]), 1)
 
@@ -6189,39 +6985,38 @@ class ProcessPriorityTests(unittest.TestCase):
         if not systemd_run:
             self.skipTest("trusted systemd-run is unavailable")
         probe = (
-            "import json, os, time; from pathlib import Path; "
+            "import json, os, signal; from pathlib import Path; "
             "relative=next(line[3:] for line in Path('/proc/self/cgroup').read_text().splitlines() "
             "if line.startswith('0::')); "
             "cgroup=Path('/sys/fs/cgroup') / relative.lstrip('/'); "
             "print(json.dumps({'pid': os.getpid(), 'pgid': os.getpgid(0), 'sid': os.getsid(0), "
             "'cgroup': str(cgroup), 'cpu': (cgroup / 'cpu.weight').read_text().strip(), "
             "'io': (cgroup / 'io.weight').read_text().strip()}), flush=True); "
-            "time.sleep(30)"
+            "os.kill(os.getpid(), signal.SIGTERM)"
         )
-        process = subprocess.Popen(  # nosec B603
-            process_priority.build_soc_priority_scope_command([sys.executable, "-c", probe]),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-            shell=False,
+        process, listener, nonce = _start_scope_with_internal_latch(
+            [sys.executable, "-c", probe]
         )
         payload: dict[str, object] | None = None
         try:
-            if process.stdout is None:
-                self.fail("scope probe stdout is unavailable")
-            ready, _, _ = select.select([process.stdout], [], [], 3.0)
-            if not ready:
-                stdout, stderr = process.communicate(timeout=3.0)
-                if process.returncode != 0 and _scope_manager_unavailable(stderr):
-                    self.skipTest(f"user systemd scope unavailable: {stderr.decode(errors='replace')}")
-                self.fail(f"scope probe produced no output: {stdout!r}")
-            line = process.stdout.readline()
-            if not line:
-                stdout, stderr = process.communicate(timeout=3.0)
-                if process.returncode != 0 and _scope_manager_unavailable(stderr):
-                    self.skipTest(f"user systemd scope unavailable: {stderr.decode(errors='replace')}")
-                self.fail(f"scope probe produced no output: {stdout!r}")
-            payload = json.loads(line.decode("utf-8"))
+            outcome = process_priority._supervise_scope_attempt(
+                process,
+                listener,
+                nonce,
+            )
+            stdout, stderr = process.communicate(timeout=3.0)
+            if outcome.returncode != -signal.SIGTERM and _scope_manager_unavailable(stderr):
+                self.skipTest(f"user systemd scope unavailable: {stderr.decode(errors='replace')}")
+            self.assertEqual(
+                outcome,
+                process_priority._ScopeExecAttemptOutcome(
+                    -signal.SIGTERM,
+                    "entered",
+                    False,
+                ),
+                stderr.decode(errors="replace"),
+            )
+            payload = json.loads(stdout.decode("utf-8"))
             self.assertEqual(payload["pid"], process.pid)
             self.assertEqual(payload["pgid"], process.pid)
             self.assertEqual(payload["sid"], process.pid)
@@ -6230,18 +7025,16 @@ class ProcessPriorityTests(unittest.TestCase):
             scope_path = Path(str(payload["cgroup"]))
             self.assertTrue(scope_path.is_absolute())
             self.assertTrue(str(scope_path).startswith("/sys/fs/cgroup/"))
-            os.killpg(process.pid, signal.SIGTERM)
-            stdout_tail, stderr = process.communicate(timeout=3.0)
             self.assertEqual(process.returncode, -signal.SIGTERM)
             self.assertEqual(stderr, b"")
-            self.assertEqual(stdout_tail, b"")
             cleanup_deadline = time.monotonic() + 2.0
             while scope_path.exists() and time.monotonic() < cleanup_deadline:
                 time.sleep(0.05)
             self.assertFalse(scope_path.exists())
         finally:
+            listener.close()
             if process.poll() is None:
-                process.kill()
+                os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=3.0)
 
     def test_real_soc_scope_keeps_detached_child_for_recorder_persistence(self) -> None:
@@ -6257,38 +7050,37 @@ class ProcessPriorityTests(unittest.TestCase):
             "os.setsid()\n"
             "time.sleep(30)\n"
         )
-        process = subprocess.Popen(  # nosec B603
-            process_priority.build_soc_priority_scope_command([sys.executable, "-c", probe]),
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            start_new_session=True,
-            shell=False,
+        process, listener, nonce = _start_scope_with_internal_latch(
+            [sys.executable, "-c", probe]
         )
         child_pid: int | None = None
         try:
+            outcome = process_priority._supervise_scope_attempt(
+                process,
+                listener,
+                nonce,
+            )
+            if outcome.returncode != 0:
+                stderr = b"" if process.stderr is None else process.stderr.read()
+                if _scope_manager_unavailable(stderr):
+                    self.skipTest(
+                        f"user systemd scope unavailable: {stderr.decode(errors='replace')}"
+                    )
+            self.assertEqual(
+                outcome,
+                process_priority._ScopeExecAttemptOutcome(0, "entered", False),
+            )
             if process.stdout is None:
                 self.fail("scope persistence probe stdout is unavailable")
-            ready, _, _ = select.select([process.stdout], [], [], 3.0)
-            if not ready:
-                stdout, stderr = process.communicate(timeout=3.0)
-                if process.returncode != 0 and _scope_manager_unavailable(stderr):
-                    self.skipTest(f"user systemd scope unavailable: {stderr.decode(errors='replace')}")
-                self.fail(f"scope persistence probe produced no output: {stdout!r}")
             line = process.stdout.readline()
             try:
                 payload = json.loads(line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
-                stdout, stderr = process.communicate(timeout=3.0)
-                if process.returncode != 0 and _scope_manager_unavailable(stderr):
-                    self.skipTest(
-                        f"user systemd scope unavailable: {stderr.decode(errors='replace')}"
-                    )
                 self.fail(
                     "scope persistence probe produced invalid output: "
-                    f"stdout={stdout!r}, stderr={stderr!r}"
+                    f"line={line!r}"
                 )
             child_pid = int(payload["child"])
-            process.wait(timeout=3.0)
             self.assertEqual(process.returncode, 0)
             os.kill(child_pid, 0)
             child_cgroup = Path(f"/proc/{child_pid}/cgroup").read_text(encoding="ascii")
@@ -6309,6 +7101,7 @@ class ProcessPriorityTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.kill(child_pid, 0)
         finally:
+            listener.close()
             if child_pid is not None:
                 try:
                     os.killpg(child_pid, signal.SIGTERM)

@@ -2249,6 +2249,347 @@ def _worker_environment() -> dict[str, str]:
     return {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LC_CTYPE": "C.UTF-8"}
 
 
+def _trusted_code_owner(owner: int, uid: int) -> bool:
+    return type(owner) is int and type(uid) is int and owner in (0, uid)
+
+
+def _package_bootstrap_snapshot() -> tuple[str, str]:
+    import ast
+    import hashlib
+    import json
+    from pathlib import Path
+
+    from .path_safety import assert_no_symlink_ancestors, open_file_without_following_symlinks
+
+    package = sys.modules.get("speed_of_cinnamon")
+    controller = sys.modules.get("speed_of_cinnamon.remote_http")
+    package_spec = getattr(package, "__spec__", None)
+    controller_spec = getattr(controller, "__spec__", None)
+    package_origin = getattr(package_spec, "origin", None)
+    controller_origin = getattr(controller_spec, "origin", None)
+    package_paths = getattr(package_spec, "submodule_search_locations", None)
+    if (
+        package is None
+        or controller is not sys.modules.get(__name__)
+        or getattr(package, "__name__", None) != "speed_of_cinnamon"
+        or getattr(controller, "__name__", None) != "speed_of_cinnamon.remote_http"
+        or getattr(package, "__package__", None) != "speed_of_cinnamon"
+        or getattr(controller, "__package__", None) != "speed_of_cinnamon"
+        or getattr(package_spec, "name", None) != "speed_of_cinnamon"
+        or getattr(controller_spec, "name", None) != "speed_of_cinnamon.remote_http"
+        or getattr(controller_spec, "submodule_search_locations", None) is not None
+        or not isinstance(package_origin, str)
+        or not isinstance(controller_origin, str)
+        or getattr(package, "__file__", None) != package_origin
+        or getattr(controller, "__file__", None) != controller_origin
+        or not isinstance(package_paths, (list, tuple))
+        or len(package_paths) != 1
+    ):
+        raise _SupervisorFailure("remote-worker-unavailable")
+
+    try:
+        root = Path(package_origin).parent.resolve(strict=True)
+        controller_path = Path(controller_origin).resolve(strict=True)
+        package_path = Path(package_origin).resolve(strict=True)
+        worker_path = root / "remote_http_worker.py"
+        if (
+            not root.is_absolute()
+            or str(package_path) != package_origin
+            or str(controller_path) != controller_origin
+            or package_path.parent != root
+            or controller_path.parent != root
+            or Path(package_paths[0]).resolve(strict=True) != root
+            or str(Path(package_paths[0])) != package_paths[0]
+            or worker_path.resolve(strict=True) != worker_path
+        ):
+            raise _SupervisorFailure("remote-worker-unavailable")
+        assert_no_symlink_ancestors(root, field_name="remote worker package root")
+
+        directory_rows: list[list[int | str]] = []
+        current = root
+        uid = os.getuid()
+        while True:
+            info = os.stat(current, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(info.st_mode)
+                or info.st_uid not in (0, uid)
+                or info.st_mode & 0o022
+            ):
+                raise _SupervisorFailure("remote-worker-unavailable")
+            directory_rows.append(
+                [
+                    str(current),
+                    info.st_dev,
+                    info.st_ino,
+                    info.st_mode,
+                    info.st_uid,
+                    info.st_gid,
+                ]
+            )
+            if current.parent == current:
+                break
+            current = current.parent
+
+        file_rows: dict[str, list[int | str]] = {}
+        init_source = b""
+        for name, path in (
+            ("init", package_path),
+            ("controller", controller_path),
+            ("worker", worker_path),
+        ):
+            fd = open_file_without_following_symlinks(
+                path, os.O_RDONLY, field_name=f"remote worker {name} source"
+            )
+            try:
+                info = os.fstat(fd)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or not _trusted_code_owner(info.st_uid, uid)
+                    or info.st_nlink != 1
+                    or info.st_mode & 0o022
+                ):
+                    raise _SupervisorFailure("remote-worker-unavailable")
+                data = bytearray()
+                while True:
+                    chunk = os.read(fd, 65536)
+                    if not chunk:
+                        break
+                    data.extend(chunk)
+                    if len(data) > 4 * 1024 * 1024:
+                        raise _SupervisorFailure("remote-worker-unavailable")
+                after = os.fstat(fd)
+                if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                ) or len(data) != after.st_size:
+                    raise _SupervisorFailure("remote-worker-unavailable")
+                file_rows[name] = [
+                    str(path),
+                    after.st_dev,
+                    after.st_ino,
+                    after.st_size,
+                    after.st_mode,
+                    after.st_uid,
+                    after.st_gid,
+                    after.st_nlink,
+                    after.st_mtime_ns,
+                    after.st_ctime_ns,
+                    hashlib.sha256(data).hexdigest(),
+                ]
+                if name == "init":
+                    init_source = bytes(data)
+            finally:
+                os.close(fd)
+
+        init_tree = ast.parse(init_source.decode("utf-8"), filename=str(package_path))
+        body = list(init_tree.body)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and type(body[0].value.value) is str
+        ):
+            body.pop(0)
+        if (
+            len(body) != 1
+            or not isinstance(body[0], ast.Assign)
+            or len(body[0].targets) != 1
+            or not isinstance(body[0].targets[0], ast.Name)
+            or body[0].targets[0].id != "__version__"
+            or not isinstance(body[0].value, ast.Constant)
+            or type(body[0].value.value) is not str
+        ):
+            raise _SupervisorFailure("remote-worker-unavailable")
+        snapshot = {
+            "controller": controller_origin,
+            "directories": directory_rows,
+            "files": file_rows,
+            "package": package_origin,
+            "root": str(root),
+            "version": 1,
+        }
+        return str(root), json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
+    except _SupervisorFailure:
+        raise
+    except (OSError, RuntimeError, TypeError, ValueError, UnicodeDecodeError, SyntaxError):
+        raise _SupervisorFailure("remote-worker-unavailable")
+
+
+_WORKER_BOOTSTRAP = r'''import ast, hashlib, importlib.util, json, os, stat, sys, types
+try:
+    root_arg, encoded = sys.argv[1:3]
+    snapshot = json.loads(encoded)
+    root = snapshot["root"]
+    if (type(root_arg) is not str or root_arg != root or not os.path.isabs(root)
+            or os.path.realpath(root) != root or snapshot["version"] != 1
+            or snapshot["package"] != root + "/__init__.py"
+            or snapshot["controller"] != root + "/remote_http.py"):
+        raise ValueError
+    def directories_match():
+        for row in snapshot["directories"]:
+            path, dev, ino, mode, uid, gid = row
+            current = os.stat(path, follow_symlinks=False)
+            if (
+                not stat.S_ISDIR(current.st_mode)
+                or current.st_mode & 0o022
+                or current.st_uid not in (0, os.getuid())
+                or (current.st_dev, current.st_ino, current.st_mode, current.st_uid, current.st_gid)
+                != (dev, ino, mode, uid, gid)
+            ):
+                return False
+            part = path
+            while True:
+                if stat.S_ISLNK(os.lstat(part).st_mode):
+                    return False
+                parent = os.path.dirname(part)
+                if parent == part:
+                    break
+                part = parent
+        return True
+    def source(name):
+        row = snapshot["files"][name]
+        path, dev, ino, size, mode, uid, gid, nlink, mtime_ns, ctime_ns, digest = row
+        expected = root + "/" + {"init": "__init__.py", "controller": "remote_http.py",
+                                 "worker": "remote_http_worker.py"}[name]
+        if path != expected or not directories_match():
+            raise ValueError
+        nofollow = getattr(os, "O_NOFOLLOW", None)
+        if type(nofollow) is not int or nofollow <= 0:
+            raise ValueError
+        fd = os.open(path, os.O_RDONLY | nofollow | getattr(os, "O_CLOEXEC", 0))
+        try:
+            before = os.fstat(fd)
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_uid not in (0, os.getuid())
+                or before.st_nlink != 1
+                or before.st_mode & 0o022
+                or (
+                    before.st_dev,
+                    before.st_ino,
+                    before.st_size,
+                    before.st_mode,
+                    before.st_uid,
+                    before.st_gid,
+                    before.st_nlink,
+                    before.st_mtime_ns,
+                    before.st_ctime_ns,
+                )
+                != (dev, ino, size, mode, uid, gid, nlink, mtime_ns, ctime_ns)
+            ):
+                raise ValueError
+            chunks = []
+            total = 0
+            while True:
+                chunk = os.read(fd, 65536)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > 4 * 1024 * 1024:
+                    raise ValueError
+                chunks.append(chunk)
+            data = b"".join(chunks)
+            after = os.fstat(fd)
+            if (
+                total != size
+                or (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns)
+                != (dev, ino, size, mtime_ns, ctime_ns)
+                or hashlib.sha256(data).hexdigest() != digest
+            ):
+                raise ValueError
+            return data
+        finally:
+            os.close(fd)
+    init_bytes = source("init")
+    tree = ast.parse(init_bytes.decode("utf-8"), filename=snapshot["package"])
+    body = list(tree.body)
+    if (
+        body
+        and isinstance(body[0], ast.Expr)
+        and isinstance(body[0].value, ast.Constant)
+        and type(body[0].value.value) is str
+    ):
+        body.pop(0)
+    if (len(body) != 1 or not isinstance(body[0], ast.Assign)
+            or len(body[0].targets) != 1 or not isinstance(body[0].targets[0], ast.Name)
+            or body[0].targets[0].id != "__version__"
+            or not isinstance(body[0].value, ast.Constant) or type(body[0].value.value) is not str):
+        raise ValueError
+    if any(name == "speed_of_cinnamon" or name.startswith("speed_of_cinnamon.")
+           for name in sys.modules):
+        raise ValueError
+    source("controller")
+    class SourceLoader:
+        def __init__(self, key): self.key = key
+        def create_module(self, spec): return None
+        def exec_module(self, module):
+            path = snapshot["files"][self.key][0]
+            code = compile(source(self.key), path, "exec", dont_inherit=True)
+            exec(code, module.__dict__)
+    package_spec = importlib.util.spec_from_file_location(
+        "speed_of_cinnamon", snapshot["package"], loader=SourceLoader("init"),
+        submodule_search_locations=[root])
+    if (package_spec is None or package_spec.name != "speed_of_cinnamon"
+            or os.path.realpath(package_spec.origin) != snapshot["package"]
+            or list(package_spec.submodule_search_locations or ()) != [root]):
+        raise ValueError
+    package = importlib.util.module_from_spec(package_spec)
+    if package.__file__ != snapshot["package"] or package.__package__ != "speed_of_cinnamon":
+        raise ValueError
+    sys.modules["speed_of_cinnamon"] = package
+    package_spec.loader.exec_module(package)
+    class LazyController(types.ModuleType):
+        def __getattr__(self, name):
+            if self.__dict__.get("_soc_loading"):
+                raise AttributeError(name)
+            self.__dict__["_soc_loading"] = True
+            self.__class__ = types.ModuleType
+            try:
+                controller_spec.loader.exec_module(self)
+            except BaseException:
+                os._exit(65)
+            finally:
+                self.__dict__.pop("_soc_loading", None)
+            return getattr(self, name)
+    controller_path = root + "/remote_http.py"
+    controller_spec = importlib.util.spec_from_file_location(
+        "speed_of_cinnamon.remote_http", controller_path,
+        loader=SourceLoader("controller"))
+    if (controller_spec is None or controller_spec.name != "speed_of_cinnamon.remote_http"
+            or os.path.realpath(controller_spec.origin) != snapshot["controller"]
+            or controller_spec.submodule_search_locations is not None):
+        raise ValueError
+    controller = importlib.util.module_from_spec(controller_spec)
+    if (controller.__name__ != "speed_of_cinnamon.remote_http"
+            or controller.__package__ != "speed_of_cinnamon"
+            or controller.__file__ != snapshot["controller"]
+            or controller.__spec__ is not controller_spec):
+        raise ValueError
+    controller.__class__ = LazyController
+    sys.modules[controller.__name__] = controller
+    package.remote_http = controller
+    worker_path = root + "/remote_http_worker.py"
+    worker_spec = importlib.util.spec_from_file_location(
+        "speed_of_cinnamon.remote_http_worker", worker_path, loader=SourceLoader("worker"))
+    if (worker_spec is None or worker_spec.name != "speed_of_cinnamon.remote_http_worker"
+            or os.path.realpath(worker_spec.origin) != worker_path):
+        raise ValueError
+    worker = importlib.util.module_from_spec(worker_spec)
+    worker.__name__ = "__main__"
+    worker.__package__ = "speed_of_cinnamon"
+    if worker.__file__ != worker_path or worker.__spec__.name != "speed_of_cinnamon.remote_http_worker":
+        raise ValueError
+    sys.argv[:] = [worker_path]
+    sys.modules["__main__"] = worker
+    worker_spec.loader.exec_module(worker)
+except BaseException:
+    os._exit(65)
+'''
+
+
 def _abandon_spawned_worker(
     process: subprocess.Popen[bytes],
     pidfd: int,
@@ -2339,8 +2680,17 @@ def _spawn_worker(request_frame: bytes) -> _WorkerHandle:
             control_child,
         ):
             os.set_inheritable(endpoint.fileno(), False)
+        bootstrap_root, bootstrap_snapshot = _package_bootstrap_snapshot()
         process = subprocess.Popen(
-            [interpreter, "-I", "-B", "-m", "speed_of_cinnamon.remote_http_worker"],
+            [
+                interpreter,
+                "-I",
+                "-B",
+                "-c",
+                _WORKER_BOOTSTRAP,
+                bootstrap_root,
+                bootstrap_snapshot,
+            ],
             stdin=control_child.fileno(),
             stdout=stdout_child.fileno(),
             stderr=stderr_child.fileno(),

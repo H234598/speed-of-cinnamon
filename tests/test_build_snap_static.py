@@ -1776,7 +1776,8 @@ class BuildSnapStaticTest(unittest.TestCase):
             rejected = self._run_snap_source_staging(bad_repo, bad_workspace)
 
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("symlink", rejected.stderr.lower())
+            self.assertIn("refusing to install unsafe Python source tree", rejected.stderr)
+            self.assertIn("outside-link", rejected.stderr)
             self.assertFalse((bad_workspace / ".snap-source").exists())
 
 

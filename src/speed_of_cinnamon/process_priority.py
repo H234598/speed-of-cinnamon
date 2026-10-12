@@ -208,6 +208,19 @@ _LOCAL_MODEL_DIRECT_SUPERVISOR_EXIT = 65
 _LOCAL_MODEL_DIRECT_CHILDREN_MAX_BYTES = 1024 * 1024
 _LOCAL_MODEL_DIRECT_MAX_CHILDREN = 4096
 _LOCAL_MODEL_DIRECT_NPROC_LIMIT = _LOCAL_MODEL_DIRECT_MAX_CHILDREN
+# RLIMIT_NPROC is UID-wide. The absolute 8192 cap and the supervisor's 4096
+# descendant cap are the security ceilings. A durable per-model 512-task cap
+# would require a cgroup pids.max boundary; this snapshot only reserves room.
+_LOCAL_MODEL_DIRECT_NPROC_MODEL_HEADROOM = 512
+_LOCAL_MODEL_DIRECT_NPROC_RACE_MARGIN = 64
+_LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT = (
+    _LOCAL_MODEL_DIRECT_NPROC_LIMIT + _LOCAL_MODEL_DIRECT_MAX_CHILDREN
+)
+_LOCAL_MODEL_DIRECT_PROC_SCAN_MAX_PIDS = 32768
+_LOCAL_MODEL_DIRECT_PROC_SCAN_MAX_TASKS = _LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT
+_LOCAL_MODEL_DIRECT_PROC_SCAN_SECONDS = 2.0
+_LOCAL_MODEL_DIRECT_DESCENDANT_SCAN_SECONDS = 1.0
+_PROC_EXIT_ERRNOS = frozenset((errno.ENOENT, errno.ESRCH))
 _LOCAL_MODEL_DIRECT_CLEANUP_GRACE_SECONDS = 0.25
 _LOCAL_MODEL_DIRECT_CLEANUP_TIMEOUT_SECONDS = 2.0
 _PR_SET_PDEATHSIG = 1
@@ -231,6 +244,7 @@ _X86_64_PRCTL = 157
 _X86_64_TKILL = 200
 _X86_64_TGKILL = 234
 _X86_64_IOPRIO_SET = 251
+_X86_64_IOPRIO_GET = 252
 _X86_64_RT_TGSIGQUEUEINFO = 297
 _X86_64_PRLIMIT64 = 302
 _X86_64_PIDFD_SEND_SIGNAL = 424
@@ -275,6 +289,11 @@ _IO_CLASS_VALUES = {
     "best-effort": "2",
     "idle": "3",
 }
+_IOPRIO_WHO_PROCESS = 1
+_IOPRIO_CLASS_SHIFT = 13
+_IOPRIO_DATA_MASK = (1 << _IOPRIO_CLASS_SHIFT) - 1
+_IOPRIO_MAX_CLASS = 3
+_IOPRIO_MAX_DATA = 7
 _IONICE_ENV = {"LANG": "C", "LC_ALL": "C"}
 _LOCAL_MODEL_DIRECT_FORBIDDEN_ENV_KEYS = frozenset(
     {
@@ -1023,13 +1042,16 @@ def _scope_exec_file_identity(
         or os.path.realpath(path) != path
     ):
         return None
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    if type(nofollow) is not int or nofollow <= 0:
+        return None
     descriptor = -1
     try:
         descriptor = os.open(
             path,
             os.O_RDONLY
             | getattr(os, "O_CLOEXEC", 0)
-            | getattr(os, "O_NOFOLLOW", 0),
+            | nofollow,
         )
         before = os.fstat(descriptor)
         path_stat = os.stat(path, follow_symlinks=False)
@@ -1231,8 +1253,8 @@ def _validated_scope_exec_target(argv: Sequence[str]) -> list[str] | None:
     if not command or len(command) > MAX_SCOPE_EXEC_ARGUMENTS:
         return None
     total_bytes = 0
-    for item in command:
-        if not isinstance(item, str) or not item or "\x00" in item:
+    for index, item in enumerate(command):
+        if not isinstance(item, str) or (index == 0 and not item) or "\x00" in item:
             return None
         try:
             encoded = item.encode("utf-8")
@@ -4694,7 +4716,9 @@ def _run_local_model_direct_exec_wrapper(
     ):
         raise PriorityScopeError(_LOCAL_MODEL_DIRECT_EXEC_FAILURE)
     cpu_priority = _current_cpu_priority()
-    io_priority = _current_io_priority(absolute_deadline=absolute_deadline)
+    io_priority = _current_io_priority_direct(
+        absolute_deadline=absolute_deadline
+    )
     if (
         type(cpu_priority) is not int
         or cpu_priority < LOCAL_MODEL_CPU_NICE
@@ -4990,6 +5014,232 @@ def _install_local_model_direct_seccomp(
     )
 
 
+def _local_model_direct_nproc_limit(
+    current_uid_tasks: int | None,
+    inherited_hard_limit: int,
+) -> int | None:
+    if (
+        type(current_uid_tasks) is not int
+        or current_uid_tasks <= 0
+        or type(inherited_hard_limit) is not int
+    ):
+        return None
+    reserve = (
+        _LOCAL_MODEL_DIRECT_NPROC_MODEL_HEADROOM
+        + _LOCAL_MODEL_DIRECT_NPROC_RACE_MARGIN
+    )
+    if current_uid_tasks > _LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT - reserve:
+        return None
+    desired = max(
+        _LOCAL_MODEL_DIRECT_NPROC_LIMIT,
+        current_uid_tasks + reserve,
+    )
+    if desired > _LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT:
+        return None
+    if (
+        inherited_hard_limit != resource.RLIM_INFINITY
+        and (inherited_hard_limit <= 0 or desired > inherited_hard_limit)
+    ):
+        return None
+    return desired
+
+
+def _read_proc_file_at(
+    directory_fd: int,
+    name: str,
+    maximum_bytes: int,
+) -> bytes:
+    file_fd = os.open(
+        name,
+        os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC,
+        dir_fd=directory_fd,
+    )
+    try:
+        contents = bytearray()
+        while len(contents) <= maximum_bytes:
+            chunk = os.read(file_fd, maximum_bytes + 1 - len(contents))
+            if not chunk:
+                return bytes(contents)
+            contents.extend(chunk)
+        raise ValueError("proc file exceeds bound")
+    finally:
+        os.close(file_fd)
+
+
+def _proc_process_identity(
+    process_fd: int,
+    expected_pid: int,
+) -> tuple[int, int, int, int] | None:
+    directory_stat = os.fstat(process_fd)
+    process_stat = _read_proc_file_at(process_fd, "stat", 4096)
+    expected_prefix = f"{expected_pid} (".encode("ascii")
+    closing_parenthesis = process_stat.rfind(b")")
+    if (
+        not process_stat.startswith(expected_prefix)
+        or closing_parenthesis < len(expected_prefix)
+        or process_stat[closing_parenthesis + 1 : closing_parenthesis + 2] != b" "
+    ):
+        return None
+    fields = process_stat[closing_parenthesis + 2 :].split()
+    if len(fields) < 20 or not fields[19].isascii() or not fields[19].isdigit():
+        return None
+    return (
+        directory_stat.st_dev,
+        directory_stat.st_ino,
+        expected_pid,
+        int(fields[19], 10),
+    )
+
+
+def _bound_proc_process_has_exited(
+    process_fd: int,
+    expected_pid: int,
+) -> bool:
+    try:
+        _proc_process_identity(process_fd, expected_pid)
+    except OSError as error:
+        if error.errno in _PROC_EXIT_ERRNOS:
+            return True
+        raise
+    return False
+
+
+def _current_uid_task_count() -> int | None:
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        scan_deadline = (
+            time.monotonic() + _LOCAL_MODEL_DIRECT_PROC_SCAN_SECONDS
+        )
+        directory_flags = (
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+        )
+        current_uid = os.getuid()
+        proc_fd = os.open(os.fspath(_PROC_ROOT), directory_flags)
+        try:
+            total = 0
+            scanned_pids = 0
+            scanned_tasks = 0
+            with os.scandir(proc_fd) as processes:
+                for process in processes:
+                    process_name = process.name
+                    if not process_name.isascii() or not process_name.isdecimal():
+                        continue
+                    if time.monotonic() >= scan_deadline:
+                        return None
+                    scanned_pids += 1
+                    if scanned_pids > _LOCAL_MODEL_DIRECT_PROC_SCAN_MAX_PIDS:
+                        return None
+                    process_pid = int(process_name, 10)
+                    try:
+                        process_fd = os.open(
+                            process_name,
+                            directory_flags,
+                            dir_fd=proc_fd,
+                        )
+                    except OSError as error:
+                        if error.errno in _PROC_EXIT_ERRNOS:
+                            continue
+                        return None
+                    process_exited = False
+                    try:
+                        try:
+                            identity_before = _proc_process_identity(
+                                process_fd,
+                                process_pid,
+                            )
+                            if identity_before is None:
+                                return None
+                            status = _read_proc_file_at(
+                                process_fd,
+                                "status",
+                                4096,
+                            )
+                            uid_lines = [
+                                line
+                                for line in status.splitlines()
+                                if line.startswith(b"Uid:")
+                            ]
+                            if len(uid_lines) != 1:
+                                return None
+                            uid_fields = uid_lines[0].split()
+                            if (
+                                len(uid_fields) != 5
+                                or uid_fields[0] != b"Uid:"
+                                or any(
+                                    not field.isascii() or not field.isdigit()
+                                    for field in uid_fields[1:]
+                                )
+                            ):
+                                return None
+                            process_tasks = 0
+                            if int(uid_fields[1], 10) == current_uid:
+                                task_fd = os.open(
+                                    "task",
+                                    directory_flags,
+                                    dir_fd=process_fd,
+                                )
+                                try:
+                                    with os.scandir(task_fd) as tasks:
+                                        for task in tasks:
+                                            if time.monotonic() >= scan_deadline:
+                                                return None
+                                            task_name = task.name
+                                            if (
+                                                not task_name.isascii()
+                                                or not task_name.isdecimal()
+                                            ):
+                                                return None
+                                            scanned_tasks += 1
+                                            if (
+                                                scanned_tasks
+                                                > _LOCAL_MODEL_DIRECT_PROC_SCAN_MAX_TASKS
+                                            ):
+                                                return None
+                                            process_tasks += 1
+                                finally:
+                                    os.close(task_fd)
+                                if process_tasks == 0:
+                                    return None
+                            identity_after = _proc_process_identity(
+                                process_fd,
+                                process_pid,
+                            )
+                            if identity_before != identity_after:
+                                return None
+                        except OSError as error:
+                            if (
+                                error.errno not in _PROC_EXIT_ERRNOS
+                                or not _bound_proc_process_has_exited(
+                                    process_fd,
+                                    process_pid,
+                                )
+                            ):
+                                return None
+                            process_exited = True
+                    finally:
+                        os.close(process_fd)
+                    if process_exited:
+                        continue
+                    total += process_tasks
+                    if total > _LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT:
+                        return None
+            if time.monotonic() >= scan_deadline:
+                return None
+            return total if total > 0 else None
+        finally:
+            os.close(proc_fd)
+    except (
+        AttributeError,
+        OSError,
+        MemoryError,
+        OverflowError,
+        TypeError,
+        ValueError,
+    ):
+        return None
+
+
 def _arm_local_model_direct_target_security(
     parent_pid: int,
     controller_pid: int,
@@ -5013,14 +5263,20 @@ def _arm_local_model_direct_target_security(
         resource.setrlimit(resource.RLIMIT_NICE, (0, 0))
         resource.setrlimit(resource.RLIMIT_RTPRIO, (0, 0))
         _, nproc_hard = resource.getrlimit(resource.RLIMIT_NPROC)
-        nproc_limit = (
-            _LOCAL_MODEL_DIRECT_NPROC_LIMIT
-            if nproc_hard == resource.RLIM_INFINITY
-            else min(nproc_hard, _LOCAL_MODEL_DIRECT_NPROC_LIMIT)
+        nproc_limit = _local_model_direct_nproc_limit(
+            _current_uid_task_count(),
+            nproc_hard,
         )
-        if type(nproc_limit) is not int or nproc_limit <= 0:
+        if nproc_limit is None:
             return False
         resource.setrlimit(resource.RLIMIT_NPROC, (nproc_limit, nproc_limit))
+        recounted_uid_tasks = _current_uid_task_count()
+        if (
+            type(recounted_uid_tasks) is not int
+            or nproc_limit - recounted_uid_tasks
+            < _LOCAL_MODEL_DIRECT_NPROC_MODEL_HEADROOM
+        ):
+            return False
         if (
             resource.getrlimit(resource.RLIMIT_NICE) != (0, 0)
             or resource.getrlimit(resource.RLIMIT_RTPRIO) != (0, 0)
@@ -5068,6 +5324,243 @@ def _local_model_direct_children_batch() -> tuple[set[int], bool] | None:
         children.append(process_id)
     complete = len(children) <= _LOCAL_MODEL_DIRECT_MAX_CHILDREN
     return set(children[:_LOCAL_MODEL_DIRECT_MAX_CHILDREN]), complete
+
+
+def _capture_local_model_direct_proc_identity(
+    proc_fd: int,
+    process_pid: int,
+    directory_flags: int,
+) -> tuple[int, int, int, int] | None:
+    try:
+        process_fd = os.open(
+            str(process_pid),
+            directory_flags,
+            dir_fd=proc_fd,
+        )
+    except OSError as error:
+        if error.errno in _PROC_EXIT_ERRNOS:
+            return None
+        raise
+    try:
+        try:
+            identity = _proc_process_identity(process_fd, process_pid)
+        except OSError as error:
+            if (
+                error.errno in _PROC_EXIT_ERRNOS
+                and _bound_proc_process_has_exited(process_fd, process_pid)
+            ):
+                return None
+            raise
+        if identity is None:
+            raise ValueError("invalid proc identity")
+        return identity
+    finally:
+        os.close(process_fd)
+
+
+def _local_model_direct_descendants_within_limit(
+    root_pid: int,
+    root_start: int,
+    descendant_limit: int,
+    absolute_deadline: float,
+) -> bool:
+    if (
+        not _valid_process_id(root_pid)
+        or type(root_start) is not int
+        or root_start <= 0
+        or type(descendant_limit) is not int
+        or not 1 <= descendant_limit <= _LOCAL_MODEL_DIRECT_MAX_CHILDREN
+        or type(absolute_deadline) is not float
+        or not math.isfinite(absolute_deadline)
+    ):
+        return False
+    supervisor_pid = os.getpid()
+    scan_deadline = min(
+        absolute_deadline,
+        time.monotonic() + _LOCAL_MODEL_DIRECT_DESCENDANT_SCAN_SECONDS,
+    )
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
+    proc_fd = -1
+    try:
+        proc_fd = os.open(os.fspath(_PROC_ROOT), directory_flags)
+        supervisor_identity = _capture_local_model_direct_proc_identity(
+            proc_fd,
+            supervisor_pid,
+            directory_flags,
+        )
+        if supervisor_identity is None:
+            return False
+        pending = [supervisor_identity]
+        known_identities = {supervisor_identity}
+        scanned_tasks = 0
+        root_seen = False
+        children_bytes_limit = min(
+            _LOCAL_MODEL_DIRECT_CHILDREN_MAX_BYTES,
+            (descendant_limit + 2) * 16,
+        )
+        while pending:
+            if time.monotonic() >= scan_deadline:
+                return False
+            expected_identity = pending.pop()
+            process_pid = expected_identity[2]
+            try:
+                process_fd = os.open(
+                    str(process_pid),
+                    directory_flags,
+                    dir_fd=proc_fd,
+                )
+            except OSError as error:
+                if error.errno in _PROC_EXIT_ERRNOS and process_pid != supervisor_pid:
+                    continue
+                return False
+            process_exited = False
+            try:
+                try:
+                    identity_before = _proc_process_identity(
+                        process_fd,
+                        process_pid,
+                    )
+                    if identity_before is None:
+                        return False
+                    if identity_before != expected_identity:
+                        if process_pid in {supervisor_pid, root_pid}:
+                            return False
+                        continue
+                    if process_pid == root_pid:
+                        if identity_before[3] != root_start:
+                            return False
+                        root_seen = True
+                    task_fd = os.open(
+                        "task",
+                        directory_flags,
+                        dir_fd=process_fd,
+                    )
+                    try:
+                        with os.scandir(task_fd) as tasks:
+                            for task in tasks:
+                                if time.monotonic() >= scan_deadline:
+                                    return False
+                                task_name = task.name
+                                if (
+                                    not task_name.isascii()
+                                    or not task_name.isdecimal()
+                                ):
+                                    return False
+                                scanned_tasks += 1
+                                if (
+                                    scanned_tasks
+                                    > _LOCAL_MODEL_DIRECT_PROC_SCAN_MAX_TASKS
+                                ):
+                                    return False
+                                try:
+                                    thread_fd = os.open(
+                                        task_name,
+                                        directory_flags,
+                                        dir_fd=task_fd,
+                                    )
+                                except OSError as error:
+                                    if error.errno in _PROC_EXIT_ERRNOS:
+                                        continue
+                                    return False
+                                try:
+                                    try:
+                                        child_data = _read_proc_file_at(
+                                            thread_fd,
+                                            "children",
+                                            children_bytes_limit,
+                                        )
+                                    except OSError as error:
+                                        if (
+                                            error.errno in _PROC_EXIT_ERRNOS
+                                            and _bound_proc_process_has_exited(
+                                                thread_fd,
+                                                int(task_name, 10),
+                                            )
+                                        ):
+                                            continue
+                                        return False
+                                finally:
+                                    os.close(thread_fd)
+                                child_fields = child_data.split()
+                                if len(child_fields) > descendant_limit + 1:
+                                    return False
+                                for field in child_fields:
+                                    if (
+                                        not field.isascii()
+                                        or not field.isdigit()
+                                        or (
+                                            len(field) > 1
+                                            and field.startswith(b"0")
+                                        )
+                                    ):
+                                        return False
+                                    child_pid = int(field, 10)
+                                    if (
+                                        not _valid_process_id(child_pid)
+                                        or child_pid == supervisor_pid
+                                    ):
+                                        return False
+                                    if time.monotonic() >= scan_deadline:
+                                        return False
+                                    child_identity = (
+                                        _capture_local_model_direct_proc_identity(
+                                            proc_fd,
+                                            child_pid,
+                                            directory_flags,
+                                        )
+                                    )
+                                    if child_identity is None:
+                                        continue
+                                    if child_identity not in known_identities:
+                                        known_identities.add(child_identity)
+                                        if (
+                                            len(known_identities) - 1
+                                            > descendant_limit
+                                        ):
+                                            return False
+                                        pending.append(child_identity)
+                    finally:
+                        os.close(task_fd)
+                    identity_after = _proc_process_identity(
+                        process_fd,
+                        process_pid,
+                    )
+                    if expected_identity != identity_after:
+                        return False
+                except OSError as error:
+                    if (
+                        error.errno not in _PROC_EXIT_ERRNOS
+                        or not _bound_proc_process_has_exited(
+                            process_fd,
+                            process_pid,
+                        )
+                    ):
+                        return False
+                    process_exited = True
+            finally:
+                os.close(process_fd)
+            if process_exited:
+                if process_pid in {supervisor_pid, root_pid}:
+                    return False
+                continue
+        if not root_seen or time.monotonic() >= scan_deadline:
+            return False
+        return True
+    except (
+        AttributeError,
+        OSError,
+        MemoryError,
+        OverflowError,
+        TypeError,
+        ValueError,
+    ):
+        return False
+    finally:
+        if proc_fd >= 0:
+            try:
+                os.close(proc_fd)
+            except OSError:
+                pass
 
 
 def _local_model_direct_children() -> set[int] | None:
@@ -5521,6 +6014,18 @@ def _run_local_model_direct_supervisor(argv: Sequence[str]) -> None:
                     if process_id == root_pid:
                         root_wait_status = wait_status
                         outcome = _LOCAL_MODEL_DIRECT_OUTCOME_TARGET
+                        break
+                    if not _local_model_direct_descendants_within_limit(
+                        root_pid,
+                        root_start,
+                        _LOCAL_MODEL_DIRECT_MAX_CHILDREN,
+                        absolute_deadline,
+                    ):
+                        outcome = (
+                            _LOCAL_MODEL_DIRECT_OUTCOME_DEADLINE
+                            if time.monotonic() >= absolute_deadline
+                            else _LOCAL_MODEL_DIRECT_OUTCOME_FAILURE
+                        )
                         break
                     time.sleep(_SCOPE_EXEC_POLL_SECONDS)
     except TimeoutError:
@@ -7502,6 +8007,50 @@ def _prepare_local_model_ready_ack_gate(
     if primary is not None or gate is None:
         raise LocalModelPriorityError(_LOCAL_MODEL_GATE_CAPABILITY) from None
     return gate
+
+
+def _current_io_priority_direct(
+    *,
+    absolute_deadline: float | None = None,
+) -> tuple[str, int] | None:
+    if absolute_deadline is not None and (
+        type(absolute_deadline) is not float
+        or not math.isfinite(absolute_deadline)
+        or time.monotonic() >= absolute_deadline
+    ):
+        return None
+    try:
+        supported_abi = bool(
+            sys.platform == "linux"
+            and os.uname().machine == "x86_64"
+            and sys.byteorder == "little"
+            and ctypes.sizeof(ctypes.c_void_p) == 8
+        )
+    except (AttributeError, OSError, TypeError, ValueError):
+        return None
+    if not supported_abi:
+        return None
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        syscall = libc.syscall
+        syscall.restype = ctypes.c_long
+        ctypes.set_errno(0)
+        encoded = syscall(
+            _X86_64_IOPRIO_GET,
+            _IOPRIO_WHO_PROCESS,
+            0,
+        )
+    except (AttributeError, OSError, OverflowError, TypeError, ValueError):
+        return None
+    if type(encoded) is not int or encoded < 0:
+        return None
+    io_class = encoded >> _IOPRIO_CLASS_SHIFT
+    priority = encoded & _IOPRIO_DATA_MASK
+    if io_class > _IOPRIO_MAX_CLASS or priority > _IOPRIO_MAX_DATA:
+        return None
+    if absolute_deadline is not None and time.monotonic() >= absolute_deadline:
+        return None
+    return str(io_class), priority
 
 
 def _current_io_priority(

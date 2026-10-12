@@ -2321,10 +2321,11 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             handle = remote_http._spawn_worker(b"request")
         self.assertEqual(handle.pid, 1234)
         args, kwargs = popen.call_args
-        self.assertEqual(
-            args[0],
-            [sys.executable, "-I", "-B", "-m", "speed_of_cinnamon.remote_http_worker"],
-        )
+        self.assertEqual(args[0][:5], [sys.executable, "-I", "-B", "-c", remote_http._WORKER_BOOTSTRAP])
+        self.assertEqual(len(args[0]), 7)
+        self.assertTrue(Path(args[0][5]).is_absolute())
+        self.assertNotIn("dummy-api-key", args[0][6])
+        self.assertEqual(json.loads(args[0][6])["root"], args[0][5])
         self.assertIsInstance(kwargs["stdin"], int)
         self.assertIsInstance(process.stdin, socket.socket)
         self.assertIsInstance(process.stdout, socket.socket)
@@ -3261,7 +3262,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             mock.patch.object(
                 remote_http_worker,
                 "_read_response_text",
-                side_effect=remote_http_worker.PostProcessError("remote response is too large"),
+                side_effect=remote_http_worker.PostProcessError(
+                    "remote response is too large (max 1024 bytes)"
+                ),
             ),
         ):
             with self.assertRaises(remote_http_worker._WorkerFailure) as context:
@@ -6189,6 +6192,526 @@ if not worker._RUNTIME_LOADED:
                     check=False,
                 )
                 self.assertEqual(completed.returncode, 0)
+
+    def _bootstrap_fixture(
+        self,
+        root: Path,
+        *,
+        controller_source: str = "# controller source\n",
+        worker_source: str | None = None,
+    ) -> tuple[dict[str, object], Path]:
+        import hashlib
+        import os
+
+        root.mkdir(mode=0o700)
+        (root / "__init__.py").write_text(
+            '"""Bootstrap metadata."""\n__version__ = "9.8.7"\n', encoding="utf-8"
+        )
+        (root / "remote_http.py").write_text(controller_source, encoding="utf-8")
+        worker = root / "remote_http_worker.py"
+        worker.write_text(
+            worker_source
+            or "import os, ssl\nos._exit(23 if not getattr(ssl, 'SHADOW', False) else 24)\n",
+            encoding="utf-8",
+        )
+        cache = root / "__pycache__"
+        cache.mkdir(mode=0o700)
+        (cache / "remote_http_worker.cpython-314.pyc").write_bytes(b"not executable source")
+
+        directories: list[list[object]] = []
+        current = root.resolve(strict=True)
+        while True:
+            info = current.stat(follow_symlinks=False)
+            directories.append(
+                [str(current), info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid]
+            )
+            if current.parent == current:
+                break
+            current = current.parent
+        files: dict[str, list[object]] = {}
+        for name, path in (
+            ("init", root / "__init__.py"),
+            ("controller", root / "remote_http.py"),
+            ("worker", worker),
+        ):
+            data = path.read_bytes()
+            info = path.stat(follow_symlinks=False)
+            files[name] = [
+                str(path),
+                info.st_dev,
+                info.st_ino,
+                info.st_size,
+                info.st_mode,
+                info.st_uid,
+                info.st_gid,
+                info.st_nlink,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+                hashlib.sha256(data).hexdigest(),
+            ]
+        snapshot: dict[str, object] = {
+            "controller": str(root / "remote_http.py"),
+            "directories": directories,
+            "files": files,
+            "package": str(root / "__init__.py"),
+            "root": str(root.resolve(strict=True)),
+            "version": 1,
+        }
+        return snapshot, worker
+
+    def _run_bootstrap_fixture(
+        self,
+        root: Path,
+        snapshot: dict[str, object],
+        *,
+        root_arg: str | None = None,
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> subprocess.CompletedProcess[bytes]:
+        import json
+
+        child_env = {
+            "LANG": "C.UTF-8",
+            "LC_ALL": "C.UTF-8",
+            "LC_CTYPE": "C.UTF-8",
+        }
+        if env:
+            child_env.update(env)
+        return subprocess.run(
+            [
+                "/usr/bin/python3.14",
+                "-I",
+                "-B",
+                "-c",
+                remote_http._WORKER_BOOTSTRAP,
+                root_arg or str(root),
+                json.dumps(snapshot, sort_keys=True, separators=(",", ":")),
+            ],
+            cwd=cwd or root.parent,
+            env=child_env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=10,
+            check=False,
+        )
+
+    def test_bootstrap_rejects_invalid_nofollow_before_source_open(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            root = Path(temporary) / "speed_of_cinnamon"
+            snapshot, _worker = self._bootstrap_fixture(root)
+            allowed = self._run_bootstrap_fixture(root, snapshot)
+            self.assertEqual(allowed.returncode, 23)
+            for label, mutation in (
+                ("missing", "del os.O_NOFOLLOW"),
+                ("zero", "os.O_NOFOLLOW = 0"),
+                ("negative", "os.O_NOFOLLOW = -1"),
+                ("boolean", "os.O_NOFOLLOW = True"),
+                ("string", "os.O_NOFOLLOW = 'invalid'"),
+            ):
+                with self.subTest(flag=label):
+                    prelude = (
+                        "import ast, hashlib, importlib.util, json, os, stat, sys, types\n"
+                        f"{mutation}\n"
+                        "def forbidden_open(*_args, **_kwargs):\n"
+                        "    os._exit(91)\n"
+                        "os.open = forbidden_open\n"
+                    )
+                    completed = subprocess.run(
+                        [
+                            "/usr/bin/python3.14",
+                            "-I",
+                            "-B",
+                            "-c",
+                            prelude + remote_http._WORKER_BOOTSTRAP,
+                            str(root),
+                            json.dumps(snapshot, sort_keys=True, separators=(",", ":")),
+                        ],
+                        cwd=root.parent,
+                        env={"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LC_CTYPE": "C.UTF-8"},
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(completed.returncode, 65)
+                    self.assertEqual(completed.stdout, b"")
+                    self.assertEqual(completed.stderr, b"")
+
+    def test_source_only_bootstrap_accepts_version_update_and_ignores_pyc_cwd_and_pythonpath(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            base = Path(temporary)
+            root = base / "speed_of_cinnamon"
+            snapshot, _worker = self._bootstrap_fixture(root)
+            attacker = base / "ambient"
+            attacker.mkdir(mode=0o700)
+            (attacker / "ssl.py").write_text("SHADOW = True\n", encoding="utf-8")
+            completed = self._run_bootstrap_fixture(
+                root,
+                snapshot,
+                cwd=attacker,
+                env={"PYTHONPATH": str(attacker)},
+            )
+        self.assertEqual(completed.returncode, 23)
+        self.assertEqual(completed.stdout, b"")
+        self.assertEqual(completed.stderr, b"")
+
+    def test_bootstrap_rejects_root_and_source_snapshot_mismatches(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            base = Path(temporary)
+            root = base / "speed_of_cinnamon"
+            snapshot, worker = self._bootstrap_fixture(root)
+            other_root = base / "other"
+            other_root.mkdir(mode=0o700)
+            wrong_root = self._run_bootstrap_fixture(root, snapshot, root_arg=str(other_root))
+            worker.write_text("import os\nos._exit(24)\n", encoding="utf-8")
+            changed_source = self._run_bootstrap_fixture(root, snapshot)
+            wrong_package = dict(snapshot)
+            wrong_package["package"] = str(other_root / "__init__.py")
+            two_roots = self._run_bootstrap_fixture(root, wrong_package)
+        self.assertEqual(wrong_root.returncode, 65)
+        self.assertEqual(changed_source.returncode, 65)
+        self.assertEqual(two_roots.returncode, 65)
+
+    def test_bootstrap_rejects_untrusted_file_modes_symlinks_and_hardlinks(self) -> None:
+        import os
+        import tempfile
+
+        results: list[int] = []
+        for mutation in ("write-mode", "dir-write-mode", "symlink", "hardlink", "owner"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+                base = Path(temporary)
+                root = base / "speed_of_cinnamon"
+                snapshot, worker = self._bootstrap_fixture(root)
+                init = root / "__init__.py"
+                if mutation == "write-mode":
+                    os.chmod(init, 0o664)
+                elif mutation == "dir-write-mode":
+                    os.chmod(root, 0o775)
+                elif mutation == "symlink":
+                    replacement = base / "replacement.py"
+                    replacement.write_text(worker.read_text(encoding="utf-8"), encoding="utf-8")
+                    worker.unlink()
+                    worker.symlink_to(replacement)
+                elif mutation == "hardlink":
+                    replacement = base / "replacement.py"
+                    os.link(worker, replacement)
+                else:
+                    rows = snapshot["files"]
+                    rows["worker"][5] = os.getuid() + 1
+                completed = self._run_bootstrap_fixture(root, snapshot)
+                results.append(completed.returncode)
+        self.assertEqual(results, [65, 65, 65, 65, 65])
+
+    def test_bootstrap_rejects_executable_package_init(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            root = Path(temporary) / "speed_of_cinnamon"
+            snapshot, _worker = self._bootstrap_fixture(root)
+            init = root / "__init__.py"
+            init.write_text("__version__ = __import__('os').getcwd()\n", encoding="utf-8")
+            import hashlib
+
+            info = init.stat(follow_symlinks=False)
+            data = init.read_bytes()
+            snapshot["files"]["init"] = [
+                str(init),
+                info.st_dev,
+                info.st_ino,
+                info.st_size,
+                info.st_mode,
+                info.st_uid,
+                info.st_gid,
+                info.st_nlink,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+                hashlib.sha256(data).hexdigest(),
+            ]
+            completed = self._run_bootstrap_fixture(root, snapshot)
+        self.assertEqual(completed.returncode, 65)
+
+    def test_code_owner_policy_accepts_root_and_current_uid_only(self) -> None:
+        import os
+
+        uid = os.getuid()
+        self.assertTrue(remote_http._trusted_code_owner(0, uid))
+        self.assertTrue(remote_http._trusted_code_owner(uid, uid))
+        self.assertFalse(remote_http._trusted_code_owner(uid + 1, uid))
+
+    def test_controller_binding_rejects_prestart_source_substitution(self) -> None:
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            root = Path(temporary) / "speed_of_cinnamon"
+            snapshot, _worker = self._bootstrap_fixture(root)
+            marker = Path(temporary) / "executed"
+            (root / "remote_http.py").write_text(
+                f"from pathlib import Path\nPath({str(marker)!r}).write_text('bad')\n",
+                encoding="utf-8",
+            )
+            completed = self._run_bootstrap_fixture(root, snapshot)
+            self.assertFalse(marker.exists())
+        self.assertEqual(completed.returncode, 65)
+
+    def test_controller_binding_rechecks_source_before_delayed_runtime_import(self) -> None:
+        import json
+        import select
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            base = Path(temporary)
+            marker = base / "executed"
+            worker_source = (
+                "import os, sys\n"
+                "print('worker-ready', flush=True)\n"
+                "sys.stdin.buffer.read(1)\n"
+                "from speed_of_cinnamon import remote_http\n"
+                "remote_http.PROBE\n"
+                "os._exit(23)\n"
+            )
+            root = base / "speed_of_cinnamon"
+            snapshot, _worker = self._bootstrap_fixture(
+                root,
+                controller_source=(
+                    f"from pathlib import Path\nPath({str(marker)!r}).write_text('bad')\nPROBE = 1\n"
+                ),
+                worker_source=worker_source,
+            )
+            process = subprocess.Popen(
+                ["/usr/bin/python3.14", "-I", "-B", "-c", remote_http._WORKER_BOOTSTRAP,
+                 str(root), json.dumps(snapshot, sort_keys=True, separators=(",", ":"))],
+                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                cwd=base, env={"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LC_CTYPE": "C.UTF-8"},
+            )
+            try:
+                ready_line = process.stdout.readline()
+                diagnostic = None
+                if ready_line != b"worker-ready\n":
+                    try:
+                        child_exit = process.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        child_exit = None
+                    readable, _, _ = select.select([process.stderr], [], [], 0.2)
+                    stderr_sample = os.read(process.stderr.fileno(), 2048) if readable else b""
+                    stderr_kind = (
+                        "empty" if not stderr_sample else
+                        "python-traceback" if stderr_sample.startswith(b"Traceback ") else
+                        "nonempty-redacted"
+                    )
+                    diagnostic = (
+                        f"child_exit={child_exit}, stderr_sample_bytes={len(stderr_sample)}, "
+                        f"stderr_kind={stderr_kind}, bootstrap_exit65={child_exit == 65}"
+                    )
+                self.assertEqual(ready_line, b"worker-ready\n", diagnostic)
+                (root / "remote_http.py").write_text(
+                    f"from pathlib import Path\nPath({str(marker)!r}).write_text('substituted')\nPROBE = 1\n",
+                    encoding="utf-8",
+                )
+                process.stdin.write(b"x")
+                process.stdin.flush()
+                process.stdin.close()
+                self.assertEqual(process.wait(timeout=10), 65)
+                self.assertFalse(marker.exists())
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                    process.wait(timeout=10)
+                for stream in (process.stdin, process.stdout, process.stderr):
+                    if stream is not None and not stream.closed:
+                        stream.close()
+
+    def test_controller_binding_ignores_timestamp_pyc_and_executes_snapshotted_source(self) -> None:
+        import hashlib
+        import importlib.util
+        import json
+        import marshal
+        import os
+        import py_compile
+        import struct
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            base = Path(temporary)
+            marker = base / "marker"
+            root = base / "speed_of_cinnamon"
+            evil = f"from pathlib import Path\nPath({str(marker)!r}).write_text('PYC')\nPROBE = 1\n"
+            source = f"from pathlib import Path\nPath({str(marker)!r}).write_text('SRC')\nPROBE = 1\n"
+            snapshot, worker = self._bootstrap_fixture(
+                root,
+                worker_source=(
+                    "import json, sys\n"
+                    "from speed_of_cinnamon import remote_http\n"
+                    "remote_http.PROBE\n"
+                    "controller = sys.modules['speed_of_cinnamon.remote_http']\n"
+                    "worker = sys.modules['__main__']\n"
+                    "print(json.dumps({'controller': {'origin': controller.__spec__.origin, "
+                    "'loader': type(controller.__loader__).__name__}, 'worker': {"
+                    "'origin': worker.__spec__.origin, 'loader': type(worker.__loader__).__name__}}, "
+                    "sort_keys=True), flush=True)\n"
+                    "import os\nos._exit(23)\n"
+                ),
+            )
+            controller_path = root / "remote_http.py"
+            controller_path.write_text(evil, encoding="utf-8")
+            py_compile.compile(str(controller_path), doraise=True)
+            controller_path.write_text(source, encoding="utf-8")
+            cached_mtime = int(controller_path.stat().st_mtime)
+            os.utime(controller_path, (cached_mtime, cached_mtime))
+            import hashlib
+            info = controller_path.stat(follow_symlinks=False)
+            data = controller_path.read_bytes()
+            snapshot["files"]["controller"] = [
+                str(controller_path), info.st_dev, info.st_ino, info.st_size,
+                info.st_mode, info.st_uid, info.st_gid, info.st_nlink,
+                info.st_mtime_ns, info.st_ctime_ns, hashlib.sha256(data).hexdigest(),
+            ]
+            cache_path = Path(importlib.util.cache_from_source(str(controller_path)))
+            cache_bytes = cache_path.read_bytes()
+            cache_flags = struct.unpack("<I", cache_bytes[4:8])[0]
+            cache_timestamp, cache_source_size = struct.unpack("<II", cache_bytes[8:16])
+            source_before = hashlib.sha256(data).hexdigest()
+            cache_code = marshal.loads(cache_bytes[16:])
+            cache_has_pyc_marker = isinstance(cache_code, type(compile("", "", "exec"))) and "PYC" in repr(cache_code.co_consts)
+            cache_valid = (
+                cache_bytes[:4] == importlib.util.MAGIC_NUMBER
+                and cache_flags == 0
+                and cache_timestamp == (int(info.st_mtime) & 0xFFFFFFFF)
+                and cache_source_size == len(data)
+                and cache_has_pyc_marker
+            )
+            completed = self._run_bootstrap_fixture(root, snapshot)
+            observed = marker.read_text(encoding="utf-8") if marker.exists() else None
+            source_after = hashlib.sha256(controller_path.read_bytes()).hexdigest()
+            runtime_observation = json.loads(completed.stdout)
+            evidence = {
+                "cache": {
+                    "bytes": len(cache_bytes),
+                    "flags": cache_flags,
+                    "header_hex": cache_bytes[:16].hex(),
+                    "path": str(cache_path),
+                    "sha256": hashlib.sha256(cache_bytes).hexdigest(),
+                    "source_size": cache_source_size,
+                    "timestamp": cache_timestamp,
+                    "valid_timestamp_pyc": cache_valid,
+                    "private_copy": None,
+                },
+                "controller": {
+                    "origin": str(controller_path),
+                    "source_sha256_before": source_before,
+                    "source_sha256_after": source_after,
+                    "runtime_loader": runtime_observation["controller"]["loader"],
+                },
+                "marker": observed,
+                "worker": {
+                    "origin": runtime_observation["worker"]["origin"],
+                    "source_sha256": snapshot["files"]["worker"][10],
+                    "runtime_loader": runtime_observation["worker"]["loader"],
+                },
+                "worker_exit": completed.returncode,
+            }
+            evidence_dir_raw = os.environ.get("SOC_PYC_EVIDENCE_DIR", "")
+            if evidence_dir_raw:
+                evidence_dir = Path(evidence_dir_raw)
+                evidence_dir.mkdir(mode=0o700, parents=True, exist_ok=False)
+                cache_copy = evidence_dir / "controller.timestamp.pyc"
+                cache_copy.write_bytes(cache_bytes)
+                os.chmod(cache_copy, 0o400)
+                evidence["cache"]["private_copy"] = str(cache_copy)
+                evidence_path = evidence_dir / "evidence.json"
+                evidence_path.write_text(
+                    json.dumps(evidence, sort_keys=True, indent=2) + "\n",
+                    encoding="utf-8",
+                )
+                os.chmod(evidence_path, 0o400)
+        self.assertEqual(completed.returncode, 23)
+        self.assertTrue(cache_valid)
+        self.assertEqual(source_before, source_after)
+        self.assertEqual(runtime_observation["controller"]["origin"], str(controller_path))
+        self.assertEqual(runtime_observation["worker"]["origin"], str(worker))
+        self.assertEqual(runtime_observation["worker"]["loader"], "SourceLoader")
+        self.assertEqual(observed, "SRC")
+
+    def test_root_owned_readonly_bootstrap_sources_are_accepted(self) -> None:
+        import hashlib
+        import os
+        import tempfile
+
+        with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+            root = Path(temporary) / "speed_of_cinnamon"
+            snapshot, worker = self._bootstrap_fixture(root)
+            source_paths = {
+                "init": root / "__init__.py",
+                "controller": root / "remote_http.py",
+                "worker": worker,
+            }
+            try:
+                for path in source_paths.values():
+                    os.chmod(path, 0o444)
+                    os.chown(path, 0, -1)
+            except PermissionError:
+                self.skipTest("root-owned code fixture requires CAP_CHOWN")
+            for name, path in source_paths.items():
+                data = path.read_bytes()
+                info = path.stat(follow_symlinks=False)
+                snapshot["files"][name] = [
+                    str(path),
+                    info.st_dev,
+                    info.st_ino,
+                    info.st_size,
+                    info.st_mode,
+                    info.st_uid,
+                    info.st_gid,
+                    info.st_nlink,
+                    info.st_mtime_ns,
+                    info.st_ctime_ns,
+                    hashlib.sha256(data).hexdigest(),
+                ]
+            completed = self._run_bootstrap_fixture(root, snapshot)
+        self.assertEqual(completed.returncode, 23)
+
+    def test_system_python_production_spawn_reaches_worker_contract(self) -> None:
+        import errno
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+        from threading import Thread
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self) -> None:
+                body = b'{"models":[]}'
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *_args: object) -> None:
+                return
+
+        try:
+            server = HTTPServer(("127.0.0.1", 0), Handler)
+        except OSError as error:
+            if error.errno == errno.EPERM:
+                self.skipTest("AF_INET loopback is blocked by the host sandbox")
+            raise
+        thread = Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            request = _request(
+                deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS,
+                payload={"url": f"http://127.0.0.1:{server.server_port}"},
+            )
+            with mock.patch.object(remote_http.sys, "executable", "/usr/bin/python3.14"):
+                result = remote_http.run_list_ollama_models(request)
+            self.assertEqual(result, _success([]))
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=2)
 
 
 if __name__ == "__main__":

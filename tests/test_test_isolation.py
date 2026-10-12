@@ -98,6 +98,8 @@ class TestDefaultIsolation(unittest.TestCase):
             safe_root.mkdir(mode=0o700)
             unsafe_root = base / "unsafe"
             unsafe_root.mkdir(mode=0o755)
+            unsafe_root.chmod(0o755)
+            self.assertEqual(stat.S_IMODE(unsafe_root.lstat().st_mode), 0o755)
             link_root = base / "link"
             link_root.symlink_to(safe_root, target_is_directory=True)
 

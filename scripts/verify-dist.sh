@@ -1700,7 +1700,7 @@ release_parent_lock() {
     printf 'dist parent lock descriptor is invalid during release\n' >&2
     return 1
   fi
-  if ! eval "exec ${parent_lock_fd}<&-"; then
+  if ! exec {parent_lock_fd}<&-; then
     printf 'failed to release dist parent lock\n' >&2
     return 1
   fi

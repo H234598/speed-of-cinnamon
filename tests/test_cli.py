@@ -940,13 +940,29 @@ class CliTest(unittest.TestCase):
         )
         for command_name, log_level in cases:
             with self.subTest(command=command_name, log_level=log_level):
+                handler_result: dict[str, object] = {"status": "done"}
+                if command_name == "doctor":
+                    configured = {
+                        name: {"ok": True, "detail": "ready"}
+                        for name in ("recorder", "transcriber", "output", "postprocessor")
+                    }
+                    configured["output"]["paste_ok"] = True
+                    handler_result = {
+                        "schema_version": 1,
+                        "status": "done",
+                        "ok": True,
+                        "checks": [{"name": "python3", "ok": True, "detail": "ready"}],
+                        "desktop": {"cinnamon": {"ok": True, "detail": "ready"}},
+                        "configured": configured,
+                        "warnings": [],
+                    }
                 parser = argparse.ArgumentParser()
                 parser.parse_args = mock.Mock(
                     return_value=argparse.Namespace(
                         command=command_name,
                         json=True,
                         log_level=log_level,
-                        handler=lambda _args: {"status": "done"},
+                        handler=lambda _args: handler_result,
                     )
                 )
                 with (
@@ -13864,6 +13880,12 @@ class CliTest(unittest.TestCase):
             self.assertFalse(final_state.process_identity)
 
     def test_start_locked_preserves_relative_recording_path_when_group_lives(self) -> None:
+        import os as fixture_os
+        import select as fixture_select
+        import signal as fixture_signal
+        import subprocess as fixture_subprocess
+        import sys as fixture_sys
+
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             state_dir = tmp_path / "speed-of-cinnamon"
@@ -13875,33 +13897,118 @@ class CliTest(unittest.TestCase):
             audio.write_bytes(b"audio")
             state_file = state_dir / "state.json"
             store = StateStore(state_file)
-            store.write(
-                RecordingState(
-                    status="recording",
-                    pid=1234,
-                    process_identity="stale-process-identity",
-                    audio_path="recordings/active.wav",
-                    error="previous stop failed",
-                    inserted=True,
-                )
+            child = fixture_subprocess.Popen(
+                [
+                    fixture_sys.executable,
+                    "-I",
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(b'R'); sys.stdout.buffer.flush(); sys.stdin.buffer.read(1)",
+                ],
+                stdin=fixture_subprocess.PIPE,
+                stdout=fixture_subprocess.PIPE,
+                stderr=fixture_subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
             )
-            with (
-                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
-                mock.patch.object(
-                    cli,
-                    "_reconcile_recording_process",
-                    return_value=cli._RECORDING_PROCESS_GROUP_ACTIVE_ERROR,
-                ),
-            ):
-                result = cli._command_start_locked(argparse.Namespace(), store)
-            final_state = store.read()
-            self.assertEqual(result["status"], "recording")
-            self.assertIn("recording process group is still active", result["error"])
-            self.assertEqual(final_state.status, "recording")
-            self.assertEqual(final_state.pid, 1234)
-            self.assertEqual(final_state.process_identity, "stale-process-identity")
-            self.assertEqual(final_state.error, "previous stop failed")
-            self.assertTrue(final_state.inserted)
+            child_pid = child.pid
+            pidfd = None
+            reaped = False
+            try:
+                pidfd = fixture_os.pidfd_open(child_pid)
+                self.assertIsNotNone(child.stdin)
+                self.assertIsNotNone(child.stdout)
+                ready, _, _ = fixture_select.select([child.stdout], [], [], 2.0)
+                self.assertTrue(ready)
+                self.assertEqual(child.stdout.read(1), b"R")
+                self.assertEqual(Path(f"/proc/{child_pid}").stat().st_uid, fixture_os.getuid())
+                child_birth = Path(f"/proc/{child_pid}/stat").read_text(encoding="utf-8").rsplit(")", 1)[1].split()[19]
+                self.assertTrue(child_birth.isdecimal())
+                process_identity = cli._recording_process_identity_for_pid(child_pid)
+                self.assertIsInstance(process_identity, str)
+                self.assertTrue(process_identity)
+                child.stdin.close()
+                child.stdout.close()
+                child_returncode = child.wait(timeout=2.0)
+                reaped = True
+                self.assertEqual(child_returncode, 0)
+                store.write(
+                    RecordingState(
+                        status="recording",
+                        pid=child_pid,
+                        process_identity=process_identity,
+                        audio_path="recordings/active.wav",
+                        error="previous stop failed",
+                        inserted=True,
+                    )
+                )
+                blocked_actions = []
+                original_kill = fixture_os.kill
+                original_killpg = fixture_os.killpg
+
+                def guarded_kill(pid: int, signal_number: int) -> None:
+                    if pid == child_pid and signal_number == 0:
+                        return original_kill(pid, signal_number)
+                    blocked_actions.append("kill")
+                    raise AssertionError("unexpected mutating or unowned PID signal")
+
+                def guarded_killpg(pgid: int, signal_number: int) -> None:
+                    if pgid == child_pid and signal_number == 0:
+                        return original_killpg(pgid, signal_number)
+                    blocked_actions.append("killpg")
+                    raise AssertionError("unexpected mutating or unowned group signal")
+
+                def blocked_start_or_signal(*args: object, **kwargs: object) -> None:
+                    blocked_actions.append("start_or_signal")
+                    raise AssertionError("unexpected process start or PIDFD signal")
+
+                with (
+                    mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                    mock.patch.object(
+                        cli,
+                        "_reconcile_recording_process",
+                        return_value=cli._RECORDING_PROCESS_GROUP_ACTIVE_ERROR,
+                    ) as mocked_reconcile,
+                    mock.patch.object(fixture_os, "kill", side_effect=guarded_kill),
+                    mock.patch.object(fixture_os, "killpg", side_effect=guarded_killpg),
+                    mock.patch.object(fixture_signal, "pidfd_send_signal", side_effect=blocked_start_or_signal),
+                    mock.patch.object(fixture_subprocess, "Popen", side_effect=blocked_start_or_signal),
+                    mock.patch.object(fixture_os, "posix_spawn", side_effect=blocked_start_or_signal),
+                    mock.patch.object(fixture_os, "posix_spawnp", side_effect=blocked_start_or_signal),
+                    mock.patch.object(fixture_os, "fork", side_effect=blocked_start_or_signal),
+                ):
+                    result = cli._command_start_locked(argparse.Namespace(), store)
+                final_state = store.read()
+                self.assertEqual(blocked_actions, [])
+                mocked_reconcile.assert_called_once()
+                reconciled_state = mocked_reconcile.call_args.args[0]
+                self.assertEqual(reconciled_state.pid, child_pid)
+                self.assertEqual(reconciled_state.process_identity, process_identity)
+                self.assertEqual(result["status"], "recording")
+                self.assertIn("recording process group is still active", result["error"])
+                self.assertEqual(final_state.status, "recording")
+                self.assertEqual(final_state.pid, child_pid)
+                self.assertEqual(final_state.process_identity, process_identity)
+                self.assertEqual(final_state.audio_path, "recordings/active.wav")
+                self.assertEqual(final_state.error, "previous stop failed")
+                self.assertTrue(final_state.inserted)
+                self.assertEqual(audio.read_bytes(), b"audio")
+            finally:
+                if child.stdin is not None and not child.stdin.closed:
+                    child.stdin.close()
+                if child.stdout is not None and not child.stdout.closed:
+                    child.stdout.close()
+                try:
+                    if not reaped:
+                        try:
+                            child.wait(timeout=2.0)
+                        except fixture_subprocess.TimeoutExpired:
+                            if pidfd is None:
+                                raise
+                            fixture_signal.pidfd_send_signal(pidfd, fixture_signal.SIGKILL)
+                            child.wait(timeout=2.0)
+                finally:
+                    if pidfd is not None:
+                        fixture_os.close(pidfd)
 
     def test_start_locked_does_not_treat_reaped_recorder_leader_as_active(self) -> None:
         process = subprocess.Popen(["/bin/true"], start_new_session=True)
@@ -16525,6 +16632,16 @@ class CliTest(unittest.TestCase):
             output = Path(tmp) / "diagnostics.json"
             target = Path(tmp) / "target.json"
             target.write_text("{}\n", encoding="utf-8")
+            target.chmod(0o644)
+            target_before = target.lstat()
+            self.assertEqual(target_before.st_mode & 0o777, 0o644)
+            target_content_before = target.read_bytes()
+            target_identity_before = (
+                target_before.st_dev,
+                target_before.st_ino,
+                target_before.st_uid,
+                target_before.st_gid,
+            )
             with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_DATA_HOME": tmp}):
                 cli.ensure_runtime_dirs()
                 legacy = cli.diagnostics_dir() / "diagnostics-link.json"
@@ -16542,6 +16659,12 @@ class CliTest(unittest.TestCase):
                 payload = json.loads(stdout.getvalue())
             self.assertEqual(code, 1)
             self.assertIn("diagnostics artifact could not be opened safely", payload["error"])
+            self.assertEqual(target.read_bytes(), target_content_before)
+            target_after = target.lstat()
+            self.assertEqual(
+                (target_after.st_dev, target_after.st_ino, target_after.st_uid, target_after.st_gid),
+                target_identity_before,
+            )
             self.assertEqual(target.stat().st_mode & 0o777, 0o644)
 
     def test_diagnostics_artifact_scan_is_bounded(self) -> None:
@@ -19560,23 +19683,123 @@ class CliTest(unittest.TestCase):
             mocked_group.assert_not_called()
 
     def test_toggle_rejects_null_personal_context(self) -> None:
+        """Keep the legacy name; the rejected NUL is in the post-process prompt."""
+        import select as fixture_select
+        import signal as fixture_signal
+        import subprocess as fixture_subprocess
+        import sys as fixture_sys
+
         with tempfile.TemporaryDirectory() as tmp:
             recordings = Path(tmp) / "speed-of-cinnamon" / "recordings"
             recordings.mkdir(parents=True)
             audio = recordings / "processing.wav"
             audio.write_bytes(b"audio")
             state_file = Path(tmp) / "state.json"
-            StateStore(state_file).write(
+            store = StateStore(state_file)
+            child = fixture_subprocess.Popen(
+                [
+                    fixture_sys.executable,
+                    "-I",
+                    "-c",
+                    "import sys; sys.stdout.buffer.write(b'R'); sys.stdout.buffer.flush(); sys.stdin.buffer.read(1)",
+                ],
+                stdin=fixture_subprocess.PIPE,
+                stdout=fixture_subprocess.PIPE,
+                stderr=fixture_subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+            child_pid = child.pid
+            pidfd = None
+            try:
+                pidfd = os.pidfd_open(child_pid)
+                self.assertIsNotNone(child.stdin)
+                self.assertIsNotNone(child.stdout)
+                ready, _, _ = fixture_select.select([child.stdout], [], [], 2.0)
+                self.assertTrue(ready)
+                self.assertEqual(child.stdout.read(1), b"R")
+                self.assertEqual(Path(f"/proc/{child_pid}").stat().st_uid, os.geteuid())
+                birth_record = Path(f"/proc/{child_pid}/stat").read_text(encoding="ascii")
+                birth_ticks = int(birth_record.rsplit(")", 1)[1].split()[19])
+                self.assertGreater(birth_ticks, 0)
+                process_identity = cli._recording_process_identity_for_pid(child_pid)
+                self.assertIsInstance(process_identity, str)
+                self.assertTrue(process_identity.endswith(f":{birth_ticks}"))
+            finally:
+                if child.stdin is not None:
+                    child.stdin.close()
+                if child.stdout is not None:
+                    child.stdout.close()
+                try:
+                    try:
+                        child.wait(timeout=2.0)
+                    except fixture_subprocess.TimeoutExpired:
+                        if pidfd is None:
+                            raise
+                        fixture_signal.pidfd_send_signal(pidfd, fixture_signal.SIGKILL)
+                        child.wait(timeout=2.0)
+                finally:
+                    if pidfd is not None:
+                        os.close(pidfd)
+            self.assertEqual(child.returncode, 0)
+            store.write(
                 RecordingState(
                     status="recording",
-                    pid=999999999,
+                    pid=child_pid,
+                    process_identity=process_identity,
                     audio_path=str(audio),
                     error="previous stop failed",
                     inserted=True,
                 )
             )
+            original_validate = cli._validate_pipeline_text_args
+            validation_errors: list[str] = []
+
+            def observe_validation(*args: object, **kwargs: object) -> str:
+                try:
+                    return original_validate(*args, **kwargs)
+                except RuntimeError as error:
+                    validation_errors.append(str(error))
+                    raise
+
+            original_kill = os.kill
+            original_killpg = os.killpg
+
+            def guarded_kill(pid: int, signal_number: int) -> None:
+                if pid == child_pid and signal_number == 0:
+                    return original_kill(pid, signal_number)
+                raise AssertionError("unexpected PID signal")
+
+            def guarded_killpg(pgid: int, signal_number: int) -> None:
+                if pgid == child_pid and signal_number == 0:
+                    return original_killpg(pgid, signal_number)
+                raise AssertionError("unexpected group signal")
+
+            def blocked_action(*args: object, **kwargs: object) -> None:
+                raise AssertionError("unexpected process or downstream action")
+
             stdout = io.StringIO()
-            with mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}), redirect_stdout(stdout):
+            with (
+                mock.patch.dict(os.environ, {"XDG_STATE_HOME": tmp, "XDG_CACHE_HOME": tmp}),
+                mock.patch.object(cli, "_validate_pipeline_text_args", side_effect=observe_validation) as mocked_validation,
+                mock.patch.object(cli, "validate_audio_file", side_effect=blocked_action) as mocked_audio_validation,
+                mock.patch.object(cli, "read_recording_level", side_effect=blocked_action) as mocked_level,
+                mock.patch.object(cli, "detect_silent_recording", side_effect=blocked_action) as mocked_silence,
+                mock.patch.object(cli, "trim_recording_silence", side_effect=blocked_action) as mocked_trim,
+                mock.patch.object(cli, "transcribe", side_effect=blocked_action) as mocked_transcribe,
+                mock.patch.object(cli, "post_process_text", side_effect=blocked_action) as mocked_post_process,
+                mock.patch.object(cli, "insert_text", side_effect=blocked_action) as mocked_insert,
+                mock.patch.object(cli, "start_recorder", side_effect=blocked_action) as mocked_start,
+                mock.patch.object(cli, "stop_process", side_effect=blocked_action) as mocked_stop,
+                mock.patch.object(os, "kill", side_effect=guarded_kill),
+                mock.patch.object(os, "killpg", side_effect=guarded_killpg),
+                mock.patch.object(fixture_signal, "pidfd_send_signal", side_effect=blocked_action),
+                mock.patch.object(fixture_subprocess, "Popen", side_effect=blocked_action),
+                mock.patch.object(os, "posix_spawn", side_effect=blocked_action),
+                mock.patch.object(os, "posix_spawnp", side_effect=blocked_action),
+                mock.patch.object(os, "fork", side_effect=blocked_action),
+                redirect_stdout(stdout),
+            ):
                 code = cli.run([
                     "toggle",
                     "--state-file",
@@ -19592,6 +19815,26 @@ class CliTest(unittest.TestCase):
                     "--json",
                 ])
             payload = json.loads(stdout.getvalue())
+            final_state = store.read()
+            self.assertEqual(audio.read_bytes(), b"audio")
+        mocked_validation.assert_called_once()
+        self.assertEqual(validation_errors, ["post-process prompt contains invalid null byte"])
+        mocked_audio_validation.assert_not_called()
+        mocked_level.assert_not_called()
+        mocked_silence.assert_not_called()
+        mocked_trim.assert_not_called()
+        mocked_transcribe.assert_not_called()
+        mocked_post_process.assert_not_called()
+        mocked_insert.assert_not_called()
+        mocked_start.assert_not_called()
+        mocked_stop.assert_not_called()
+        self.assertEqual(final_state.status, "recorded")
+        self.assertIsNone(final_state.pid)
+        self.assertEqual(final_state.process_identity, "")
+        self.assertEqual(final_state.audio_path, str(audio))
+        self.assertFalse(final_state.inserted)
+        self.assertEqual(final_state.transcript, "")
+        self.assertEqual(final_state.transcript_path, "")
         self.assertEqual(code, 1)
         self.assertIn("transcribe failed", payload["error"])
 
