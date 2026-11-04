@@ -45888,6 +45888,19 @@ class CliTest(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "text must be text"):
             cli.soften_profanity_text(False)  # type: ignore[arg-type]
 
+    def test_profanity_replacement_pairs_from_file_requires_private_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "profanity-filter.txt"
+            path.write_text("foo -> bar\n", encoding="utf-8")
+            path.chmod(0o644)
+            with mock.patch.object(
+                cli, "_ensure_editable_profanity_filter_file", return_value=path
+            ):
+                with self.assertRaisesRegex(
+                    OSError, "profanity filter file must be private"
+                ):
+                    cli._profanity_replacement_pairs_from_file()
+
     def test_profanity_filter_document_command_writes_list(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()

@@ -1044,6 +1044,7 @@ class BackupIntegrationTests(unittest.TestCase):
     def test_backup_state_json_resource_exhaustion_is_controlled(self):
         self.ledger.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.ledger.path.write_text("{}\n", encoding="utf-8")
+        self.ledger.path.chmod(0o600)
         for failure in (RecursionError("nested"), MemoryError("budget")):
             with (
                 self.subTest(failure=type(failure).__name__),
@@ -1055,6 +1056,16 @@ class BackupIntegrationTests(unittest.TestCase):
                     BackupStateError, "backup state is invalid"
                 ):
                     self.ledger.load()
+
+    def test_backup_state_read_rejects_non_private_permissions(self):
+        self.ledger.record_job(
+            job_id="private-mode-check",
+            status="success",
+            created_at_utc="2026-08-15T00:00:00Z",
+        )
+        self.ledger.path.chmod(0o644)
+        with self.assertRaisesRegex(BackupStateError, "backup state is invalid"):
+            self.ledger.load()
 
     def test_backup_state_read_does_not_probe_through_symlink(self):
         target = self.root / "outside-state.json"

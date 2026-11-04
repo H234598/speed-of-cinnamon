@@ -238,6 +238,7 @@ class OutputTest(unittest.TestCase):
             path.write_text(
                 json.dumps({"text": "legacy secret", "at": 42.0}), encoding="utf-8"
             )
+            path.chmod(0o600)
             with mock.patch(
                 "speed_of_cinnamon.output.state_dir", return_value=state_root
             ):
@@ -246,6 +247,29 @@ class OutputTest(unittest.TestCase):
         self.assertFalse(trusted)
         self.assertEqual(snapshot, ("", 0.0))
         self.assertFalse(path.exists())
+
+    def test_clipboard_dedup_state_rejects_non_private_permissions(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp)
+            path = state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE
+            path.write_text(
+                json.dumps(
+                    {
+                        "sha256": output_module._clipboard_text_fingerprint(
+                            "secret text"
+                        ),
+                        "at": 42.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            path.chmod(0o644)
+            with mock.patch(
+                "speed_of_cinnamon.output.state_dir", return_value=state_root
+            ):
+                entry = output_module._read_clipboard_dedup_state_entry()
+
+        self.assertEqual(entry, (False, ("", 0.0), False))
 
     def test_clipboard_dedup_state_rejects_invalid_fingerprint(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -373,9 +397,9 @@ class OutputTest(unittest.TestCase):
     ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_root = Path(tmp)
-            (state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE).write_text(
-                "{}", encoding="utf-8"
-            )
+            state_path = state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE
+            state_path.write_text("{}", encoding="utf-8")
+            state_path.chmod(0o600)
             with (
                 mock.patch(
                     "speed_of_cinnamon.output.state_dir", return_value=state_root
@@ -3414,6 +3438,7 @@ class OutputTest(unittest.TestCase):
                     ),
                     encoding="utf-8",
                 )
+                state_path.chmod(0o600)
                 lock_path = state_root / output_module.CLIPBOARD_DEDUP_LOCK_FILE
                 lock_path.write_text("999999999\n", encoding="utf-8")
                 os.utime(lock_path, (stale, stale))
@@ -5537,6 +5562,7 @@ class OutputTest(unittest.TestCase):
             state_root = Path(tmp)
             path = state_root / output_module.CLIPBOARD_DEDUP_STATE_FILE
             path.write_text("{}", encoding="utf-8")
+            path.chmod(0o600)
             with (
                 mock.patch(
                     "speed_of_cinnamon.output.state_dir", return_value=state_root

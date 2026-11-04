@@ -363,6 +363,7 @@ def _read_clipboard_dedup_state_entry() -> tuple[bool, tuple[str, float], bool]:
             path,
             field_name="clipboard dedupe state",
             max_bytes=MAX_CLIPBOARD_DEDUP_STATE_BYTES,
+            require_private_mode=True,
         )
     except FileNotFoundError:
         return True, ("", 0.0), False
@@ -1227,6 +1228,7 @@ def _read_clipboard_pending_quarantine_ledger() -> tuple[
             path,
             field_name="clipboard pending quarantine",
             max_bytes=MAX_CLIPBOARD_PENDING_QUARANTINE_BYTES,
+            require_private_mode=True,
         )
     except (
         FileNotFoundError,

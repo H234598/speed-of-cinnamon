@@ -397,6 +397,7 @@ def _read_model_checksum_cache() -> dict[str, dict[str, int | str]]:
     if (
         not stat_module.S_ISREG(cache_stat.st_mode)
         or getattr(cache_stat, "st_nlink", 1) != 1
+        or (cache_stat.st_mode & 0o077) != 0
     ):
         _remove_model_checksum_cache_file(cache_path)
         return {}
@@ -409,6 +410,7 @@ def _read_model_checksum_cache() -> dict[str, dict[str, int | str]]:
             cache_path,
             field_name="model checksum cache path",
             max_bytes=MAX_MODEL_CHECKSUM_JSON_BYTES,
+            require_private_mode=True,
             expected_stat=cache_stat,
         )
     except (OSError, json.JSONDecodeError, UnicodeDecodeError, MemoryError):

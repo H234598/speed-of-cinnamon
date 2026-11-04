@@ -3220,6 +3220,7 @@ def _profanity_replacement_pairs_from_file() -> tuple[tuple[str, str], ...]:
         path,
         field_name="profanity filter file",
         max_bytes=MAX_PROFANITY_FILTER_BYTES,
+        require_private_mode=True,
     )
     digest = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
     cached = _PROFANITY_REPLACEMENT_CACHE

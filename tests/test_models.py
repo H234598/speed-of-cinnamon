@@ -485,6 +485,7 @@ class ModelsTest(unittest.TestCase):
             cache_path = models._model_checksum_cache_path()
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text("{}", encoding="utf-8")
+            cache_path.chmod(0o600)
             with mock.patch.object(
                 models.json, "loads", side_effect=RecursionError("too deep")
             ):
@@ -542,6 +543,7 @@ class ModelsTest(unittest.TestCase):
             cache_path = models._model_checksum_cache_path()
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text("{}", encoding="utf-8")
+            cache_path.chmod(0o600)
             with mock.patch.object(
                 models.json, "loads", side_effect=MemoryError("too large")
             ):
@@ -574,6 +576,7 @@ class ModelsTest(unittest.TestCase):
             local_key = str(cache_path.parent / "local-model.bin")
             entry = {"checksum": "a" * 40, "size": 1, "mtime_ns": 1}
             cache_path.write_text(json.dumps({disk_key: entry}), encoding="utf-8")
+            cache_path.chmod(0o600)
             models._model_checksum_cache[local_key] = {**entry, "size": 2}
 
             models._write_model_checksum_cache()
@@ -599,6 +602,7 @@ class ModelsTest(unittest.TestCase):
                 json.dumps({kept_key: entry, str(removed_path): entry}),
                 encoding="utf-8",
             )
+            cache_path.chmod(0o600)
 
             models._clear_model_checksum_cache(removed_path)
 
@@ -645,6 +649,7 @@ class ModelsTest(unittest.TestCase):
                 },
             }
             cache_path.write_text(json.dumps(cache_payload), encoding="utf-8")
+            cache_path.chmod(0o600)
             models._load_model_checksum_cache()
 
             self.assertIn(str(path), models._model_checksum_cache)
@@ -1035,6 +1040,7 @@ class ModelsTest(unittest.TestCase):
             cache_path = models._model_checksum_cache_path()
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text("{}", encoding="utf-8")
+            cache_path.chmod(0o600)
 
             with mock.patch.object(
                 models,
@@ -1048,6 +1054,7 @@ class ModelsTest(unittest.TestCase):
                 cache_path,
                 field_name="model checksum cache path",
                 max_bytes=models.MAX_MODEL_CHECKSUM_JSON_BYTES,
+                require_private_mode=True,
                 expected_stat=mock.ANY,
             )
 
@@ -1066,6 +1073,7 @@ class ModelsTest(unittest.TestCase):
             cache_path = models._model_checksum_cache_path()
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text("{}", encoding="utf-8")
+            cache_path.chmod(0o600)
             replacement = json.dumps(
                 {
                     str(model_path): {
@@ -1094,6 +1102,37 @@ class ModelsTest(unittest.TestCase):
             self.assertTrue(
                 cache_path.with_name("model_checksums-original.json").exists()
             )
+
+    def test_model_checksum_cache_rejects_non_private_permissions(self) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict(os.environ, {"XDG_DATA_HOME": tmp}),
+            mock.patch.object(models, "_model_checksum_cache", {}),
+            mock.patch.object(models, "_model_checksum_cache_loaded", False),
+        ):
+            model_path = Path(tmp) / "model.bin"
+            model_path.write_bytes(b"model")
+            model_stat = model_path.stat()
+            cache_path = models._model_checksum_cache_path()
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps(
+                    {
+                        str(model_path): {
+                            "checksum": hashlib.sha1(b"model").hexdigest(),
+                            "size": model_stat.st_size,
+                            "mtime_ns": model_stat.st_mtime_ns,
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            cache_path.chmod(0o644)
+
+            models._load_model_checksum_cache()
+
+            self.assertEqual(models._model_checksum_cache, {})
+            self.assertFalse(cache_path.exists())
 
     def test_invalid_model_checksum_cache_delete_uses_dir_fd_and_fsync(self) -> None:
         with (

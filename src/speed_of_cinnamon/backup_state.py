@@ -307,7 +307,12 @@ class BackupStateStore:
             )
         except FileNotFoundError:
             return _empty_state()
+        except (OSError, RuntimeError) as exc:
+            raise BackupStateError("backup state is invalid") from exc
         try:
+            assert_fd_is_regular_private_file(
+                fd, field_name="backup state", require_private_mode=True
+            )
             chunks: list[bytes] = []
             total_bytes = 0
             while True:
@@ -322,6 +327,10 @@ class BackupStateStore:
                 if total_bytes > MAX_BACKUP_STATE_BYTES:
                     raise BackupStateError("backup state is too large")
             payload = b"".join(chunks)
+        except BackupStateError:
+            raise
+        except (OSError, RuntimeError) as exc:
+            raise BackupStateError("backup state is invalid") from exc
         finally:
             os.close(fd)
         if len(payload) > MAX_BACKUP_STATE_BYTES:
