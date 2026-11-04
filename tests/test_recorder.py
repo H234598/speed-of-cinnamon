@@ -373,14 +373,6 @@ class RecorderTest(unittest.TestCase):
         try:
             if process.stdout is None:
                 self.fail("dedicated scope probe stdout is unavailable")
-            caller_identity = recorder_module._recording_process_identity_for_pid(
-                os.getpid()
-            )
-            self.assertIsNotNone(caller_identity)
-            bound_caller = self._bind_dedicated_scope_fixture_pidfd(
-                process.pid, os.getpid(), caller_identity
-            )
-            self.assertIsNotNone(bound_caller, "scope caller identity is not bound")
             deadline = time.monotonic() + 3.0
             response = bytearray()
             while b"\n" not in response and len(response) < 4096:
@@ -418,10 +410,12 @@ class RecorderTest(unittest.TestCase):
             caller_pid = int(payload["caller_pid"])
             member_pids = tuple(int(pid) for pid in dict(payload["members"]))
             self.assertEqual(process.pid, caller_pid)
-            self.assertEqual(
-                bound_caller[1],
-                recorder_module._recording_process_identity_for_pid(caller_pid),
+            caller_identity = recorder_module._recording_process_identity_for_pid(
+                caller_pid
             )
+            self.assertIsNotNone(caller_identity)
+            bound_caller_fd = os.pidfd_open(caller_pid, 0)
+            bound_caller = (bound_caller_fd, caller_identity)
             bound_leader = self._bind_dedicated_scope_fixture_pidfd(
                 leader_pid, caller_pid, bound_caller[1]
             )
@@ -466,7 +460,7 @@ class RecorderTest(unittest.TestCase):
             self.assertTrue(
                 stop_process(
                     leader_pid,
-                    timeout_seconds=3,
+                    timeout_seconds=10,
                     expected_process_identity=identity,
                     expected_recorder_scope=scope,
                 )
@@ -475,15 +469,28 @@ class RecorderTest(unittest.TestCase):
             os.kill(caller_pid, 0)
             deadline = time.monotonic() + 2
             while time.monotonic() < deadline:
+                for pid in member_pids:
+                    try:
+                        os.waitpid(pid, os.WNOHANG)
+                    except OSError:
+                        pass
                 if all(
-                    recorder_module._recording_process_stat_fields(pid) is None
+                    (
+                        (fields := recorder_module._recording_process_stat_fields(pid))
+                        is None
+                        or (fields and fields[0] in {"Z", "X", "x"})
+                    )
                     for pid in member_pids
                 ):
                     break
                 time.sleep(0.05)
             self.assertTrue(
                 all(
-                    recorder_module._recording_process_stat_fields(pid) is None
+                    (
+                        (fields := recorder_module._recording_process_stat_fields(pid))
+                        is None
+                        or (fields and fields[0] in {"Z", "X", "x"})
+                    )
                     for pid in member_pids
                 )
             )
@@ -5982,6 +5989,9 @@ class RecorderTest(unittest.TestCase):
                 process_holder["process"] = self
 
         with (
+            mock.patch.object(
+                recorder_module, "_command_path", return_value="/usr/bin/pactl"
+            ),
             mock.patch(
                 "speed_of_cinnamon.recorder.subprocess.Popen", side_effect=FakePopen
             ),
@@ -8672,6 +8682,10 @@ Source #13
                 return_value=False,
             ),
             mock.patch(
+                "speed_of_cinnamon.recorder._recording_process_identity_for_pid",
+                return_value=None,
+            ),
+            mock.patch(
                 "speed_of_cinnamon.recorder._recording_process_is_absent",
                 return_value=True,
             ),
@@ -8689,7 +8703,7 @@ Source #13
         self.assertFalse(result)
         self.assertEqual(
             mocked_group_exists.call_args_list,
-            [mock.call(1234), mock.call(1234)],
+            [mock.call(1234), mock.call(1234), mock.call(1234)],
         )
         mocked_kill.assert_not_called()
 

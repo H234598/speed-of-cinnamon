@@ -6813,7 +6813,7 @@ if not worker._RUNTIME_LOADED:
             child_env.update(env)
         return subprocess.run(
             [
-                "/usr/bin/python3.14",
+                sys.executable,
                 "-I",
                 "-B",
                 "-c",
@@ -6854,7 +6854,7 @@ if not worker._RUNTIME_LOADED:
                     )
                     completed = subprocess.run(
                         [
-                            "/usr/bin/python3.14",
+                            sys.executable,
                             "-I",
                             "-B",
                             "-c",
@@ -7044,7 +7044,7 @@ if not worker._RUNTIME_LOADED:
             )
             process = subprocess.Popen(
                 [
-                    "/usr/bin/python3.14",
+                    sys.executable,
                     "-I",
                     "-B",
                     "-c",
@@ -7136,10 +7136,14 @@ if not worker._RUNTIME_LOADED:
             )
             controller_path = root / "remote_http.py"
             controller_path.write_text(evil, encoding="utf-8")
-            py_compile.compile(str(controller_path), doraise=True)
+            py_compile.compile(
+                str(controller_path),
+                doraise=True,
+                invalidation_mode=py_compile.PycInvalidationMode.TIMESTAMP,
+            )
+            evil_mtime = int(controller_path.stat().st_mtime)
             controller_path.write_text(source, encoding="utf-8")
-            cached_mtime = int(controller_path.stat().st_mtime)
-            os.utime(controller_path, (cached_mtime, cached_mtime))
+            os.utime(controller_path, (evil_mtime, evil_mtime))
             import hashlib
 
             info = controller_path.stat(follow_symlinks=False)
@@ -7296,7 +7300,9 @@ if not worker._RUNTIME_LOADED:
                 payload={"url": f"http://127.0.0.1:{server.server_port}"},
             )
             with mock.patch.object(
-                remote_http.sys, "executable", "/usr/bin/python3.14"
+                remote_http.sys,
+                "executable",
+                str(Path(sys.executable).resolve()),
             ):
                 result = remote_http.run_list_ollama_models(request)
             self.assertEqual(result, _success([]))

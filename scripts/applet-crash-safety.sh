@@ -61,19 +61,6 @@ tmp_dir="${test_root}/tmp"
 display_log="${test_root}/xephyr.log"
 cinnamon_log="${test_root}/cinnamon.log"
 
-if [[ ${namespace_guard_probe} != "1" ]]; then
-	for tool in Xephyr dbus-daemon dconf gdbus timeout cinnamon ps sed awk date xprop rg python3 env stat tr id bwrap xauth; do
-		if ! command -v -- "${tool}" >/dev/null 2>&1; then
-			printf 'applet-crash-safety: required tool missing: %s\n' "${tool}" >&2
-			exit 2
-		fi
-	done
-fi
-if [[ ${namespace_guard_probe} != "1" && (! -x ${bwrap_bin} || -L ${bwrap_bin}) ]]; then
-	printf 'applet-crash-safety: private namespace contract is unavailable.\n' >&2
-	exit 2
-fi
-
 validate_xauthority_files() {
 	python3 - "$host_xauthority" "$nested_xauthority" <<'PY'
 import os
@@ -542,6 +529,17 @@ fi
 
 if [[ ${namespace_guard_probe} == "1" ]]; then
 	exit 0
+fi
+
+for tool in Xephyr dbus-daemon dconf gdbus timeout cinnamon ps sed awk date xprop rg python3 env stat tr id bwrap xauth; do
+	if ! command -v -- "${tool}" >/dev/null 2>&1; then
+		printf 'applet-crash-safety: required tool missing: %s\n' "${tool}" >&2
+		exit 2
+	fi
+done
+if [[ ! -x ${bwrap_bin} || -L ${bwrap_bin} ]]; then
+	printf 'applet-crash-safety: private namespace contract is unavailable.\n' >&2
+	exit 2
 fi
 
 if [[ ! -d "${repo_dir}/files/${uuid}" || -L "${repo_dir}/files/${uuid}" ]]; then

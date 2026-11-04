@@ -23,6 +23,13 @@ SUPERVISOR = REPO_ROOT / "scripts" / "rpm-lifecycle-supervisor.py"
 
 
 class RpmLifecycleSupervisorTest(unittest.TestCase):
+    def tearDown(self) -> None:
+        try:
+            self._set_test_subreaper(False)
+        except Exception:
+            pass
+        super().tearDown()
+
     def test_supervisor_binds_unreaped_root_and_direct_children(self) -> None:
         source = SUPERVISOR.read_text(encoding="utf-8")
         self.assertIn("os.WNOWAIT", source)

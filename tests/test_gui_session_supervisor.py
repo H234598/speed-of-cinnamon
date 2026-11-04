@@ -327,8 +327,11 @@ sys.stdout.buffer.write(checked.stdout)
                 "/run/soc-controller",
                 "--dir",
                 "/run/soc-work",
-                "--chdir",
+                "--ro-bind",
                 str(REPO_ROOT),
+                "/run/soc-repo",
+                "--chdir",
+                "/run/soc-repo",
                 "--setenv",
                 "PATH",
                 "/usr/bin:/bin",
@@ -336,12 +339,12 @@ sys.stdout.buffer.write(checked.stdout)
                 "LC_ALL",
                 "C",
                 "--",
-                "/usr/bin/python3.14",
+                str(Path(sys.executable).resolve()),
                 "-I",
                 "-S",
                 "-c",
                 payload,
-                str(SUPERVISOR),
+                "/run/soc-repo/scripts/gui-session-supervisor.py",
             ],
             capture_output=True,
             check=False,
@@ -360,10 +363,61 @@ sys.stdout.buffer.write(checked.stdout)
         self.assertEqual(result.stdout, b"INSTALL_GUARD_FAIL CORE_PARSER_EMPTY\n")
         self.assertEqual(result.stderr, b"")
 
+    def _require_real_runner_bwrap(self) -> None:
+        module = self._module()
+        missing = [
+            path
+            for path in (
+                module.RUNNER_BWRAP,
+                module.RUNNER_ENV,
+                module.RUNNER_PYTHON,
+                module.RUNNER_XVFB,
+            )
+            if not os.path.lexists(path)
+        ]
+        if missing:
+            self.skipTest("required isolated runner tool is unavailable")
+        capability = subprocess.run(
+            [
+                module.RUNNER_BWRAP,
+                "--die-with-parent",
+                "--new-session",
+                "--unshare-all",
+                "--clearenv",
+                "--ro-bind",
+                "/",
+                "/",
+                "--proc",
+                "/proc",
+                "--dev",
+                "/dev",
+                "--tmpfs",
+                "/tmp",
+                "--tmpfs",
+                "/run",
+                "--",
+                "/usr/bin/true",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            check=False,
+            timeout=5,
+        )
+        if capability.returncode != 0 and any(
+            marker in capability.stderr
+            for marker in (
+                b"Operation not permitted",
+                b"Permission denied",
+                b"namespace",
+            )
+        ):
+            self.skipTest("host blocks required bubblewrap namespace capability")
+
     def _run_install_outer(
         self, command: list[str], payload: bytes = b"outer-payload\n"
     ) -> subprocess.CompletedProcess[bytes]:
         if len(command) >= 3 and command[1] == "-c" and payload == b"outer-payload\n":
+            self._require_real_runner_bwrap()
             code = command[2]
             if len(command) > 3:
                 code = code.replace("sys.argv[1]", repr(command[3]))
@@ -443,7 +497,10 @@ sys.stdout.buffer.write(checked.stdout)
             "-",
             *suffix,
         ]
-        built = module._runner_bwrap_command(adapter_command)
+        with mock.patch.object(
+            module, "_runner_trusted_file", return_value=True
+        ), mock.patch.object(module, "_runner_trusted_dir", return_value=True):
+            built = module._runner_bwrap_command(adapter_command)
         contained = built[built.index("--") + 1 :]
         self.assertEqual(
             contained[:9],
@@ -483,7 +540,10 @@ sys.stdout.buffer.write(checked.stdout)
             "--",
             "fixed-child",
         ]
-        built = module._runner_bwrap_command(command, 9)
+        with mock.patch.object(
+            module, "_runner_trusted_file", return_value=True
+        ), mock.patch.object(module, "_runner_trusted_dir", return_value=True):
+            built = module._runner_bwrap_command(command, 9)
         self.assertIn(
             ["--info-fd", "9"],
             [built[index : index + 2] for index in range(len(built) - 1)],
@@ -1174,6 +1234,7 @@ sys.stdout.buffer.write(checked.stdout)
         self._assert_runner_children_empty()
 
     def test_install_outer_runner_reaps_double_fork_setsid_descendant(self) -> None:
+        self._require_real_runner_bwrap()
         comm = "sc" + secrets.token_hex(6)
         self.assertLessEqual(len(comm.encode("ascii")), 15)
         payload = (
@@ -2043,12 +2104,24 @@ time.sleep(5)
                 self.assertEqual(process.wait(timeout=2), -signal.SIGKILL)
                 self.assertEqual(os.read(read_fd, 512), b"")
                 child_pid = int(marker.read_text(encoding="ascii"))
-                deadline = time.monotonic() + 2
-                while (
-                    Path(f"/proc/{child_pid}").exists() and time.monotonic() < deadline
-                ):
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    try:
+                        stat_bytes = Path(f"/proc/{child_pid}/stat").read_bytes()
+                    except OSError:
+                        break
+                    fields = stat_bytes.rsplit(b") ", 1)[1].split()
+                    if not fields or fields[0] == b"Z":
+                        break
                     time.sleep(0.01)
-                self.assertFalse(Path(f"/proc/{child_pid}").exists())
+                if Path(f"/proc/{child_pid}/stat").exists():
+                    fields = (
+                        Path(f"/proc/{child_pid}/stat")
+                        .read_bytes()
+                        .rsplit(b") ", 1)[1]
+                        .split()
+                    )
+                    self.assertEqual(fields[0], b"Z")
             finally:
                 os.close(read_fd)
 

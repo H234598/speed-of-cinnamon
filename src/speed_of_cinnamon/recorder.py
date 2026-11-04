@@ -3429,13 +3429,15 @@ def _reap_recorder_process_if_zombie(pid: int) -> bool:
 def _recording_process_is_absent(pid: int) -> bool:
     if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
         return False
+    _reap_recorder_process_if_zombie(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
         return True
     except (OSError, OverflowError, ValueError):
         return False
-    return False
+    stat_fields = _recording_process_stat_fields(pid)
+    return bool(stat_fields and stat_fields[0] in {"Z", "X", "x"})
 
 
 def _process_group_has_recorder_session(process_group_id: int) -> bool | None:
@@ -4104,6 +4106,8 @@ def stop_process(
         for scope_pid, expected_start_time in scope_process_identities.items():
             if not has_time_remaining():
                 return False
+            if scope_pid > 0 and scope_pid != os.getpid():
+                _reap_recorder_process_if_zombie(scope_pid)
             stat_fields = _recording_process_stat_fields(scope_pid)
             if stat_fields is None:
                 if not has_time_remaining():
@@ -4117,6 +4121,8 @@ def stop_process(
                 return False
             if len(stat_fields) < 20 or not stat_fields[19].isdecimal():
                 return False
+            if stat_fields[0] in {"Z", "X", "x"}:
+                continue
             if stat_fields[19] == expected_start_time:
                 return False
         return True
@@ -4145,9 +4151,13 @@ def stop_process(
         if not has_time_remaining():
             return False
         if _recording_process_identity_matches(pid, expected_process_identity):
-            expected_start_time = expected_process_identity.rpartition(":")[2]
-            if refreshed.get(pid) != expected_start_time:
-                return False
+            leader_fields = _recording_process_stat_fields(pid)
+            if leader_fields is None or (
+                leader_fields and leader_fields[0] not in {"Z", "X", "x"}
+            ):
+                expected_start_time = expected_process_identity.rpartition(":")[2]
+                if refreshed.get(pid) != expected_start_time:
+                    return False
         scope_process_identities = refreshed
         return True
 
@@ -4246,6 +4256,7 @@ def stop_process(
     def target_identity_still_safe() -> bool:
         if not has_time_remaining():
             return False
+        _reap_recorder_process_if_zombie(pid)
         if not refresh_scope_identities():
             return False
         if not has_time_remaining():
@@ -4311,12 +4322,18 @@ def stop_process(
         if not has_time_remaining():
             return False
         if scope_identity is not None:
+            for scope_pid in sorted(scope_process_identities):
+                if scope_pid > 0 and scope_pid != os.getpid():
+                    _reap_recorder_process_if_zombie(scope_pid)
             if not refresh_scope_identities():
                 return False
             if scope_process_identities:
                 return False
         if not has_time_remaining():
             return False
+        for descendant_pid in sorted(descendant_identities):
+            if descendant_pid > 0 and descendant_pid != os.getpid():
+                _reap_recorder_process_if_zombie(descendant_pid)
         descendants_live = _process_tree_has_live_processes(descendant_identities)
         if descendants_live is not False:
             return False
@@ -4491,34 +4508,43 @@ def stop_process(
                 return False
             return signal_scope_targets(signal_name, signal_deadline)
         if _recording_process_identity_matches(pid, expected_process_identity):
-            if scope_identity is not None and not refresh_scope_identities():
-                return False
-            if not has_time_remaining() or not signal_phase_has_time(signal_deadline):
-                return False
-            if (
-                _send_process_signal_with_pidfd(
-                    pid,
-                    expected_process_identity,
-                    signal_name,
-                    expected_recorder_scope=expected_recorder_scope,
-                    deadline=signal_deadline,
-                    distinguish_deadline_expiry=True,
-                )
-                if expected_recorder_scope is not None
-                else _send_process_signal_with_pidfd(
-                    pid,
-                    expected_process_identity,
-                    signal_name,
-                    deadline=signal_deadline,
-                    distinguish_deadline_expiry=True,
-                )
-            ) is not True:
-                return False
-            if not has_time_remaining() or not signal_phase_has_time(signal_deadline):
-                return False
-            if not signal_descendant_targets(signal_name, signal_deadline):
-                return False
-            return signal_scope_targets(signal_name, signal_deadline)
+            leader_fields = _recording_process_stat_fields(pid)
+            if leader_fields is None or (
+                leader_fields and leader_fields[0] not in {"Z", "X", "x"}
+            ):
+                if scope_identity is not None and not refresh_scope_identities():
+                    return False
+                if not has_time_remaining() or not signal_phase_has_time(
+                    signal_deadline
+                ):
+                    return False
+                if (
+                    _send_process_signal_with_pidfd(
+                        pid,
+                        expected_process_identity,
+                        signal_name,
+                        expected_recorder_scope=expected_recorder_scope,
+                        deadline=signal_deadline,
+                        distinguish_deadline_expiry=True,
+                    )
+                    if expected_recorder_scope is not None
+                    else _send_process_signal_with_pidfd(
+                        pid,
+                        expected_process_identity,
+                        signal_name,
+                        deadline=signal_deadline,
+                        distinguish_deadline_expiry=True,
+                    )
+                ) is not True:
+                    return False
+                if not has_time_remaining() or not signal_phase_has_time(
+                    signal_deadline
+                ):
+                    return False
+                if not signal_descendant_targets(signal_name, signal_deadline):
+                    return False
+                return signal_scope_targets(signal_name, signal_deadline)
+            _reap_recorder_process_if_zombie(pid)
         if not has_time_remaining() or not _recording_process_is_absent(pid):
             return False
         if scope_identity is not None:

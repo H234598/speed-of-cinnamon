@@ -886,6 +886,7 @@ def _require_private_identity_removal_parent(
     *,
     action: str,
     path: Path,
+    allow_sticky_system_parent: bool = False,
 ) -> None:
     try:
         parent_stat = os.fstat(parent_fd)
@@ -893,6 +894,14 @@ def _require_private_identity_removal_parent(
         raise OSError(
             f"could not inspect removal parent during {action}: {path}"
         ) from exc
+    if (
+        allow_sticky_system_parent
+        and path.parent in _TRUSTED_STICKY_SYSTEM_DIRS
+        and stat_is_dir_no_follow(parent_stat.st_mode)
+        and parent_stat.st_uid == 0
+        and bool(parent_stat.st_mode & stat.S_ISVTX)
+    ):
+        return
     if (
         parent_stat.st_uid != os.geteuid()
         or parent_stat.st_mode & 0o022
@@ -3071,7 +3080,10 @@ def cmd_remove(args: argparse.Namespace) -> None:
         stat_result = _lstat_at(parent_fd, leaf)
         if expected_identity is not None:
             _require_private_identity_removal_parent(
-                parent_fd, action=args.action, path=path
+                parent_fd,
+                action=args.action,
+                path=path,
+                allow_sticky_system_parent=(args.kind == "dir"),
             )
             _assert_expected_identity(
                 parent_fd,
@@ -3082,7 +3094,11 @@ def cmd_remove(args: argparse.Namespace) -> None:
             )
             stat_result = _lstat_at(parent_fd, leaf)
         if stat_result is None:
-            _validate_private_dir_chain(path.parent, action=args.action)
+            _validate_private_dir_chain(
+                path.parent,
+                action=args.action,
+                allow_sticky_system_leaf=(args.kind == "dir"),
+            )
             return
         _validate_private_dir_chain(
             path if stat_is_dir_no_follow(stat_result.st_mode) else path.parent,

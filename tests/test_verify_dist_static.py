@@ -304,7 +304,7 @@ class VerifyDistStaticTest(unittest.TestCase):
     def _process_info(pid: int) -> tuple[int, str, int, int, bytes] | None:
         try:
             stat = Path(f"/proc/{pid}/stat").read_text(encoding="ascii")
-        except (FileNotFoundError, PermissionError):
+        except (FileNotFoundError, PermissionError, ProcessLookupError, OSError):
             return None
         right_paren = stat.rfind(")")
         if right_paren < 0:
@@ -315,7 +315,14 @@ class VerifyDistStaticTest(unittest.TestCase):
         try:
             command_path = Path(f"/proc/{pid}/cmdline").read_bytes()
             return (int(pid), fields[0], int(fields[2]), int(fields[19]), command_path)
-        except (FileNotFoundError, IndexError, PermissionError, ValueError):
+        except (
+            FileNotFoundError,
+            IndexError,
+            PermissionError,
+            ProcessLookupError,
+            OSError,
+            ValueError,
+        ):
             return None
 
     @staticmethod

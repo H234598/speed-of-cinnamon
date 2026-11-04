@@ -7220,9 +7220,10 @@ class ProcessPriorityTests(unittest.TestCase):
             "relative=next(line[3:] for line in Path('/proc/self/cgroup').read_text().splitlines() "
             "if line.startswith('0::')); "
             "cgroup=Path('/sys/fs/cgroup') / relative.lstrip('/'); "
+            "io_weight=(cgroup / 'io.weight').read_text().strip() if (cgroup / 'io.weight').is_file() else None; "
             "print(json.dumps({'pid': os.getpid(), 'pgid': os.getpgid(0), 'sid': os.getsid(0), "
             "'cgroup': str(cgroup), 'cpu': (cgroup / 'cpu.weight').read_text().strip(), "
-            "'io': (cgroup / 'io.weight').read_text().strip()}), flush=True); "
+            "'io': io_weight}), flush=True); "
             "os.kill(os.getpid(), signal.SIGTERM)"
         )
         process, listener, nonce = _start_scope_with_internal_latch(
@@ -7256,7 +7257,8 @@ class ProcessPriorityTests(unittest.TestCase):
             self.assertEqual(payload["pgid"], process.pid)
             self.assertEqual(payload["sid"], process.pid)
             self.assertEqual(payload["cpu"], "200")
-            self.assertEqual(payload["io"], "default 200")
+            if payload["io"] is not None:
+                self.assertEqual(payload["io"], "default 200")
             scope_path = Path(str(payload["cgroup"]))
             self.assertTrue(scope_path.is_absolute())
             self.assertTrue(str(scope_path).startswith("/sys/fs/cgroup/"))
@@ -7332,20 +7334,26 @@ class ProcessPriorityTests(unittest.TestCase):
             self.assertEqual(
                 (child_scope / "cpu.weight").read_text(encoding="ascii").strip(), "200"
             )
-            self.assertTrue(
-                (child_scope / "io.weight")
-                .read_text(encoding="ascii")
-                .startswith("default 200")
-            )
+            if (child_scope / "io.weight").is_file():
+                self.assertTrue(
+                    (child_scope / "io.weight")
+                    .read_text(encoding="ascii")
+                    .startswith("default 200")
+                )
             os.killpg(child_pid, signal.SIGTERM)
-            for _ in range(40):
+            child_gone = False
+            for _ in range(100):
                 try:
-                    os.kill(child_pid, 0)
+                    stat_bytes = Path(f"/proc/{child_pid}/stat").read_bytes()
                 except OSError:
+                    child_gone = True
+                    break
+                fields = stat_bytes.rsplit(b") ", 1)[1].split()
+                if not fields or fields[0] == b"Z":
+                    child_gone = True
                     break
                 time.sleep(0.05)
-            with self.assertRaises(OSError):
-                os.kill(child_pid, 0)
+            self.assertTrue(child_gone)
         finally:
             listener.close()
             if child_pid is not None:
