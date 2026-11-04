@@ -1593,7 +1593,10 @@ def _read_bounded_ascii_descriptor(descriptor: int, *, max_bytes: int) -> str | 
     try:
         data = bytearray()
         while len(data) <= max_bytes:
-            chunk = os.read(descriptor, min(4096, max_bytes + 1 - len(data)))
+            try:
+                chunk = os.read(descriptor, min(4096, max_bytes + 1 - len(data)))
+            except InterruptedError:
+                continue
             if not chunk:
                 break
             data.extend(chunk)
@@ -5017,7 +5020,10 @@ def _read_proc_file_at(
     try:
         contents = bytearray()
         while len(contents) <= maximum_bytes:
-            chunk = os.read(file_fd, maximum_bytes + 1 - len(contents))
+            try:
+                chunk = os.read(file_fd, maximum_bytes + 1 - len(contents))
+            except InterruptedError:
+                continue
             if not chunk:
                 return bytes(contents)
             contents.extend(chunk)
@@ -5742,6 +5748,30 @@ def _write_local_model_direct_status(
         return False
 
 
+def _read_uninterrupted_pipe(descriptor: int, count: int) -> bytes:
+    while True:
+        try:
+            return os.read(descriptor, count)
+        except InterruptedError:
+            continue
+
+
+def _write_uninterrupted_pipe(descriptor: int, payload: bytes) -> int:
+    while True:
+        try:
+            return os.write(descriptor, payload)
+        except InterruptedError:
+            continue
+
+
+def _waitpid_uninterrupted(pid: int, options: int) -> tuple[int, int]:
+    while True:
+        try:
+            return os.waitpid(pid, options)
+        except InterruptedError:
+            continue
+
+
 def _run_local_model_direct_supervisor(argv: Sequence[str]) -> None:
     configuration = _take_local_model_direct_supervisor_configuration()
     if configuration is None:
@@ -5830,10 +5860,10 @@ def _run_local_model_direct_supervisor(argv: Sequence[str]) -> None:
                 if (
                     os.getpgrp() != os.getpid()
                     or os.getpgrp() == os.getpgid(parent_pid)
-                    or os.write(ready_write, b"P") != 1
+                    or _write_uninterrupted_pipe(ready_write, b"P") != 1
                 ):
                     os._exit(_LOCAL_MODEL_DIRECT_SUPERVISOR_EXIT)
-                if os.read(gate_read, 2) != b"G":
+                if _read_uninterrupted_pipe(gate_read, 2) != b"G":
                     os._exit(_LOCAL_MODEL_DIRECT_SUPERVISOR_EXIT)
                 os.close(gate_read)
                 if not _arm_local_model_direct_target_security(
@@ -5842,7 +5872,7 @@ def _run_local_model_direct_supervisor(argv: Sequence[str]) -> None:
                     (parent_pid, controller_process_group),
                 ):
                     os._exit(_LOCAL_MODEL_DIRECT_SUPERVISOR_EXIT)
-                if os.write(ready_write, b"A") != 1:
+                if _write_uninterrupted_pipe(ready_write, b"A") != 1:
                     os._exit(_LOCAL_MODEL_DIRECT_SUPERVISOR_EXIT)
                 os.close(ready_write)
                 if time.monotonic() >= absolute_deadline:
@@ -5875,23 +5905,29 @@ def _run_local_model_direct_supervisor(argv: Sequence[str]) -> None:
             if received_signal:
                 outcome = _LOCAL_MODEL_DIRECT_OUTCOME_SIGNAL
                 break
-            process_id, wait_status = os.waitpid(root_pid, os.WNOHANG)
+            process_id, wait_status = _waitpid_uninterrupted(root_pid, os.WNOHANG)
             if process_id == root_pid:
                 root_wait_status = wait_status
                 outcome = _LOCAL_MODEL_DIRECT_OUTCOME_FAILURE
                 break
-            readable, _, _ = select.select(
-                [ready_read],
-                [],
-                [],
-                min(
-                    _SCOPE_EXEC_POLL_SECONDS,
-                    absolute_deadline - time.monotonic(),
-                ),
-            )
+            try:
+                readable, _, _ = select.select(
+                    [ready_read],
+                    [],
+                    [],
+                    max(
+                        0.0,
+                        min(
+                            _SCOPE_EXEC_POLL_SECONDS,
+                            absolute_deadline - time.monotonic(),
+                        ),
+                    ),
+                )
+            except InterruptedError:
+                continue
             if readable:
                 if (
-                    os.read(ready_read, 1) != b"P"
+                    _read_uninterrupted_pipe(ready_read, 1) != b"P"
                     or os.getpgid(root_pid) != root_pid
                     or os.getpgid(root_pid) == os.getpgrp()
                 ):
@@ -5914,7 +5950,7 @@ def _run_local_model_direct_supervisor(argv: Sequence[str]) -> None:
             or _canonical_process_identity(controller_pid) != controller_identity
         ):
             outcome = _LOCAL_MODEL_DIRECT_OUTCOME_FAILURE
-        elif os.write(gate_write, b"G") != 1:
+        elif _write_uninterrupted_pipe(gate_write, b"G") != 1:
             outcome = _LOCAL_MODEL_DIRECT_OUTCOME_FAILURE
         else:
             os.close(gate_write)
@@ -5926,22 +5962,28 @@ def _run_local_model_direct_supervisor(argv: Sequence[str]) -> None:
                 if time.monotonic() >= absolute_deadline:
                     outcome = _LOCAL_MODEL_DIRECT_OUTCOME_DEADLINE
                     break
-                process_id, wait_status = os.waitpid(root_pid, os.WNOHANG)
+                process_id, wait_status = _waitpid_uninterrupted(root_pid, os.WNOHANG)
                 if process_id == root_pid:
                     root_wait_status = wait_status
                     outcome = _LOCAL_MODEL_DIRECT_OUTCOME_FAILURE
                     break
-                readable, _, _ = select.select(
-                    [ready_read],
-                    [],
-                    [],
-                    min(
-                        _SCOPE_EXEC_POLL_SECONDS,
-                        absolute_deadline - time.monotonic(),
-                    ),
-                )
+                try:
+                    readable, _, _ = select.select(
+                        [ready_read],
+                        [],
+                        [],
+                        max(
+                            0.0,
+                            min(
+                                _SCOPE_EXEC_POLL_SECONDS,
+                                absolute_deadline - time.monotonic(),
+                            ),
+                        ),
+                    )
+                except InterruptedError:
+                    continue
                 if readable:
-                    if os.read(ready_read, 2) != b"A":
+                    if _read_uninterrupted_pipe(ready_read, 2) != b"A":
                         outcome = _LOCAL_MODEL_DIRECT_OUTCOME_FAILURE
                         break
                     flags |= _LOCAL_MODEL_DIRECT_FLAG_SECURITY_ARMED
@@ -5956,7 +5998,9 @@ def _run_local_model_direct_supervisor(argv: Sequence[str]) -> None:
                     if time.monotonic() >= absolute_deadline:
                         outcome = _LOCAL_MODEL_DIRECT_OUTCOME_DEADLINE
                         break
-                    process_id, wait_status = os.waitpid(root_pid, os.WNOHANG)
+                    process_id, wait_status = _waitpid_uninterrupted(
+                        root_pid, os.WNOHANG
+                    )
                     if process_id == root_pid:
                         root_wait_status = wait_status
                         outcome = _LOCAL_MODEL_DIRECT_OUTCOME_TARGET
@@ -5973,7 +6017,10 @@ def _run_local_model_direct_supervisor(argv: Sequence[str]) -> None:
                             else _LOCAL_MODEL_DIRECT_OUTCOME_FAILURE
                         )
                         break
-                    time.sleep(_SCOPE_EXEC_POLL_SECONDS)
+                    try:
+                        time.sleep(_SCOPE_EXEC_POLL_SECONDS)
+                    except InterruptedError:
+                        continue
     except TimeoutError:
         pass
     except BaseException:
@@ -6309,7 +6356,10 @@ def _read_scope_file_snapshot(
             return None
         data = bytearray()
         while len(data) <= max_bytes:
-            chunk = os.read(descriptor, min(4096, max_bytes + 1 - len(data)))
+            try:
+                chunk = os.read(descriptor, min(4096, max_bytes + 1 - len(data)))
+            except InterruptedError:
+                continue
             if not chunk:
                 break
             data.extend(chunk)
@@ -7778,14 +7828,20 @@ def _read_ionice_output_bounded(
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise subprocess.TimeoutExpired(argv, IONICE_TIMEOUT_SECONDS)
-            events = selector.select(remaining)
+            try:
+                events = selector.select(remaining)
+            except InterruptedError:
+                continue
             if not events:
                 raise subprocess.TimeoutExpired(argv, IONICE_TIMEOUT_SECONDS)
             for key, _ in events:
-                chunk = os.read(
-                    key.fileobj.fileno(),
-                    IONICE_OUTPUT_READ_CHUNK_BYTES,
-                )
+                try:
+                    chunk = os.read(
+                        key.fileobj.fileno(),
+                        IONICE_OUTPUT_READ_CHUNK_BYTES,
+                    )
+                except InterruptedError:
+                    continue
                 if not chunk:
                     selector.unregister(key.fileobj)
                     key.fileobj.close()

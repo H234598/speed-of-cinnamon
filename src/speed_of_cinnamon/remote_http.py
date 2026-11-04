@@ -2400,7 +2400,10 @@ def _package_bootstrap_snapshot() -> tuple[str, str]:
                     raise _SupervisorFailure("remote-worker-unavailable")
                 data = bytearray()
                 while True:
-                    chunk = os.read(fd, 65536)
+                    try:
+                        chunk = os.read(fd, 65536)
+                    except InterruptedError:
+                        continue
                     if not chunk:
                         break
                     data.extend(chunk)
@@ -2548,7 +2551,10 @@ try:
             chunks = []
             total = 0
             while True:
-                chunk = os.read(fd, 65536)
+                try:
+                    chunk = os.read(fd, 65536)
+                except InterruptedError:
+                    continue
                 if not chunk:
                     break
                 total += len(chunk)
