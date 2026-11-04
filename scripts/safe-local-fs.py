@@ -493,7 +493,9 @@ def _open_dir_chain(
         raise
 
 
-def _validate_private_dir_chain(path: Path, *, action: str) -> None:
+def _validate_private_dir_chain(
+    path: Path, *, action: str, allow_sticky_system_leaf: bool = False
+) -> None:
     """Validate existing persistent-directory ancestors through pinned descriptors."""
     if path == Path("/"):
         raise OSError(
@@ -570,7 +572,11 @@ def _validate_private_dir_chain(path: Path, *, action: str) -> None:
                 raise OSError(
                     f"persistent directory ancestor is writable during {action}: {current_path}"
                 )
-            if current_path == path and current_stat.st_uid != os.geteuid():
+            if (
+                current_path == path
+                and current_stat.st_uid != os.geteuid()
+                and not (allow_sticky_system_leaf and sticky_system_root)
+            ):
                 raise OSError(
                     f"persistent directory root is not owned by current user during {action}: {path}"
                 )
@@ -609,7 +615,11 @@ def _validate_nearest_private_dir_chain(path: Path, *, action: str) -> None:
             raise OSError(
                 f"persistent directory ancestor is not a directory during {action}: {candidate}"
             )
-        _validate_private_dir_chain(candidate, action=action)
+        _validate_private_dir_chain(
+            candidate,
+            action=action,
+            allow_sticky_system_leaf=candidate != path,
+        )
         return
     raise OSError(f"no private persistent directory ancestor during {action}: {path}")
 

@@ -1019,6 +1019,21 @@ module.cmd_rmdir(module.argparse.Namespace(
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("writable", result.stderr)
 
+    def test_private_chain_allow_missing_accepts_sticky_tmp_parent_and_rejects_tmp_leaf(
+        self,
+    ) -> None:
+        missing_child = Path("/tmp") / f"soc-missing-private-child-{os.getpid()}"
+        result = run_helper(
+            "assert-private-chain", "test", str(missing_child), "--allow-missing"
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+        direct_tmp = run_helper(
+            "assert-private-chain", "test", "/tmp", "--allow-missing"
+        )
+        self.assertNotEqual(direct_tmp.returncode, 0)
+        self.assertIn("not owned by current user", direct_tmp.stderr)
+
     def test_private_chain_rejects_foreign_owner(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "home"

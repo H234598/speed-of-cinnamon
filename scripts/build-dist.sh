@@ -8,7 +8,7 @@ export LC_ALL=C
 
 readonly DIST_BUILD_TIMEOUT_SECONDS=3600
 readonly DIST_BUILD_KILL_AFTER_SECONDS=2
-readonly DIST_BUILD_CLOCK_TIMEOUT_SECONDS=0.25
+readonly DIST_BUILD_CLOCK_TIMEOUT_SECONDS=1.0
 readonly DIST_BUILD_LAUNCH_MARGIN_NS=50000000
 readonly DIST_BUILD_INITIAL_PROBE_TIMEOUT_SECONDS=0.25
 readonly DIST_BUILD_STARTUP_RESERVE_NS=3000000000
@@ -1739,6 +1739,28 @@ try:
                 raise SystemExit(f"unresolved build-dist workspace: {workspace_base}/{name}")
             age_ns = time.time_ns() - path_stat.st_mtime_ns
             if age_ns < max_age_ns:
+                active_lock_held = False
+                if is_workspace:
+                    workspace_fd = None
+                    try:
+                        workspace_fd = os.open(
+                            name,
+                            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                            dir_fd=parent_fd,
+                        )
+                        try:
+                            fcntl.flock(workspace_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        except BlockingIOError:
+                            active_lock_held = True
+                        else:
+                            fcntl.flock(workspace_fd, fcntl.LOCK_UN)
+                    except OSError:
+                        pass
+                    finally:
+                        if workspace_fd is not None:
+                            os.close(workspace_fd)
+                if active_lock_held:
+                    continue
                 raise SystemExit(f"recent build-dist workspace requires recovery: {workspace_base}/{name}")
             if len(stale) >= max_stale:
                 raise SystemExit(f"build-dist workspace sweep exceeds max {max_stale}")
@@ -1824,6 +1846,11 @@ work_dir_mode_bits=$((8#${work_dir_mode}))
 if [[ ${work_dir_owner} != "${EUID}" ]] ||
 	(((work_dir_mode_bits & 0077) != 0 || (work_dir_mode_bits & 0200) == 0)); then
 	printf 'temporary build-dist workspace is unsafe: %s\n' "${work_dir}" >&2
+	exit 1
+fi
+exec {work_dir_lock_fd}<"${work_dir}"
+if ! flock -n -x "${work_dir_lock_fd}"; then
+	printf 'failed to lock active build-dist workspace: %s\n' "${work_dir}" >&2
 	exit 1
 fi
 staging_tarball=""
@@ -1980,6 +2007,9 @@ cleanup() {
 	elif [[ -n ${work_dir} ]]; then
 		printf 'refusing build-dist workspace cleanup without verified identity: %s\n' "${work_dir}" >&2
 		cleanup_failed=1
+	fi
+	if [[ -n ${work_dir_lock_fd:-} ]]; then
+		exec {work_dir_lock_fd}<&-
 	fi
 	if ((cleanup_failed)); then
 		if ((primary_status == 0)); then
