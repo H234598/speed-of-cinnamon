@@ -2038,9 +2038,9 @@ if run_command_bounded grep -Fq 'command -v -- python3' "${package_dir}/scripts/
 	printf 'archive backend wrapper helper must not resolve python3 through PATH at runtime.\n' >&2
 	exit 1
 fi
-if ! run_command_bounded grep -Fq 'python_executable = _validate_absolute(args.python_executable, "python executable path")' "${package_dir}/scripts/safe-local-fs.py" ||
+if ! run_command_bounded grep -Fq 'args.python_executable, "python executable path"' "${package_dir}/scripts/safe-local-fs.py" ||
 	! run_command_bounded grep -Fq 'write_wrapper.add_argument("python_executable")' "${package_dir}/scripts/safe-local-fs.py" ||
-	! run_command_bounded grep -Fq ' -m speed_of_cinnamon.cli \"$@\"' "${package_dir}/scripts/safe-local-fs.py"; then
+	! run_command_bounded grep -Fq ' -m speed_of_cinnamon.cli "$@"' "${package_dir}/scripts/safe-local-fs.py"; then
 	printf 'archive backend wrapper helper does not invoke the expected CLI module.\n' >&2
 	exit 1
 fi

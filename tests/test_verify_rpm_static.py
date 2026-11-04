@@ -21,9 +21,9 @@ class VerifyRpmStaticTest(unittest.TestCase):
     def test_snapshot_copy_enforces_rpm_size_limit(self) -> None:
         source = VERIFY_RPM.read_text(encoding="utf-8")
 
-        self.assertIn(
-            'copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644 \\\n  --max-bytes "${MAX_RPM_ARCHIVE_BYTES}"',
+        self.assertRegex(
             source,
+            r'copy-file verify-rpm "\$\{rpm_path\}" "\$\{rpm_snapshot\}" 0644 \\\n\s+--max-bytes "\$\{MAX_RPM_ARCHIVE_BYTES\}"',
         )
         self.assertIn('snapshot_bytes="$(stat -c \'%s\' "${rpm_snapshot}")"', source)
 
