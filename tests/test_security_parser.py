@@ -67,6 +67,34 @@ class SecurityParserTest(unittest.TestCase):
             ],
         )
 
+    def test_blacklist_lock_retries_interrupted_unlock_and_eacces(self) -> None:
+        operations: list[int] = []
+
+        def contend_and_interrupt(_fd: int, operation: int) -> None:
+            operations.append(operation)
+            if len(operations) == 1:
+                raise PermissionError(security_parser.errno.EACCES, "contended")
+            if operation == fcntl.LOCK_UN and operations.count(fcntl.LOCK_UN) == 1:
+                raise InterruptedError()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "blacklist.txt"
+            with mock.patch.object(
+                security_parser.fcntl, "flock", side_effect=contend_and_interrupt
+            ):
+                fd = security_parser._acquire_blacklist_lock(path)
+                security_parser._release_blacklist_lock(fd)
+
+        self.assertEqual(
+            operations,
+            [
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                fcntl.LOCK_UN,
+                fcntl.LOCK_UN,
+            ],
+        )
+
     def test_blacklist_lock_is_close_on_exec(self) -> None:
         cloexec_flag = getattr(os, "O_CLOEXEC", 0)
         if not cloexec_flag:

@@ -69,6 +69,34 @@ class StateStoreTest(unittest.TestCase):
             ],
         )
 
+    def test_state_lock_retries_interrupted_unlock_and_eacces_contention(self) -> None:
+        operations: list[int] = []
+
+        def contend_and_interrupt(_fd: int, operation: int) -> None:
+            operations.append(operation)
+            if len(operations) == 1:
+                raise PermissionError(errno.EACCES, "contended")
+            if operation == fcntl.LOCK_UN and operations.count(fcntl.LOCK_UN) == 1:
+                raise InterruptedError()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            store = StateStore(Path(tmp) / "state.json")
+            with mock.patch.object(
+                state_module.fcntl, "flock", side_effect=contend_and_interrupt
+            ):
+                with store._locked():
+                    pass
+
+        self.assertEqual(
+            operations,
+            [
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                fcntl.LOCK_UN,
+                fcntl.LOCK_UN,
+            ],
+        )
+
     def test_state_lock_times_out_when_exclusive_lock_stays_busy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")

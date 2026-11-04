@@ -1505,6 +1505,29 @@ class RecorderTest(unittest.TestCase):
             if recorder_module._recording_process_stat_fields(process.pid) is not None:
                 os.waitpid(process.pid, os.WNOHANG)
 
+    def test_reap_recorder_process_if_zombie_retries_eintr(self) -> None:
+        calls = 0
+
+        def flaky_waitpid(pid: int, options: int) -> tuple[int, int]:
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise InterruptedError()
+            return (pid, 0)
+
+        with (
+            mock.patch.object(
+                recorder_module,
+                "_recording_process_stat_fields",
+                return_value=("Z", "1", "1"),
+            ),
+            mock.patch.object(
+                recorder_module.os, "waitpid", side_effect=flaky_waitpid
+            ),
+        ):
+            self.assertTrue(recorder_module._reap_recorder_process_if_zombie(4321))
+        self.assertEqual(calls, 2)
+
     def test_recorder_process_cleanup_fails_closed_when_pid_identity_changes(
         self,
     ) -> None:

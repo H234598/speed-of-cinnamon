@@ -51,6 +51,35 @@ class BackupIntegrationTests(unittest.TestCase):
                 + 1,
             )
 
+    def test_backup_state_lock_retries_interrupted_unlock_and_eacces(self):
+        operations: list[int] = []
+
+        def contend_and_interrupt(_fd: int, operation: int) -> None:
+            operations.append(operation)
+            if len(operations) == 1:
+                raise PermissionError(backup_state_module.errno.EACCES, "contended")
+            if (
+                operation == backup_state_module.fcntl.LOCK_UN
+                and operations.count(backup_state_module.fcntl.LOCK_UN) == 1
+            ):
+                raise InterruptedError()
+
+        with mock.patch.object(
+            backup_state_module.fcntl, "flock", side_effect=contend_and_interrupt
+        ):
+            with self.ledger._locked():
+                pass
+
+        self.assertEqual(
+            operations,
+            [
+                backup_state_module.fcntl.LOCK_EX | backup_state_module.fcntl.LOCK_NB,
+                backup_state_module.fcntl.LOCK_EX | backup_state_module.fcntl.LOCK_NB,
+                backup_state_module.fcntl.LOCK_UN,
+                backup_state_module.fcntl.LOCK_UN,
+            ],
+        )
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)

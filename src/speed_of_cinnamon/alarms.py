@@ -87,8 +87,12 @@ def _flock_retry(
     if timeout_seconds > ALARM_LOCK_TIMEOUT_SECONDS:
         raise RuntimeError("alarm lock timeout exceeds safe limit")
     if operation & fcntl.LOCK_UN:
-        fcntl.flock(fd, operation)
-        return
+        while True:
+            try:
+                fcntl.flock(fd, operation)
+                return
+            except InterruptedError:
+                continue
     deadline = time_module.monotonic() + timeout_seconds
     nonblocking_operation = operation | fcntl.LOCK_NB
     while True:
@@ -97,6 +101,11 @@ def _flock_retry(
             return
         except InterruptedError:
             continue
+        except BlockingIOError as exc:
+            remaining = deadline - time_module.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("alarm store lock acquisition timed out") from exc
+            time_module.sleep(min(ALARM_LOCK_RETRY_SECONDS, remaining))
         except OSError as exc:
             if exc.errno not in {errno.EACCES, errno.EAGAIN}:
                 raise

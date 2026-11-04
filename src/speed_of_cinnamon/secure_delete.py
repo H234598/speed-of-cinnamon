@@ -85,10 +85,16 @@ def secure_wipe_bound_regular_fd(
         if not chunk:
             raise RuntimeError(f"{field_name} secure deletion made no progress")
         if callable(_OS_PWRITE):
-            written = _OS_PWRITE(secure_fd, chunk, offset)
+            try:
+                written = _OS_PWRITE(secure_fd, chunk, offset)
+            except InterruptedError:
+                continue
         else:
             _OS_LSEEK(secure_fd, offset, os.SEEK_SET)
-            written = _OS_WRITE(secure_fd, chunk)
+            try:
+                written = _OS_WRITE(secure_fd, chunk)
+            except InterruptedError:
+                continue
         if (
             isinstance(written, bool)
             or not isinstance(written, int)
@@ -98,8 +104,18 @@ def secure_wipe_bound_regular_fd(
             raise RuntimeError(f"{field_name} secure deletion made no progress")
         offset += written
     final_size = 0 if truncate_after_wipe else size
-    _OS_FTRUNCATE(secure_fd, final_size)
-    _OS_FSYNC(secure_fd)
+    while True:
+        try:
+            _OS_FTRUNCATE(secure_fd, final_size)
+            break
+        except InterruptedError:
+            continue
+    while True:
+        try:
+            _OS_FSYNC(secure_fd)
+            break
+        except InterruptedError:
+            continue
     wiped_stat = _OS_FSTAT(secure_fd)
     if (
         not _same_claim_object_identity(wiped_stat, opened_stat)

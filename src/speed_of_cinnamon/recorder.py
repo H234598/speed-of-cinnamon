@@ -3416,7 +3416,12 @@ def _reap_recorder_process_if_zombie(pid: int) -> bool:
     if not stat_fields or stat_fields[0] not in {"Z", "X", "x"}:
         return True
     try:
-        waited_pid, _status = os.waitpid(pid, os.WNOHANG)
+        while True:
+            try:
+                waited_pid, _status = os.waitpid(pid, os.WNOHANG)
+                break
+            except InterruptedError:
+                continue
     except ChildProcessError:
         return False
     except (OSError, ValueError):

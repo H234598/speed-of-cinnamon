@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import fcntl
 import json
 import math
@@ -70,8 +71,12 @@ def _flock_retry(
     if timeout > BACKUP_STATE_LOCK_TIMEOUT_SECONDS:
         raise BackupStateError("backup state lock timeout exceeds safe limit")
     if operation & fcntl.LOCK_UN:
-        fcntl.flock(fd, operation)
-        return
+        while True:
+            try:
+                fcntl.flock(fd, operation)
+                return
+            except InterruptedError:
+                continue
     deadline = time.monotonic() + timeout
     nonblocking_operation = operation | fcntl.LOCK_NB
     while True:
@@ -80,10 +85,21 @@ def _flock_retry(
             return
         except InterruptedError:
             continue
-        except BlockingIOError:
+        except BlockingIOError as exc:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise BackupStateError("backup state lock acquisition timed out")
+                raise BackupStateError(
+                    "backup state lock acquisition timed out"
+                ) from exc
+            time.sleep(min(0.05, remaining))
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise BackupStateError(
+                    "backup state lock acquisition timed out"
+                ) from exc
             time.sleep(min(0.05, remaining))
 
 

@@ -92,6 +92,31 @@ class AlarmTest(unittest.TestCase):
             ],
         )
 
+    def test_alarm_store_lock_retries_interrupted_unlock(self) -> None:
+        operations: list[int] = []
+
+        def interrupt_first_unlock(_fd: int, operation: int) -> None:
+            operations.append(operation)
+            if operation == fcntl.LOCK_UN and operations.count(fcntl.LOCK_UN) == 1:
+                raise InterruptedError()
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "alarms.json"
+            with mock.patch.object(
+                alarm_module.fcntl, "flock", side_effect=interrupt_first_unlock
+            ):
+                with alarm_module._locked_alarm_store(path):
+                    pass
+
+        self.assertEqual(
+            operations,
+            [
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                fcntl.LOCK_UN,
+                fcntl.LOCK_UN,
+            ],
+        )
+
     def test_alarm_store_lock_times_out_when_exclusive_lock_is_busy(self) -> None:
         def busy_lock(_fd: int, operation: int) -> None:
             if operation == fcntl.LOCK_UN:

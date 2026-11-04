@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 import math
 import os
@@ -120,8 +121,12 @@ def _flock_retry(
     if timeout_seconds > STATE_LOCK_TIMEOUT_SECONDS:
         raise RuntimeError("state lock timeout exceeds safe limit")
     if operation & fcntl.LOCK_UN:
-        fcntl.flock(fd, operation)
-        return
+        while True:
+            try:
+                fcntl.flock(fd, operation)
+                return
+            except InterruptedError:
+                continue
     deadline = time.monotonic() + timeout_seconds
     nonblocking_operation = operation | fcntl.LOCK_NB
     first_attempt = True
@@ -133,6 +138,13 @@ def _flock_retry(
             fcntl.flock(fd, nonblocking_operation)
             return
         except (BlockingIOError, InterruptedError):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError("state lock acquisition timed out") from None
+            time.sleep(min(STATE_LOCK_RETRY_SECONDS, remaining))
+        except OSError as exc:
+            if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                raise
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise RuntimeError("state lock acquisition timed out") from None
