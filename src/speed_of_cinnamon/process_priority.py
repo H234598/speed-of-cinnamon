@@ -953,9 +953,20 @@ class _ScopeExecAttemptOutcome:
 
 def _scope_exec_fd_has_elf_magic(descriptor: int) -> bool:
     try:
-        return (
-            os.pread(descriptor, len(_SCOPE_EXEC_ELF_MAGIC), 0) == _SCOPE_EXEC_ELF_MAGIC
-        )
+        magic = bytearray()
+        while len(magic) < len(_SCOPE_EXEC_ELF_MAGIC):
+            try:
+                chunk = os.pread(
+                    descriptor,
+                    len(_SCOPE_EXEC_ELF_MAGIC) - len(magic),
+                    len(magic),
+                )
+            except InterruptedError:
+                continue
+            if not chunk:
+                return False
+            magic.extend(chunk)
+        return bytes(magic) == _SCOPE_EXEC_ELF_MAGIC
     except (AttributeError, OSError, OverflowError, TypeError, ValueError):
         return False
 

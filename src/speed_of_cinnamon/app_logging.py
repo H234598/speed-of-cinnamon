@@ -934,7 +934,12 @@ def _rewrite_private_error_markdown(
         if matches:
             return
         os.lseek(fd, 0, os.SEEK_SET)
-        os.ftruncate(fd, 0)
+        while True:
+            try:
+                os.ftruncate(fd, 0)
+                break
+            except InterruptedError:
+                continue
         offset = 0
         while offset < len(rendered):
             try:

@@ -46620,7 +46620,21 @@ class CliSecurityRegressionTests(unittest.TestCase):
             self.assertIs(second_caught.exception, second_interrupt)
             self.assertEqual(claim.read_bytes(), body)
 
-            committed = cli._commit_cleanup_claim(claim, identity, digest)
+            real_pread = cli.os.pread
+            eof_pread_interrupts = 0
+
+            def interrupt_eof_pread_once(fd: int, size: int, offset: int) -> bytes:
+                nonlocal eof_pread_interrupts
+                if size == 1 and eof_pread_interrupts == 0:
+                    eof_pread_interrupts += 1
+                    raise InterruptedError("interrupted")
+                return real_pread(fd, size, offset)
+
+            with mock.patch.object(
+                cli.os, "pread", side_effect=interrupt_eof_pread_once
+            ):
+                committed = cli._commit_cleanup_claim(claim, identity, digest)
+            self.assertEqual(eof_pread_interrupts, 1)
 
             self.assertIsNotNone(committed)
             self.assertTrue(

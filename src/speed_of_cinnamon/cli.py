@@ -1640,7 +1640,12 @@ def _retain_finalization_lock_for_process(
             opened_stat, prewrite_stat
         ) or not _same_finalization_lock_snapshot(prewrite_stat, prewrite_path_stat):
             return False
-        os.ftruncate(lock_fd, 0)
+        while True:
+            try:
+                os.ftruncate(lock_fd, 0)
+                break
+            except InterruptedError:
+                continue
         os.lseek(lock_fd, 0, os.SEEK_SET)
         _write_all(lock_fd, payload_bytes, field_name="finalization lock")
         _fsync_fd(lock_fd)
@@ -9517,6 +9522,42 @@ def _cleanup_claim_read_exact(
     return bytes(result)
 
 
+def _cleanup_claim_has_eof_at(file_fd: int, offset: int) -> bool:
+    pread = getattr(os, "pread", None)
+    if (
+        type(file_fd) is not int
+        or file_fd < 0
+        or type(offset) is not int
+        or offset < 0
+        or not callable(pread)
+    ):
+        raise RuntimeError("cleanup content binding failed")
+    interrupts = 0
+    while True:
+        try:
+            trailing = pread(file_fd, 1, offset)
+            break
+        except InterruptedError:
+            interrupts += 1
+            if interrupts > _MAX_CLEANUP_CLAIM_HASH_INTERRUPTS:
+                raise RuntimeError("cleanup content binding failed") from None
+    return trailing == b""
+
+
+def _cleanup_claim_ftruncate_exact(file_fd: int, size: int) -> None:
+    if type(file_fd) is not int or file_fd < 0 or type(size) is not int or size < 0:
+        raise RuntimeError("cleanup claim commit failed")
+    interrupts = 0
+    while True:
+        try:
+            os.ftruncate(file_fd, size)
+            return
+        except InterruptedError:
+            interrupts += 1
+            if interrupts > _MAX_CLEANUP_CLAIM_HASH_INTERRUPTS:
+                raise RuntimeError("cleanup claim commit failed") from None
+
+
 def _cleanup_claim_content_snapshot(
     path: Path,
     identity: tuple[int, int, int, int, int, int, int],
@@ -9562,7 +9603,7 @@ def _cleanup_claim_content_snapshot(
         ):
             raise RuntimeError("cleanup content binding failed")
         digest = _cleanup_claim_fd_digest(file_fd, opened_stat.st_size)
-        if os.pread(file_fd, 1, opened_stat.st_size) != b"":
+        if not _cleanup_claim_has_eof_at(file_fd, opened_stat.st_size):
             raise RuntimeError("cleanup content binding failed")
         if not _same_leaf_identity(os.fstat(file_fd), opened_stat):
             raise RuntimeError("cleanup content binding failed")
@@ -9663,10 +9704,10 @@ def _commit_cleanup_claim(
                     _cleanup_claim_fd_digest(file_fd, original_size),
                     content_digest,
                 )
-                or os.pread(file_fd, 1, opened_stat.st_size) != b""
+                or not _cleanup_claim_has_eof_at(file_fd, opened_stat.st_size)
             ):
                 raise RuntimeError("cleanup claim commit failed")
-            os.ftruncate(file_fd, original_size)
+            _cleanup_claim_ftruncate_exact(file_fd, original_size)
             _fsync_fd(file_fd)
             opened_stat = os.fstat(file_fd)
             if (
@@ -9718,10 +9759,10 @@ def _commit_cleanup_claim(
                     _cleanup_claim_fd_digest(file_fd, original_size),
                     content_digest,
                 )
-                or os.pread(file_fd, 1, opened_stat.st_size) != b""
+                or not _cleanup_claim_has_eof_at(file_fd, opened_stat.st_size)
             ):
                 raise RuntimeError("cleanup claim commit failed")
-            os.ftruncate(file_fd, original_size)
+            _cleanup_claim_ftruncate_exact(file_fd, original_size)
             _fsync_fd(file_fd)
             opened_stat = os.fstat(file_fd)
             if (
@@ -9738,7 +9779,7 @@ def _commit_cleanup_claim(
                 _cleanup_claim_fd_digest(file_fd, original_size),
                 content_digest,
             )
-            or os.pread(file_fd, 1, original_size) != b""
+            or not _cleanup_claim_has_eof_at(file_fd, original_size)
         ):
             raise RuntimeError("cleanup claim commit failed")
         offset = 0
@@ -9788,7 +9829,7 @@ def _commit_cleanup_claim(
                 ),
                 trailer,
             )
-            or os.pread(file_fd, 1, committed_stat.st_size) != b""
+            or not _cleanup_claim_has_eof_at(file_fd, committed_stat.st_size)
         ):
             raise RuntimeError("cleanup claim commit failed")
         result = committed_stat
@@ -9887,12 +9928,7 @@ def _prepare_cleanup_claim_wipe_authorization(
         authorized = secrets.compare_digest(actual_trailer, authorized_trailer)
         if (
             not (prepared or intermediate or authorized)
-            or os.pread(
-                file_fd,
-                1,
-                opened_stat.st_size,
-            )
-            != b""
+            or not _cleanup_claim_has_eof_at(file_fd, opened_stat.st_size)
             or not secrets.compare_digest(
                 _cleanup_claim_fd_digest(file_fd, original_size),
                 content_digest,
@@ -10007,7 +10043,7 @@ def _prepare_cleanup_claim_wipe_authorization(
                 _cleanup_claim_fd_digest(file_fd, original_size),
                 content_digest,
             )
-            or os.pread(file_fd, 1, authorized_stat.st_size) != b""
+            or not _cleanup_claim_has_eof_at(file_fd, authorized_stat.st_size)
         ):
             raise RuntimeError("cleanup claim authorization failed")
         named_stat = os.stat(
@@ -10161,7 +10197,7 @@ def _legacy_cleanup_claim_authorization_snapshot(
                 _cleanup_claim_fd_digest(file_fd, matches[0]),
                 content_digest,
             )
-            or os.pread(file_fd, 1, opened_stat.st_size) != b""
+            or not _cleanup_claim_has_eof_at(file_fd, opened_stat.st_size)
         ):
             raise RuntimeError("legacy cleanup authorization failed")
         named_stat = os.stat(
@@ -10257,7 +10293,7 @@ def _authorize_cleanup_claim_wipe(
                 ),
                 authorized_trailer,
             )
-            or os.pread(file_fd, 1, opened_stat.st_size) != b""
+            or not _cleanup_claim_has_eof_at(file_fd, opened_stat.st_size)
             or (
                 require_content_digest
                 and not secrets.compare_digest(

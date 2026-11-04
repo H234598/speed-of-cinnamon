@@ -8476,6 +8476,23 @@ class InitialNamespaceIdentityTests(unittest.TestCase):
             self.assertIsNone(process_priority.initial_namespace_identity())
         path_open.assert_not_called()
 
+    def test_scope_exec_fd_has_elf_magic_handles_interrupted_and_short_pread(
+        self,
+    ) -> None:
+        calls: list[tuple[int, int]] = []
+        responses = [InterruptedError("interrupted"), b"\x7fE", b"LF"]
+
+        def fake_pread(_fd: int, size: int, offset: int) -> bytes:
+            calls.append((size, offset))
+            item = responses.pop(0)
+            if isinstance(item, BaseException):
+                raise item
+            return item
+
+        with mock.patch.object(process_priority.os, "pread", side_effect=fake_pread):
+            self.assertTrue(process_priority._scope_exec_fd_has_elf_magic(10))
+        self.assertEqual(calls, [(4, 0), (4, 0), (2, 2)])
+
 
 if __name__ == "__main__":
     unittest.main()

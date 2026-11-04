@@ -1610,6 +1610,26 @@ class AppLoggingTest(unittest.TestCase):
                 )
             self.assertGreaterEqual(read_calls, 4)
 
+            real_ftruncate = app_logging.os.ftruncate
+            ftruncate_calls = 0
+
+            def interrupted_ftruncate_once(fd: int, length: int) -> None:
+                nonlocal ftruncate_calls
+                ftruncate_calls += 1
+                if ftruncate_calls == 1:
+                    raise InterruptedError("interrupted")
+                real_ftruncate(fd, length)
+
+            with mock.patch.object(
+                app_logging.os, "ftruncate", side_effect=interrupted_ftruncate_once
+            ):
+                app_logging._rewrite_private_error_markdown(
+                    markdown_file,
+                    expected_markdown + b"\n",
+                    expected_stat=markdown_file.stat(),
+                )
+            self.assertEqual(ftruncate_calls, 2)
+
     def test_markdown_rebuild_does_not_truncate_hardlinked_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
