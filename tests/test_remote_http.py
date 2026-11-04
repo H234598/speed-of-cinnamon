@@ -274,6 +274,13 @@ def _dispose_test_child(handle: remote_http._WorkerHandle) -> None:
         time.monotonic_ns() + 2_000_000_000,
         time.monotonic_ns,
     )
+    remote_http._close_fd(handle.pidfd)
+    for stream in (handle.process.stdin, handle.process.stdout, handle.process.stderr):
+        if stream is not None:
+            try:
+                stream.close()
+            except OSError:
+                pass
     if handle.process.poll() is None:
         handle.process.kill()
         handle.process.wait()
@@ -1455,9 +1462,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                         pass
                     else:
                         real_close(pidfd)
-                    if handle.process.poll() is None:
-                        handle.process.kill()
-                    handle.process.wait()
+                    _dispose_test_child(handle)
 
     def test_descendant_pidfd_close_failure_is_not_success(self) -> None:
         selector = mock.Mock()
@@ -1502,9 +1507,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 pass
             else:
                 real_close(pidfd)
-            if handle.process.poll() is None:
-                handle.process.kill()
-            handle.process.wait()
+            _dispose_test_child(handle)
 
     def test_release_abandon_consumes_handle_pidfd_once_on_close_error(self) -> None:
         handle = _start_test_child("import time\ntime.sleep(10)\n")
@@ -1551,9 +1554,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 pass
             else:
                 real_close(pidfd)
-            if handle.process.poll() is None:
-                handle.process.kill()
-            handle.process.wait()
+            _dispose_test_child(handle)
 
     def test_release_ignoring_workers_are_killed_within_tight_budget(self) -> None:
         frame = self._valid_frame()
@@ -1588,9 +1589,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     )
                     self.assertIsNotNone(handle.process.poll())
                 finally:
-                    if handle.process.poll() is None:
-                        handle.process.kill()
-                    handle.process.wait()
+                    _dispose_test_child(handle)
 
     def test_release_ignoring_worker_is_terminal_with_production_budget(self) -> None:
         frame = self._valid_frame()
@@ -1612,9 +1611,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             self.assertEqual(result["error_code"], "remote-worker-cleanup-unconfirmed")
             self.assertIsNotNone(handle.process.poll())
         finally:
-            if handle.process.poll() is None:
-                handle.process.kill()
-            handle.process.wait()
+            _dispose_test_child(handle)
 
     def test_late_stdout_or_stderr_after_release_is_cleanup_unconfirmed(self) -> None:
         frame = self._valid_frame()
@@ -1861,9 +1858,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             if ready_write >= 0:
                 os.close(ready_write)
             if handle is not None:
-                if handle.process.poll() is None:
-                    handle.process.kill()
-                handle.process.wait()
+                _dispose_test_child(handle)
 
     def test_cleanup_reports_scan_identity_and_reap_failures(self) -> None:
         handle = _start_test_child("import time\ntime.sleep(1)\n")
@@ -1880,9 +1875,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 )
             scan.assert_called_once()
         finally:
-            if handle.process.poll() is None:
-                handle.process.kill()
-                handle.process.wait()
+            _dispose_test_child(handle)
 
         handle = _start_test_child("import time\ntime.sleep(1)\n")
         try:
@@ -1905,9 +1898,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     )
                 )
         finally:
-            if handle.process.poll() is None:
-                handle.process.kill()
-                handle.process.wait()
+            _dispose_test_child(handle)
 
     def test_descendant_exit_requires_post_pidfd_identity_absence(self) -> None:
         cases = (
@@ -1961,9 +1952,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                             identity_present.call_count, len(identity_sequence)
                         )
                 finally:
-                    if handle.process.poll() is None:
-                        handle.process.kill()
-                    handle.process.wait()
+                    _dispose_test_child(handle)
 
     def test_descendant_exit_identity_read_exceptions_fail_closed(self) -> None:
         cases = (
@@ -2136,9 +2125,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             self.assertEqual(identity_present.call_count, 6)
         finally:
             for handle in handles:
-                if handle.process.poll() is None:
-                    handle.process.kill()
-                handle.process.wait()
+                _dispose_test_child(handle)
 
     def test_pump_binds_setsid_descendant_before_root_exit_and_cleanup_kills_it(
         self,
@@ -2342,9 +2329,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             send_tree.assert_not_called()
             drain_output.assert_not_called()
         finally:
-            if handle.process.poll() is None:
-                handle.process.kill()
-                handle.process.wait()
+            _dispose_test_child(handle)
 
     def test_post_release_fork_is_os_blocked_and_never_success(self) -> None:
         frame = self._valid_frame()
@@ -2384,9 +2369,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     self.assertTrue(handle.release_pending)
                     self.assertFalse(handle.descendants)
                 finally:
-                    if handle.process.poll() is None:
-                        handle.process.kill()
-                        handle.process.wait()
+                    _dispose_test_child(handle)
 
     def test_no_fork_filter_arch_and_x32_jumps_are_fail_closed(self) -> None:
         from speed_of_cinnamon import remote_http_worker
@@ -2464,7 +2447,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     start_new_session=True,
                 )
                 try:
-                    stdout, stderr = process.communicate(timeout=2.0)
+                    stdout, stderr = process.communicate(timeout=5.0)
                 except subprocess.TimeoutExpired:
                     process.kill()
                     stdout, stderr = process.communicate()

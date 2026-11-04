@@ -424,6 +424,7 @@ def _read_default_passphrase_history(path: Path) -> list[str]:
             history_path,
             field_name="artifact encryption passphrase history",
             max_bytes=MAX_PASSPHRASE_HISTORY_BYTES,
+            require_private_mode=True,
         )
     except ArtifactCryptoError:
         read_failed = True
@@ -943,6 +944,11 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
         handle: Any | None = None
         primary_read_error: BaseException | None = None
         try:
+            assert_fd_is_regular_private_file(
+                fd,
+                field_name="artifact encryption passphrase file",
+                require_private_mode=True,
+            )
             handle = os.fdopen(fd, "rb")
             fd = -1
             opened_stat = os.fstat(handle.fileno())
@@ -2295,8 +2301,11 @@ def _keyring_initialization_lock():
             0o600,
             dir_fd=parent_fd,
         )
+        os.fchmod(lock_fd, 0o600)
         assert_fd_is_regular_private_file(
-            lock_fd, field_name="artifact encryption keyring lock"
+            lock_fd,
+            field_name="artifact encryption keyring lock",
+            require_private_mode=True,
         )
         deadline = time.monotonic() + KEYRING_INITIALIZATION_LOCK_TIMEOUT_SECONDS
         while True:
@@ -2681,6 +2690,7 @@ def read_private_bytes(
     field_name: str,
     max_bytes: int | None = None,
     expected_stat: os.stat_result | None = None,
+    require_private_mode: bool = False,
 ) -> bytes:
     public_field_name = _safe_public_field_label(field_name)
     if not isinstance(path, Path):
@@ -2718,7 +2728,11 @@ def read_private_bytes(
     handle: Any | None = None
     primary_error: BaseException | None = None
     try:
-        assert_fd_is_regular_private_file(fd, field_name=field_name)
+        assert_fd_is_regular_private_file(
+            fd,
+            field_name=field_name,
+            require_private_mode=require_private_mode,
+        )
         opened_stat: os.stat_result | None = None
         if expected_stat is not None:
             opened_stat = os.fstat(fd)
