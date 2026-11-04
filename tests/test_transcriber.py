@@ -6831,6 +6831,30 @@ class TranscriberTest(unittest.TestCase):
                 ):
                     transcribe(audio, "en", text, "printf ignored", backend="command")
 
+    def test_transcribe_output_namespace_lock_retries_interrupted_flock(
+        self,
+    ) -> None:
+        real_flock = fcntl.flock
+        attempts = 0
+
+        def interrupted_once(fd: int, operation: int) -> None:
+            nonlocal attempts
+            if operation & fcntl.LOCK_EX:
+                attempts += 1
+                if attempts == 1:
+                    raise InterruptedError("interrupted")
+            real_flock(fd, operation)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            with mock.patch(
+                "speed_of_cinnamon.transcriber.fcntl.flock",
+                side_effect=interrupted_once,
+            ):
+                with transcriber_module._transcriber_output_namespace_lock(root):
+                    pass
+        self.assertEqual(attempts, 2)
+
     def test_transcribe_preserves_body_baseexception_when_output_lock_release_fails(
         self,
     ) -> None:

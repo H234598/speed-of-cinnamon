@@ -252,6 +252,11 @@ def _acquire_backup_lock(
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 return lock_fd
+            except InterruptedError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BackupError("backup target is busy") from None
+                continue
             except OSError as exc:
                 if exc.errno not in {errno.EACCES, errno.EAGAIN}:
                     raise BackupError(

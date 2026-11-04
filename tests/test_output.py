@@ -4709,6 +4709,52 @@ class OutputTest(unittest.TestCase):
                     output_module._acquire_clipboard_pending_quarantine_lock()
                 )
 
+    def test_clipboard_pending_lock_retries_interrupted_flock_and_closes_fd_on_fstat_failure(
+        self,
+    ) -> None:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            mock.patch.dict("os.environ", {"XDG_STATE_HOME": tmp}),
+        ):
+            real_flock = output_module.fcntl.flock
+            attempts = 0
+
+            def interrupted_once(fd: int, operation: int) -> None:
+                nonlocal attempts
+                if operation != output_module.fcntl.LOCK_UN:
+                    attempts += 1
+                    if attempts == 1:
+                        raise InterruptedError("interrupted")
+                real_flock(fd, operation)
+
+            with mock.patch.object(
+                output_module.fcntl, "flock", side_effect=interrupted_once
+            ):
+                lock_fd = output_module._acquire_clipboard_pending_quarantine_lock()
+                self.assertIsNotNone(lock_fd)
+                output_module._release_clipboard_pending_quarantine_lock(lock_fd)
+            self.assertEqual(attempts, 2)
+
+            closed_fds: list[int] = []
+            real_close = output_module.os.close
+
+            def track_close(fd: int) -> None:
+                closed_fds.append(fd)
+                real_close(fd)
+
+            with (
+                mock.patch.object(
+                    output_module.os,
+                    "fstat",
+                    side_effect=OSError("fstat failed"),
+                ),
+                mock.patch.object(output_module.os, "close", side_effect=track_close),
+            ):
+                self.assertIsNone(
+                    output_module._acquire_clipboard_pending_quarantine_lock()
+                )
+            self.assertGreaterEqual(len(closed_fds), 2)
+
     def test_invalid_pending_ledger_is_untouched_and_blocks_dedupe(self) -> None:
         path = output_module._clipboard_pending_quarantine_path()
         path.parent.mkdir(parents=True, exist_ok=True)

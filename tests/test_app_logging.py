@@ -1568,6 +1568,42 @@ class AppLoggingTest(unittest.TestCase):
                 "",
             )
 
+    def test_error_log_and_markdown_reads_retry_interrupted_syscalls(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            log_dir = Path(tmp)
+            app_logging.configure_logging("error", base_dir=log_dir)
+            error_file = log_dir / app_logging.ERROR_LOG_FILENAME
+            markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
+            error_file.write_text(
+                '{"ts":"2026-08-17T10:00:00+00:00","level":"error","event":"eintr_event","group":"test","error_message":"ok"}\n',
+                encoding="utf-8",
+            )
+            os.chmod(error_file, 0o600)
+            app_logging._rebuild_error_markdown(log_dir)
+            expected_markdown = markdown_file.read_bytes()
+
+            real_read = app_logging.os.read
+            read_calls = 0
+
+            def interrupted_every_other(fd: int, length: int) -> bytes:
+                nonlocal read_calls
+                read_calls += 1
+                if read_calls in {1, 3}:
+                    raise InterruptedError("interrupted")
+                return real_read(fd, length)
+
+            with mock.patch.object(
+                app_logging.os, "read", side_effect=interrupted_every_other
+            ):
+                content = app_logging._read_private_error_log(error_file)
+                self.assertIsNotNone(content)
+                app_logging._rewrite_private_error_markdown(
+                    markdown_file,
+                    expected_markdown,
+                    expected_stat=markdown_file.stat(),
+                )
+            self.assertGreaterEqual(read_calls, 4)
+
     def test_markdown_rebuild_does_not_truncate_hardlinked_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)

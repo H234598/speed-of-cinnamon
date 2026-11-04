@@ -1170,5 +1170,33 @@ class BackupIntegrationTests(unittest.TestCase):
                     pass
 
 
+    def test_acquire_backup_lock_retries_interrupted_flock(self):
+        target_fd = os.open(
+            self.target, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        real_flock = backup_module.fcntl.flock
+        attempts = 0
+
+        def interrupted_once(fd, operation):
+            nonlocal attempts
+            if operation != backup_module.fcntl.LOCK_UN:
+                attempts += 1
+                if attempts == 1:
+                    raise InterruptedError(errno.EINTR, "interrupted")
+            return real_flock(fd, operation)
+
+        try:
+            with mock.patch.object(
+                backup_module.fcntl, "flock", side_effect=interrupted_once
+            ):
+                lock_fd = backup_module._acquire_backup_lock(
+                    target_fd, timeout_seconds=1.0
+                )
+                backup_module._release_backup_lock(lock_fd)
+        finally:
+            os.close(target_fd)
+        self.assertEqual(attempts, 2)
+
+
 if __name__ == "__main__":
     unittest.main()

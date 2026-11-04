@@ -9899,6 +9899,36 @@ def _prepare_cleanup_claim_wipe_authorization(
             )
         ):
             raise RuntimeError("cleanup claim authorization failed")
+        def _pwrite_exact(data: bytes, write_offset: int) -> None:
+            offset = 0
+            interrupts = 0
+            calls = 0
+            max_calls = len(data) + _MAX_CLEANUP_CLAIM_HASH_INTERRUPTS + 1
+            while offset < len(data):
+                if calls >= max_calls:
+                    raise RuntimeError("cleanup claim authorization failed")
+                try:
+                    written = pwrite(
+                        file_fd,
+                        data[offset:],
+                        write_offset + offset,
+                    )
+                except InterruptedError:
+                    interrupts += 1
+                    if interrupts > _MAX_CLEANUP_CLAIM_HASH_INTERRUPTS:
+                        raise RuntimeError(
+                            "cleanup claim authorization failed"
+                        ) from None
+                    continue
+                calls += 1
+                if (
+                    type(written) is not int
+                    or written <= 0
+                    or written > len(data) - offset
+                ):
+                    raise RuntimeError("cleanup claim authorization failed")
+                offset += written
+
         if prepared:
             if not _cleanup_backup_journal_claim_matches(
                 opened_stat,
@@ -9906,13 +9936,10 @@ def _prepare_cleanup_claim_wipe_authorization(
                 fields=7,
             ):
                 raise RuntimeError("cleanup claim authorization failed")
-            written = pwrite(
-                file_fd,
+            _pwrite_exact(
                 b"C",
                 original_size + len(prepared_trailer) - 1,
             )
-            if type(written) is not int or written != 1:
-                raise RuntimeError("cleanup claim authorization failed")
             _fsync_fd(file_fd)
             authorized_stat = os.fstat(file_fd)
             if (
@@ -9946,15 +9973,10 @@ def _prepare_cleanup_claim_wipe_authorization(
                 raise RuntimeError("cleanup claim authorization failed")
             intermediate = True
         if intermediate:
-            written = pwrite(
-                file_fd,
+            _pwrite_exact(
                 _CLEANUP_CLAIM_AUTHORIZATION_SUFFIX,
                 original_size + len(intermediate_trailer),
             )
-            if type(written) is not int or written != len(
-                _CLEANUP_CLAIM_AUTHORIZATION_SUFFIX
-            ):
-                raise RuntimeError("cleanup claim authorization failed")
             _fsync_fd(file_fd)
         _fsync_fd(file_fd)
         authorized_stat = os.fstat(file_fd)

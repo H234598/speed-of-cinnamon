@@ -1618,7 +1618,12 @@ def _transcriber_output_namespace_lock(parent: Path):
                 raise TranscriptionError("transcript output lock is unsafe")
             try:
                 os.set_inheritable(lock_fd, False)
-                fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                while True:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except InterruptedError:
+                        continue
             except BlockingIOError:
                 raise TranscriptionError(
                     "transcript output namespace is busy"

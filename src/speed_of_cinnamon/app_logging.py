@@ -843,7 +843,10 @@ def _read_private_error_log(
         chunks: list[bytes] = []
         total = 0
         while total <= MAX_ERROR_LOG_BYTES:
-            chunk = os.read(fd, min(65536, MAX_ERROR_LOG_BYTES + 1 - total))
+            try:
+                chunk = os.read(fd, min(65536, MAX_ERROR_LOG_BYTES + 1 - total))
+            except InterruptedError:
+                continue
             if not chunk:
                 break
             chunks.append(chunk)
@@ -899,7 +902,10 @@ def _rewrite_private_error_markdown(
             os.lseek(fd, 0, os.SEEK_SET)
             offset = 0
             while offset < len(rendered):
-                chunk = os.read(fd, min(65_536, len(rendered) - offset))
+                try:
+                    chunk = os.read(fd, min(65_536, len(rendered) - offset))
+                except InterruptedError:
+                    continue
                 if not chunk or chunk != rendered[offset : offset + len(chunk)]:
                     matches = False
                     break

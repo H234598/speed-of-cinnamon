@@ -46730,6 +46730,75 @@ class CliSecurityRegressionTests(unittest.TestCase):
                 self.assertIsNotNone(authorized)
                 self.assertGreaterEqual(retry_fsyncs, 1)
 
+    def test_prepare_cleanup_claim_wipe_authorization_retries_interrupted_pwrite(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            state_root = Path(tmp) / "speed-of-cinnamon"
+            recordings = state_root / "recordings"
+            recordings.mkdir(parents=True)
+            state_root.chmod(0o700)
+            state_file = state_root / "state.json"
+            owner = recordings / "recording.wav"
+            body = b"owned audio"
+            digest = hashlib.sha256(body).hexdigest()
+            claim = owner.with_name(
+                f"{cli._cleanup_backup_v3_prefix(owner, state_file)}"
+                f"tombstone.{digest}.{'d' * 32}.done"
+            )
+            claim.write_bytes(body)
+            claimed_path = claim.with_name(
+                cli._cleanup_claim_journal_basename(claim.name, "claimed")
+            )
+            _name, claimed_identity = cli._parse_cleanup_backup_journal_entry(
+                cli._cleanup_backup_journal_entry(
+                    claimed_path,
+                    claim.stat(),
+                )
+            )
+            prepared_stat = cli._commit_cleanup_claim(
+                claim,
+                claimed_identity,
+                digest,
+            )
+            self.assertIsNotNone(prepared_stat)
+            assert prepared_stat is not None
+            prepared_path = claim.with_name(
+                cli._cleanup_claim_journal_basename(
+                    claim.name,
+                    "prepared",
+                )
+            )
+            _name, prepared_identity = cli._parse_cleanup_backup_journal_entry(
+                cli._cleanup_backup_journal_entry(
+                    prepared_path,
+                    prepared_stat,
+                )
+            )
+            real_pwrite = os.pwrite
+            pwrite_calls = 0
+
+            def interrupted_pwrite(fd: int, data: bytes, offset: int) -> int:
+                nonlocal pwrite_calls
+                pwrite_calls += 1
+                if pwrite_calls in {1, 3}:
+                    raise InterruptedError(errno.EINTR, "interrupted")
+                return real_pwrite(fd, data, offset)
+
+            with mock.patch.object(
+                cli.os,
+                "pwrite",
+                side_effect=interrupted_pwrite,
+            ):
+                authorized = cli._prepare_cleanup_claim_wipe_authorization(
+                    claim,
+                    prepared_identity,
+                    digest,
+                    len(body),
+                )
+            self.assertIsNotNone(authorized)
+            self.assertEqual(pwrite_calls, 4)
+
     def test_near_limit_legacy_wiping_migrates_directly_to_armed(
         self,
     ) -> None:

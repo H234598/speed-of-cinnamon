@@ -1327,6 +1327,7 @@ def _acquire_clipboard_pending_quarantine_lock() -> int | None:
         )
     except (OSError, RuntimeError):
         return None
+    fd: int | None = None
     try:
         fd = os.open(
             path.name,
@@ -1340,15 +1341,35 @@ def _acquire_clipboard_pending_quarantine_lock() -> int | None:
             or getattr(file_stat, "st_nlink", 1) != 1
         ):
             os.close(fd)
+            fd = None
             return None
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except (BlockingIOError, OSError):
-            os.close(fd)
-            return None
-        return fd
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except InterruptedError:
+                continue
+            except (BlockingIOError, OSError):
+                os.close(fd)
+                fd = None
+                return None
+        locked_fd = fd
+        fd = None
+        return locked_fd
     except OSError:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
         return None
+    except BaseException:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+        raise
     finally:
         try:
             os.close(parent_fd)
