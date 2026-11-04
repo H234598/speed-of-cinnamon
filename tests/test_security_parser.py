@@ -575,6 +575,18 @@ class SecurityParserTest(unittest.TestCase):
         self.assertEqual(sanitized, "The [redacted blacklist item] is [redacted token]")
         self.assertEqual(count, 1)
 
+    def test_apply_security_mode_redacts_multiline_sensitive_values_containing_blacklisted_words(
+        self,
+    ) -> None:
+        sanitized, count = apply_security_mode(
+            "password:\nab\nfoo\ncd",
+            ["foo"],
+        )
+
+        self.assertEqual(sanitized, "[redacted password]")
+        self.assertEqual(count, 1)
+        self.assertNotIn("cd", sanitized)
+
     def test_apply_security_mode_redacts_api_key_value_when_hyphenated_label_is_blacklisted(
         self,
     ) -> None:

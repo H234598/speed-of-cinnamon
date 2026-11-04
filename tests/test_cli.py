@@ -33297,7 +33297,9 @@ class CliTest(unittest.TestCase):
                     status="error",
                     audio_path=str(audio),
                     log_path=str(log),
+                    transcript="secret",
                     transcript_path=str(transcript),
+                    error="recorder process exited unexpectedly",
                 )
             )
             stdout = io.StringIO()
@@ -33326,6 +33328,7 @@ class CliTest(unittest.TestCase):
         self.assertTrue(payload["transcript_deleted"])
         self.assertFalse(final_state.audio_path)
         self.assertEqual(final_state.log_path, str(log))
+        self.assertEqual(final_state.transcript, "")
         self.assertEqual(final_state.transcript_path, "")
 
     def test_start_does_not_overwrite_expired_recording(self) -> None:

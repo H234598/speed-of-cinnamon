@@ -7036,6 +7036,50 @@ class ProcessPriorityTests(unittest.TestCase):
                 200,
             )
 
+    def test_scope_identity_and_weights_allow_missing_io_weight_controller(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            proc_root = root / "proc"
+            pid_cgroup = proc_root / "4242" / "cgroup"
+            pid_cgroup.parent.mkdir(parents=True)
+            pid_cgroup.write_text("0::/work.scope\n", encoding="ascii")
+            mountpoint = root / "cgroup"
+            scope = mountpoint / "work.scope"
+            scope.mkdir(parents=True)
+            (scope / "cpu.weight").write_text("200\n", encoding="ascii")
+            mountinfo = root / "mountinfo"
+            mountinfo.write_text(
+                f"35 25 {_mountinfo_device(root)} / {mountpoint} rw - cgroup2 cgroup rw\n",
+                encoding="ascii",
+            )
+            with (
+                mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
+                mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
+                mock.patch.object(
+                    process_priority,
+                    "_current_cgroup2_path",
+                    return_value=scope,
+                ),
+            ):
+                self.assertEqual(
+                    process_priority._current_priority_scope_weights(),
+                    (200, 200),
+                )
+                identity = process_priority.priority_scope_identity_for_pid(4242)
+                self.assertIsNotNone(identity)
+                assert identity is not None
+                self.assertTrue(
+                    process_priority.verify_priority_scope_identity(identity, pid=4242)
+                )
+                self.assertEqual(
+                    process_priority.priority_scope_identity_for_control_group(
+                        "/work.scope"
+                    ),
+                    identity,
+                )
+
     def test_priority_scope_identity_round_trips_and_rejects_ambiguous_paths(
         self,
     ) -> None:

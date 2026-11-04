@@ -15342,7 +15342,14 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         )
                         else ""
                     ),
-                    transcript=state.transcript,
+                    transcript=(
+                        state.transcript
+                        if (
+                            preserve_transcript_after_insert_failure
+                            or not transcript_deleted
+                        )
+                        else ""
+                    ),
                     transcript_path=(
                         preserved_transcript_path
                         if preserve_transcript_after_insert_failure
@@ -15384,9 +15391,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "inflight_artifacts_deleted": inflight_deleted,
                 "cleanup_backups_deleted": cleanup_backups_deleted,
                 "transcript_deleted": bool(
-                    transcript_deleted
-                    and not preserve_transcript_after_insert_failure
-                    and not state.transcript
+                    transcript_deleted and not preserve_transcript_after_insert_failure
                 ),
             }
             return payload

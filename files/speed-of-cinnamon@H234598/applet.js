@@ -19153,7 +19153,8 @@ MyApplet.prototype = {
           : String(this.ollamaModel || "");
       let current = backend === activeProvider && currentModel === name;
       let detailsValue =
-        typeof model.description === "string"
+        typeof model.description === "string" &&
+        model.description.trim() !== ""
           ? model.description
           : typeof model.size_label === "string"
             ? model.size_label
@@ -19277,7 +19278,7 @@ MyApplet.prototype = {
       String(this.postProcessBackend || "") === provider &&
       currentModel === name;
     let detailsValue =
-      typeof model.description === "string"
+      typeof model.description === "string" && model.description.trim() !== ""
         ? model.description
         : typeof model.size_label === "string"
           ? model.size_label
@@ -19867,7 +19868,8 @@ MyApplet.prototype = {
       let details = "";
       try {
         let detailsValue =
-          typeof model.description === "string"
+          typeof model.description === "string" &&
+          model.description.trim() !== ""
             ? model.description
             : typeof model.size_label === "string"
               ? model.size_label
@@ -23989,7 +23991,9 @@ MyApplet.prototype = {
           );
           this._scheduleStatusPoll();
         }
-        this._maybeWarnRejectedArtifactPassphrase(errorMessage);
+        this._maybeWarnRejectedArtifactPassphrase(
+          payload.error || payload.message || errorMessage,
+        );
         return;
       }
       let preserveRecordingOnError =
@@ -24036,7 +24040,9 @@ MyApplet.prototype = {
           payload.persisted_error === true,
         );
       }
-      this._maybeWarnRejectedArtifactPassphrase(errorMessage);
+      this._maybeWarnRejectedArtifactPassphrase(
+        payload.error || payload.message || errorMessage,
+      );
       return;
     }
     if (status === "warning") {

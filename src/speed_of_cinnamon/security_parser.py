@@ -1009,14 +1009,7 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
 
     clean = text
     redactions = 0
-    blacklist_pattern = _compile_blacklist_pattern(
-        blacklist, preserve_sensitive_labels=True
-    )
-    if blacklist_pattern is not None:
-        clean, count = _apply_blacklist_around_redaction_placeholders(
-            clean, blacklist_pattern
-        )
-        redactions += count
+    final_blacklist_pattern = _compile_blacklist_pattern(blacklist)
     clean, count = _apply_multiline_sensitive_redaction(clean)
     redactions += count
     clean, count = _mask_cards(clean)
@@ -1034,7 +1027,6 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
             redactions += count
     clean, count = _apply_name_redaction(clean)
     redactions += count
-    final_blacklist_pattern = _compile_blacklist_pattern(blacklist)
     if final_blacklist_pattern is not None:
         clean, count = _apply_blacklist_around_redaction_placeholders(
             clean, final_blacklist_pattern

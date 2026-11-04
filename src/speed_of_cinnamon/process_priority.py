@@ -6379,12 +6379,40 @@ def _read_scope_file(
     return snapshot.contents if snapshot is not None else None
 
 
+def _cgroup_file_exists(path: Path) -> bool:
+    try:
+        path.stat(follow_symlinks=False)
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError):
+        return True
+    return True
+
+
+def _scope_file_exists(scope_descriptor: int, name: str) -> bool:
+    nofollow = getattr(os, "O_NOFOLLOW", None)
+    try:
+        os.stat(
+            name,
+            dir_fd=scope_descriptor,
+            follow_symlinks=False if nofollow is not None else True,
+        )
+    except FileNotFoundError:
+        return False
+    except (NotImplementedError, OSError, TypeError, ValueError):
+        return True
+    return True
+
+
 def _current_priority_scope_weights() -> tuple[int, int] | None:
     cgroup_path = _current_cgroup2_path()
     if cgroup_path is None:
         return None
     cpu_weight = _parse_cgroup_weight(cgroup_path / "cpu.weight")
-    io_weight = _parse_cgroup_weight(cgroup_path / "io.weight", io_weight=True)
+    io_path = cgroup_path / "io.weight"
+    io_weight = _parse_cgroup_weight(io_path, io_weight=True)
+    if io_weight is None and cpu_weight is not None and not _cgroup_file_exists(io_path):
+        io_weight = cpu_weight
     if cpu_weight is None or io_weight is None:
         return None
     return cpu_weight, io_weight
@@ -6437,11 +6465,15 @@ def priority_scope_identity_for_pid(
             "io.weight",
             max_bytes=MAX_CGROUP_FILE_BYTES,
         )
-        if cpu_contents is None or io_contents is None:
+        io_missing = io_contents is None and not _scope_file_exists(
+            scope_descriptor,
+            "io.weight",
+        )
+        if cpu_contents is None or (io_contents is None and not io_missing):
             return None
-        if (
-            _parse_cgroup_weight_contents(cpu_contents) != cpu_weight
-            or _parse_cgroup_weight_contents(io_contents, io_weight=True) != io_weight
+        if _parse_cgroup_weight_contents(cpu_contents) != cpu_weight or (
+            io_contents is not None
+            and _parse_cgroup_weight_contents(io_contents, io_weight=True) != io_weight
         ):
             return None
         if _cgroup2_path_for_pid(pid, mappings=mappings) != cgroup_path:
@@ -6523,11 +6555,15 @@ def priority_scope_identity_for_control_group(
             "io.weight",
             max_bytes=MAX_CGROUP_FILE_BYTES,
         )
-        if cpu_contents is None or io_contents is None:
+        io_missing = io_contents is None and not _scope_file_exists(
+            scope_descriptor,
+            "io.weight",
+        )
+        if cpu_contents is None or (io_contents is None and not io_missing):
             return None
-        if (
-            _parse_cgroup_weight_contents(cpu_contents) != cpu_weight
-            or _parse_cgroup_weight_contents(io_contents, io_weight=True) != io_weight
+        if _parse_cgroup_weight_contents(cpu_contents) != cpu_weight or (
+            io_contents is not None
+            and _parse_cgroup_weight_contents(io_contents, io_weight=True) != io_weight
         ):
             return None
         if not _scope_fd_matches_identity(scope_descriptor, scope_path, candidate):
@@ -6789,9 +6825,13 @@ def _priority_scope_snapshot(
             if process_after is not None
             else None
         )
+        io_missing = io_contents is None and not _scope_file_exists(
+            scope_descriptor,
+            "io.weight",
+        )
         if (
             cpu_contents is None
-            or io_contents is None
+            or (io_contents is None and not io_missing)
             or (include_process_ids and process_contents is None)
             or (include_membership and events_before is None)
             or (include_membership and events_after is None)
@@ -6805,9 +6845,13 @@ def _priority_scope_snapshot(
         ):
             return None
         parsed_cpu_weight = _parse_cgroup_weight_contents(cpu_contents)
-        parsed_io_weight = _parse_cgroup_weight_contents(
-            io_contents,
-            io_weight=True,
+        parsed_io_weight = (
+            _parse_cgroup_weight_contents(
+                io_contents,
+                io_weight=True,
+            )
+            if io_contents is not None
+            else io_weight
         )
         if parsed_cpu_weight != cpu_weight or parsed_io_weight != io_weight:
             return None

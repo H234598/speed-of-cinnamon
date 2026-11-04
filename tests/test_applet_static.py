@@ -15250,6 +15250,10 @@ class AppletStaticTest(unittest.TestCase):
             "this._maybeWarnRejectedArtifactPassphrase(payload.error);", source
         )
         self.assertIn(
+            "this._maybeWarnRejectedArtifactPassphrase(\n          payload.error || payload.message || errorMessage,\n        );",
+            source,
+        )
+        self.assertIn(
             "_maybeWarnUnencryptedArtifactStorage: function (payload, statusOverride)",
             source,
         )
