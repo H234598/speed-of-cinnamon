@@ -6499,6 +6499,7 @@ MyApplet.prototype = {
       }
       if (
         this._resourceRegistry &&
+        this._resourceRegistry.timers &&
         this._resourceRegistry.timers[key] === sourceId &&
         this._resourceRegistry.timerOwners &&
         this._resourceRegistry.timerOwners[key] === registeredOwner
@@ -10142,8 +10143,11 @@ MyApplet.prototype = {
     if (!this._appendCliFlagWithinBudget(args, flexProcessingFlag)) {
       throw new Error("OpenAI-compatible Flex setting exceeds command limit");
     }
-    let transcriberCommandIncluded = safeTranscriberCommand.trim() === "";
-    let postProcessCommandIncluded = safePostProcessCommand.trim() === "";
+    let transcriberCommandIncluded =
+      safeTranscriber !== "command" || safeTranscriberCommand.trim() === "";
+    let postProcessCommandIncluded =
+      safePostProcessBackend !== "command" ||
+      safePostProcessCommand.trim() === "";
     let ollamaModelIncluded = safeOllamaModel.trim() === "";
     let whisperModelIncluded = safeWhisperModel.trim() === "";
     let ollamaUrlIncluded =
@@ -10164,14 +10168,17 @@ MyApplet.prototype = {
         throw new Error("Input device setting exceeds command limit");
       }
     }
-    if (safeTranscriberCommand.trim() !== "") {
+    if (safeTranscriber === "command" && safeTranscriberCommand.trim() !== "") {
       transcriberCommandIncluded = this._appendCliOptionWithinBudget(
         args,
         "--transcriber-command",
         safeTranscriberCommand,
       );
     }
-    if (safePostProcessCommand.trim() !== "") {
+    if (
+      safePostProcessBackend === "command" &&
+      safePostProcessCommand.trim() !== ""
+    ) {
       postProcessCommandIncluded = this._appendCliOptionWithinBudget(
         args,
         "--post-process-command",
@@ -14858,7 +14865,9 @@ MyApplet.prototype = {
       let terminalWorkflowToken = {};
       this.terminalWorkflowToken = terminalWorkflowToken;
       let handle = this._runBoundedSubprocess(
-        this._coerceSpawnArgs(terminalArgs),
+        this._coerceSpawnArgs(terminalArgs, {
+          allowNewlinesInIndex: terminalArgs.length - 1,
+        }),
         {},
         {
           timeoutMs: 0,
@@ -14942,7 +14951,11 @@ MyApplet.prototype = {
     let script = [
       "set -eu",
       "rc=0",
-      'trap \'rc=$?; printf "\\nFinished with exit code %s.\\n" "$rc"; read -r -p "Press Enter to close..." || true; exit "$rc"\' EXIT',
+      'trap \'rc=$?; printf "%sFinished with exit code %s.%s" "$' +
+        "'\\x0a'" +
+        '" "$rc" "$' +
+        "'\\x0a'" +
+        '"; read -r -p "Press Enter to close..." || true; exit "$rc"\' EXIT',
     ].concat(lines || []);
     return script.join("\n");
   },
@@ -14954,8 +14967,8 @@ MyApplet.prototype = {
       "  echo 'Ollama is already installed.'",
       "  ollama --version || true",
       "else",
-      "  printf 'Speed of Cinnamon does not run privileged package-manager commands from the applet.\\n' >&2",
-      "  printf 'Install Ollama manually with your distribution package manager, then rerun this step.\\n' >&2",
+      "  echo 'Speed of Cinnamon does not run privileged package-manager commands from the applet.' >&2",
+      "  echo 'Install Ollama manually with your distribution package manager, then rerun this step.' >&2",
       "  exit 1",
       "fi",
       "if command -v ollama >/dev/null 2>&1; then",
@@ -14969,8 +14982,8 @@ MyApplet.prototype = {
     return this._terminalWorkflowScript([
       "echo 'Uninstalling Ollama runtime...'",
       "if command -v ollama >/dev/null 2>&1; then",
-      "  printf 'Speed of Cinnamon does not run privileged uninstall commands from the applet.\\n' >&2",
-      "  printf 'Remove Ollama manually with your distribution package manager or service manager.\\n' >&2",
+      "  echo 'Speed of Cinnamon does not run privileged uninstall commands from the applet.' >&2",
+      "  echo 'Remove Ollama manually with your distribution package manager or service manager.' >&2",
       "  exit 1",
       "fi",
       "echo 'Ollama runtime removed.'",
@@ -22195,7 +22208,7 @@ MyApplet.prototype = {
     return pending.length;
   },
 
-  _coerceSpawnArgs: function (args) {
+  _coerceSpawnArgs: function (args, options) {
     if (!Array.isArray(args)) {
       throw new Error("Backend command arguments are invalid");
     }
@@ -22208,6 +22221,10 @@ MyApplet.prototype = {
     if (String(args[0] || "").trim() === "") {
       throw new Error("Backend command is empty");
     }
+    let allowNewlinesInIndex =
+      options && Number.isInteger(options.allowNewlinesInIndex)
+        ? options.allowNewlinesInIndex
+        : -1;
     let normalized = [];
     let totalBytes = 0;
     for (let i = 0; i < args.length; i++) {
@@ -22221,7 +22238,7 @@ MyApplet.prototype = {
       if (i === 0) {
         value = value.trim();
       }
-      if (this._containsCliControlChars(value)) {
+      if (this._containsCliControlChars(value, i === allowNewlinesInIndex)) {
         throw new Error(
           "Backend command argument contains invalid control character",
         );

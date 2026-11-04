@@ -4464,6 +4464,41 @@ class ArtifactCryptoTest(unittest.TestCase):
         self.assertNotIn(secret, repr(caught.exception.args))
         self.assertNotIn(secret, rendered)
 
+    def test_generate_default_passphrase_file_captures_temporary_stat_after_write(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "artifact.key"
+            real_rename = artifact_crypto._rename_without_replacing
+
+            def fail_rename(*args: object, **kwargs: object) -> None:
+                if kwargs.get("field_name") == "artifact encryption passphrase file":
+                    raise OSError("simulated activation rename failure")
+                real_rename(*args, **kwargs)
+
+            with (
+                mock.patch.object(
+                    artifact_crypto,
+                    "default_passphrase_file",
+                    return_value=path,
+                ),
+                mock.patch.object(
+                    artifact_crypto,
+                    "_rename_without_replacing",
+                    side_effect=fail_rename,
+                ),
+            ):
+                with self.assertRaisesRegex(
+                    artifact_crypto.ArtifactCryptoError,
+                    "passphrase file could not be generated",
+                ):
+                    artifact_crypto._generate_default_passphrase_file(path)
+
+            self.assertEqual(list(Path(tmp).glob(".artifact.key.*.tmp")), [])
+            self.assertFalse(path.exists())
+            self.assertIsNotNone(real_rename)
+
 
 if __name__ == "__main__":
     unittest.main()
+

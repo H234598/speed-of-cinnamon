@@ -5576,12 +5576,16 @@ def _prepare_private_file(
         return result
     try:
         with os.fdopen(fd, "ab") as handle:
+            fd = -1
             os.fchmod(handle.fileno(), 0o600)
+            if exclusive:
+                created_stat = os.fstat(handle.fileno())
     except (OSError, ValueError) as exc:
-        try:
-            os.close(fd)
-        except BaseException:
-            pass
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
         raise _PrivateFilePrepareError(
             f"failed to prepare {field_name}: {path}",
             created=exclusive,
@@ -5594,10 +5598,11 @@ def _prepare_private_file(
                 setattr(exc, "_speed_of_cinnamon_created_stat", created_stat)
             except BaseException:
                 pass
-        try:
-            os.close(fd)
-        except BaseException:
-            pass
+        if fd >= 0:
+            try:
+                os.close(fd)
+            except BaseException:
+                pass
         raise
 
 
@@ -15342,14 +15347,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         )
                         else ""
                     ),
-                    transcript=(
-                        state.transcript
-                        if (
-                            preserve_transcript_after_insert_failure
-                            or not transcript_deleted
-                        )
-                        else ""
-                    ),
+                    transcript=state.transcript,
                     transcript_path=(
                         preserved_transcript_path
                         if preserve_transcript_after_insert_failure
@@ -15391,7 +15389,9 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "inflight_artifacts_deleted": inflight_deleted,
                 "cleanup_backups_deleted": cleanup_backups_deleted,
                 "transcript_deleted": bool(
-                    transcript_deleted and not preserve_transcript_after_insert_failure
+                    transcript_deleted
+                    and not preserve_transcript_after_insert_failure
+                    and not state.transcript
                 ),
             }
             return payload

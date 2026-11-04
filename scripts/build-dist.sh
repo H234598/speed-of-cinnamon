@@ -1743,29 +1743,7 @@ try:
                 raise SystemExit(f"unresolved build-dist workspace: {workspace_base}/{name}")
             age_ns = time.time_ns() - path_stat.st_mtime_ns
             if age_ns < max_age_ns:
-                active_lock_held = False
-                if is_workspace:
-                    workspace_fd = None
-                    try:
-                        workspace_fd = os.open(
-                            name,
-                            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
-                            dir_fd=parent_fd,
-                        )
-                        try:
-                            fcntl.flock(workspace_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                        except BlockingIOError:
-                            active_lock_held = True
-                        else:
-                            fcntl.flock(workspace_fd, fcntl.LOCK_UN)
-                    except OSError:
-                        pass
-                    finally:
-                        if workspace_fd is not None:
-                            os.close(workspace_fd)
-                if active_lock_held:
-                    continue
-                raise SystemExit(f"recent build-dist workspace requires recovery: {workspace_base}/{name}")
+                continue
             if len(stale) >= max_stale:
                 raise SystemExit(f"build-dist workspace sweep exceeds max {max_stale}")
             if is_tombstone:

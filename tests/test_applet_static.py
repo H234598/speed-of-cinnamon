@@ -4350,7 +4350,7 @@ class AppletStaticTest(unittest.TestCase):
             source,
         )
         self.assertIn(
-            'let transcriberCommandIncluded = safeTranscriberCommand.trim() === "";',
+            'let transcriberCommandIncluded =\n      safeTranscriber !== "command" || safeTranscriberCommand.trim() === "";',
             source,
         )
         self.assertIn(
@@ -13411,7 +13411,7 @@ class AppletStaticTest(unittest.TestCase):
         )
         self.assertIn('message += _(" (truncated)");', source)
         self.assertIn("const CLI_COMMAND_TIMEOUT_MS = 300000;", source)
-        self.assertIn("_coerceSpawnArgs: function (args) {", source)
+        self.assertIn("_coerceSpawnArgs: function (args, options) {", source)
         self.assertIn("if (!Array.isArray(args)) {", source)
         self.assertIn("if (args[i] === null || args[i] === undefined) {", source)
         self.assertIn('throw new Error("Backend command argument is missing");', source)
@@ -19161,3 +19161,34 @@ class AppletStaticTest(unittest.TestCase):
             "this._statusIconCache.status === status && this._statusIconCache.icon === nextIcon",
             source,
         )
+
+    def test_base_args_only_pass_custom_commands_for_command_backends(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        base_start = source.index("_baseArgs: function (command, languageOverride)")
+        base_end = source.index("\n  _appendCliOptionWithinBudget:", base_start)
+        block = source[base_start:base_end]
+        self.assertIn(
+            'let transcriberCommandIncluded =\n      safeTranscriber !== "command" || safeTranscriberCommand.trim() === "";',
+            block,
+        )
+        self.assertIn(
+            'let postProcessCommandIncluded =\n      safePostProcessBackend !== "command" ||\n      safePostProcessCommand.trim() === "";',
+            block,
+        )
+        self.assertIn(
+            'if (safeTranscriber === "command" && safeTranscriberCommand.trim() !== "") {',
+            block,
+        )
+        self.assertIn(
+            'if (\n      safePostProcessBackend === "command" &&\n      safePostProcessCommand.trim() !== ""\n    ) {',
+            block,
+        )
+        self.assertIn(
+            'this._coerceSpawnArgs(terminalArgs, {\n          allowNewlinesInIndex: terminalArgs.length - 1,\n        })',
+            source,
+        )
+        self.assertIn(
+            "this._resourceRegistry &&\n        this._resourceRegistry.timers &&\n        this._resourceRegistry.timers[key] === sourceId",
+            source,
+        )
+

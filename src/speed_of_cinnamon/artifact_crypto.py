@@ -1149,7 +1149,6 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
             require_private_mode=True,
         )
         file_stat = os.fstat(temp_fd)
-        temporary_stat = file_stat
         if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
             raise ArtifactCryptoError(
                 "artifact encryption passphrase file must be owned by the current user"
@@ -1159,8 +1158,10 @@ def _generate_default_passphrase_file(path: Path, *, replace: bool = False) -> s
                 "artifact encryption passphrase file must be private"
             )
         os.fchmod(temp_fd, 0o600)
+        temporary_stat = os.fstat(temp_fd)
         _write_all(temp_fd, payload)
         _fsync_fd(temp_fd)
+        temporary_stat = os.fstat(temp_fd)
         temp_fd_to_close = temp_fd
         temp_fd = -1
         os.close(temp_fd_to_close)

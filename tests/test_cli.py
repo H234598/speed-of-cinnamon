@@ -2496,6 +2496,35 @@ class CliTest(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(target_fds[0])
 
+    def test_prepare_private_file_captures_created_stat_after_fchmod(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "recording.wav"
+                real_fstat = os.fstat
+                fstat_modes: list[int] = []
+
+                def fstat_wrapper(fd: int) -> os.stat_result:
+                    result = real_fstat(fd)
+                    fstat_modes.append(result.st_mode & 0o777)
+                    if len(fstat_modes) == 2:
+                        raise OSError("post-chmod fstat failed")
+                    return result
+
+                old_umask = os.umask(0o022)
+                try:
+                    with mock.patch.object(cli.os, "fstat", side_effect=fstat_wrapper):
+                        with self.assertRaisesRegex(
+                            cli._PrivateFilePrepareError,
+                            "failed to prepare recording audio file",
+                        ) as caught:
+                            cli._prepare_private_file(
+                                path, field_name="recording audio file"
+                            )
+                finally:
+                    os.umask(old_umask)
+
+                self.assertTrue(caught.exception.created)
+                self.assertEqual(fstat_modes[-1], 0o600)
+
     def test_prepare_transient_transcript_closes_descriptor_when_owner_write_is_interrupted(
         self,
     ) -> None:
@@ -33297,7 +33326,6 @@ class CliTest(unittest.TestCase):
                     status="error",
                     audio_path=str(audio),
                     log_path=str(log),
-                    transcript="secret",
                     transcript_path=str(transcript),
                     error="recorder process exited unexpectedly",
                 )
@@ -33328,7 +33356,6 @@ class CliTest(unittest.TestCase):
         self.assertTrue(payload["transcript_deleted"])
         self.assertFalse(final_state.audio_path)
         self.assertEqual(final_state.log_path, str(log))
-        self.assertEqual(final_state.transcript, "")
         self.assertEqual(final_state.transcript_path, "")
 
     def test_start_does_not_overwrite_expired_recording(self) -> None:
