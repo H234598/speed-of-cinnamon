@@ -31210,6 +31210,7 @@ MyApplet.prototype = {
   },
 };
 
-function _main(metadata, orientation, panelHeight, instanceId) {
+// eslint-disable-next-line no-unused-vars
+function main(metadata, orientation, panelHeight, instanceId) {
   return new MyApplet(metadata, orientation, panelHeight, instanceId);
 }

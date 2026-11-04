@@ -12,6 +12,14 @@ APPLET_DIR = REPO_ROOT / "files" / "speed-of-cinnamon@H234598"
 
 
 class AppletStaticTest(unittest.TestCase):
+    def test_applet_exports_cinnamon_main_entrypoint(self) -> None:
+        source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
+        self.assertIn(
+            "function main(metadata, orientation, panelHeight, instanceId) {\n  return new MyApplet(metadata, orientation, panelHeight, instanceId);\n}",
+            source,
+        )
+        self.assertNotIn("function _main(", source)
+
     def test_settings_page_includes_responsive_header_and_footer_logos(self) -> None:
         schema = json.loads(
             (APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8")
