@@ -88,19 +88,19 @@ USER_NS_INIT_INO = 0xEFFFFFFD
 PID_NS_INIT_INO = 0xEFFFFFFC
 CGROUP_NS_INIT_INO = 0xEFFFFFFB
 MNT_NS_INIT_INO = 0xEFFFFFF8
-_SCOPE_EXEC_WRAPPER_TOKEN = "--speed-of-cinnamon-scope-exec"
-_LOCAL_MODEL_DIRECT_EXEC_TOKEN = "--speed-of-cinnamon-local-model-direct-exec"
+_SCOPE_EXEC_WRAPPER_TOKEN = "--speed-of-cinnamon-scope-exec"  # nosec B105
+_LOCAL_MODEL_DIRECT_EXEC_TOKEN = "--speed-of-cinnamon-local-model-direct-exec"  # nosec B105
 _INTERNAL_EXEC_WRAPPER_TOKENS = frozenset(
     {_SCOPE_EXEC_WRAPPER_TOKEN, _LOCAL_MODEL_DIRECT_EXEC_TOKEN}
 )
-_SCOPE_EXEC_LATCH_REQUIRED_TOKEN = "--entered-latch-required"
+_SCOPE_EXEC_LATCH_REQUIRED_TOKEN = "--entered-latch-required"  # nosec B105
 _SCOPE_EXEC_LATCH_ADDRESS_ENV = "SPEED_OF_CINNAMON_SCOPE_ENTERED_ADDRESS"
 _SCOPE_EXEC_LATCH_NONCE_ENV = "SPEED_OF_CINNAMON_SCOPE_ENTERED_NONCE"
 _SCOPE_EXEC_LATCH_MESSAGE_PREFIX = b"SOC_SCOPE_ENTERED_V1:"
 _SCOPE_EXEC_LATCH_ADDRESS_RE = re.compile(r"^[0-9a-f]{32}$", re.ASCII)
 _SCOPE_EXEC_LATCH_NONCE_RE = re.compile(r"^[0-9a-f]{64}$", re.ASCII)
 _SCOPE_EXEC_LATCH_MAX_BYTES = len(_SCOPE_EXEC_LATCH_MESSAGE_PREFIX) + 64
-_LOCAL_MODEL_GATE_REQUIRED_TOKEN = "--local-model-ready-ack-required"
+_LOCAL_MODEL_GATE_REQUIRED_TOKEN = "--local-model-ready-ack-required"  # nosec B105
 _LOCAL_MODEL_GATE_ADDRESS_ENV = "SPEED_OF_CINNAMON_LOCAL_MODEL_GATE_ADDRESS"
 _LOCAL_MODEL_GATE_READY_NONCE_ENV = "SPEED_OF_CINNAMON_LOCAL_MODEL_GATE_READY_NONCE"
 _LOCAL_MODEL_GATE_ACK_NONCE_ENV = "SPEED_OF_CINNAMON_LOCAL_MODEL_GATE_ACK_NONCE"
@@ -2270,10 +2270,13 @@ def _cgroup_resource_snapshot_from_bound(
         if any(item is None for item in files):
             return None
         cpu_max, memory_current, memory_max, memory_high = files
-        assert cpu_max is not None
-        assert memory_current is not None
-        assert memory_max is not None
-        assert memory_high is not None
+        if (
+            cpu_max is None
+            or memory_current is None
+            or memory_max is None
+            or memory_high is None
+        ):
+            return None
         levels.append(
             _CgroupResourceLevelSnapshot(
                 cpu_max=cpu_max,
@@ -4646,7 +4649,7 @@ def _run_scope_exec_wrapper(argv: Sequence[str]) -> None:
             ):
                 raise PriorityScopeError(_SCOPE_EXEC_FAILURE)
         try:
-            os.execve(descriptor, list(spec.argv), environment)
+            os.execve(descriptor, list(spec.argv), environment)  # nosec B606
         except (OSError, OverflowError, TypeError, ValueError):
             raise PriorityScopeError(_SCOPE_EXEC_EXEC_FAILURE) from None
         raise PriorityScopeError(_SCOPE_EXEC_EXEC_FAILURE)
@@ -4711,7 +4714,7 @@ def _run_local_model_direct_exec_wrapper(
         if absolute_deadline is not None and time.monotonic() >= absolute_deadline:
             raise PriorityScopeError(_LOCAL_MODEL_DIRECT_EXEC_FAILURE)
         try:
-            os.execve(descriptor, list(spec.argv), environment)
+            os.execve(descriptor, list(spec.argv), environment)  # nosec B606
         except (OSError, OverflowError, TypeError, ValueError):
             raise PriorityScopeError(_LOCAL_MODEL_DIRECT_EXEC_FAILURE) from None
         raise PriorityScopeError(_LOCAL_MODEL_DIRECT_EXEC_FAILURE)

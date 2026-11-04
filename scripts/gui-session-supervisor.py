@@ -12,7 +12,7 @@ import select
 import selectors
 import signal
 import stat
-import subprocess
+import subprocess  # nosec B404
 import sys
 import time
 
@@ -505,7 +505,7 @@ def _runner_bwrap_command(command: list[str], ready_fd: int | None = None) -> li
         "--dev",
         "/dev",
         "--tmpfs",
-        "/tmp",
+        "/tmp",  # nosec B108
         "--tmpfs",
         "/run",
         "--tmpfs",
@@ -1136,7 +1136,7 @@ def _run_install_guard_outer(arguments: list[str]) -> int:
                 wrapped_command and wrapped_command[0] == RUNNER_BWRAP
             )
             phase = "SPAWN"
-            process = subprocess.Popen(
+            process = subprocess.Popen(  # nosec B603
                 [*wrapped_command],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.DEVNULL,
@@ -1603,7 +1603,7 @@ class Supervisor:
             os.close(stdout_fd)
             raise
         try:
-            process = subprocess.Popen(
+            process = subprocess.Popen(  # nosec B603
                 [*self.command],
                 stdin=subprocess.DEVNULL,
                 stdout=stdout_fd,

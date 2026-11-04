@@ -288,7 +288,8 @@ class StateStore:
                     primary_cause = exc
             if primary_error is None:
                 try:
-                    assert fd is not None
+                    if fd is None:
+                        raise RuntimeError("failed to open state lock file")
                     assert_fd_is_regular_private_file(
                         fd,
                         field_name="state lock file",

@@ -3990,7 +3990,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("pylint==4.0.5", workflow)
         self.assertIn("--require-hashes", requirements)
         self.assertIn("pylint==4.0.9 --hash=sha256:", requirements)
-        self.assertIn("astroid==4.3.4 --hash=sha256:", requirements)
+        self.assertIn("astroid==4.0.4 --hash=sha256:", requirements)
         self.assertNotIn("permissions:", "\n".join(checkout_block))
         self.assertNotIn("contents: write", workflow)
         self.assertNotIn("id-token: write", workflow)

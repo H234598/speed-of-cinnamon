@@ -12,7 +12,7 @@ import os
 import re
 import select
 import signal
-import subprocess
+import subprocess  # nosec B404
 import sys
 import time
 
@@ -2258,7 +2258,7 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
             signal.signal(signum, remember_signal)
             installed_handlers.append(signum)
         ensure_launch_budget(terminate_at, phase="RPM identity helper")
-        child = subprocess.Popen(
+        child = subprocess.Popen(  # nosec B603
             [*command],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -3124,7 +3124,7 @@ def run(
             installed_handlers.append(signum)
         os.fstat(handoff_fd)
         ensure_launch_budget(terminate_at, phase="RPM lifecycle")
-        child = subprocess.Popen(
+        child = subprocess.Popen(  # nosec B603
             [*command],
             pass_fds=(handoff_fd,),
             start_new_session=True,

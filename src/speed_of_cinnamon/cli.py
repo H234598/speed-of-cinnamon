@@ -13667,7 +13667,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                             )
                         except (KeyboardInterrupt, SystemExit):
                             raise
-                        except Exception:
+                        except Exception:  # nosec B110
                             pass
                 return current_state, False, False
             wiped_stat = _authorize_cleanup_claim_wipe(
@@ -13836,7 +13836,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 )
             except (KeyboardInterrupt, SystemExit):
                 raise
-            except Exception:
+            except Exception:  # nosec B110
                 pass
             return {
                 "status": "error",

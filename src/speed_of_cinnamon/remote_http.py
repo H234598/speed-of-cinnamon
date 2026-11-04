@@ -296,7 +296,8 @@ def validate_failure_metadata(
         return None, None
     if error_code is None:
         error_code = default_error_code_for_failure_reason(reason)
-    assert type(error_code) is str
+    if type(error_code) is not str:
+        raise ValueError("invalid remote failure error code")
     if reason in _HTTP_REASON_STATUS:
         if error_code != "remote-http-failed" or status != _HTTP_REASON_STATUS[reason]:
             raise ValueError("inconsistent remote HTTP failure metadata")
@@ -551,7 +552,8 @@ def _validate_api_key(value: object) -> str:
         max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
         max_bytes=MAX_OPENAI_COMPATIBLE_API_KEY_BYTES,
     )
-    assert type(value) is str
+    if type(value) is not str:
+        raise ValueError
     normalized = value.strip()
     _validate_text(
         normalized,
@@ -566,7 +568,8 @@ def _validate_request_envelope(
     monotonic_ns: Callable[[], object] | None,
 ) -> dict[str, object]:
     _require_exact_keys(value, _REQUEST_KEYS)
-    assert type(value) is dict
+    if type(value) is not dict:
+        raise ValueError
     if (
         type(value["schema_version"]) is not int
         or value["schema_version"] != PROTOCOL_SCHEMA_VERSION
@@ -596,7 +599,8 @@ def _validate_request_envelope(
 
 def _validate_postprocess_payload(payload: object) -> dict[str, object]:
     _require_exact_keys(payload, _POSTPROCESS_REQUEST_PAYLOAD_KEYS)
-    assert type(payload) is dict
+    if type(payload) is not dict:
+        raise ValueError
     url = payload["url"]
     if type(url) is not str or len(url) > MAX_POSTPROCESS_URL_CHARS:
         raise ValueError
@@ -631,7 +635,8 @@ def _validate_postprocess_payload(payload: object) -> dict[str, object]:
 
 def _validate_openai_postprocess_payload(payload: object) -> dict[str, object]:
     _require_exact_keys(payload, _OPENAI_POSTPROCESS_REQUEST_PAYLOAD_KEYS)
-    assert type(payload) is dict
+    if type(payload) is not dict:
+        raise ValueError
     url = payload["url"]
     if type(url) is not str or len(url) > MAX_POSTPROCESS_URL_CHARS:
         raise ValueError
@@ -706,7 +711,8 @@ def _validate_request_payload(value: dict[str, object]) -> dict[str, object]:
         normalized["payload"] = normalized_payload
         return normalized
     _require_exact_keys(payload, expected_keys)
-    assert type(payload) is dict
+    if type(payload) is not dict:
+        raise ValueError
     _validate_url(payload["url"])
     if operation != LIST_OPENAI_COMPATIBLE_MODELS_OPERATION:
         return value
@@ -728,7 +734,8 @@ def _validate_request(
 
 def _validate_model(value: object) -> str:
     _require_exact_keys(value, _MODEL_KEYS)
-    assert type(value) is dict
+    if type(value) is not dict:
+        raise ValueError
     name = value["name"]
     model_name = value["model"]
     _validate_text(
@@ -779,7 +786,8 @@ def _validate_model(value: object) -> str:
 
 def _validate_openai_model(value: object) -> str:
     _require_exact_keys(value, _OPENAI_MODEL_KEYS)
-    assert type(value) is dict
+    if type(value) is not dict:
+        raise ValueError
     name = value["name"]
     model_name = value["model"]
     for item in (name, model_name):
@@ -800,7 +808,8 @@ def _validate_listing_result(
     operation: str = LIST_OLLAMA_MODELS_OPERATION,
 ) -> None:
     _require_exact_keys(value, _LISTING_RESULT_KEYS)
-    assert type(value) is dict
+    if type(value) is not dict:
+        raise ValueError
     if operation not in SUPPORTED_OPERATIONS:
         raise ValueError
     state = value["listing_state"]
@@ -825,7 +834,8 @@ def _validate_listing_result(
 
 def _validate_postprocess_result(value: object) -> None:
     _require_exact_keys(value, _POSTPROCESS_RESULT_KEYS)
-    assert type(value) is dict
+    if type(value) is not dict:
+        raise ValueError
     _assert_text_length(
         value["text"],
         field_name="post-process output",
@@ -885,7 +895,8 @@ def _validate_response(
             _ERROR_RESPONSE_KEYS | _ERROR_RESPONSE_OPTIONAL_KEYS
         ):
             raise ValueError
-    assert type(value) is dict
+    if type(value) is not dict:
+        raise ValueError
     if (
         type(value["schema_version"]) is not int
         or value["schema_version"] != PROTOCOL_SCHEMA_VERSION
@@ -2740,7 +2751,7 @@ def _spawn_worker(request_frame: bytes) -> _WorkerHandle:
         ):
             os.set_inheritable(endpoint.fileno(), False)
         bootstrap_root, bootstrap_snapshot = _package_bootstrap_snapshot()
-        process = subprocess.Popen(
+        process = subprocess.Popen(  # nosec B603
             [
                 interpreter,
                 "-I",
@@ -3058,7 +3069,7 @@ def _run_operation(
     deadline = request.get("deadline_monotonic_ns")
     if type(nonce) is not str or type(deadline) is not int:
         raise RemoteProtocolError("remote-request-invalid")
-    secret = ""
+    secret = ""  # nosec B105
     payload = request.get("payload")
     if (
         operation

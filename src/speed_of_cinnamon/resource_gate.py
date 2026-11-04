@@ -78,7 +78,8 @@ def _parse_loadavg(contents: str | None) -> tuple[float, float, float] | None:
     if any(value is None for value in parsed):
         return None
     first, fifth, fifteenth = parsed
-    assert first is not None and fifth is not None and fifteenth is not None
+    if first is None or fifth is None or fifteenth is None:
+        return None
     return first, fifth, fifteenth
 
 
@@ -249,7 +250,10 @@ def _build_payload(*, require_full_online: bool) -> dict[str, object]:
         available >= MIN_MEMORY_HEADROOM_BYTES and available * 4 >= total
     )
     cpu_psi, memory_psi, io_psi = psi_values
-    assert cpu_psi is not None and memory_psi is not None and io_psi is not None
+    if cpu_psi is None or memory_psi is None or io_psi is None:
+        return _defer_payload(
+            "psi_unavailable", require_full_online=require_full_online
+        )
     psi_ok = all(
         value <= threshold
         for value, threshold in zip(

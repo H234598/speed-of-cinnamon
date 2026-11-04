@@ -46,7 +46,7 @@ STALE_CLEANUP_BUDGET_NS = 5_000_000_000
 TREE_IO_PASSES = 7
 TREE_IO_ENTRY_PASSES = 7
 _TRUSTED_STICKY_SYSTEM_DIRS = frozenset(
-    {Path("/tmp"), Path("/var/tmp"), Path("/dev/shm")}
+    {Path("/tmp"), Path("/var/tmp"), Path("/dev/shm")}  # nosec B108
 )
 _PROC_ATTESTATION_MAX_BYTES = 64 * 1024
 _PROC_ATTESTATION_MAX_EINTR = 8

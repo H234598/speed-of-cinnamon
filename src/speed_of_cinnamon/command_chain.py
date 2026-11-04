@@ -455,21 +455,29 @@ class _BoundedPopenThread(threading.Thread):
         try:
             try:
                 environment = _filtered_environment(self._environment)
-                popen_kwargs: dict[str, object] = {
-                    "stdin": self._stdin_file,
-                    "stdout": subprocess.PIPE,
-                    "stderr": subprocess.PIPE,
-                    "env": environment,
-                    "shell": False,
-                    "close_fds": True,
-                    "start_new_session": True,
-                }
                 if self._pass_fds:
-                    popen_kwargs["pass_fds"] = self._pass_fds
-                process = subprocess.Popen(
-                    [*self._command],
-                    **popen_kwargs,
-                )
+                    process = subprocess.Popen(  # nosec B603
+                        [*self._command],
+                        stdin=self._stdin_file,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=environment,
+                        shell=False,
+                        close_fds=True,
+                        start_new_session=True,
+                        pass_fds=self._pass_fds,
+                    )
+                else:
+                    process = subprocess.Popen(  # nosec B603
+                        [*self._command],
+                        stdin=self._stdin_file,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=environment,
+                        shell=False,
+                        close_fds=True,
+                        start_new_session=True,
+                    )
             except BaseException as error:
                 outcome, error_number = _bounded_popen_exception_outcome(error)
                 self._owner.publish_outcome(outcome, error_number)

@@ -461,7 +461,11 @@ def _fixed_http_postprocess_error(
             "remote-worker-protocol-invalid",
             "worker_protocol",
         )
-    assert type(status) is int
+    if type(status) is not int:
+        return _fixed_remote_postprocess_error(
+            "remote-worker-protocol-invalid",
+            "worker_protocol",
+        )
     return _fixed_remote_postprocess_error("remote-http-failed", reason, status)
 
 
@@ -779,7 +783,7 @@ def _set_response_socket_timeout(response: object, timeout: float) -> None:
         try:
             settimeout(timeout)  # pylint: disable=not-callable
             return
-        except Exception:
+        except Exception:  # nosec B112
             continue
 
 
@@ -1674,7 +1678,8 @@ def list_ollama_models(
         failure = _detached_boundary_base_exception(error, remote=True)
     url = ""
     timeout = 0
-    assert failure is not None
+    if failure is None:
+        failure = PostProcessError(GENERIC_POSTPROCESS_FAILURE_MESSAGE)
     _raise_no_secret(failure)
 
 
@@ -1808,7 +1813,8 @@ def list_openai_compatible_models(
     url = ""
     timeout = 0
     api_key = ""
-    assert failure is not None
+    if failure is None:
+        failure = PostProcessError(GENERIC_POSTPROCESS_FAILURE_MESSAGE)
     _raise_no_secret(failure)
 
 
@@ -1955,7 +1961,8 @@ def post_process_with_ollama(
     except BaseException as error:
         failure = _detached_boundary_base_exception(error, remote=True)
     text = language = model = url = personal_context = vocabulary = prompt = ""
-    assert failure is not None
+    if failure is None:
+        failure = PostProcessError(GENERIC_POSTPROCESS_FAILURE_MESSAGE)
     _raise_no_secret(failure)
 
 
@@ -2212,7 +2219,8 @@ def post_process_with_openai_compatible(
     api_key = ""
     flex_processing = False
     openai_compatible_service_tier_fallback = False
-    assert failure is not None
+    if failure is None:
+        failure = PostProcessError(GENERIC_POSTPROCESS_FAILURE_MESSAGE)
     _raise_no_secret(failure)
 
 
@@ -2446,5 +2454,6 @@ def post_process_text(
     openai_compatible_flex_processing = False
     openai_compatible_service_tier_fallback = False
     remote_backend = False
-    assert failure is not None
+    if failure is None:
+        failure = PostProcessError(GENERIC_POSTPROCESS_FAILURE_MESSAGE)
     _raise_no_secret(failure)

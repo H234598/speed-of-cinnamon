@@ -3490,8 +3490,8 @@ def faster_whisper_runtime_diagnostics() -> dict[str, object]:
 
     ctranslate2 = parsed["ctranslate2"]
     faster_whisper = parsed["faster_whisper"]
-    assert isinstance(ctranslate2, dict)
-    assert isinstance(faster_whisper, dict)
+    if not isinstance(ctranslate2, dict) or not isinstance(faster_whisper, dict):
+        return _empty_faster_whisper_runtime_diagnostic("failed", worker_available=True)
     if ctranslate2["available"] is False:
         status = "unavailable"
     elif (
