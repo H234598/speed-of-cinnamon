@@ -2035,7 +2035,7 @@ class AppletStaticTest(unittest.TestCase):
         )
         self.assertIn("this._hotkeyDefinitions = {};", source)
         self.assertIn(
-            'return (\n              Main.keybindingManager.addHotKey(\n                name,\n                accelerator,\n                this._guardStateCallback("hotkeys", callback, undefined),\n              ) === true\n            );',
+            'let addResult = Main.keybindingManager.addHotKey(\n              name,\n              accelerator,\n              this._guardStateCallback("hotkeys", callback, undefined),\n            );\n            if (addResult !== false) {\n              addedExternally = true;\n            }\n            return addResult === true;',
             source,
         )
         self.assertIn(

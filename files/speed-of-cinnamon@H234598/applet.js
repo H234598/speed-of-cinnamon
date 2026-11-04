@@ -8911,21 +8911,35 @@ MyApplet.prototype = {
       .split("::")
       .some((part) => String(part || "").trim() !== "");
     let registered = false;
+    let addedExternally = false;
     if (hasBinding) {
       registered =
         this._runStateGuarded(
           "hotkeys",
           () => {
-            return (
-              Main.keybindingManager.addHotKey(
-                name,
-                accelerator,
-                this._guardStateCallback("hotkeys", callback, undefined),
-              ) === true
+            let addResult = Main.keybindingManager.addHotKey(
+              name,
+              accelerator,
+              this._guardStateCallback("hotkeys", callback, undefined),
             );
+            if (addResult !== false) {
+              addedExternally = true;
+            }
+            return addResult === true;
           },
           false,
         ) === true;
+      if (!registered && addedExternally) {
+        let cleanupRemoved =
+          this._runStateGuarded(
+            "hotkeys",
+            () => Main.keybindingManager.removeHotKey(name) !== false,
+            false,
+          ) === true;
+        if (!cleanupRemoved) {
+          this._trackOrphanedHotkey(name, false);
+        }
+      }
     }
     if (registered) {
       let tracked =
@@ -8988,24 +9002,38 @@ MyApplet.prototype = {
       registered = false;
     }
     if (previous) {
+      let restoredExternally = false;
       let restored =
         this._runStateGuarded(
           "hotkeys",
           () => {
-            return (
-              Main.keybindingManager.addHotKey(
-                name,
-                previous.binding,
-                this._guardStateCallback(
-                  "hotkeys",
-                  previous.callback,
-                  undefined,
-                ),
-              ) === true
+            let addResult = Main.keybindingManager.addHotKey(
+              name,
+              previous.binding,
+              this._guardStateCallback(
+                "hotkeys",
+                previous.callback,
+                undefined,
+              ),
             );
+            if (addResult !== false) {
+              restoredExternally = true;
+            }
+            return addResult === true;
           },
           false,
         ) === true;
+      if (!restored && restoredExternally) {
+        let cleanupRemoved =
+          this._runStateGuarded(
+            "hotkeys",
+            () => Main.keybindingManager.removeHotKey(name) !== false,
+            false,
+          ) === true;
+        if (!cleanupRemoved) {
+          this._trackOrphanedHotkey(name, false);
+        }
+      }
       if (restored) {
         let tracked =
           this._runStateGuarded(

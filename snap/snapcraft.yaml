@@ -29,7 +29,7 @@ parts:
       - libsecret-tools
     override-build: |
       craftctl default
-      python3 -m pip install \
+      /usr/bin/python3 -m pip install \
         --disable-pip-version-check \
         --no-cache-dir \
         --target="${CRAFT_PART_INSTALL}/usr/lib/python3/dist-packages" \
