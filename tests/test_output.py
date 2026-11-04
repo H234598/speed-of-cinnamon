@@ -4718,12 +4718,17 @@ class OutputTest(unittest.TestCase):
         ):
             real_flock = output_module.fcntl.flock
             attempts = 0
+            unlock_attempts = 0
 
             def interrupted_once(fd: int, operation: int) -> None:
-                nonlocal attempts
+                nonlocal attempts, unlock_attempts
                 if operation != output_module.fcntl.LOCK_UN:
                     attempts += 1
                     if attempts == 1:
+                        raise InterruptedError("interrupted")
+                else:
+                    unlock_attempts += 1
+                    if unlock_attempts == 1:
                         raise InterruptedError("interrupted")
                 real_flock(fd, operation)
 
@@ -4734,6 +4739,7 @@ class OutputTest(unittest.TestCase):
                 self.assertIsNotNone(lock_fd)
                 output_module._release_clipboard_pending_quarantine_lock(lock_fd)
             self.assertEqual(attempts, 2)
+            self.assertEqual(unlock_attempts, 2)
 
             closed_fds: list[int] = []
             real_close = output_module.os.close

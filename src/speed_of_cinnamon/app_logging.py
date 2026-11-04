@@ -158,6 +158,13 @@ def _acquire_log_lock(base_dir: Path) -> int:
                 if remaining <= 0:
                     raise RuntimeError("log lock acquisition timed out")
                 time.sleep(min(0.05, remaining))
+            except OSError as exc:
+                if exc.errno not in {errno.EACCES, errno.EAGAIN}:
+                    raise
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise RuntimeError("log lock acquisition timed out")
+                time.sleep(min(0.05, remaining))
     except BaseException:
         try:
             os.close(fd)
@@ -168,7 +175,12 @@ def _acquire_log_lock(base_dir: Path) -> int:
 
 def _release_log_lock(fd: int) -> None:
     try:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                break
+            except InterruptedError:
+                continue
     finally:
         os.close(fd)
 

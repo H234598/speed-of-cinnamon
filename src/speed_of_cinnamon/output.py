@@ -1381,7 +1381,12 @@ def _release_clipboard_pending_quarantine_lock(fd: int | None) -> None:
     if fd is None:
         return
     try:
-        fcntl.flock(fd, fcntl.LOCK_UN)
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_UN)
+                break
+            except InterruptedError:
+                continue
     except OSError:
         pass
     try:

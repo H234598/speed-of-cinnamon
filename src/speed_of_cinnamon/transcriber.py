@@ -1628,7 +1628,11 @@ def _transcriber_output_namespace_lock(parent: Path):
                 raise TranscriptionError(
                     "transcript output namespace is busy"
                 ) from None
-            except OSError:
+            except OSError as exc:
+                if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                    raise TranscriptionError(
+                        "transcript output namespace is busy"
+                    ) from None
                 raise TranscriptionError(
                     "failed to acquire transcript output lock"
                 ) from None
@@ -1650,7 +1654,12 @@ def _transcriber_output_namespace_lock(parent: Path):
         if lock_fd is not None:
             if locked:
                 try:
-                    fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                    while True:
+                        try:
+                            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                            break
+                        except InterruptedError:
+                            continue
                 except BaseException as exc:
                     release_errors.append(exc)
             owned_lock_fd = lock_fd

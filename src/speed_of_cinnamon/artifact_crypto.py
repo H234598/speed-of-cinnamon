@@ -2320,6 +2320,13 @@ def _keyring_initialization_lock():
             except OSError as exc:
                 if exc.errno == errno.EINTR:
                     continue
+                if exc.errno in {errno.EACCES, errno.EAGAIN}:
+                    if time.monotonic() >= deadline:
+                        raise ArtifactCryptoError(
+                            "Secret Service keyring initialization lock timed out"
+                        )
+                    time.sleep(0.01)
+                    continue
                 raise ArtifactCryptoError(
                     "Secret Service keyring initialization lock failed"
                 ) from None
@@ -2338,7 +2345,12 @@ def _keyring_initialization_lock():
         cleanup_error: BaseException | None = None
         if acquired:
             try:
-                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                while True:
+                    try:
+                        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                        break
+                    except InterruptedError:
+                        continue
             except BaseException as exc:
                 cleanup_error = exc
         if lock_fd >= 0:

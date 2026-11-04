@@ -1844,23 +1844,60 @@ class ArtifactCryptoTest(unittest.TestCase):
             self.assertEqual(lock_path.stat().st_mode & 0o777, 0o600)
 
     def test_keyring_initialization_lock_times_out_closed(self) -> None:
+        for contention_exc in (
+            BlockingIOError(),
+            OSError(artifact_crypto.errno.EACCES, "permission denied"),
+        ):
+            with self.subTest(exc=type(contention_exc).__name__):
+                with tempfile.TemporaryDirectory() as tmp:
+                    with (
+                        mock.patch.object(
+                            artifact_crypto, "config_dir", return_value=Path(tmp)
+                        ),
+                        mock.patch.object(
+                            artifact_crypto,
+                            "KEYRING_INITIALIZATION_LOCK_TIMEOUT_SECONDS",
+                            0.0,
+                        ),
+                        mock.patch.object(
+                            artifact_crypto.fcntl,
+                            "flock",
+                            side_effect=contention_exc,
+                        ),
+                    ):
+                        with self.assertRaisesRegex(
+                            artifact_crypto.ArtifactCryptoError,
+                            "initialization lock timed out",
+                        ):
+                            with artifact_crypto._keyring_initialization_lock():
+                                self.fail("lock unexpectedly acquired")
+
+    def test_keyring_initialization_lock_retries_interrupted_unlock(self) -> None:
+        real_flock = artifact_crypto.fcntl.flock
+        unlock_attempts = 0
+
+        def interrupted_unlock_once(fd: int, operation: int) -> None:
+            nonlocal unlock_attempts
+            if operation == artifact_crypto.fcntl.LOCK_UN:
+                unlock_attempts += 1
+                if unlock_attempts == 1:
+                    raise InterruptedError("interrupted")
+            real_flock(fd, operation)
+
         with tempfile.TemporaryDirectory() as tmp:
             with (
                 mock.patch.object(
                     artifact_crypto, "config_dir", return_value=Path(tmp)
                 ),
                 mock.patch.object(
-                    artifact_crypto, "KEYRING_INITIALIZATION_LOCK_TIMEOUT_SECONDS", 0.0
-                ),
-                mock.patch.object(
-                    artifact_crypto.fcntl, "flock", side_effect=BlockingIOError
+                    artifact_crypto.fcntl,
+                    "flock",
+                    side_effect=interrupted_unlock_once,
                 ),
             ):
-                with self.assertRaisesRegex(
-                    artifact_crypto.ArtifactCryptoError, "initialization lock timed out"
-                ):
-                    with artifact_crypto._keyring_initialization_lock():
-                        self.fail("lock unexpectedly acquired")
+                with artifact_crypto._keyring_initialization_lock():
+                    pass
+        self.assertEqual(unlock_attempts, 2)
 
     def test_keyring_initialization_lock_rejects_invalid_no_follow_flag(self) -> None:
         for value in (None, 0, -1, True, "nofollow"):

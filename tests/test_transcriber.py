@@ -6676,6 +6676,42 @@ class TranscriberTest(unittest.TestCase):
                 fcntl.flock(lock_fd, fcntl.LOCK_UN)
                 os.close(lock_fd)
 
+            with mock.patch(
+                "speed_of_cinnamon.transcriber.fcntl.flock",
+                side_effect=PermissionError(13, "permission denied"),
+            ):
+                with self.assertRaisesRegex(
+                    TranscriptionError, "transcript output namespace is busy"
+                ):
+                    transcribe(audio, "en", text, "printf ignored", backend="command")
+
+            real_flock = fcntl.flock
+            unlock_attempts = 0
+
+            def interrupted_unlock_once(fd: int, operation: int) -> None:
+                nonlocal unlock_attempts
+                if operation == fcntl.LOCK_UN:
+                    unlock_attempts += 1
+                    if unlock_attempts == 1:
+                        raise InterruptedError("interrupted")
+                real_flock(fd, operation)
+
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.fcntl.flock",
+                    side_effect=interrupted_unlock_once,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.transcriber.transcribe_with_template",
+                    return_value="ok",
+                ),
+            ):
+                self.assertEqual(
+                    transcribe(audio, "en", text, "printf ignored", backend="command"),
+                    "ok",
+                )
+            self.assertEqual(unlock_attempts, 2)
+
     def test_transcribe_holds_output_lock_during_backend_and_releases_after_success(
         self,
     ) -> None:

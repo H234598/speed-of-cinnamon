@@ -257,6 +257,11 @@ def _acquire_backup_lock(
                 if remaining <= 0:
                     raise BackupError("backup target is busy") from None
                 continue
+            except BlockingIOError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise BackupError("backup target is busy") from None
+                time.sleep(min(0.05, remaining))
             except OSError as exc:
                 if exc.errno not in {errno.EACCES, errno.EAGAIN}:
                     raise BackupError(
@@ -271,11 +276,25 @@ def _acquire_backup_lock(
         raise
 
 
+def _fsync_fd(fd: int) -> None:
+    while True:
+        try:
+            os.fsync(fd)
+            return
+        except InterruptedError:
+            continue
+
+
 def _release_backup_lock(lock_fd: int | None) -> None:
     if lock_fd is None:
         return
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        while True:
+            try:
+                fcntl.flock(lock_fd, fcntl.LOCK_UN)
+                break
+            except InterruptedError:
+                continue
     finally:
         os.close(lock_fd)
 
@@ -429,7 +448,7 @@ def _copy_source_to_stage(
                 except InterruptedError:
                     continue
             offset += len(chunk)
-        os.fsync(destination_fd)
+        _fsync_fd(destination_fd)
         after = os.fstat(source_fd)
         if (
             after.st_dev,
@@ -512,7 +531,7 @@ def _secure_remove_temporary_file(target_fd: int, name: str) -> None:
         os.unlink(name, dir_fd=target_fd)
     except FileNotFoundError:
         return
-    os.fsync(target_fd)
+    _fsync_fd(target_fd)
 
 
 def _secure_remove_stage_directory(target_fd: int, stage: Path) -> None:
@@ -572,7 +591,7 @@ def _build_archive(stage: Path, temporary_path: Path, manifest: BackupManifest) 
                         archive, stage / artifact.archive_path, artifact.archive_path
                     )
             stream.flush()
-            os.fsync(stream.fileno())
+            _fsync_fd(stream.fileno())
     finally:
         if fd != -1:
             _close_fd(fd)
@@ -926,7 +945,7 @@ def create_backup(
             temporary_path = target_directory / temporary_name
             try:
                 _write_fd_all(encrypted_temporary_fd, encrypted_payload)
-                os.fsync(encrypted_temporary_fd)
+                _fsync_fd(encrypted_temporary_fd)
             finally:
                 _close_fd(encrypted_temporary_fd)
             _secure_remove_temporary_file(target_fd, plain_temporary_name)
@@ -942,7 +961,7 @@ def create_backup(
         )
         published = True
         result = BackupResult(job, target_directory / archive_name, verified_manifest)
-        os.fsync(target_fd)
+        _fsync_fd(target_fd)
         ledger.record_job(
             job_id=job,
             status="success",
@@ -1262,7 +1281,7 @@ def restore_backup(
                     member_data,
                     field_name="restore artifact",
                 )
-        os.fsync(stage_fd)
+        _fsync_fd(stage_fd)
         stage_stat = os.fstat(stage_fd)
         _rename_without_replacing(
             stage_name,
@@ -1273,7 +1292,7 @@ def restore_backup(
             field_name="restore destination publication",
         )
         published = True
-        os.fsync(parent_fd)
+        _fsync_fd(parent_fd)
         return plan
     except (
         ArtifactCryptoError,

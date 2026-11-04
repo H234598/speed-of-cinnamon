@@ -1226,6 +1226,53 @@ class BackupIntegrationTests(unittest.TestCase):
             os.close(target_fd)
         self.assertEqual(attempts, 2)
 
+    def test_backup_lock_handles_unlock_eintr_bare_blocking_io_and_fsync_eintr(self):
+        target_fd = os.open(
+            self.target, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        )
+        real_flock = backup_module.fcntl.flock
+        unlock_attempts = 0
+
+        def interrupted_unlock_once(fd, operation):
+            nonlocal unlock_attempts
+            if operation == backup_module.fcntl.LOCK_UN:
+                unlock_attempts += 1
+                if unlock_attempts == 1:
+                    raise InterruptedError(errno.EINTR, "interrupted")
+            return real_flock(fd, operation)
+
+        try:
+            with mock.patch.object(
+                backup_module.fcntl, "flock", side_effect=interrupted_unlock_once
+            ):
+                lock_fd = backup_module._acquire_backup_lock(
+                    target_fd, timeout_seconds=1.0
+                )
+                backup_module._release_backup_lock(lock_fd)
+            self.assertEqual(unlock_attempts, 2)
+
+            with (
+                mock.patch.object(
+                    backup_module.fcntl, "flock", side_effect=BlockingIOError
+                ),
+                mock.patch.object(
+                    backup_module.time, "monotonic", side_effect=(0.0, 0.02)
+                ),
+                mock.patch.object(backup_module.time, "sleep"),
+            ):
+                with self.assertRaisesRegex(BackupError, "backup target is busy"):
+                    backup_module._acquire_backup_lock(
+                        target_fd, timeout_seconds=0.01
+                    )
+        finally:
+            os.close(target_fd)
+
+        with mock.patch.object(
+            backup_module.os, "fsync", side_effect=[InterruptedError(), None]
+        ) as mocked_fsync:
+            backup_module._fsync_fd(456)
+        self.assertEqual(mocked_fsync.call_args_list, [mock.call(456), mock.call(456)])
+
 
 if __name__ == "__main__":
     unittest.main()

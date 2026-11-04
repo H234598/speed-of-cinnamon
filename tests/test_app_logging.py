@@ -54,7 +54,7 @@ class AppLoggingTest(unittest.TestCase):
 
         def interrupt_first_lock(_fd: int, operation: int) -> None:
             operations.append(operation)
-            if len(operations) == 1:
+            if len(operations) in {1, 3}:
                 raise InterruptedError()
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -71,25 +71,31 @@ class AppLoggingTest(unittest.TestCase):
                 app_logging.fcntl.LOCK_EX | app_logging.fcntl.LOCK_NB,
                 app_logging.fcntl.LOCK_EX | app_logging.fcntl.LOCK_NB,
                 app_logging.fcntl.LOCK_UN,
+                app_logging.fcntl.LOCK_UN,
             ],
         )
 
     def test_log_lock_times_out_without_blocking(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
-            with (
-                mock.patch.object(app_logging, "LOG_LOCK_TIMEOUT_SECONDS", 0.01),
-                mock.patch.object(
-                    app_logging.fcntl, "flock", side_effect=BlockingIOError
-                ),
-                mock.patch.object(
-                    app_logging.time, "monotonic", side_effect=(0.0, 0.02)
-                ),
-                mock.patch.object(app_logging.time, "sleep"),
-            ):
-                with self.assertRaisesRegex(
-                    RuntimeError, "log lock acquisition timed out"
-                ):
-                    app_logging._acquire_log_lock(Path(tmp))
+        for contention_exc in (
+            BlockingIOError(),
+            OSError(app_logging.errno.EACCES, "permission denied"),
+        ):
+            with self.subTest(exc=type(contention_exc).__name__):
+                with tempfile.TemporaryDirectory() as tmp:
+                    with (
+                        mock.patch.object(app_logging, "LOG_LOCK_TIMEOUT_SECONDS", 0.01),
+                        mock.patch.object(
+                            app_logging.fcntl, "flock", side_effect=contention_exc
+                        ),
+                        mock.patch.object(
+                            app_logging.time, "monotonic", side_effect=(0.0, 0.02)
+                        ),
+                        mock.patch.object(app_logging.time, "sleep"),
+                    ):
+                        with self.assertRaisesRegex(
+                            RuntimeError, "log lock acquisition timed out"
+                        ):
+                            app_logging._acquire_log_lock(Path(tmp))
 
     def test_fsync_retries_interrupted_calls(self) -> None:
         with mock.patch.object(
