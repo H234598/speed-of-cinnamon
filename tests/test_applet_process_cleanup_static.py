@@ -16,8 +16,16 @@ class AppletProcessCleanupStaticTests(unittest.TestCase):
     def test_false_cancel_accepts_stopped_gio_process_handles(self) -> None:
         source = APPLET_PATH.read_text(encoding="utf-8")
         self.assertIn("_processHandleIsStopped: function (process)", source)
-        self.assertIn("get_if_exited() === true", source)
-        self.assertIn("get_if_signaled() === true", source)
+        helper_start = source.index("_processHandleIsStopped: function (process)")
+        helper_end = source.index("\n  _terminateProcess:", helper_start)
+        helper_block = source[helper_start:helper_end]
+        self.assertIn('typeof process.get_identifier === "function"', helper_block)
+        self.assertIn('if (identifier !== "") {\n          return false;', helper_block)
+        self.assertIn("get_if_exited() === true", helper_block)
+        self.assertIn("get_if_signaled() === true", helper_block)
+        self.assertLess(
+            helper_block.index("get_identifier"), helper_block.index("get_if_exited")
+        )
         for start_marker, end_marker, false_end_marker in (
             (
                 "_terminateAllProcesses: function ()",

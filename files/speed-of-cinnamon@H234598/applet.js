@@ -23,6 +23,7 @@ const LIFECYCLE_REMOVED = "REMOVED";
 const LIFECYCLE_ERROR_WINDOW_MS = 60000;
 const LIFECYCLE_ERROR_THRESHOLD = 3;
 const MAX_ERROR_JOURNAL_QUEUE = 128;
+const ERROR_JOURNAL_COMMAND_TIMEOUT_MS = 10000;
 const ERROR_JOURNAL_RETRY_BASE_MS = 250;
 const ERROR_JOURNAL_RETRY_MAX_MS = 4000;
 const PAYLOAD_STATUSES = [
@@ -260,7 +261,7 @@ function _decodeSubprocessOutputChunks(chunks) {
 const CLI_COMMAND_TIMEOUT_MS = 300000;
 const STATUS_COMMAND_TIMEOUT_MS = 40000;
 const OLLAMA_COMMAND_TIMEOUT_MS = 10000;
-const DOCTOR_COMMAND_TIMEOUT_MS = 20000;
+const DOCTOR_COMMAND_TIMEOUT_MS = 35000;
 const BENCHMARK_COMMAND_TIMEOUT_MS = 1800000;
 const OLLAMA_INSTALL_POLL_SECONDS = 5;
 const OLLAMA_INSTALL_MAX_POLLS = 120;
@@ -837,7 +838,7 @@ MyApplet.prototype = {
           inputText: JSON.stringify(entry),
           invalidatesStatus: false,
           resourceGroup: "error-journal",
-          timeoutMs: 3000,
+          timeoutMs: ERROR_JOURNAL_COMMAND_TIMEOUT_MS,
         },
       );
       if (!handle && !callbackCompleted) {
@@ -897,7 +898,7 @@ MyApplet.prototype = {
           "error-journal-retry",
           delay,
           () => {
-            this.errorJournalRetryTimer = 0;
+            this._clearErrorJournalRetryTimer();
             if (!this._lifecycleAllowsWork() || this.appletRemoved) {
               return false;
             }
@@ -4538,12 +4539,20 @@ MyApplet.prototype = {
 
   _processHandleIsStopped: function (process) {
     try {
+      if (!process) {
+        return false;
+      }
+      if (typeof process.get_identifier === "function") {
+        let identifier = String(process.get_identifier() || "").trim();
+        if (identifier !== "") {
+          return false;
+        }
+      }
       return Boolean(
-        process &&
-          ((typeof process.get_if_exited === "function" &&
-            process.get_if_exited() === true) ||
-            (typeof process.get_if_signaled === "function" &&
-              process.get_if_signaled() === true)),
+        (typeof process.get_if_exited === "function" &&
+          process.get_if_exited() === true) ||
+          (typeof process.get_if_signaled === "function" &&
+            process.get_if_signaled() === true),
       );
     } catch (_error) {
       return false;
@@ -4557,16 +4566,7 @@ MyApplet.prototype = {
     try {
       // A fast subprocess can exit between registration and cancellation. Gio
       // already knows this state; no process-group identity is needed anymore.
-      if (
-        typeof process.get_if_exited === "function" &&
-        process.get_if_exited() === true
-      ) {
-        return true;
-      }
-      if (
-        typeof process.get_if_signaled === "function" &&
-        process.get_if_signaled() === true
-      ) {
+      if (this._processHandleIsStopped(process)) {
         return true;
       }
       let hasIdentifier = typeof process.get_identifier === "function";

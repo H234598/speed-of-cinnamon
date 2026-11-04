@@ -6023,14 +6023,26 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_process_termination_accepts_already_exited_subprocesses(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_terminateProcess: function (process, resourceGroup)")
+        helper_start = source.index("_processHandleIsStopped: function (process)")
+        start = source.index(
+            "_terminateProcess: function (process, resourceGroup)", helper_start
+        )
         end = source.index("\n  _findTrackedProcessGroupIdentity:", start)
+        helper_block = source[helper_start:start]
         block = source[start:end]
-        self.assertIn('typeof process.get_if_exited === "function"', block)
-        self.assertIn("process.get_if_exited() === true", block)
-        self.assertIn('typeof process.get_if_signaled === "function"', block)
-        self.assertIn("process.get_if_signaled() === true", block)
-        self.assertLess(block.index("get_if_exited"), block.index("get_identifier"))
+        self.assertIn('typeof process.get_identifier === "function"', helper_block)
+        self.assertIn('typeof process.get_if_exited === "function"', helper_block)
+        self.assertIn("process.get_if_exited() === true", helper_block)
+        self.assertIn('typeof process.get_if_signaled === "function"', helper_block)
+        self.assertIn("process.get_if_signaled() === true", helper_block)
+        self.assertLess(
+            helper_block.index("get_identifier"), helper_block.index("get_if_exited")
+        )
+        self.assertIn("if (this._processHandleIsStopped(process)) {", block)
+        self.assertLess(
+            block.index("this._processHandleIsStopped(process)"),
+            block.index("get_identifier"),
+        )
 
     def test_process_teardown_fails_closed_when_registry_is_unavailable(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
@@ -8089,7 +8101,7 @@ class AppletStaticTest(unittest.TestCase):
         )
 
         update_start = source.index("_updatePanel: function (menuOpenOverride)")
-        update_end = source.index("\n};\n\nfunction _main", update_start)
+        update_end = source.index("\n};\n", update_start)
         update_block = source[update_start:update_end]
         self.assertIn("let panelActor = this.actor;", update_block)
         self.assertIn("panelActor.is_finalized", update_block)
@@ -8666,7 +8678,7 @@ class AppletStaticTest(unittest.TestCase):
         display_end = source.index("\n  _isUsableTargetWindow:", display_start)
         display_block = source[display_start:display_end]
         panel_start = source.index("_updatePanel: function (menuOpenOverride)")
-        panel_end = source.index("\n};\n\nfunction _main", panel_start)
+        panel_end = source.index("\n};\n", panel_start)
         panel_block = source[panel_start:panel_end]
         for render_block in (display_block, panel_block):
             self.assertIn("let recordingMessageText = this.lastMessage", render_block)
@@ -9421,7 +9433,7 @@ class AppletStaticTest(unittest.TestCase):
     def test_doctor_checks_use_spawn_json_timeout(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
 
-        self.assertIn("const DOCTOR_COMMAND_TIMEOUT_MS = 20000;", source)
+        self.assertIn("const DOCTOR_COMMAND_TIMEOUT_MS = 35000;", source)
         self.assertIn("_runDoctor: function (startupCheck) {", source)
         self.assertIn("inputText: inputOption.inputText", source)
         self.assertIn("timeoutMs: DOCTOR_COMMAND_TIMEOUT_MS", source)
@@ -11545,17 +11557,22 @@ class AppletStaticTest(unittest.TestCase):
 
     def test_process_termination_uses_force_exit_with_safe_exit_probe(self) -> None:
         source = (APPLET_DIR / "applet.js").read_text(encoding="utf-8")
-        start = source.index("_terminateProcess: function (process, resourceGroup)")
+        helper_start = source.index("_processHandleIsStopped: function (process)")
+        start = source.index(
+            "_terminateProcess: function (process, resourceGroup)", helper_start
+        )
         end = source.index("\n  _terminateAllProcesses:", start)
+        helper_block = source[helper_start:start]
         block = source[start:end]
         self.assertIn(
             'throw new Error("Process termination API is unavailable");', block
         )
         self.assertIn("process.force_exit();", block)
-        self.assertIn('typeof process.get_if_exited === "function"', block)
-        self.assertIn("process.get_if_exited() === true", block)
-        self.assertIn('typeof process.get_if_signaled === "function"', block)
-        self.assertIn("process.get_if_signaled() === true", block)
+        self.assertIn('typeof process.get_if_exited === "function"', helper_block)
+        self.assertIn("process.get_if_exited() === true", helper_block)
+        self.assertIn('typeof process.get_if_signaled === "function"', helper_block)
+        self.assertIn("process.get_if_signaled() === true", helper_block)
+        self.assertIn("if (this._processHandleIsStopped(process)) {", block)
         self.assertNotIn("result === false", block)
         self.assertIn(
             'let hasIdentifier = typeof process.get_identifier === "function";', block
@@ -17662,7 +17679,7 @@ class AppletStaticTest(unittest.TestCase):
         )
 
         panel_start = source.index("_updatePanel: function (menuOpenOverride)")
-        panel_end = source.index("\n};\n\nfunction _main", panel_start)
+        panel_end = source.index("\n};\n", panel_start)
         panel_block = source[panel_start:panel_end]
         self.assertIn("let menuRenderSucceeded = true;", panel_block)
         self.assertIn(
@@ -17730,7 +17747,7 @@ class AppletStaticTest(unittest.TestCase):
         self.assertIn('return "audio-input-microphone-symbolic";', icon_block)
 
         update_start = source.index("_updatePanel: function (menuOpenOverride)")
-        update_end = source.index("\n};\n\nfunction _main", update_start)
+        update_end = source.index("\n};\n", update_start)
         update_block = source[update_start:update_end]
         self.assertIn(
             "panelIconRenderSucceeded =\n              this._applyPanelIcon(this.status) === true;",

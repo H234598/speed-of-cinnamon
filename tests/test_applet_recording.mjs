@@ -75,6 +75,7 @@ function loadAppletMethod(name, nextName, clock, extraContext = {}) {
   const loadedMethod = vm.runInNewContext(`({${property}}).${name}`, {
     CLIPBOARD_READY_RETRY_MS: 40,
     CLIPBOARD_READY_TIMEOUT_MS: 100,
+    ERROR_JOURNAL_COMMAND_TIMEOUT_MS: 10000,
     MAX_CANCEL_RECOVERY_ATTEMPTS: 3,
     MAX_KEYBOARD_COMMAND_TIMEOUT_MS: 300000,
     MAX_XDOTOOL_TARGET_OUTPUT_BYTES: 4096,
@@ -6506,6 +6507,43 @@ test("process cleanup returns pending before eventual stopped", () => {
   groupState = "stopped";
   assert.equal(terminateProcessesByGroup.call(applet, "status"), "stopped");
   assert.equal(Object.keys(processes).length, 0);
+});
+
+test("processHandleIsStopped skips get_if_exited while Gio subprocess identifier is active", () => {
+  const processHandleIsStopped = loadAppletMethod(
+    "_processHandleIsStopped",
+    "_terminateProcess",
+    { value: 0 },
+  );
+  let exitProbes = 0;
+  let signalProbes = 0;
+  let activeIdentifier = "4242";
+  const process = {
+    get_identifier: () => activeIdentifier,
+    get_if_exited() {
+      exitProbes += 1;
+      if (activeIdentifier !== "") {
+        throw new Error("assertion 'pid == 0' failed");
+      }
+      return true;
+    },
+    get_if_signaled() {
+      signalProbes += 1;
+      if (activeIdentifier !== "") {
+        throw new Error("assertion 'pid == 0' failed");
+      }
+      return false;
+    },
+  };
+
+  assert.equal(processHandleIsStopped.call({}, process), false);
+  assert.equal(exitProbes, 0);
+  assert.equal(signalProbes, 0);
+
+  activeIdentifier = "";
+  assert.equal(processHandleIsStopped.call({}, process), true);
+  assert.equal(exitProbes, 1);
+  assert.equal(signalProbes, 0);
 });
 
 test("foreign orphan retry scheduling failure does not fail stopped group", () => {
