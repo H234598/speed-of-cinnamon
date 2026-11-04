@@ -487,9 +487,20 @@ test("keyboard process refuses locked screen and runs only when unlocked", () =>
     ),
     _findTrustedProgramInPath: (name) => `/usr/bin/${name}`,
     _coerceSpawnArgs: (args) => args,
-    _runBoundedSubprocess(args, _env, _options, callback) {
+    _runBoundedSubprocess(args, env, _options, callback) {
       calls.push(Array.from(args));
       if (args[1] === "--query") {
+        if (
+          !env ||
+          env.LANG !== "C" ||
+          env.LC_ALL !== "C" ||
+          !_options ||
+          !_options.env ||
+          _options.env.LANG !== "C" ||
+          _options.env.LC_ALL !== "C"
+        ) {
+          throw new Error("Expected LANG=C and LC_ALL=C for screensaver query");
+        }
         callback(screenState, "", { completed: true });
       } else {
         callback("", "", { completed: true });

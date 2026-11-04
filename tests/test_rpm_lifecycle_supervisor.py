@@ -2801,19 +2801,6 @@ real_close = module.os.close
 children_path = f"/proc/self/task/{{os.getpid()}}/children"
 injected_bytes = [0]
 
-def write_fake_children(payload):
-    descriptor = real_open(
-        {str(fake_children)!r},
-        os.O_WRONLY | os.O_CREAT | os.O_TRUNC,
-        0o600,
-    )
-    try:
-        offset = 0
-        while offset < len(payload):
-            offset += os.write(descriptor, payload[offset:])
-    finally:
-        real_close(descriptor)
-
 def injected_open(path, flags, *args, **kwargs):
     if os.fspath(path) == children_path:
         source = real_open(path, flags, *args, **kwargs)
@@ -2821,23 +2808,25 @@ def injected_open(path, flags, *args, **kwargs):
             actual = real_read(source, 4096)
         finally:
             real_close(source)
-        try:
-            root_pid = int(Path({str(launched_record)!r}).read_text(encoding="ascii"))
-        except (FileNotFoundError, ValueError):
-            root_pid = -1
+        root_pid = launched_pid[0]
         if root_pid > 0 and str(root_pid).encode("ascii") in actual.split():
             payload = b" " * 4097 + actual
-            write_fake_children(payload)
             injected_bytes[0] = len(payload)
-            return real_open(
-                {str(fake_children)!r},
-                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0),
-            )
+            read_fd, write_fd = os.pipe()
+            try:
+                offset = 0
+                while offset < len(payload):
+                    offset += os.write(write_fd, payload[offset:])
+            finally:
+                real_close(write_fd)
+            return read_fd
     return real_open(path, flags, *args, **kwargs)
 
+launched_pid = [-1]
 original_popen = module.subprocess.Popen
 def tracking_popen(*args, **kwargs):
     process = original_popen(*args, **kwargs)
+    launched_pid[0] = process.pid
     Path({str(launched_record)!r}).write_text(str(process.pid), encoding="ascii")
     return process
 

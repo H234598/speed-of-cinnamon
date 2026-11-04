@@ -10701,12 +10701,7 @@ MyApplet.prototype = {
       this.autoBackupPending = true;
       return;
     }
-    if (this.autoBackupTimerId) {
-      try {
-        GLib.source_remove(this.autoBackupTimerId);
-      } catch (ignored) {}
-      this.autoBackupTimerId = 0;
-    }
+    this._clearTrackedTimer("auto-backup-debounce", "autoBackupTimerId");
     let delaySeconds = Math.max(
       0,
       Math.min(3600, Number(this.autoBackupConfigDebounceSeconds) || 0),
@@ -17397,7 +17392,9 @@ MyApplet.prototype = {
       if (this.voiceModelActionToken === actionToken) {
         this.voiceModelActionToken = null;
       }
-      this.isCommandRunning = false;
+      if (!this._recordingCommandToken) {
+        this.isCommandRunning = false;
+      }
       this._recordLifecycleError("model-action", error);
       this._setStatus(
         "error",
@@ -17443,7 +17440,9 @@ MyApplet.prototype = {
           this._selectVoiceModel(payload, false);
           this._refreshModelMenu(true);
         } catch (error) {
-          this.isCommandRunning = false;
+          if (!this._recordingCommandToken) {
+            this.isCommandRunning = false;
+          }
           if (this.voiceModelActionToken === actionToken) {
             this.voiceModelActionToken = null;
           }
@@ -17459,7 +17458,9 @@ MyApplet.prototype = {
     );
     if (!downloadProcess && this.voiceModelActionToken === actionToken) {
       this.voiceModelActionToken = null;
-      this.isCommandRunning = false;
+      if (!this._recordingCommandToken) {
+        this.isCommandRunning = false;
+      }
       this._recordLifecycleError(
         "model-action",
         new Error("Subprocess could not be started"),
@@ -17503,7 +17504,9 @@ MyApplet.prototype = {
       if (this.voiceModelActionToken === actionToken) {
         this.voiceModelActionToken = null;
       }
-      this.isCommandRunning = false;
+      if (!this._recordingCommandToken) {
+        this.isCommandRunning = false;
+      }
       this._recordLifecycleError("model-action", error);
       this._setStatus(
         "error",
@@ -17567,7 +17570,9 @@ MyApplet.prototype = {
           );
           this._refreshModelMenu(true);
         } catch (error) {
-          this.isCommandRunning = false;
+          if (!this._recordingCommandToken) {
+            this.isCommandRunning = false;
+          }
           if (this.voiceModelActionToken === actionToken) {
             this.voiceModelActionToken = null;
           }
@@ -17583,7 +17588,9 @@ MyApplet.prototype = {
     );
     if (!removeProcess && this.voiceModelActionToken === actionToken) {
       this.voiceModelActionToken = null;
-      this.isCommandRunning = false;
+      if (!this._recordingCommandToken) {
+        this.isCommandRunning = false;
+      }
       this._recordLifecycleError(
         "model-action",
         new Error("Subprocess could not be started"),
@@ -20541,7 +20548,9 @@ MyApplet.prototype = {
     if (!installProcess && this.ollamaModelInstallToken === installToken) {
       this.ollamaModelInstallToken = null;
       this.ollamaModelInstallRunning = false;
-      this.isCommandRunning = false;
+      if (!this._recordingCommandToken) {
+        this.isCommandRunning = false;
+      }
       if (!this._clearOllamaModelFlowOrReport(flowToken)) {
         return;
       }
@@ -20907,7 +20916,9 @@ MyApplet.prototype = {
           if (this._cleanupCommandToken === cleanupToken) {
             this._cleanupCommandToken = null;
           }
-          this.isCommandRunning = false;
+          if (!this._recordingCommandToken) {
+            this.isCommandRunning = false;
+          }
           this._recordLifecycleError("maintenance-command", error);
           this._setStatus(
             "error",
@@ -20920,7 +20931,9 @@ MyApplet.prototype = {
     );
     if (!historyDocumentProcess && this._cleanupCommandToken === cleanupToken) {
       this._cleanupCommandToken = null;
-      this.isCommandRunning = false;
+      if (!this._recordingCommandToken) {
+        this.isCommandRunning = false;
+      }
       this._recordLifecycleError(
         "maintenance-command",
         new Error("Subprocess could not be started"),
@@ -21135,7 +21148,9 @@ MyApplet.prototype = {
           if (this._cleanupCommandToken === cleanupToken) {
             this._cleanupCommandToken = null;
           }
-          this.isCommandRunning = false;
+          if (!this._recordingCommandToken) {
+            this.isCommandRunning = false;
+          }
           this._recordLifecycleError("maintenance-command", error);
           this._setStatus(
             "error",
@@ -21148,7 +21163,9 @@ MyApplet.prototype = {
     );
     if (!exportProcess && this._cleanupCommandToken === cleanupToken) {
       this._cleanupCommandToken = null;
-      this.isCommandRunning = false;
+      if (!this._recordingCommandToken) {
+        this.isCommandRunning = false;
+      }
       this._recordLifecycleError(
         "maintenance-command",
         new Error("Subprocess could not be started"),
@@ -21487,7 +21504,9 @@ MyApplet.prototype = {
           if (this._cleanupCommandToken === cleanupToken) {
             this._cleanupCommandToken = null;
           }
-          this.isCommandRunning = false;
+          if (!this._recordingCommandToken) {
+            this.isCommandRunning = false;
+          }
           this._recordLifecycleError("maintenance-command", error);
           this._setStatus(
             "error",
@@ -21500,7 +21519,9 @@ MyApplet.prototype = {
     );
     if (!cleanupPreviewProcess && this._cleanupCommandToken === cleanupToken) {
       this._cleanupCommandToken = null;
-      this.isCommandRunning = false;
+      if (!this._recordingCommandToken) {
+        this.isCommandRunning = false;
+      }
       this._recordLifecycleError(
         "maintenance-command",
         new Error("Subprocess could not be started"),
@@ -21571,7 +21592,9 @@ MyApplet.prototype = {
           if (this._cleanupCommandToken === cleanupToken) {
             this._cleanupCommandToken = null;
           }
-          this.isCommandRunning = false;
+          if (!this._recordingCommandToken) {
+            this.isCommandRunning = false;
+          }
           this._recordLifecycleError("maintenance-command", error);
           this._setStatus(
             "error",
@@ -21584,7 +21607,9 @@ MyApplet.prototype = {
     );
     if (!cleanupProcess && this._cleanupCommandToken === cleanupToken) {
       this._cleanupCommandToken = null;
-      this.isCommandRunning = false;
+      if (!this._recordingCommandToken) {
+        this.isCommandRunning = false;
+      }
       this._recordLifecycleError(
         "maintenance-command",
         new Error("Subprocess could not be started"),
@@ -23104,7 +23129,12 @@ MyApplet.prototype = {
     let process = null;
     try {
       let launcher = new Gio.SubprocessLauncher({ flags: flags });
-      env = env || {};
+      env =
+        env && typeof env === "object" && Object.keys(env).length > 0
+          ? env
+          : options.env && typeof options.env === "object"
+            ? options.env
+            : {};
       if (options.replaceEnvironment === true) {
         launcher.set_environ(
           Object.keys(env).map((key) => key + "=" + String(env[key])),
@@ -28272,7 +28302,7 @@ MyApplet.prototype = {
     try {
       handle = this._runBoundedSubprocess(
         [screenSaverCommand, "--query"],
-        {},
+        { LANG: "C", LC_ALL: "C" },
         {
           env: { LANG: "C", LC_ALL: "C" },
           timeoutMs: SCREEN_SAVER_QUERY_TIMEOUT_MS,
