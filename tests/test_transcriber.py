@@ -11563,10 +11563,9 @@ class TranscriberTest(unittest.TestCase):
 
         real_cleanup = transcriber_module._remove_staged_audio_file_after_mismatch
 
-        def cleanup_then_consume_budget(*args: object, **kwargs: object) -> object:
-            result = real_cleanup(*args, **kwargs)
+        def cleanup_then_consume_budget(*args: object, **kwargs: object) -> None:
+            real_cleanup(*args, **kwargs)
             clock["now"] = 901.0
-            return result
 
         with tempfile.TemporaryDirectory() as tmp:
             audio = Path(tmp) / "sample.wav"

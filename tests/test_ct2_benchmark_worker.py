@@ -1,3 +1,4 @@
+# pylint: disable=function-redefined
 from __future__ import annotations
 
 import contextlib
@@ -840,13 +841,13 @@ class Ctranslate2BenchmarkAttestationWorkerTests(unittest.TestCase):
             def __init__(self) -> None:
                 self.count = 0
 
-            def __enter__(self) -> EndlessEntries:
+            def __enter__(self) -> object:
                 return self
 
             def __exit__(self, *_args: object) -> None:
                 return None
 
-            def __iter__(self) -> EndlessEntries:
+            def __iter__(self) -> object:
                 return self
 
             def __next__(self) -> Entry | PoisonEntry:

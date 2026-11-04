@@ -1,3 +1,4 @@
+# pylint: disable=invalid-str-returned,invalid-repr-returned
 from __future__ import annotations
 
 import io

@@ -211,7 +211,9 @@ class ResourceGateTests(unittest.TestCase):
         }
         for name, (arguments, failed_check) in cases.items():
             with self.subTest(name=name):
-                code, payload, _raw = self.run_gate(**arguments)
+                code, payload, _raw = self.run_gate(
+                    **arguments  # pylint: disable=not-a-mapping
+                )
                 self.assertEqual(code, 75)
                 self.assertEqual(payload["status"], "defer")
                 self.assertFalse(payload["checks"][failed_check])

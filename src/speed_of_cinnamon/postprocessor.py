@@ -777,7 +777,7 @@ def _set_response_socket_timeout(response: object, timeout: float) -> None:
         if not callable(settimeout):
             continue
         try:
-            settimeout(timeout)
+            settimeout(timeout)  # pylint: disable=not-callable
             return
         except Exception:
             continue

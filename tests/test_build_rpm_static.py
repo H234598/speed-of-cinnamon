@@ -1,3 +1,4 @@
+# pylint: disable=method-hidden
 from __future__ import annotations
 
 import ast

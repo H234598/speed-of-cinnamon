@@ -875,7 +875,7 @@ def _close_http_resources(
         except BaseException as error:
             record_close_failure(error)
     if close_abort is not None and not primary_is_semantic:
-        raise close_abort
+        raise close_abort  # pylint: disable=raising-bad-type
     if primary is not None:
         return
     if close_failed:

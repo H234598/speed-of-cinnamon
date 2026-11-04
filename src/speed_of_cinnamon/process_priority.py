@@ -2452,11 +2452,11 @@ def _cgroup_resource_public_snapshot(
         return None
     effective_cpu_limit: tuple[int, int] | None = None
     for candidate in cpu_limits:
-        if (
-            effective_cpu_limit is None
-            or candidate[0] * effective_cpu_limit[1]
-            < effective_cpu_limit[0] * candidate[1]
-        ):
+        if effective_cpu_limit is None:
+            effective_cpu_limit = candidate
+            continue
+        current_quota, current_period = effective_cpu_limit
+        if candidate[0] * current_period < current_quota * candidate[1]:
             effective_cpu_limit = candidate
     finite_maxima = [value for value in maxima if value is not None]
     finite_highs = [value for value in highs if value is not None]

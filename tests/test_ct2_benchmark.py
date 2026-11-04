@@ -638,7 +638,7 @@ class Ctranslate2BenchmarkPlanTests(unittest.TestCase):
         manifest = self._encoded(self._manifest_payload())
 
         with self.assertRaises(TypeError):
-            ct2_benchmark.build_run_plan(manifest)
+            ct2_benchmark.build_run_plan(manifest)  # pylint: disable=missing-kwoa
         for seed in (True, False, -1, 2**64, 1.0, "1", None):
             with self.subTest(seed=seed):
                 with self.assertRaises(ct2_benchmark.RuntimeProbeError) as raised:

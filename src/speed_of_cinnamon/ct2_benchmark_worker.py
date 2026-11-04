@@ -18,6 +18,7 @@ import unicodedata
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import PurePath
+from typing import NoReturn
 
 
 SCHEMA_VERSION = 1
@@ -1130,7 +1131,7 @@ def _parse_benchmark_arm_request(
     return result
 
 
-def _corpus_invalid() -> None:
+def _corpus_invalid() -> NoReturn:
     raise WorkerFailure("benchmark-corpus-invalid")
 
 
