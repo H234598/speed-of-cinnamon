@@ -12,7 +12,9 @@ class ProcSafetyTest(unittest.TestCase):
     def test_bounded_proc_entries_keeps_numeric_snapshot_only(self) -> None:
         entries = ("100", "self", "200")
         scanner = mock.MagicMock()
-        scanner.__enter__.return_value = (SimpleNamespace(name=name) for name in entries)
+        scanner.__enter__.return_value = (
+            SimpleNamespace(name=name) for name in entries
+        )
         scanner.__exit__.return_value = False
         with mock.patch.object(proc_safety.os, "scandir", return_value=scanner):
             result = proc_safety._bounded_proc_entries()
@@ -21,7 +23,9 @@ class ProcSafetyTest(unittest.TestCase):
     def test_bounded_proc_entries_fails_closed_at_limit(self) -> None:
         entries = tuple(str(pid) for pid in range(3))
         scanner = mock.MagicMock()
-        scanner.__enter__.return_value = (SimpleNamespace(name=name) for name in entries)
+        scanner.__enter__.return_value = (
+            SimpleNamespace(name=name) for name in entries
+        )
         scanner.__exit__.return_value = False
         with (
             mock.patch.object(proc_safety.os, "scandir", return_value=scanner),
@@ -30,7 +34,9 @@ class ProcSafetyTest(unittest.TestCase):
             self.assertIsNone(proc_safety._bounded_proc_entries())
 
     def test_bounded_proc_entries_fails_closed_on_iteration_error(self) -> None:
-        with mock.patch.object(proc_safety.os, "scandir", side_effect=OSError("proc unavailable")):
+        with mock.patch.object(
+            proc_safety.os, "scandir", side_effect=OSError("proc unavailable")
+        ):
             self.assertIsNone(proc_safety._bounded_proc_entries())
 
     def test_process_stat_reader_uses_bounded_ascii_read(self) -> None:
@@ -40,7 +46,9 @@ class ProcSafetyTest(unittest.TestCase):
 
         self.assertEqual(result, "123 (worker) S 1 2 3")
         mocked_open.assert_called_once_with("r", encoding="ascii")
-        mocked_open.return_value.read.assert_called_once_with(proc_safety.MAX_PROC_STAT_BYTES)
+        mocked_open.return_value.read.assert_called_once_with(
+            proc_safety.MAX_PROC_STAT_BYTES
+        )
 
     def test_process_stat_path_reader_preserves_io_errors(self) -> None:
         with mock.patch.object(proc_safety.Path, "open", side_effect=FileNotFoundError):
@@ -54,7 +62,9 @@ class ProcSafetyTest(unittest.TestCase):
 
         self.assertEqual(result, "boot-id")
         mocked_open.assert_called_once_with("r", encoding="ascii")
-        mocked_open.return_value.read.assert_called_once_with(proc_safety.MAX_PROC_BOOT_ID_BYTES)
+        mocked_open.return_value.read.assert_called_once_with(
+            proc_safety.MAX_PROC_BOOT_ID_BYTES
+        )
 
 
 if __name__ == "__main__":

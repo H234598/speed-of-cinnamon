@@ -11,7 +11,11 @@ from typing import Any
 from urllib.parse import urlsplit
 
 from . import __version__
-from .alarms import MAX_ALARM_COUNT, MAX_ALARM_TRIGGER_CHARS, STORE_VERSION as ALARM_STORE_VERSION
+from .alarms import (
+    MAX_ALARM_COUNT,
+    MAX_ALARM_TRIGGER_CHARS,
+    STORE_VERSION as ALARM_STORE_VERSION,
+)
 from .alarms import _dedupe_alarm_ids
 from .alarms import normalize_alarm
 from .http_safety import is_loopback_hostname
@@ -50,10 +54,14 @@ POST_COMMIT_RECOVERY_BACKUP_CLEANUP_WARNING = (
     "settings export committed but settings export recovery backup cleanup failed; "
     "private backup data may remain"
 )
-POST_COMMIT_DIRECTORY_CLOSE_WARNING = "settings export committed but settings export directory close failed"
+POST_COMMIT_DIRECTORY_CLOSE_WARNING = (
+    "settings export committed but settings export directory close failed"
+)
 
 
-def _note_cleanup_failure(primary: BaseException, _cleanup_error: BaseException) -> None:
+def _note_cleanup_failure(
+    primary: BaseException, _cleanup_error: BaseException
+) -> None:
     primary.add_note("settings export cleanup failed")
 
 
@@ -153,59 +161,78 @@ _ALLOWED_SETTING_TEXT_VALUES: dict[str, frozenset[str]] = {
     "artifact-encryption": frozenset({"keyring", "passphrase", "off"}),
     "auto-backup-encryption": frozenset({"keyring", "passphrase", "off"}),
     "auto-backup-retention-mode": frozenset({"manual"}),
-    "insert-method": frozenset({"clipboard-paste", "clipboard-paste-submit", "clipboard", "type", "none"}),
-    "language": frozenset({
-        "ar",
-        "zh",
-        "cs",
-        "da",
-        "en",
-        "fi",
-        "de",
-        "el",
-        "fr",
-        "hi",
-        "it",
-        "ja",
-        "ko",
-        "nl",
-        "no",
-        "pl",
-        "pt",
-        "ru",
-        "es",
-        "sv",
-        "tr",
-        "uk",
-    }),
-    "post-process-backend": frozenset({"none", "command", "ollama", "openai-compatible"}),
-    "post-process-preset": frozenset({"minimal", "clean", "code", "chat", "email", "safety", "custom"}),
+    "insert-method": frozenset(
+        {"clipboard-paste", "clipboard-paste-submit", "clipboard", "type", "none"}
+    ),
+    "language": frozenset(
+        {
+            "ar",
+            "zh",
+            "cs",
+            "da",
+            "en",
+            "fi",
+            "de",
+            "el",
+            "fr",
+            "hi",
+            "it",
+            "ja",
+            "ko",
+            "nl",
+            "no",
+            "pl",
+            "pt",
+            "ru",
+            "es",
+            "sv",
+            "tr",
+            "uk",
+        }
+    ),
+    "post-process-backend": frozenset(
+        {"none", "command", "ollama", "openai-compatible"}
+    ),
+    "post-process-preset": frozenset(
+        {"minimal", "clean", "code", "chat", "email", "safety", "custom"}
+    ),
     "recorder": frozenset({"auto", "pw-record", "parecord", "arecord"}),
-    "secondary-language": frozenset({
-        "ar",
-        "zh",
-        "cs",
-        "da",
-        "en",
-        "fi",
-        "de",
-        "el",
-        "fr",
-        "hi",
-        "it",
-        "ja",
-        "ko",
-        "nl",
-        "no",
-        "pl",
-        "pt",
-        "ru",
-        "es",
-        "sv",
-        "tr",
-        "uk",
-    }),
-    "transcriber": frozenset({"auto", "whisper", "faster-whisper", "whisper-cpp", "openai-compatible", "command"}),
+    "secondary-language": frozenset(
+        {
+            "ar",
+            "zh",
+            "cs",
+            "da",
+            "en",
+            "fi",
+            "de",
+            "el",
+            "fr",
+            "hi",
+            "it",
+            "ja",
+            "ko",
+            "nl",
+            "no",
+            "pl",
+            "pt",
+            "ru",
+            "es",
+            "sv",
+            "tr",
+            "uk",
+        }
+    ),
+    "transcriber": frozenset(
+        {
+            "auto",
+            "whisper",
+            "faster-whisper",
+            "whisper-cpp",
+            "openai-compatible",
+            "command",
+        }
+    ),
 }
 
 
@@ -213,7 +240,9 @@ def _utf8_byte_count(value: str, *, field_name: str) -> int:
     try:
         return len(value.encode("utf-8"))
     except UnicodeEncodeError as exc:
-        raise SettingsExportError(f"{field_name} contains invalid Unicode characters") from exc
+        raise SettingsExportError(
+            f"{field_name} contains invalid Unicode characters"
+        ) from exc
 
 
 class SettingsExportError(RuntimeError):
@@ -234,7 +263,10 @@ def _assert_clean_path(path: Path, *, field_name: str) -> None:
     if not text or len(text) > MAX_SETTINGS_EXPORT_PATH_CHARS:
         raise SettingsExportError(f"{field_name} path is invalid")
     try:
-        if _utf8_byte_count(text, field_name=f"{field_name} path") > MAX_SETTINGS_EXPORT_PATH_CHARS:
+        if (
+            _utf8_byte_count(text, field_name=f"{field_name} path")
+            > MAX_SETTINGS_EXPORT_PATH_CHARS
+        ):
             raise SettingsExportError(f"{field_name} path is invalid")
     except SettingsExportError as exc:
         raise SettingsExportError(f"{field_name} path is invalid") from exc
@@ -255,14 +287,22 @@ def _contains_escaped_null(text: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
-def _contains_http_header_control_chars(text: str, *, allow_newline: bool = False) -> bool:
+def _contains_http_header_control_chars(
+    text: str, *, allow_newline: bool = False
+) -> bool:
     if isinstance(text, bool) or not isinstance(text, str):
         raise SettingsExportError("value must be text")
     lowered = (text or "").lower()
     control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
-    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+    if any(
+        sequence in lowered
+        for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")
+    ):
         return True
-    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
+    if any(
+        f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered
+        for codepoint in control_codepoints
+    ):
         return True
     for char in lowered:
         codepoint = ord(char)
@@ -338,9 +378,21 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, ob
 def _create_private_temp_file(parent_fd: int, final_name: str) -> tuple[int, str]:
     safe_name = final_name.replace("/", "_") or "settings-export.json"
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-        raise SettingsExportError("secure settings export temp file creation is not supported on this platform")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag | getattr(os, "O_CLOEXEC", 0)
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
+        raise SettingsExportError(
+            "secure settings export temp file creation is not supported on this platform"
+        )
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | nofollow_flag
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     for _ in range(100):
         temp_name = f".{safe_name}.{secrets.token_hex(8)}.tmp"
         try:
@@ -399,8 +451,14 @@ def _scrub_temp_settings_export_file(
     if not temp_name:
         return
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-        raise SettingsExportError("secure settings export temp file scrubbing is not supported on this platform")
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
+        raise SettingsExportError(
+            "secure settings export temp file scrubbing is not supported on this platform"
+        )
     nonblock_flag = _required_nonblock_flag("settings export temp file scrubbing")
     fd = os.open(
         temp_name,
@@ -430,7 +488,9 @@ def _scrub_temp_settings_export_file(
 
 def _read_text_capped_without_following_symlinks(path: Path) -> str:
     nonblock_flag = _required_nonblock_flag("settings export path")
-    fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name="settings export path")
+    fd = open_file_without_following_symlinks(
+        path, os.O_RDONLY | nonblock_flag, field_name="settings export path"
+    )
     primary_error: BaseException | None = None
     try:
         try:
@@ -511,15 +571,23 @@ def _reject_secret_bearing_url_setting(key: str, text: str) -> None:
     if not parsed.hostname:
         raise SettingsExportError(f"setting {key} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
-        raise SettingsExportError(f"setting {key} must use https:// unless host is local loopback")
+        raise SettingsExportError(
+            f"setting {key} must use https:// unless host is local loopback"
+        )
     try:
         _ = parsed.port
     except ValueError:
         raise SettingsExportError(f"setting {key} has invalid port") from None
-    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
+    if (
+        "@" in parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise SettingsExportError(f"setting {key} must not contain URL credentials")
     if parsed.query or parsed.fragment:
-        raise SettingsExportError(f"setting {key} must not contain URL query or fragment")
+        raise SettingsExportError(
+            f"setting {key} must not contain URL query or fragment"
+        )
 
 
 def normalize_setting(key: str, value: Any) -> Any:
@@ -543,7 +611,9 @@ def normalize_setting(key: str, value: Any) -> Any:
             raise SettingsExportError(f"setting {key} must be an integer")
         if key == "max-seconds":
             if parsed < MIN_RECORDING_SECONDS:
-                raise SettingsExportError(f"setting max-seconds must be at least {MIN_RECORDING_SECONDS}")
+                raise SettingsExportError(
+                    f"setting max-seconds must be at least {MIN_RECORDING_SECONDS}"
+                )
             if parsed > MAX_RECORDING_SECONDS:
                 raise SettingsExportError(
                     f"setting max-seconds must be at most {MAX_RECORDING_SECONDS}"
@@ -551,7 +621,9 @@ def normalize_setting(key: str, value: Any) -> Any:
             return parsed
         if key == "typing-delay-ms":
             if parsed < MIN_TYPING_DELAY_MS:
-                raise SettingsExportError(f"setting typing-delay-ms must be at least {MIN_TYPING_DELAY_MS}")
+                raise SettingsExportError(
+                    f"setting typing-delay-ms must be at least {MIN_TYPING_DELAY_MS}"
+                )
             if parsed > MAX_TYPING_DELAY_MS:
                 raise SettingsExportError(
                     f"setting typing-delay-ms must be at most {MAX_TYPING_DELAY_MS}"
@@ -559,7 +631,9 @@ def normalize_setting(key: str, value: Any) -> Any:
             return parsed
         if key == "max-transcript-files":
             if parsed < 1:
-                raise SettingsExportError("setting max-transcript-files must be at least 1")
+                raise SettingsExportError(
+                    "setting max-transcript-files must be at least 1"
+                )
             if parsed > MAX_TRANSCRIPT_FILES:
                 raise SettingsExportError(
                     f"setting max-transcript-files must be at most {MAX_TRANSCRIPT_FILES}"
@@ -635,17 +709,27 @@ def normalize_excluded_private_settings(value: Any) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise SettingsExportError("settings export excluded private settings must be a list")
+        raise SettingsExportError(
+            "settings export excluded private settings must be a list"
+        )
     allowed = set(NON_EXPORTABLE_PRIVATE_SETTINGS)
     normalized: list[str] = []
     for raw_item in value:
         if not isinstance(raw_item, str):
-            raise SettingsExportError("settings export excluded private settings must contain setting names")
-        item = _sanitize_text_field(raw_item, field_name="settings export excluded private setting")
+            raise SettingsExportError(
+                "settings export excluded private settings must contain setting names"
+            )
+        item = _sanitize_text_field(
+            raw_item, field_name="settings export excluded private setting"
+        )
         if item not in allowed:
-            raise SettingsExportError(f"unknown settings export excluded private setting: {item}")
+            raise SettingsExportError(
+                f"unknown settings export excluded private setting: {item}"
+            )
         if item in normalized:
-            raise SettingsExportError(f"duplicate settings export excluded private setting: {item}")
+            raise SettingsExportError(
+                f"duplicate settings export excluded private setting: {item}"
+            )
         normalized.append(item)
     return normalized
 
@@ -654,17 +738,27 @@ def normalize_included_private_settings(value: Any) -> list[str]:
     if value is None:
         return []
     if not isinstance(value, list):
-        raise SettingsExportError("settings export included private settings must be a list")
+        raise SettingsExportError(
+            "settings export included private settings must be a list"
+        )
     allowed = set(NON_EXPORTABLE_PRIVATE_SETTINGS)
     normalized: list[str] = []
     for raw_item in value:
         if not isinstance(raw_item, str):
-            raise SettingsExportError("settings export included private settings must contain setting names")
-        item = _sanitize_text_field(raw_item, field_name="settings export included private setting")
+            raise SettingsExportError(
+                "settings export included private settings must contain setting names"
+            )
+        item = _sanitize_text_field(
+            raw_item, field_name="settings export included private setting"
+        )
         if item not in allowed:
-            raise SettingsExportError(f"unknown settings export included private setting: {item}")
+            raise SettingsExportError(
+                f"unknown settings export included private setting: {item}"
+            )
         if item in normalized:
-            raise SettingsExportError(f"duplicate settings export included private setting: {item}")
+            raise SettingsExportError(
+                f"duplicate settings export included private setting: {item}"
+            )
         normalized.append(item)
     return normalized
 
@@ -677,10 +771,14 @@ def build_export(
     include_created_at: bool = True,
 ) -> dict[str, Any]:
     if type(include_private_settings) is not bool:
-        raise SettingsExportError("settings export private setting opt-in must be boolean")
+        raise SettingsExportError(
+            "settings export private setting opt-in must be boolean"
+        )
     if type(include_created_at) is not bool:
         raise SettingsExportError("settings export created_at option must be boolean")
-    normalized_alarm_store = normalize_alarm_store(alarm_store if alarm_store is not None else {})
+    normalized_alarm_store = normalize_alarm_store(
+        alarm_store if alarm_store is not None else {}
+    )
     normalized_settings = normalize_settings(settings)
     if not include_private_settings:
         for key in NON_EXPORTABLE_PRIVATE_SETTINGS:
@@ -694,7 +792,9 @@ def build_export(
     return {
         "app": APP_ID,
         "version": EXPORT_VERSION,
-        "created_at": datetime.now(timezone.utc).isoformat() if include_created_at else "",
+        "created_at": (
+            datetime.now(timezone.utc).isoformat() if include_created_at else ""
+        ),
         "excluded_private_settings": excluded_private_settings,
         "included_private_settings": included_private_settings,
         "speed_of_cinnamon_version": __version__,
@@ -724,10 +824,15 @@ def write_export(
         rendered = json.dumps(payload, indent=2, sort_keys=True) + "\n"
     except (MemoryError, RecursionError) as exc:
         raise SettingsExportError("settings export could not be rendered") from exc
-    if _utf8_byte_count(rendered, field_name="settings export payload") > MAX_SETTINGS_EXPORT_BYTES:
+    if (
+        _utf8_byte_count(rendered, field_name="settings export payload")
+        > MAX_SETTINGS_EXPORT_BYTES
+    ):
         raise SettingsExportError(f"settings export is too large: {path}")
     _required_nonblock_flag("settings export")
-    parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="settings export directory")
+    parent_fd = ensure_directory_without_following_symlinks(
+        path.parent, field_name="settings export directory"
+    )
     temp_name = ""
     temp_fd: int | None = None
     backup_name = ""
@@ -823,29 +928,40 @@ def write_export(
         )
 
     def _same_leaf_inode(first: os.stat_result, second: os.stat_result) -> bool:
-        return (first.st_dev, first.st_ino, first.st_mode) == (second.st_dev, second.st_ino, second.st_mode)
+        return (first.st_dev, first.st_ino, first.st_mode) == (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+        )
 
     def _unlink_temp_if_same() -> None:
         nonlocal temporary_stat
         if not temp_name:
             return
-        nonblock_flag = _required_nonblock_flag("settings export temporary file cleanup")
+        nonblock_flag = _required_nonblock_flag(
+            "settings export temporary file cleanup"
+        )
         if temporary_stat is None:
             if temp_fd is None:
                 raise OSError("settings export temporary file identity is unavailable")
             try:
                 temporary_stat = os.fstat(temp_fd)
             except (OSError, ValueError) as exc:
-                raise OSError("settings export temporary file identity is unavailable") from exc
+                raise OSError(
+                    "settings export temporary file identity is unavailable"
+                ) from exc
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-            raise OSError("settings export temporary file cleanup is not supported on this platform")
+        if (
+            isinstance(nofollow_flag, bool)
+            or not isinstance(nofollow_flag, int)
+            or nofollow_flag <= 0
+        ):
+            raise OSError(
+                "settings export temporary file cleanup is not supported on this platform"
+            )
         claim_fd = os.open(
             temp_name,
-            os.O_RDWR
-            | nofollow_flag
-            | nonblock_flag
-            | getattr(os, "O_CLOEXEC", 0),
+            os.O_RDWR | nofollow_flag | nonblock_flag | getattr(os, "O_CLOEXEC", 0),
             dir_fd=parent_fd,
         )
         primary_error: BaseException | None = None
@@ -877,19 +993,25 @@ def write_export(
                 expected_source_fd=claim_fd,
                 field_name="settings export temporary file cleanup",
             )
-            cleanup_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+            cleanup_stat = os.stat(
+                cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+            )
             if (
                 not stat_module.S_ISREG(cleanup_stat.st_mode)
                 or getattr(cleanup_stat, "st_nlink", 1) != 1
                 or not _same_leaf_inode(cleanup_stat, final_stat)
             ):
-                raise OSError("settings export temporary file changed after cleanup claim")
+                raise OSError(
+                    "settings export temporary file changed after cleanup claim"
+                )
             if not _unlink_leaf_safely(
                 cleanup_name,
                 cleanup_stat,
                 field_name="settings export temporary file cleanup",
             ):
-                raise OSError("settings export temporary file disappeared during cleanup")
+                raise OSError(
+                    "settings export temporary file disappeared during cleanup"
+                )
         except BaseException as exc:
             primary_error = exc
             raise
@@ -910,15 +1032,21 @@ def write_export(
     def _scrub_temp_if_same() -> None:
         if temporary_stat is None:
             raise OSError("settings export temporary file identity is unavailable")
-        _scrub_temp_settings_export_file(parent_fd, temp_name, expected_stat=temporary_stat)
+        _scrub_temp_settings_export_file(
+            parent_fd, temp_name, expected_stat=temporary_stat
+        )
 
     def _assert_recovery_backup_identity() -> None:
         if not backup_moved:
             return
         try:
-            current_backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+            current_backup_stat = os.stat(
+                backup_name, dir_fd=parent_fd, follow_symlinks=False
+            )
         except FileNotFoundError as exc:
-            raise OSError("settings export recovery backup disappeared during rollback") from exc
+            raise OSError(
+                "settings export recovery backup disappeared during rollback"
+            ) from exc
         if (
             existing_stat is None
             or not stat_module.S_ISREG(current_backup_stat.st_mode)
@@ -929,25 +1057,38 @@ def write_export(
 
     def _remove_recovery_backup_safely() -> None:
         if not backup_moved or not backup_name or existing_stat is None:
-            raise _RecoveryBackupChanged("settings export recovery backup identity is unavailable")
-        nonblock_flag = _required_nonblock_flag("settings export recovery backup cleanup")
-        current_backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+            raise _RecoveryBackupChanged(
+                "settings export recovery backup identity is unavailable"
+            )
+        nonblock_flag = _required_nonblock_flag(
+            "settings export recovery backup cleanup"
+        )
+        current_backup_stat = os.stat(
+            backup_name, dir_fd=parent_fd, follow_symlinks=False
+        )
         if (
             not stat_module.S_ISREG(current_backup_stat.st_mode)
             or getattr(current_backup_stat, "st_nlink", 1) != 1
             or not _same_leaf_identity(current_backup_stat, existing_stat)
         ):
-            raise _RecoveryBackupChanged("settings export recovery backup changed before cleanup")
+            raise _RecoveryBackupChanged(
+                "settings export recovery backup changed before cleanup"
+            )
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-            raise _RecoveryBackupChanged("settings export recovery backup cleanup is not supported on this platform")
+        if (
+            isinstance(nofollow_flag, bool)
+            or not isinstance(nofollow_flag, int)
+            or nofollow_flag <= 0
+        ):
+            raise _RecoveryBackupChanged(
+                "settings export recovery backup cleanup is not supported on this platform"
+            )
         claim_flags = (
-            os.O_RDONLY
-            | nofollow_flag
-            | nonblock_flag
-            | getattr(os, "O_CLOEXEC", 0)
+            os.O_RDONLY | nofollow_flag | nonblock_flag | getattr(os, "O_CLOEXEC", 0)
         )
-        scrub_flags = os.O_WRONLY | nofollow_flag | nonblock_flag | getattr(os, "O_CLOEXEC", 0)
+        scrub_flags = (
+            os.O_WRONLY | nofollow_flag | nonblock_flag | getattr(os, "O_CLOEXEC", 0)
+        )
         for _ in range(100):
             cleanup_name = f"{backup_name}.{secrets.token_hex(8)}.cleanup"
             claim_fd = -1
@@ -955,7 +1096,9 @@ def write_export(
                 claim_fd = os.open(backup_name, claim_flags, dir_fd=parent_fd)
                 source_stat = os.fstat(claim_fd)
                 if not _same_leaf_identity(source_stat, current_backup_stat):
-                    raise _RecoveryBackupChanged("settings export recovery backup changed before cleanup")
+                    raise _RecoveryBackupChanged(
+                        "settings export recovery backup changed before cleanup"
+                    )
                 _rename_without_replacing(
                     backup_name,
                     cleanup_name,
@@ -978,18 +1121,24 @@ def write_export(
             scrub_started = False
             try:
                 claimed_stat = os.fstat(claim_fd)
-                cleanup_path_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                cleanup_path_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if (
                     not stat_module.S_ISREG(claimed_stat.st_mode)
                     or getattr(claimed_stat, "st_nlink", 1) != 1
                     or not _same_leaf_identity(claimed_stat, existing_stat)
                     or not _same_leaf_inode(cleanup_path_stat, claimed_stat)
                 ):
-                    raise _RecoveryBackupChanged("settings export recovery backup changed before cleanup")
+                    raise _RecoveryBackupChanged(
+                        "settings export recovery backup changed before cleanup"
+                    )
 
                 os.fchmod(claim_fd, 0o600)
                 claimed_stat = os.fstat(claim_fd)
-                cleanup_path_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                cleanup_path_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if (
                     not stat_module.S_ISREG(claimed_stat.st_mode)
                     or getattr(claimed_stat, "st_nlink", 1) != 1
@@ -997,14 +1146,18 @@ def write_export(
                     or claimed_stat.st_ino != source_stat.st_ino
                     or not _same_leaf_inode(cleanup_path_stat, claimed_stat)
                 ):
-                    raise _RecoveryBackupChanged("settings export recovery backup changed after permission update")
+                    raise _RecoveryBackupChanged(
+                        "settings export recovery backup changed after permission update"
+                    )
 
                 scrub_fd = os.open(cleanup_name, scrub_flags, dir_fd=parent_fd)
                 scrub_primary_error: BaseException | None = None
                 try:
                     scrub_stat = os.fstat(scrub_fd)
                     if not _same_leaf_inode(scrub_stat, claimed_stat):
-                        raise _RecoveryBackupChanged("settings export recovery backup changed before scrubbing")
+                        raise _RecoveryBackupChanged(
+                            "settings export recovery backup changed before scrubbing"
+                        )
                     scrub_started = True
                     _scrub_settings_export_fd(scrub_fd, expected_stat=scrub_stat)
                 except BaseException as exc:
@@ -1016,13 +1169,17 @@ def write_export(
                     except BaseException:
                         raise
 
-                final_path_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                final_path_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if (
                     not stat_module.S_ISREG(final_path_stat.st_mode)
                     or getattr(final_path_stat, "st_nlink", 1) != 1
                     or not _same_leaf_inode(final_path_stat, claimed_stat)
                 ):
-                    raise _RecoveryBackupChanged("settings export recovery backup changed during cleanup")
+                    raise _RecoveryBackupChanged(
+                        "settings export recovery backup changed during cleanup"
+                    )
                 os.unlink(cleanup_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
             except BaseException as exc:
@@ -1045,7 +1202,9 @@ def write_export(
             finally:
                 _close_claim_fd(claim_fd, primary_error)
             return
-        raise _RecoveryBackupChanged("settings export recovery backup cleanup path could not be claimed")
+        raise _RecoveryBackupChanged(
+            "settings export recovery backup cleanup path could not be claimed"
+        )
 
     def _unlink_leaf_safely(
         leaf_name: str,
@@ -1061,7 +1220,11 @@ def write_export(
         if not _same_leaf_snapshot(current_stat, expected_stat):
             raise OSError(f"{field_name} changed before cleanup")
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+        if (
+            isinstance(nofollow_flag, bool)
+            or not isinstance(nofollow_flag, int)
+            or nofollow_flag <= 0
+        ):
             raise OSError(f"{field_name} cleanup is not supported on this platform")
         claim_flags = (
             getattr(os, "O_PATH", os.O_RDONLY)
@@ -1104,10 +1267,18 @@ def write_export(
             unlinked = False
             try:
                 claimed_stat = os.fstat(claim_fd)
-                cleanup_path_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                cleanup_path_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if (
-                    (not allow_symlink_candidate and not stat_module.S_ISREG(claimed_stat.st_mode))
-                    or (allow_symlink_candidate and not stat_module.S_ISLNK(claimed_stat.st_mode))
+                    (
+                        not allow_symlink_candidate
+                        and not stat_module.S_ISREG(claimed_stat.st_mode)
+                    )
+                    or (
+                        allow_symlink_candidate
+                        and not stat_module.S_ISLNK(claimed_stat.st_mode)
+                    )
                     or not _same_leaf_identity(claimed_stat, expected_stat)
                     or not _same_leaf_inode(cleanup_path_stat, claimed_stat)
                 ):
@@ -1117,7 +1288,11 @@ def write_export(
                 _fsync_fd(parent_fd)
             except BaseException as exc:
                 primary_error = exc
-                if not unlinked and claimed_stat is not None and _same_leaf_inode(claimed_stat, expected_stat):
+                if (
+                    not unlinked
+                    and claimed_stat is not None
+                    and _same_leaf_inode(claimed_stat, expected_stat)
+                ):
                     try:
                         restore_stat = os.fstat(claim_fd)
                         _rename_without_replacing(
@@ -1139,7 +1314,9 @@ def write_export(
 
     try:
         try:
-            assert_fd_is_private_directory(parent_fd, field_name="settings export directory")
+            assert_fd_is_private_directory(
+                parent_fd, field_name="settings export directory"
+            )
         except RuntimeError as exc:
             raise SettingsExportError(str(exc)) from exc
         try:
@@ -1147,11 +1324,17 @@ def write_export(
         except FileNotFoundError:
             existing_stat = None
         if existing_stat is not None and stat_module.S_ISLNK(existing_stat.st_mode):
-            raise SettingsExportError(f"settings export path must not be a symlink: {path}")
+            raise SettingsExportError(
+                f"settings export path must not be a symlink: {path}"
+            )
         if existing_stat is not None and not stat_module.S_ISREG(existing_stat.st_mode):
-            raise SettingsExportError(f"settings export path must be a regular file: {path}")
+            raise SettingsExportError(
+                f"settings export path must be a regular file: {path}"
+            )
         if existing_stat is not None and getattr(existing_stat, "st_nlink", 1) != 1:
-            raise SettingsExportError(f"settings export path must not be hardlinked: {path}")
+            raise SettingsExportError(
+                f"settings export path must not be hardlinked: {path}"
+            )
         temp_fd, temp_name = _create_private_temp_file(parent_fd, path.name)
         try:
             temporary_stat = os.fstat(temp_fd)
@@ -1171,7 +1354,9 @@ def write_export(
             try:
                 temporary_stat = os.fstat(handle.fileno())
             except (OSError, ValueError) as exc:
-                raise OSError("failed to inspect settings export temporary file") from exc
+                raise OSError(
+                    "failed to inspect settings export temporary file"
+                ) from exc
             handle.write(rendered)
             handle.flush()
             temporary_stat = os.fstat(handle.fileno())
@@ -1190,16 +1375,23 @@ def write_export(
         if temporary_stat is None:
             raise OSError("settings export temporary file identity is unavailable")
         try:
-            current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            current_target_stat = os.stat(
+                path.name, dir_fd=parent_fd, follow_symlinks=False
+            )
         except FileNotFoundError:
             current_target_stat = None
         if existing_stat is None:
             if current_target_stat is not None:
                 raise OSError("settings export path changed before activation")
-        elif current_target_stat is None or not _same_leaf_snapshot(current_target_stat, existing_stat):
+        elif current_target_stat is None or not _same_leaf_snapshot(
+            current_target_stat, existing_stat
+        ):
             raise OSError("settings export path changed before activation")
         staged_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
-        if not stat_module.S_ISREG(staged_stat.st_mode) or getattr(staged_stat, "st_nlink", 1) != 1:
+        if (
+            not stat_module.S_ISREG(staged_stat.st_mode)
+            or getattr(staged_stat, "st_nlink", 1) != 1
+        ):
             raise OSError("settings export temporary file is not safe")
         if not _same_leaf_snapshot(staged_stat, temporary_stat):
             raise OSError("settings export temporary file changed before activation")
@@ -1217,15 +1409,21 @@ def write_export(
                         follow_symlinks=False,
                     )
                 except FileNotFoundError:
-                    raise OSError("settings export path disappeared before backup activation") from None
+                    raise OSError(
+                        "settings export path disappeared before backup activation"
+                    ) from None
                 except FileExistsError:
                     continue
                 candidate_stat_at_creation: os.stat_result | None = None
                 try:
                     backup_name = candidate_name
-                    candidate_stat_at_creation = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                    candidate_stat_at_creation = os.stat(
+                        candidate_name, dir_fd=parent_fd, follow_symlinks=False
+                    )
                     backup_stat = candidate_stat_at_creation
-                    current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                    current_target_stat = os.stat(
+                        path.name, dir_fd=parent_fd, follow_symlinks=False
+                    )
                     if (
                         not stat_module.S_ISREG(backup_stat.st_mode)
                         or getattr(backup_stat, "st_nlink", 1) < 2
@@ -1233,7 +1431,9 @@ def write_export(
                         or not stat_module.S_ISREG(current_target_stat.st_mode)
                         or not _same_leaf_inode(current_target_stat, existing_stat)
                     ):
-                        raise OSError("settings export path changed during backup activation")
+                        raise OSError(
+                            "settings export path changed during backup activation"
+                        )
                     backup_moved = True
                     _fsync_fd(parent_fd)
                     break
@@ -1247,10 +1447,16 @@ def write_export(
                             _note_cleanup_failure(exc, cleanup_error)
                         else:
                             try:
-                                candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                                candidate_stat = os.stat(
+                                    candidate_name,
+                                    dir_fd=parent_fd,
+                                    follow_symlinks=False,
+                                )
                                 if (
                                     candidate_stat_at_creation is not None
-                                    and _same_leaf_inode(candidate_stat, candidate_stat_at_creation)
+                                    and _same_leaf_inode(
+                                        candidate_stat, candidate_stat_at_creation
+                                    )
                                 ):
                                     if _unlink_leaf_safely(
                                         candidate_name,
@@ -1276,10 +1482,16 @@ def write_export(
             )
             activation_exchange = True
             try:
-                activated_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
-                replaced_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+                activated_stat = os.stat(
+                    path.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                replaced_stat = os.stat(
+                    temp_name, dir_fd=parent_fd, follow_symlinks=False
+                )
             except OSError as stat_error:
-                raise OSError("settings export could not be inspected after activation") from stat_error
+                raise OSError(
+                    "settings export could not be inspected after activation"
+                ) from stat_error
             if (
                 temporary_stat is None
                 or not _same_leaf_identity(activated_stat, temporary_stat)
@@ -1305,7 +1517,9 @@ def write_export(
                 replaced_stat,
                 field_name="settings export replaced target",
             ):
-                raise OSError("settings export replaced target disappeared during activation")
+                raise OSError(
+                    "settings export replaced target disappeared during activation"
+                )
             temp_name = ""
         else:
             _rename_without_replacing(
@@ -1318,8 +1532,12 @@ def write_export(
         try:
             activated_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except OSError as stat_error:
-            raise OSError("settings export could not be inspected after activation") from stat_error
-        if temporary_stat is None or not _same_leaf_identity(activated_stat, temporary_stat):
+            raise OSError(
+                "settings export could not be inspected after activation"
+            ) from stat_error
+        if temporary_stat is None or not _same_leaf_identity(
+            activated_stat, temporary_stat
+        ):
             raise OSError("settings export changed after activation")
         activation_stat = activated_stat
         _fsync_fd(parent_fd)
@@ -1343,19 +1561,27 @@ def write_export(
                 _assert_recovery_backup_identity()
                 if activation_attempted:
                     try:
-                        current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                        current_target_stat = os.stat(
+                            path.name, dir_fd=parent_fd, follow_symlinks=False
+                        )
                     except FileNotFoundError:
                         current_target_stat = None
                     expected_activation_stat = activation_stat or temporary_stat
                     if current_target_stat is not None:
-                        if expected_activation_stat is None or not _same_leaf_identity(current_target_stat, expected_activation_stat):
-                            raise OSError("settings export target changed during rollback")
+                        if expected_activation_stat is None or not _same_leaf_identity(
+                            current_target_stat, expected_activation_stat
+                        ):
+                            raise OSError(
+                                "settings export target changed during rollback"
+                            )
                         if not _unlink_leaf_safely(
                             path.name,
                             current_target_stat,
                             field_name="settings export target",
                         ):
-                            raise OSError("settings export target disappeared during rollback")
+                            raise OSError(
+                                "settings export target disappeared during rollback"
+                            )
                         _fsync_fd(parent_fd)
                 if backup_moved:
                     try:
@@ -1372,11 +1598,15 @@ def write_export(
                         raise OSError("settings export target exists during rollback")
                 if activation_exchange and temp_name and existing_stat is not None:
                     try:
-                        replaced_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+                        replaced_stat = os.stat(
+                            temp_name, dir_fd=parent_fd, follow_symlinks=False
+                        )
                     except FileNotFoundError:
                         temp_name = ""
                     else:
-                        if _same_leaf_identity(replaced_stat, existing_stat) and _unlink_leaf_safely(
+                        if _same_leaf_identity(
+                            replaced_stat, existing_stat
+                        ) and _unlink_leaf_safely(
                             temp_name,
                             replaced_stat,
                             field_name="settings export replaced target rollback",
@@ -1408,7 +1638,9 @@ def write_export(
                 public_error = error
                 public_error_cause = _sanitized_public_error_cause(exc)
             else:
-                public_error = SettingsExportError(f"failed to write settings export: {path}")
+                public_error = SettingsExportError(
+                    f"failed to write settings export: {path}"
+                )
                 primary_error = public_error
                 public_error_cause = _sanitized_public_error_cause(exc)
         if public_error is None:
@@ -1474,7 +1706,10 @@ def read_export(path: Path) -> dict[str, Any]:
         raise SettingsExportError("settings export path must be absolute")
     try:
         text = _read_text_capped_without_following_symlinks(path)
-        if _utf8_byte_count(text, field_name="settings export content") > MAX_SETTINGS_EXPORT_BYTES:
+        if (
+            _utf8_byte_count(text, field_name="settings export content")
+            > MAX_SETTINGS_EXPORT_BYTES
+        ):
             raise SettingsExportError(f"settings export is too large: {path}")
         if _contains_escaped_null(text):
             raise SettingsExportError("settings export contains invalid null byte")
@@ -1487,7 +1722,13 @@ def read_export(path: Path) -> dict[str, Any]:
         _assert_json_value_budget(payload)
     except FileNotFoundError as exc:
         raise SettingsExportError(f"settings export not found: {path}") from exc
-    except (OSError, ValueError, RecursionError, UnicodeDecodeError, MemoryError) as exc:
+    except (
+        OSError,
+        ValueError,
+        RecursionError,
+        UnicodeDecodeError,
+        MemoryError,
+    ) as exc:
         raise SettingsExportError(f"settings export could not be read: {path}") from exc
 
     if not isinstance(payload, dict):
@@ -1495,14 +1736,23 @@ def read_export(path: Path) -> dict[str, Any]:
     if payload.get("app") != APP_ID:
         raise SettingsExportError("settings export is for a different app")
     version = payload.get("version")
-    if isinstance(version, bool) or not isinstance(version, int) or version < 1 or version > EXPORT_VERSION:
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version < 1
+        or version > EXPORT_VERSION
+    ):
         raise SettingsExportError("unsupported settings export version")
     if version == EXPORT_VERSION and "alarms" not in payload:
         raise SettingsExportError("settings export alarms must be an object")
     raw_settings = payload.get("settings")
     if not isinstance(raw_settings, dict):
         raise SettingsExportError("settings export does not contain a settings object")
-    raw_alarms = payload.get("alarms") if version == EXPORT_VERSION else payload.get("alarms", {})
+    raw_alarms = (
+        payload.get("alarms")
+        if version == EXPORT_VERSION
+        else payload.get("alarms", {})
+    )
     included_private_settings = normalize_included_private_settings(
         payload.get("included_private_settings", [])
     )
@@ -1518,8 +1768,12 @@ def read_export(path: Path) -> dict[str, Any]:
         ]
     if set(excluded_private_settings).intersection(included_private_settings):
         raise SettingsExportError("settings export private setting metadata conflicts")
-    if set(excluded_private_settings).union(included_private_settings) != set(NON_EXPORTABLE_PRIVATE_SETTINGS):
-        raise SettingsExportError("settings export private setting metadata is incomplete")
+    if set(excluded_private_settings).union(included_private_settings) != set(
+        NON_EXPORTABLE_PRIVATE_SETTINGS
+    ):
+        raise SettingsExportError(
+            "settings export private setting metadata is incomplete"
+        )
     importable_settings = normalize_settings(raw_settings)
     allowed_private_settings = set(included_private_settings)
     for key in NON_EXPORTABLE_PRIVATE_SETTINGS:
@@ -1528,7 +1782,9 @@ def read_export(path: Path) -> dict[str, Any]:
     return {
         "app": APP_ID,
         "version": version,
-        "created_at": _sanitize_text_field(payload.get("created_at", ""), field_name="settings export created_at"),
+        "created_at": _sanitize_text_field(
+            payload.get("created_at", ""), field_name="settings export created_at"
+        ),
         "speed_of_cinnamon_version": _sanitize_text_field(
             payload.get("speed_of_cinnamon_version", ""),
             field_name="settings export speed_of_cinnamon_version",

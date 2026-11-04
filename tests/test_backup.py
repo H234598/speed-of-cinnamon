@@ -25,7 +25,9 @@ class BackupManifestTest(unittest.TestCase):
             mtime_ns=123,
         )
 
-    def _manifest(self, artifact: backup_manifest.BackupArtifact | None = None) -> backup_manifest.BackupManifest:
+    def _manifest(
+        self, artifact: backup_manifest.BackupArtifact | None = None
+    ) -> backup_manifest.BackupManifest:
         return backup_manifest.create_manifest(
             job_id="job-001",
             created_at_utc="2026-08-14T12:00:00Z",
@@ -91,14 +93,23 @@ class BackupManifestTest(unittest.TestCase):
     def test_manifest_roundtrip_is_canonical(self) -> None:
         manifest = self._manifest()
         rendered = backup_manifest.serialize_manifest(manifest)
-        self.assertEqual(backup_manifest.serialize_manifest(backup_manifest.parse_manifest(rendered)), rendered)
+        self.assertEqual(
+            backup_manifest.serialize_manifest(
+                backup_manifest.parse_manifest(rendered)
+            ),
+            rendered,
+        )
         self.assertNotIn(b"/home/", rendered)
         self.assertNotIn(b"secret", rendered)
 
-    def test_manifest_rejects_unknown_version_duplicate_keys_and_non_finite_numbers(self) -> None:
+    def test_manifest_rejects_unknown_version_duplicate_keys_and_non_finite_numbers(
+        self,
+    ) -> None:
         manifest = self._manifest().to_dict()
         manifest["schema_version"] = 99
-        with self.assertRaisesRegex(backup_manifest.BackupManifestError, "schema version"):
+        with self.assertRaisesRegex(
+            backup_manifest.BackupManifestError, "schema version"
+        ):
             backup_manifest.BackupManifest.from_mapping(manifest)
 
         duplicate = b'{"schema_version":1,"schema_version":1}'
@@ -112,10 +123,14 @@ class BackupManifestTest(unittest.TestCase):
             with self.subTest(failure=type(failure).__name__), mock.patch.object(
                 backup_manifest.json, "loads", side_effect=failure
             ):
-                with self.assertRaisesRegex(backup_manifest.BackupManifestError, "manifest JSON is invalid"):
+                with self.assertRaisesRegex(
+                    backup_manifest.BackupManifestError, "manifest JSON is invalid"
+                ):
                     backup_manifest.parse_manifest(b"{}")
 
-    def test_manifest_rejects_wrong_json_field_types_without_leaking_type_errors(self) -> None:
+    def test_manifest_rejects_wrong_json_field_types_without_leaking_type_errors(
+        self,
+    ) -> None:
         document = self._manifest().to_dict()
         document["encryption"]["mode"] = []
         with self.assertRaises(backup_manifest.BackupManifestError):
@@ -140,15 +155,24 @@ class BackupManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(backup_manifest.BackupManifestError, "kind"):
             self._artifact(archive_path="audio/001.flac")
 
-    def test_manifest_accepts_unicode_archive_name_and_rejects_unsafe_names(self) -> None:
+    def test_manifest_accepts_unicode_archive_name_and_rejects_unsafe_names(
+        self,
+    ) -> None:
         artifact = self._artifact(archive_path="transcripts/e\u0301.txt")
         self.assertEqual(artifact.archive_path, "transcripts/\u00e9.txt")
-        for path in ("/transcripts/x", "transcripts/../x", "transcripts/x\\y", "transcripts//x"):
+        for path in (
+            "/transcripts/x",
+            "transcripts/../x",
+            "transcripts/x\\y",
+            "transcripts//x",
+        ):
             with self.subTest(path=path):
                 with self.assertRaises(backup_manifest.BackupManifestError):
                     self._artifact(archive_path=path)
 
-    def test_manifest_rejects_unselected_artifact_and_plaintext_inconsistent_encryption(self) -> None:
+    def test_manifest_rejects_unselected_artifact_and_plaintext_inconsistent_encryption(
+        self,
+    ) -> None:
         with self.assertRaisesRegex(backup_manifest.BackupManifestError, "unselected"):
             backup_manifest.create_manifest(
                 job_id="job-001",
@@ -158,7 +182,9 @@ class BackupManifestTest(unittest.TestCase):
                 selection={"config": True, "transcripts": False, "audio": False},
                 artifacts=(self._artifact(),),
             )
-        with self.assertRaisesRegex(backup_manifest.BackupManifestError, "inconsistent"):
+        with self.assertRaisesRegex(
+            backup_manifest.BackupManifestError, "inconsistent"
+        ):
             backup_manifest.BackupManifest(
                 job_id="job-001",
                 created_at_utc="2026-08-14T12:00:00Z",
@@ -182,7 +208,9 @@ class BackupManifestTest(unittest.TestCase):
             )
             backup_manifest.verify_artifact_source(artifact, source)
             source.write_bytes(b"changed")
-            with self.assertRaisesRegex(backup_manifest.BackupManifestError, "mismatch"):
+            with self.assertRaisesRegex(
+                backup_manifest.BackupManifestError, "mismatch"
+            ):
                 backup_manifest.verify_artifact_source(artifact, source)
 
     def test_hash_rejects_source_changed_during_hash(self) -> None:
@@ -200,20 +228,30 @@ class BackupManifestTest(unittest.TestCase):
                     source.write_bytes(b"changed")
                 return chunk
 
-            with mock.patch.object(backup_manifest.os, "pread", side_effect=mutate_after_read):
-                with self.assertRaisesRegex(backup_manifest.BackupManifestError, "changed"):
+            with mock.patch.object(
+                backup_manifest.os, "pread", side_effect=mutate_after_read
+            ):
+                with self.assertRaisesRegex(
+                    backup_manifest.BackupManifestError, "changed"
+                ):
                     backup_manifest.hash_regular_file(source)
 
     def test_hash_rejects_size_limit_and_manifest_size_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             source = Path(tmp) / "transcript.txt"
             source.write_bytes(b"payload")
-            with self.assertRaisesRegex(backup_manifest.BackupManifestError, "size limit"):
+            with self.assertRaisesRegex(
+                backup_manifest.BackupManifestError, "size limit"
+            ):
                 backup_manifest.hash_regular_file(source, max_bytes=1)
         with self.assertRaisesRegex(backup_manifest.BackupManifestError, "too large"):
-            backup_manifest.parse_manifest(b"{}" + b" " * backup_manifest.MAX_MANIFEST_BYTES)
+            backup_manifest.parse_manifest(
+                b"{}" + b" " * backup_manifest.MAX_MANIFEST_BYTES
+            )
         with self.assertRaisesRegex(backup_manifest.BackupManifestError, "too large"):
-            backup_manifest.parse_manifest("x" * (backup_manifest.MAX_MANIFEST_BYTES + 1))
+            backup_manifest.parse_manifest(
+                "x" * (backup_manifest.MAX_MANIFEST_BYTES + 1)
+            )
 
 
 if __name__ == "__main__":

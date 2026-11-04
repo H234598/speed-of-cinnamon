@@ -13,13 +13,13 @@ name: OSV-Scanner
 
 on:
   pull_request:
-    branches: [ "main" ]
+    branches: ["main"]
   merge_group:
     types: [checks_requested]
   schedule:
-    - cron: '38 18 * * 3'
+    - cron: "38 18 * * 3"
   push:
-    branches: [ "main" ]
+    branches: ["main"]
 
 permissions:
   # Read commit contents

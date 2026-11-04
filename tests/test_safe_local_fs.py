@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,509 @@ def run_helper(*args: str) -> subprocess.CompletedProcess[str]:
 
 
 class SafeLocalFsTest(unittest.TestCase):
+    def _parse_status_cli(
+        self, frame: bytes, child_status: int, *, mode: int = 0o600
+    ) -> subprocess.CompletedProcess[str]:
+        with tempfile.TemporaryDirectory() as tmp:
+            status = Path(tmp) / "status"
+            status.write_bytes(frame)
+            status.chmod(mode)
+            fd = os.open(status, os.O_RDWR | os.O_NOFOLLOW)
+            try:
+                os.lseek(fd, 0, os.SEEK_END)
+                return subprocess.run(
+                    [
+                        sys.executable,
+                        SAFE_LOCAL_FS.__file__,
+                        "parse-status-fd",
+                        "--status-fd",
+                        str(fd),
+                        "--child-exit-status",
+                        str(child_status),
+                    ],
+                    pass_fds=(fd,),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            finally:
+                os.close(fd)
+
+    def test_parse_status_fd_cli_matrix_uses_pread_and_fixed_tokens(self) -> None:
+        cases = [(b"ROOT_OK\n", 0, "OK")]
+        cases += [
+            (f"ROOT_FAIL {code}\n".encode(), status, f"ROOT_FAIL_{code}")
+            for code, status in SAFE_LOCAL_FS.ROOT_EXIT_CODES.items()
+        ]
+        cases += [
+            (f"CHAIN_FAIL {code}\n".encode(), 1, f"CHAIN_FAIL_{code}")
+            for code in SAFE_LOCAL_FS.CHAIN_CODES
+        ]
+        for terminal, child_status, expected in cases:
+            with self.subTest(terminal=terminal, child_status=child_status):
+                result = self._parse_status_cli(
+                    b"STATUS_READY\n" + terminal, child_status
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected + "\n")
+
+    def test_parse_status_fd_cli_rejects_frame_and_exit_mismatches_without_raw_content(
+        self,
+    ) -> None:
+        cases = (
+            (b"", 0, "CORE_FRAME"),
+            (b"STATUS_READY\n", 0, "CORE_FRAME"),
+            (b"STATUS_READY\nROOT_OK\nROOT_OK\n", 0, "CORE_STATUS_MULTIPLE"),
+            (b"STATUS_READY\nROOT_OK\nextra\n", 0, "CORE_STATUS_MULTIPLE"),
+            (b"STATUS_READY\nROOT_OK\n", 1, "CORE_STATUS_OK_NONZERO"),
+            (b"STATUS_READY\nROOT_FAIL ROOT_META\n", 0, "CORE_STATUS_FAIL_ZERO"),
+            (b"STATUS_READY\nROOT_FAIL ROOT_META\n", 71, "CORE_STATUS_ROOT_EXIT"),
+            (b"STATUS_READY\nCHAIN_FAIL OWNER\n", 0, "CORE_STATUS_FAIL_ZERO"),
+            (b"STATUS_READY\nCHAIN_FAIL OWNER\n", 2, "CORE_STATUS_CHAIN_EXIT"),
+            (b"STATUS_READY\nROOT_FAIL SECRET\n", 70, "CORE_FRAME"),
+            (b"STATUS_READY\nROOT_OK\xff\n", 0, "CORE_FRAME"),
+            (b"STATUS_READY\nROOT_OK\n" + b"x" * 110, 0, "CORE_FRAME"),
+        )
+        for frame, child_status, expected in cases:
+            with self.subTest(frame=frame, child_status=child_status):
+                result = self._parse_status_cli(frame, child_status)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout, expected + "\n")
+                self.assertNotIn(b"SECRET", result.stdout.encode())
+
+    def test_parse_status_fd_requires_read_write_regular_owned_single_link_fd(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            status = Path(tmp) / "status"
+            status.write_bytes(b"STATUS_READY\nROOT_OK\n")
+            status.chmod(0o600)
+            fd = os.open(status, os.O_RDONLY | os.O_NOFOLLOW)
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        SAFE_LOCAL_FS.__file__,
+                        "parse-status-fd",
+                        "--status-fd",
+                        str(fd),
+                        "--child-exit-status",
+                        "0",
+                    ],
+                    pass_fds=(fd,),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            finally:
+                os.close(fd)
+        self.assertEqual(result.stdout, "CORE_FD\n")
+
+    def test_uid_map_parser_requires_one_nonzero_root_mapping_without_overlap(
+        self,
+    ) -> None:
+        parse = SAFE_LOCAL_FS._parse_uid_map
+        self.assertEqual(parse("0 1000 1\n1 2000 10\n")[0], (0, 1000, 1))
+        for text in (
+            "",
+            "0 0 1\n",
+            "0 1000 1\n0 2000 1\n",
+            "0 1000 2\n1 2000 1\n",
+            "0 1000 1\n2 1000 1\n",
+            "0 4294967295 2\n",
+            "4294967295 1000 2\n",
+            "4294967296 1000 1\n",
+            "0 1000 4294967296\n",
+            "0 1000 nope\n",
+            "0 1000 0\n",
+        ):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    parse(text)
+
+    def test_root_mount_parser_requires_exact_read_only_root(self) -> None:
+        parse = SAFE_LOCAL_FS._parse_root_mount_read_only
+        valid = "36 25 0:32 / / ro,nosuid - tmpfs tmpfs rw\n37 36 0:1 / /proc ro,nosuid - proc proc rw\n"
+        self.assertTrue(parse(valid, 36))
+        for text in (
+            "36 25 0:32 / / rw,nosuid - tmpfs tmpfs rw\n",
+            "36 25 0:32 / / ro,nosuid - tmpfs tmpfs rw\n36 36 0:1 / / ro - proc proc rw\n",
+            "malformed mountinfo\n",
+        ):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    parse(text, 36)
+
+    def test_root_mount_correlation_requires_one_matching_fd_mount(self) -> None:
+        parse = SAFE_LOCAL_FS._parse_root_mount_read_only
+        one = "36 25 0:32 / / ro - tmpfs tmpfs rw\n"
+        wrong_id = "37 25 0:32 / / ro - tmpfs tmpfs rw\n"
+        overmounted = one + one
+        wrong_point = "36 25 0:32 / /private ro - tmpfs tmpfs rw\n"
+        self.assertTrue(parse(one, 36))
+        for text in (wrong_id, overmounted, wrong_point):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    parse(text, 36)
+
+    def test_fdinfo_mnt_id_is_bounded_unique_and_unsigned(self) -> None:
+        parse = SAFE_LOCAL_FS._parse_fdinfo_mnt_id
+        self.assertEqual(parse("pos:\t0\nmnt_id:\t36\nflags:\t0100000\n"), 36)
+        for text in (
+            "pos:\t0\n",
+            "mnt_id:\t36\nmnt_id:\t37\n",
+            "mnt_id:\t0\n",
+            "mnt_id:\t4294967296\n",
+            "mnt_id:\t-1\n",
+            "mnt_id: 36 extra\n",
+        ):
+            with self.subTest(text=text):
+                with self.assertRaises(ValueError):
+                    parse(text)
+
+    def test_bounded_attestation_reader_handles_short_reads_and_eintr(self) -> None:
+        reads: list[object] = [b"abc", InterruptedError(), b"de", b""]
+
+        def fake_read(_fd: int, _size: int) -> bytes:
+            value = reads.pop(0)
+            if isinstance(value, BaseException):
+                raise value
+            return value
+
+        with mock.patch.object(SAFE_LOCAL_FS.os, "read", side_effect=fake_read):
+            self.assertEqual(SAFE_LOCAL_FS._read_bounded_to_eof(9), b"abcde")
+        self.assertEqual(reads, [])
+
+    def test_bounded_attestation_reader_rejects_overflow_and_missing_eof(self) -> None:
+        with mock.patch.object(
+            SAFE_LOCAL_FS.os,
+            "read",
+            return_value=b"x" * (SAFE_LOCAL_FS._PROC_ATTESTATION_MAX_BYTES + 1),
+        ):
+            with self.assertRaises(OSError):
+                SAFE_LOCAL_FS._read_bounded_to_eof(9)
+
+        calls = 0
+
+        def never_eof(_fd: int, size: int) -> bytes:
+            nonlocal calls
+            calls += 1
+            return b"x" * min(size, 4096)
+
+        with mock.patch.object(SAFE_LOCAL_FS.os, "read", side_effect=never_eof):
+            with self.assertRaises(OSError):
+                SAFE_LOCAL_FS._read_bounded_to_eof(9)
+        self.assertLessEqual(
+            calls, (SAFE_LOCAL_FS._PROC_ATTESTATION_MAX_BYTES // 4096) + 2
+        )
+
+    def test_bounded_attestation_reader_rejects_persistent_eintr(self) -> None:
+        with mock.patch.object(SAFE_LOCAL_FS.os, "read", side_effect=InterruptedError):
+            with self.assertRaises(OSError):
+                SAFE_LOCAL_FS._read_bounded_to_eof(9)
+
+    def test_proc_attestation_decode_error_is_fail_closed(self) -> None:
+        with tempfile.NamedTemporaryFile() as temporary:
+            temporary.write(b"\xff")
+            temporary.flush()
+            with self.assertRaises(UnicodeDecodeError):
+                SAFE_LOCAL_FS._read_proc_attestation(temporary.name)
+
+    def test_root_fd_metadata_change_after_attestation_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "home"
+            target.mkdir()
+            root_before = os.stat("/")
+            root_changed = mock.Mock(
+                st_dev=root_before.st_dev,
+                st_ino=root_before.st_ino,
+                st_mode=root_before.st_mode ^ stat.S_IWUSR,
+                st_uid=root_before.st_uid,
+                st_gid=root_before.st_gid,
+                st_nlink=root_before.st_nlink,
+            )
+            with mock.patch.object(
+                SAFE_LOCAL_FS.os, "fstat", side_effect=(root_before, root_changed)
+            ):
+                with self.assertRaisesRegex(OSError, "root directory changed"):
+                    SAFE_LOCAL_FS._validate_private_dir_chain(target, action="test")
+
+    def test_overflow_uid_root_requires_all_attestations_and_rejects_negatives(
+        self,
+    ) -> None:
+        root_stat = mock.Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=65534)
+        with mock.patch.object(
+            SAFE_LOCAL_FS.os, "geteuid", return_value=0
+        ), mock.patch.object(
+            SAFE_LOCAL_FS,
+            "_read_proc_attestation",
+            side_effect=(
+                "mnt_id:\t36\n",
+                "0 1000 1\n",
+                "36 25 0:32 / / ro - tmpfs tmpfs rw\n",
+            ),
+        ):
+            self.assertTrue(SAFE_LOCAL_FS._root_stat_is_trusted(9, root_stat))
+        for euid, uid_map, mountinfo, mode in (
+            (
+                1000,
+                "0 1000 1\n",
+                "1 25 0:32 / / ro - tmpfs tmpfs rw\n",
+                stat.S_IFDIR | 0o700,
+            ),
+            (0, "0 0 1\n", "1 25 0:32 / / ro - tmpfs tmpfs rw\n", stat.S_IFDIR | 0o700),
+            (
+                0,
+                "0 1000 1\n",
+                "1 25 0:32 / / rw - tmpfs tmpfs rw\n",
+                stat.S_IFDIR | 0o700,
+            ),
+            (
+                0,
+                "0 1000 1\n",
+                "1 25 0:32 / / ro - tmpfs tmpfs rw\n",
+                stat.S_IFDIR | 0o720,
+            ),
+        ):
+            with self.subTest(
+                euid=euid, uid_map=uid_map, mountinfo=mountinfo, mode=mode
+            ):
+                candidate = mock.Mock(st_mode=mode, st_uid=65534)
+                with mock.patch.object(
+                    SAFE_LOCAL_FS.os, "geteuid", return_value=euid
+                ), mock.patch.object(
+                    SAFE_LOCAL_FS,
+                    "_read_proc_attestation",
+                    side_effect=("mnt_id:\t36\n", uid_map, mountinfo),
+                ):
+                    self.assertFalse(SAFE_LOCAL_FS._root_stat_is_trusted(9, candidate))
+
+    def test_root_overflow_attestation_uses_only_fixed_failure_codes(self) -> None:
+        valid_stat = mock.Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=65534)
+        cases = {
+            "ROOT_META": (mock.Mock(st_mode=stat.S_IFDIR | 0o720, st_uid=65534), 0, ()),
+            "ROOT_EUID": (valid_stat, 1000, ()),
+            "ROOT_FDINFO": (valid_stat, 0, (OSError(),)),
+            "ROOT_UID_MAP": (valid_stat, 0, ("mnt_id:\t36\n", "malformed\n")),
+            "ROOT_MOUNT": (
+                valid_stat,
+                0,
+                ("mnt_id:\t36\n", "0 1000 1\n", "malformed\n"),
+            ),
+        }
+        self.assertEqual(SAFE_LOCAL_FS.ROOT_CODES, frozenset(cases))
+        for expected, (candidate, euid, reads) in cases.items():
+            with self.subTest(code=expected), mock.patch.object(
+                SAFE_LOCAL_FS.os, "geteuid", return_value=euid
+            ), mock.patch.object(
+                SAFE_LOCAL_FS, "_read_proc_attestation", side_effect=reads
+            ):
+                self.assertEqual(
+                    SAFE_LOCAL_FS._root_stat_failure_code(9, candidate), expected
+                )
+
+    def test_root_attestation_is_called_once_and_reuses_its_result(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "home"
+            target.mkdir()
+            root_stat = mock.Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=1234)
+            with mock.patch.object(
+                SAFE_LOCAL_FS.os, "fstat", return_value=root_stat
+            ), mock.patch.object(
+                SAFE_LOCAL_FS, "_root_stat_failure_code", return_value=None
+            ) as classify:
+                with self.assertRaisesRegex(OSError, "untrusted owner|ancestor"):
+                    SAFE_LOCAL_FS._validate_private_dir_chain(target, action="test")
+            classify.assert_called_once()
+
+    def test_root_cli_exit_codes_are_fixed(self) -> None:
+        self.assertEqual(
+            SAFE_LOCAL_FS.ROOT_EXIT_CODES,
+            {
+                "ROOT_META": 70,
+                "ROOT_EUID": 71,
+                "ROOT_UID_MAP": 72,
+                "ROOT_FDINFO": 73,
+                "ROOT_MOUNT": 74,
+            },
+        )
+        source = SAFE_LOCAL_FS.__file__
+        self.assertIsNotNone(source)
+        text = Path(source).read_text(encoding="utf-8")
+        self.assertIn("return ROOT_EXIT_CODES[exc.code]", text)
+        parser = mock.Mock()
+        for code, expected in SAFE_LOCAL_FS.ROOT_EXIT_CODES.items():
+            args = mock.Mock(action="test")
+            args.func = mock.Mock(side_effect=SAFE_LOCAL_FS.RootAttestationError(code))
+            parser.parse_args.return_value = args
+            with self.subTest(code=code), mock.patch.object(
+                SAFE_LOCAL_FS, "build_parser", return_value=parser
+            ):
+                self.assertEqual(SAFE_LOCAL_FS.main(), expected)
+
+    def test_assert_private_chain_cli_writes_exact_ok_frame_to_status_fd(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            status = Path(tmp) / "status"
+            status.touch(mode=0o600)
+            fd = os.open(status, os.O_RDWR | os.O_NOFOLLOW)
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        SAFE_LOCAL_FS.__file__,
+                        "assert-private-chain",
+                        "test",
+                        str(Path.home()),
+                        "--status-fd",
+                        str(fd),
+                    ],
+                    pass_fds=(fd,),
+                    capture_output=True,
+                    check=False,
+                )
+            finally:
+                os.close(fd)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(status.read_bytes(), b"STATUS_READY\nROOT_OK\n")
+
+    def test_status_fd_rejects_preexisting_or_invalid_frame_without_writing(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            status = Path(tmp) / "status"
+            status.write_bytes(b"existing")
+            status.chmod(0o600)
+            fd = os.open(status, os.O_RDWR | os.O_NOFOLLOW)
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        SAFE_LOCAL_FS.__file__,
+                        "assert-private-chain",
+                        "test",
+                        str(Path.home()),
+                        "--status-fd",
+                        str(fd),
+                    ],
+                    pass_fds=(fd,),
+                    capture_output=True,
+                    check=False,
+                )
+            finally:
+                os.close(fd)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(status.read_bytes(), b"existing")
+
+    def test_status_frame_write_handles_partial_writes_and_intermittent_eintr(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            status = Path(tmp) / "status"
+            status.touch(mode=0o600)
+            fd = os.open(status, os.O_RDWR | os.O_NOFOLLOW)
+            try:
+                before = os.fstat(fd)
+                real_write = SAFE_LOCAL_FS.os.write
+                calls = 0
+
+                def partial_write(descriptor: int, data: bytes) -> int:
+                    nonlocal calls
+                    calls += 1
+                    if calls in {1, 3}:
+                        raise InterruptedError
+                    return real_write(descriptor, data[:2])
+
+                with mock.patch.object(
+                    SAFE_LOCAL_FS.os, "write", side_effect=partial_write
+                ):
+                    SAFE_LOCAL_FS._write_status_frame(fd, b"ROOT_OK\n", before)
+            finally:
+                os.close(fd)
+            self.assertEqual(status.read_bytes(), b"ROOT_OK\n")
+
+    def test_status_frame_write_fails_closed_after_eight_total_eintr(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            status = Path(tmp) / "status"
+            status.touch(mode=0o600)
+            fd = os.open(status, os.O_RDWR | os.O_NOFOLLOW)
+            try:
+                before = os.fstat(fd)
+                with mock.patch.object(
+                    SAFE_LOCAL_FS.os, "write", side_effect=InterruptedError
+                ):
+                    with self.assertRaisesRegex(OSError, "interrupted too often"):
+                        SAFE_LOCAL_FS._write_status_frame(fd, b"ROOT_OK\n", before)
+            finally:
+                os.close(fd)
+            self.assertEqual(status.read_bytes(), b"")
+
+    def test_status_fd_generic_cli_failure_writes_no_frame(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            status = Path(tmp) / "status"
+            status.touch(mode=0o600)
+            fd = os.open(status, os.O_RDWR | os.O_NOFOLLOW)
+            try:
+                result = subprocess.run(
+                    [
+                        sys.executable,
+                        SAFE_LOCAL_FS.__file__,
+                        "assert-private-chain",
+                        "test",
+                        "relative",
+                        "--status-fd",
+                        str(fd),
+                    ],
+                    pass_fds=(fd,),
+                    capture_output=True,
+                    check=False,
+                )
+            finally:
+                os.close(fd)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertEqual(status.read_bytes(), b"")
+
+    def test_non_root_uid_65534_component_remains_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "home"
+            target.mkdir()
+            real_fstat = SAFE_LOCAL_FS.os.fstat
+            calls = 0
+
+            def fake_fstat(fd: int) -> os.stat_result:
+                nonlocal calls
+                calls += 1
+                result = real_fstat(fd)
+                if calls > 2:
+                    return mock.Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=65534)
+                return result
+
+            with mock.patch.object(SAFE_LOCAL_FS.os, "fstat", side_effect=fake_fstat):
+                with self.assertRaisesRegex(OSError, "untrusted owner"):
+                    SAFE_LOCAL_FS._validate_private_dir_chain(target, action="test")
+
+    def test_non_root_uid_65534_is_rejected_even_when_process_euid_matches(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            target = Path(tmp) / "home"
+            target.mkdir()
+            real_fstat = SAFE_LOCAL_FS.os.fstat
+            calls = 0
+
+            def fake_fstat(fd: int) -> os.stat_result:
+                nonlocal calls
+                calls += 1
+                result = real_fstat(fd)
+                if calls > 2:
+                    return mock.Mock(st_mode=stat.S_IFDIR | 0o700, st_uid=65534)
+                return result
+
+            with mock.patch.object(
+                SAFE_LOCAL_FS.os, "geteuid", return_value=65534
+            ), mock.patch.object(SAFE_LOCAL_FS.os, "fstat", side_effect=fake_fstat):
+                with self.assertRaisesRegex(OSError, "untrusted owner"):
+                    SAFE_LOCAL_FS._validate_private_dir_chain(target, action="test")
+
     def test_close_failures_are_reported_without_masking_primary_error(self) -> None:
         module = SAFE_LOCAL_FS
         with mock.patch.object(module.os, "close", side_effect=OSError("close failed")):
@@ -37,18 +541,24 @@ class SafeLocalFsTest(unittest.TestCase):
 
             primary = RuntimeError("primary failure")
             module._close_fds(123, action="test", primary_error=primary)
-            self.assertIn("test descriptor cleanup failed", getattr(primary, "__notes__", ()))
+            self.assertIn(
+                "test descriptor cleanup failed", getattr(primary, "__notes__", ())
+            )
 
     def test_mkdirs_accepts_concurrent_directory_creation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             target = Path(tmp) / "nested"
             real_mkdir = SAFE_LOCAL_FS.os.mkdir
 
-            def create_then_report_exists(name: str, mode: int, *, dir_fd: int | None = None) -> None:
+            def create_then_report_exists(
+                name: str, mode: int, *, dir_fd: int | None = None
+            ) -> None:
                 real_mkdir(name, mode, dir_fd=dir_fd)
                 raise FileExistsError(name)
 
-            with mock.patch.object(SAFE_LOCAL_FS.os, "mkdir", side_effect=create_then_report_exists):
+            with mock.patch.object(
+                SAFE_LOCAL_FS.os, "mkdir", side_effect=create_then_report_exists
+            ):
                 fd = SAFE_LOCAL_FS._open_dir_chain(target, action="test", create=True)
             self.assertIsNotNone(fd)
             os.close(fd)
@@ -63,7 +573,9 @@ class SafeLocalFsTest(unittest.TestCase):
             real_open = SAFE_LOCAL_FS.os.open
             source_flags: list[int] = []
 
-            def record_source_flags(path: object, flags: int, *args: object, **kwargs: object) -> int:
+            def record_source_flags(
+                path: object, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 if path == source.name:
                     source_flags.append(flags)
                 return real_open(path, flags, *args, **kwargs)
@@ -75,11 +587,15 @@ class SafeLocalFsTest(unittest.TestCase):
                 mode="0644",
                 dst_must_not_exist=False,
             )
-            with mock.patch.object(SAFE_LOCAL_FS.os, "open", side_effect=record_source_flags):
+            with mock.patch.object(
+                SAFE_LOCAL_FS.os, "open", side_effect=record_source_flags
+            ):
                 SAFE_LOCAL_FS.cmd_copy_file(args)
 
             self.assertTrue(source_flags)
-            self.assertTrue(source_flags[0] & getattr(SAFE_LOCAL_FS.os, "O_NONBLOCK", 0))
+            self.assertTrue(
+                source_flags[0] & getattr(SAFE_LOCAL_FS.os, "O_NONBLOCK", 0)
+            )
             self.assertEqual(target.read_text(encoding="utf-8"), "safe\n")
 
     def test_copy_file_enforces_max_bytes_before_activation(self) -> None:
@@ -126,9 +642,15 @@ class SafeLocalFsTest(unittest.TestCase):
             ) -> None:
                 raced_target = Path(f"/proc/self/fd/{directory_fd}") / target_name
                 raced_target.write_text("raced\n", encoding="utf-8")
-                real_no_replace(source_name, target_name, directory_fd=directory_fd, action=action)
+                real_no_replace(
+                    source_name, target_name, directory_fd=directory_fd, action=action
+                )
 
-            with mock.patch.object(SAFE_LOCAL_FS, "_rename_without_replacing", side_effect=create_raced_destination):
+            with mock.patch.object(
+                SAFE_LOCAL_FS,
+                "_rename_without_replacing",
+                side_effect=create_raced_destination,
+            ):
                 with self.assertRaises(FileExistsError):
                     SAFE_LOCAL_FS.cmd_copy_file(args)
 
@@ -158,7 +680,11 @@ class SafeLocalFsTest(unittest.TestCase):
                 expected_source_stat: os.stat_result | None = None,
                 action: str,
             ) -> None:
-                target_fd = target_directory_fd if target_directory_fd is not None else directory_fd
+                target_fd = (
+                    target_directory_fd
+                    if target_directory_fd is not None
+                    else directory_fd
+                )
                 raced_target = Path(f"/proc/self/fd/{target_fd}") / target_name
                 raced_target.write_text("raced\n", encoding="utf-8")
                 real_no_replace(
@@ -170,7 +696,11 @@ class SafeLocalFsTest(unittest.TestCase):
                     action=action,
                 )
 
-            with mock.patch.object(SAFE_LOCAL_FS, "_rename_without_replacing", side_effect=create_raced_destination):
+            with mock.patch.object(
+                SAFE_LOCAL_FS,
+                "_rename_without_replacing",
+                side_effect=create_raced_destination,
+            ):
                 with self.assertRaises(FileExistsError):
                     SAFE_LOCAL_FS.cmd_replace(args)
 
@@ -202,7 +732,11 @@ class SafeLocalFsTest(unittest.TestCase):
                 expected_source_stat: os.stat_result | None = None,
                 action: str,
             ) -> None:
-                target_fd = target_directory_fd if target_directory_fd is not None else directory_fd
+                target_fd = (
+                    target_directory_fd
+                    if target_directory_fd is not None
+                    else directory_fd
+                )
                 raced_target = Path(f"/proc/self/fd/{target_fd}") / target_name
                 raced_target.write_text("raced\n", encoding="utf-8")
                 real_no_replace(
@@ -214,7 +748,11 @@ class SafeLocalFsTest(unittest.TestCase):
                     action=action,
                 )
 
-            with mock.patch.object(SAFE_LOCAL_FS, "_rename_without_replacing", side_effect=create_raced_destination):
+            with mock.patch.object(
+                SAFE_LOCAL_FS,
+                "_rename_without_replacing",
+                side_effect=create_raced_destination,
+            ):
                 with self.assertRaises(FileExistsError):
                     SAFE_LOCAL_FS.cmd_replace(args)
 
@@ -232,7 +770,9 @@ class SafeLocalFsTest(unittest.TestCase):
             real_lstat_at = SAFE_LOCAL_FS._lstat_at
             destination_checks = 0
 
-            def lstat_and_replace_destination(parent_fd: int, name: str) -> os.stat_result | None:
+            def lstat_and_replace_destination(
+                parent_fd: int, name: str
+            ) -> os.stat_result | None:
                 nonlocal destination_checks
                 result = real_lstat_at(parent_fd, name)
                 if name == target.name and result is not None:
@@ -250,7 +790,9 @@ class SafeLocalFsTest(unittest.TestCase):
                 src_kind="file",
                 dst_must_not_exist=False,
             )
-            with mock.patch.object(SAFE_LOCAL_FS, "_lstat_at", side_effect=lstat_and_replace_destination):
+            with mock.patch.object(
+                SAFE_LOCAL_FS, "_lstat_at", side_effect=lstat_and_replace_destination
+            ):
                 with self.assertRaisesRegex(OSError, "destination changed"):
                     SAFE_LOCAL_FS.cmd_replace(args)
 
@@ -307,8 +849,12 @@ class SafeLocalFsTest(unittest.TestCase):
                 with self.assertRaisesRegex(SystemExit, "1"):
                     SAFE_LOCAL_FS.cmd_exchange(args)
 
-            self.assertEqual((source / "payload").read_text(encoding="utf-8"), "target\n")
-            self.assertEqual((raced_target / "payload").read_text(encoding="utf-8"), "source\n")
+            self.assertEqual(
+                (source / "payload").read_text(encoding="utf-8"), "target\n"
+            )
+            self.assertEqual(
+                (raced_target / "payload").read_text(encoding="utf-8"), "source\n"
+            )
 
     def test_remove_leaf_unlinks_symlink_leaf_without_following_it(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -325,7 +871,9 @@ class SafeLocalFsTest(unittest.TestCase):
             self.assertFalse(link.exists())
             self.assertTrue(target.exists())
 
-    def test_remove_leaf_unlinks_regular_hardlink_without_touching_sibling(self) -> None:
+    def test_remove_leaf_unlinks_regular_hardlink_without_touching_sibling(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             sibling = root / "sibling.txt"
@@ -413,7 +961,9 @@ module.cmd_rmdir(module.argparse.Namespace(
                 real_rmdir(name, dir_fd=dir_fd)
 
             with mock.patch.object(SAFE_LOCAL_FS.os, "rmdir", side_effect=fail_final):
-                with self.assertRaisesRegex(OSError, "stale cleanup residue remains at"):
+                with self.assertRaisesRegex(
+                    OSError, "stale cleanup residue remains at"
+                ):
                     SAFE_LOCAL_FS.cmd_remove(args)
 
             self.assertFalse(target.exists())
@@ -462,7 +1012,9 @@ module.cmd_rmdir(module.argparse.Namespace(
             unsafe.chmod(0o777)
             target = unsafe / "not-created" / "yet"
 
-            result = run_helper("assert-private-chain", "test", str(target), "--allow-missing")
+            result = run_helper(
+                "assert-private-chain", "test", str(target), "--allow-missing"
+            )
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("writable", result.stderr)
@@ -472,7 +1024,9 @@ module.cmd_rmdir(module.argparse.Namespace(
             target = Path(tmp) / "home"
             target.mkdir()
             current_euid = os.geteuid()
-            with mock.patch.object(SAFE_LOCAL_FS.os, "geteuid", return_value=current_euid + 1):
+            with mock.patch.object(
+                SAFE_LOCAL_FS.os, "geteuid", return_value=current_euid + 1
+            ):
                 with self.assertRaisesRegex(OSError, "untrusted owner|not owned"):
                     SAFE_LOCAL_FS._validate_private_dir_chain(target, action="test")
 
@@ -580,8 +1134,12 @@ module.cmd_rmdir(module.argparse.Namespace(
                 return result
 
             try:
-                with mock.patch.object(module, "_lstat_at", side_effect=replace_cleanup_entry):
-                    module._cleanup_temporary_file(parent_fd, temporary.name, expected_stat, action="test")
+                with mock.patch.object(
+                    module, "_lstat_at", side_effect=replace_cleanup_entry
+                ):
+                    module._cleanup_temporary_file(
+                        parent_fd, temporary.name, expected_stat, action="test"
+                    )
             finally:
                 os.close(parent_fd)
 
@@ -598,7 +1156,9 @@ module.cmd_rmdir(module.argparse.Namespace(
             root.chmod(0o777)
             parent_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
             try:
-                module._cleanup_temporary_file(parent_fd, temporary.name, expected_stat, action="test")
+                module._cleanup_temporary_file(
+                    parent_fd, temporary.name, expected_stat, action="test"
+                )
             finally:
                 os.close(parent_fd)
 
@@ -642,7 +1202,9 @@ module.cmd_rmdir(module.argparse.Namespace(
             real_lstat_at = module._lstat_at
             injected = False
 
-            def lstat_and_create_target(parent_fd: int, name: str) -> os.stat_result | None:
+            def lstat_and_create_target(
+                parent_fd: int, name: str
+            ) -> os.stat_result | None:
                 nonlocal injected
                 result = real_lstat_at(parent_fd, name)
                 if name == target.name and result is None and not injected:
@@ -650,7 +1212,9 @@ module.cmd_rmdir(module.argparse.Namespace(
                     target.write_bytes(b"raced target\n")
                 return result
 
-            with mock.patch.object(module, "_lstat_at", side_effect=lstat_and_create_target):
+            with mock.patch.object(
+                module, "_lstat_at", side_effect=lstat_and_create_target
+            ):
                 with self.assertRaisesRegex(OSError, "destination changed"):
                     module._write_bytes_atomic(target, b"new\n", 0o600, action="test")
 
@@ -670,7 +1234,9 @@ module.cmd_rmdir(module.argparse.Namespace(
             except OSError as exc:
                 self.skipTest(f"fifo unavailable: {exc}")
 
-            result = run_helper("install-tree", "test", str(source), str(target), "test tree")
+            result = run_helper(
+                "install-tree", "test", str(source), str(target), "test tree"
+            )
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("unsupported file type", result.stderr)
@@ -700,11 +1266,15 @@ module.cmd_rmdir(module.argparse.Namespace(
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((target / "keep.txt").read_text(encoding="utf-8"), "keep\n")
+            self.assertEqual(
+                (target / "keep.txt").read_text(encoding="utf-8"), "keep\n"
+            )
             self.assertFalse((target / "__pycache__").exists())
             self.assertFalse((target / ".coverage").exists())
 
-    def test_phase_set_remains_bound_to_pinned_workspace_fd_on_path_substitution(self) -> None:
+    def test_phase_set_remains_bound_to_pinned_workspace_fd_on_path_substitution(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             workspace = root / "workspace"
@@ -724,10 +1294,14 @@ module.cmd_rmdir(module.argparse.Namespace(
                 workspace=str(workspace),
                 phase="pre-activation",
             )
-            with mock.patch.object(SAFE_LOCAL_FS, "_open_private_directory", side_effect=open_then_replace):
+            with mock.patch.object(
+                SAFE_LOCAL_FS, "_open_private_directory", side_effect=open_then_replace
+            ):
                 SAFE_LOCAL_FS.cmd_phase_set(args)
 
-            self.assertEqual((original / ".install-phase").read_bytes(), b"pre-activation\n")
+            self.assertEqual(
+                (original / ".install-phase").read_bytes(), b"pre-activation\n"
+            )
             self.assertFalse((replacement / ".install-phase").exists())
 
     def test_install_tree_rejects_existing_target_unchanged(self) -> None:

@@ -87,19 +87,29 @@ def _project_version() -> str:
 
 def validate() -> list[str]:
     version = _project_version()
-    metadata = _load_json(_read_text(ROOT / "files/speed-of-cinnamon@H234598/metadata.json"))
-    schema = _load_json(_read_text(ROOT / "files/speed-of-cinnamon@H234598/settings-schema.json"))
+    metadata = _load_json(
+        _read_text(ROOT / "files/speed-of-cinnamon@H234598/metadata.json")
+    )
+    schema = _load_json(
+        _read_text(ROOT / "files/speed-of-cinnamon@H234598/settings-schema.json")
+    )
     errors: list[str] = []
     for spec_path in RPM_SPEC_PATHS:
-        spec_version_match = re.search(r"^Version:\s*([^\s]+)\s*$", _read_text(spec_path), flags=re.MULTILINE)
+        spec_version_match = re.search(
+            r"^Version:\s*([^\s]+)\s*$", _read_text(spec_path), flags=re.MULTILINE
+        )
         if spec_version_match is None or spec_version_match.group(1) != version:
             errors.append(f"{spec_path.name} version does not match pyproject.toml")
     if metadata.get("version") != version:
         errors.append("Cinnamon metadata version does not match pyproject.toml")
     if metadata.get("comments") != f"Version: {version}":
-        errors.append("Cinnamon metadata comments version does not match pyproject.toml")
+        errors.append(
+            "Cinnamon metadata comments version does not match pyproject.toml"
+        )
     about_description = schema.get("about-version", {}).get("description")
-    if not isinstance(about_description, str) or not about_description.startswith(f"Version: {version}\n"):
+    if not isinstance(about_description, str) or not about_description.startswith(
+        f"Version: {version}\n"
+    ):
         errors.append("settings schema about-version does not match pyproject.toml")
     for manpage_path in MANPAGE_PATHS:
         manpage = _read_text(manpage_path)

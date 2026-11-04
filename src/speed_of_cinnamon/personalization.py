@@ -98,9 +98,13 @@ def normalize_context(value: str = "") -> str:
     except UnicodeEncodeError as exc:
         raise ValueError("personal context contains invalid UTF-8") from exc
     if len(normalized) > MAX_PERSONAL_CONTEXT_CHARS:
-        raise ValueError(f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} characters)")
+        raise ValueError(
+            f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} characters)"
+        )
     if len(normalized_utf8) > MAX_PERSONAL_CONTEXT_CHARS:
-        raise ValueError(f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} bytes)")
+        raise ValueError(
+            f"personal context is too large (max {MAX_PERSONAL_CONTEXT_CHARS} bytes)"
+        )
     return normalized
 
 
@@ -122,7 +126,9 @@ def vocabulary_terms(value: str = "") -> list[str]:
     except UnicodeEncodeError as exc:
         raise ValueError("vocabulary contains invalid UTF-8") from exc
     if len(raw) > MAX_VOCABULARY_CHARS:
-        raise ValueError(f"vocabulary is too large (max {MAX_VOCABULARY_CHARS} characters)")
+        raise ValueError(
+            f"vocabulary is too large (max {MAX_VOCABULARY_CHARS} characters)"
+        )
     if len(raw_utf8) > MAX_VOCABULARY_CHARS:
         raise ValueError(f"vocabulary is too large (max {MAX_VOCABULARY_CHARS} bytes)")
     terms: list[str] = []
@@ -133,7 +139,9 @@ def vocabulary_terms(value: str = "") -> list[str]:
         if term:
             terms.append(term)
             if len(terms) > MAX_VOCABULARY_TERMS:
-                raise ValueError(f"vocabulary has too many terms (max {MAX_VOCABULARY_TERMS})")
+                raise ValueError(
+                    f"vocabulary has too many terms (max {MAX_VOCABULARY_TERMS})"
+                )
     return terms
 
 
@@ -171,7 +179,9 @@ def _render_personalization_prompt(context: str, terms: list[str]) -> str:
     return prompt
 
 
-def build_personalization_prompt(personal_context: str = "", vocabulary: str = "") -> str:
+def build_personalization_prompt(
+    personal_context: str = "", vocabulary: str = ""
+) -> str:
     if not isinstance(personal_context, str) or isinstance(personal_context, bool):
         raise ValueError("personal context must be text")
     if not isinstance(vocabulary, str) or isinstance(vocabulary, bool):
@@ -182,7 +192,9 @@ def build_personalization_prompt(personal_context: str = "", vocabulary: str = "
     )
 
 
-def command_environment(personal_context: str = "", vocabulary: str = "") -> dict[str, str]:
+def command_environment(
+    personal_context: str = "", vocabulary: str = ""
+) -> dict[str, str]:
     context = normalize_context(personal_context)
     terms = vocabulary_terms(vocabulary)
     prompt = _render_personalization_prompt(context, terms)
@@ -221,10 +233,17 @@ def _contains_null_byte(value: str) -> bool:
 def _contains_forbidden_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError("value must be text")
-    return any((ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F) and char != "\n" for char in value)
+    return any(
+        (ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F)
+        and char != "\n"
+        for char in value
+    )
 
 
 def _contains_environment_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError("value must be text")
-    return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
+    return any(
+        ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F
+        for char in value
+    )

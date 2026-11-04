@@ -85,7 +85,7 @@ class BuildSnapStaticTest(unittest.TestCase):
 
     def _scan_program(self) -> str:
         source = BUILD_SNAP.read_text(encoding="utf-8")
-        marker = 'python3 - \\\n    "${SNAP_SCAN_MAX_ENTRIES}"'
+        marker = 'python3 - \\\n\t\t"${SNAP_SCAN_MAX_ENTRIES}"'
         marker_start = source.index(marker)
         start = source.index("<<'PY'\n", marker_start) + len("<<'PY'\n")
         end = source.index('\nPY\n)"; then', start)
@@ -94,12 +94,12 @@ class BuildSnapStaticTest(unittest.TestCase):
     def _sweep_program(self) -> str:
         source = BUILD_SNAP.read_text(encoding="utf-8")
         marker = (
-            'if ! timeout --signal=TERM --kill-after='
+            "if ! timeout --signal=TERM --kill-after="
             '"${SNAP_STARTUP_SWEEP_KILL_AFTER_SECONDS}s"'
         )
         marker_start = source.index(marker)
-        start = source.index("<<'PY'\n", marker_start) + len("<<'PY'\n")
-        end = source.index("\nPY\nthen\n", start)
+        start = source.index("<<'PY'; then\n", marker_start) + len("<<'PY'; then\n")
+        end = source.index("\nPY\n\tprintf", start)
         return source[start:end]
 
     def _run_scan(
@@ -279,13 +279,15 @@ class BuildSnapStaticTest(unittest.TestCase):
         end = source.index("\n}\n\nrepo_tmp_root=", start) + 2
         return source[start:end]
 
-    def _run_tmp_validation(self, program: str, root: Path) -> subprocess.CompletedProcess[str]:
+    def _run_tmp_validation(
+        self, program: str, root: Path
+    ) -> subprocess.CompletedProcess[str]:
         script = (
             "set -u\n"
             'repo_dir="$1"\n'
             'repo_tmp_root=""\n'
             + program
-            + "\nif validate_snap_tmp_root \"$2\"; then exit 0; else exit 1; fi\n"
+            + '\nif validate_snap_tmp_root "$2"; then exit 0; else exit 1; fi\n'
         )
         return subprocess.run(
             ["bash", "-c", script, "tmp", str(REPO_ROOT), str(root)],
@@ -318,7 +320,7 @@ class BuildSnapStaticTest(unittest.TestCase):
         script = (
             "set -euo pipefail\n"
             'safe_fs_cmd=(bash "$1")\n'
-            'SNAP_CLEANUP_TIMEOUT_SECONDS=30\n'
+            "SNAP_CLEANUP_TIMEOUT_SECONDS=30\n"
             'snap_workspace=""\n'
             'snap_workspace_identity=""\n'
             'dist_dir="$2"\n'
@@ -353,7 +355,7 @@ class BuildSnapStaticTest(unittest.TestCase):
         validation_end = source.index("\n}\n\nrepo_tmp_root=", validation_start) + 2
         private_start = source.index('snap_tmp_parent="${repo_tmp_root}/')
         sweep_start = source.index(
-            'if ! timeout --signal=TERM --kill-after='
+            "if ! timeout --signal=TERM --kill-after="
             '"${SNAP_STARTUP_SWEEP_KILL_AFTER_SECONDS}s"',
             private_start,
         )
@@ -388,7 +390,7 @@ class BuildSnapStaticTest(unittest.TestCase):
             + self._cleanup_program()
             + "\ntrap cleanup_tmpdir EXIT\n"
             + source[identity_start:identity_end]
-            + '\n'
+            + "\n"
             + 'snap_filename="published.snap"\n'
             + 'output_path="${dist_dir}/${snap_filename}"\n'
             + 'snap_stage_path="${dist_dir}/.${snap_filename}.staging-cccccccccccccccccccccccccccccccc"\n'
@@ -481,6 +483,7 @@ class BuildSnapStaticTest(unittest.TestCase):
         cleanup_timeout: int = 30,
     ) -> subprocess.CompletedProcess[str]:
         script = (
+            "export LC_ALL=C\n"
             "set -u\n"
             'safe_fs_cmd=(bash "$1")\n'
             f"SNAP_CLEANUP_TIMEOUT_SECONDS={cleanup_timeout}\n"
@@ -535,7 +538,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             workspace.mkdir()
             workspace_dist.mkdir()
             for suffix in ("one", "two", "three"):
-                (workspace / f"speed-of-cinnamon_1.2.3_{suffix}.snap").write_bytes(b"snap\n")
+                (workspace / f"speed-of-cinnamon_1.2.3_{suffix}.snap").write_bytes(
+                    b"snap\n"
+                )
 
             result = self._run_scan(program, workspace, workspace_dist)
 
@@ -654,14 +659,18 @@ class BuildSnapStaticTest(unittest.TestCase):
             recent_parent = root / "recent-tombstone-parent"
             recent_parent.mkdir()
             recent_parent.chmod(0o700)
-            recent = recent_parent / f".speed-of-cinnamon-snap-tree-dddddd.final-{'d' * 32}"
+            recent = (
+                recent_parent / f".speed-of-cinnamon-snap-tree-dddddd.final-{'d' * 32}"
+            )
             recent.mkdir()
             recent.chmod(0o700)
 
             result = self._run_sweep(program, recent_parent, safe_fs)
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("recent snap temporary workspace requires recovery", result.stderr)
+            self.assertIn(
+                "recent snap temporary workspace requires recovery", result.stderr
+            )
             self.assertTrue(recent.exists())
 
     def test_snap_startup_sweep_eintr_retry_obeys_deadline(self) -> None:
@@ -695,9 +704,13 @@ class BuildSnapStaticTest(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("snap temporary workspace sweep deadline exceeded", result.stderr)
+            self.assertIn(
+                "snap temporary workspace sweep deadline exceeded", result.stderr
+            )
 
-    def test_snap_startup_sweep_rejects_recent_artifact_and_stale_overflow(self) -> None:
+    def test_snap_startup_sweep_rejects_recent_artifact_and_stale_overflow(
+        self,
+    ) -> None:
         program = self._sweep_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -712,7 +725,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             result = self._run_sweep(program, recent_parent, safe_fs)
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("recent snap temporary workspace requires recovery", result.stderr)
+            self.assertIn(
+                "recent snap temporary workspace requires recovery", result.stderr
+            )
             self.assertTrue(recent.exists())
 
             overflow_parent = root / "overflow-parent"
@@ -735,7 +750,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("sweep exceeds max 2", result.stderr)
 
-    def test_snap_tmp_root_accepts_private_and_rejects_foreign_writable_shape(self) -> None:
+    def test_snap_tmp_root_accepts_private_and_rejects_foreign_writable_shape(
+        self,
+    ) -> None:
         program = self._tmp_validation_program()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -745,7 +762,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             root.chmod(0o777)
             rejected = self._run_tmp_validation(program, root)
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("euid-owned private or root-owned sticky standard temp", rejected.stderr)
+            self.assertIn(
+                "euid-owned private or root-owned sticky standard temp", rejected.stderr
+            )
 
     def test_snap_publish_kill_at_each_publish_phase_preserves_recovery(self) -> None:
         program = self._finalizer_program()
@@ -899,7 +918,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             self.assertIn("identity-verified previous recovery path", result.stderr)
             self.assertIn(str(recovery), result.stderr)
 
-    def test_snap_next_start_refuses_unresolved_recovery_without_deleting_it(self) -> None:
+    def test_snap_next_start_refuses_unresolved_recovery_without_deleting_it(
+        self,
+    ) -> None:
         program = self._finalizer_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -984,7 +1005,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(final.read_bytes(), b"new\n")
             self.assertFalse(recovery.exists())
-            self.assertIn("no identity-verified previous recovery path available", result.stderr)
+            self.assertIn(
+                "no identity-verified previous recovery path available", result.stderr
+            )
             self.assertNotIn(str(recovery), result.stderr)
 
     def test_snap_upgrade_exchange_preserves_previous_output(self) -> None:
@@ -1009,7 +1032,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             self.assertEqual(previous.read_bytes(), b"old\n")
             self.assertFalse(self._recovery_path(final).exists())
 
-    def test_snap_previous_cleanup_error_keeps_active_output_and_reports_verified_path(self) -> None:
+    def test_snap_previous_cleanup_error_keeps_active_output_and_reports_verified_path(
+        self,
+    ) -> None:
         program = self._finalizer_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -1053,9 +1078,7 @@ class BuildSnapStaticTest(unittest.TestCase):
             stage.write_bytes(b"published\n")
             stub = root / "cleanup-failure.sh"
             stub.write_text(
-                "#!/usr/bin/env bash\n"
-                "printf 'cleanup invoked\\n' >&2\n"
-                "exit 42\n",
+                "#!/usr/bin/env bash\n" "printf 'cleanup invoked\\n' >&2\n" "exit 42\n",
                 encoding="utf-8",
             )
 
@@ -1080,9 +1103,7 @@ class BuildSnapStaticTest(unittest.TestCase):
             stage.write_bytes(b"staged\n")
             stub = root / "cleanup-failure.sh"
             stub.write_text(
-                "#!/usr/bin/env bash\n"
-                "printf 'cleanup invoked\\n' >&2\n"
-                "exit 42\n",
+                "#!/usr/bin/env bash\n" "printf 'cleanup invoked\\n' >&2\n" "exit 42\n",
                 encoding="utf-8",
             )
 
@@ -1141,14 +1162,21 @@ class BuildSnapStaticTest(unittest.TestCase):
                     self.assertTrue(tmp_parent.is_dir())
                     self.assertEqual(list(tmp_parent.iterdir()), [])
                     if activation_mode == "success":
-                        self.assertEqual((dist / "published.snap").read_bytes(), b"harness-snap\n")
+                        self.assertEqual(
+                            (dist / "published.snap").read_bytes(), b"harness-snap\n"
+                        )
                         self.assertFalse(
-                            (dist / ".published.snap.staging-cccccccccccccccccccccccccccccccc").exists()
+                            (
+                                dist
+                                / ".published.snap.staging-cccccccccccccccccccccccccccccccc"
+                            ).exists()
                         )
                     else:
                         self.assertFalse((dist / "published.snap").exists())
 
-    def test_snap_finalizer_watchdog_keeps_term_and_kill_inside_total_budget(self) -> None:
+    def test_snap_finalizer_watchdog_keeps_term_and_kill_inside_total_budget(
+        self,
+    ) -> None:
         source = BUILD_SNAP.read_text(encoding="utf-8")
         activation_start = source.index("activate_snap_output() {")
         activation_end = source.index("\n}\n\nfor tool in", activation_start) + 2
@@ -1195,8 +1223,7 @@ class BuildSnapStaticTest(unittest.TestCase):
             "time.monotonic = _test_monotonic\n"
             "def _eintr_flock(fd, operation):\n"
             "    raise InterruptedError\n"
-            "fcntl.flock = _eintr_flock\n"
-            + marker,
+            "fcntl.flock = _eintr_flock\n" + marker,
             1,
         )
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
@@ -1224,7 +1251,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             self.assertIn("snap finalization lock timed out", result.stderr)
             self.assertLess(elapsed, 1.5, result.stderr)
 
-    def test_snap_finalizer_uses_one_absolute_deadline_for_multiple_safe_fs_calls(self) -> None:
+    def test_snap_finalizer_uses_one_absolute_deadline_for_multiple_safe_fs_calls(
+        self,
+    ) -> None:
         program = self._finalizer_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -1237,7 +1266,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             stage.write_bytes(b"new\n")
             final.write_bytes(b"old\n")
             delayed_safe_fs = root / "safe-fs-delayed.py"
-            self._write_delayed_safe_fs_wrapper(delayed_safe_fs, real=safe_fs, delay=0.6)
+            self._write_delayed_safe_fs_wrapper(
+                delayed_safe_fs, real=safe_fs, delay=0.6
+            )
 
             started = time.monotonic()
             result = self._run_finalizer(
@@ -1263,8 +1294,7 @@ class BuildSnapStaticTest(unittest.TestCase):
             "def _test_monotonic():\n"
             "    _clock[0] += 1\n"
             "    return 0.0 if _clock[0] <= 3 else 2.0\n"
-            "time.monotonic = _test_monotonic\n"
-            + marker,
+            "time.monotonic = _test_monotonic\n" + marker,
             1,
         )
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
@@ -1293,7 +1323,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             )
             self.assertEqual(final.read_bytes(), b"new\n")
 
-    def test_snap_exit_cleanup_reports_failure_and_preserves_primary_status(self) -> None:
+    def test_snap_exit_cleanup_reports_failure_and_preserves_primary_status(
+        self,
+    ) -> None:
         cleanup_function = self._cleanup_program()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1319,7 +1351,9 @@ class BuildSnapStaticTest(unittest.TestCase):
                 self.assertEqual(result.returncode, expected_status, result.stderr)
                 self.assertIn("stub cleanup failure", result.stderr)
                 if primary_status == 0:
-                    self.assertIn("final output status changed to failure", result.stderr)
+                    self.assertIn(
+                        "final output status changed to failure", result.stderr
+                    )
                 else:
                     self.assertIn("preserving primary exit status: 7", result.stderr)
 
@@ -1329,9 +1363,7 @@ class BuildSnapStaticTest(unittest.TestCase):
             root = Path(tmp)
             delayed_safe_fs = root / "safe-fs-delayed.py"
             delayed_safe_fs.write_text(
-                "#!/usr/bin/env bash\n"
-                "sleep 0.6\n"
-                "exit 0\n",
+                "#!/usr/bin/env bash\n" "sleep 0.6\n" "exit 0\n",
                 encoding="utf-8",
             )
             started = time.monotonic()
@@ -1368,12 +1400,16 @@ class BuildSnapStaticTest(unittest.TestCase):
             lock = dist / ".finalize.lock"
             lock.write_text("lock\n", encoding="utf-8")
 
-            result = self._run_finalizer(program, safe_fs, lock, root / "stage", dist / "output")
+            result = self._run_finalizer(
+                program, safe_fs, lock, root / "stage", dist / "output"
+            )
 
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("snap finalization lock parent path changed", result.stderr)
 
-    def test_snap_finalization_directory_fd_flock_survives_lockfile_rename_recreate(self) -> None:
+    def test_snap_finalization_directory_fd_flock_survives_lockfile_rename_recreate(
+        self,
+    ) -> None:
         program = self._finalizer_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -1534,12 +1570,19 @@ class BuildSnapStaticTest(unittest.TestCase):
             source,
         )
 
-    def test_build_snap_does_not_delete_unrelated_repository_root_artifacts(self) -> None:
+    def test_build_snap_does_not_delete_unrelated_repository_root_artifacts(
+        self,
+    ) -> None:
         source = BUILD_SNAP.read_text(encoding="utf-8")
 
         self.assertNotIn("cleanup_existing_root_snaps", source)
-        self.assertNotIn('find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap"', source)
-        self.assertNotIn('cleanup_existing_dist_snaps "$(basename "${output_path}")"', source)
+        self.assertNotIn(
+            'find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap"',
+            source,
+        )
+        self.assertNotIn(
+            'cleanup_existing_dist_snaps "$(basename "${output_path}")"', source
+        )
 
     def test_build_snap_cleanup_requires_expected_identity(self) -> None:
         source = BUILD_SNAP.read_text(encoding="utf-8")
@@ -1579,18 +1622,20 @@ class BuildSnapStaticTest(unittest.TestCase):
             'command -v -- lxc >/dev/null 2>&1 && timeout --signal=TERM --kill-after=5s "${LXD_PROBE_TIMEOUT_SECONDS}s" lxc info >/dev/null 2>&1',
             source,
         )
-        self.assertIn('snapcraft_args=(--use-lxd)', source)
-        self.assertIn('snapcraft_args=(--destructive-mode)', source)
+        self.assertIn("snapcraft_args=(--use-lxd)", source)
+        self.assertIn("snapcraft_args=(--destructive-mode)", source)
         self.assertIn(
-            'SNAPCRAFT_MODE=destructive is supported only on Ubuntu',
+            "SNAPCRAFT_MODE=destructive is supported only on Ubuntu",
             source,
         )
-        self.assertNotIn('snapcraft prime --destructive-mode', source)
-        self.assertNotIn('snapcraft pack --destructive-mode prime', source)
+        self.assertNotIn("snapcraft prime --destructive-mode", source)
+        self.assertNotIn("snapcraft pack --destructive-mode prime", source)
         self.assertIn('snapcraft pack "${snapcraft_args[@]}"', source)
         self.assertNotIn('snapcraft "${snapcraft_args[@]}" pack', source)
 
-    def test_snap_activation_requires_original_stage_and_empty_destination(self) -> None:
+    def test_snap_activation_requires_original_stage_and_empty_destination(
+        self,
+    ) -> None:
         program = self._finalizer_program()
 
         self.assertIn('"exchange",', program)
@@ -1615,7 +1660,7 @@ class BuildSnapStaticTest(unittest.TestCase):
         start = source.index(
             'if ! "${safe_fs_cmd[@]}" install-tree build-snap "${repo_dir}/snap"'
         )
-        end = source.index('\nif ! (\n  cd "${snap_workspace}"', start)
+        end = source.index('\nif ! (\n\tcd "${snap_workspace}"', start)
         return source[start:end]
 
     def _write_snap_source_fixture(self, repo: Path) -> None:
@@ -1654,12 +1699,12 @@ class BuildSnapStaticTest(unittest.TestCase):
             "repo_dir=$1\n"
             "snap_workspace=$2\n"
             "safe_fs=$3\n"
-            "safe_fs_cmd=(python3 \"${safe_fs}\")\n"
-            "snapcraft_file=\"${repo_dir}/snap/snapcraft.yaml\"\n"
-            "snapcraft_file_rendered=\"${snap_workspace}/snap/snapcraft.yaml\"\n"
-            "snap_source=\"${snap_workspace}/.snap-source\"\n"
-            "snap_source_staging=\"${snap_workspace}/.snap-source.staging\"\n"
-            "snap_source_staging_identity=\"\"\n"
+            'safe_fs_cmd=(python3 "${safe_fs}")\n'
+            'snapcraft_file="${repo_dir}/snap/snapcraft.yaml"\n'
+            'snapcraft_file_rendered="${snap_workspace}/snap/snapcraft.yaml"\n'
+            'snap_source="${snap_workspace}/.snap-source"\n'
+            'snap_source_staging="${snap_workspace}/.snap-source.staging"\n'
+            'snap_source_staging_identity=""\n'
             "version=1.2.3\n"
             "snapcraft_base=core22\n"
             f"{self._snap_source_staging_program()}\n"
@@ -1685,13 +1730,17 @@ class BuildSnapStaticTest(unittest.TestCase):
         manifest = SNAPCRAFT_YAML.read_text(encoding="utf-8")
         source = BUILD_SNAP.read_text(encoding="utf-8")
         population_start = source.index('snap_source="${snap_workspace}/.snap-source"')
-        population_end = source.index('\nif ! (\n  cd "${snap_workspace}"', population_start)
+        population_end = source.index(
+            '\nif ! (\n\tcd "${snap_workspace}"', population_start
+        )
         population = source[population_start:population_end]
 
         self.assertIn("    source: .snap-source\n", manifest)
         self.assertNotIn("    source: .\n", manifest)
         self.assertFalse((REPO_ROOT / ".snap-source").exists())
-        self.assertIn('snap_source_staging="${snap_workspace}/.snap-source.staging"', source)
+        self.assertIn(
+            'snap_source_staging="${snap_workspace}/.snap-source.staging"', source
+        )
         self.assertIn(
             'install-tree build-snap "${repo_dir}/src" "${snap_source_staging}/src"',
             population,
@@ -1712,17 +1761,27 @@ class BuildSnapStaticTest(unittest.TestCase):
             '"${snap_source_staging}" "${snap_source}"',
             population,
         )
-        self.assertIn('--dst-must-not-exist', population)
-        self.assertIn('--expected-src-identity "${snap_source_staging_identity}"', population)
+        self.assertIn("--dst-must-not-exist", population)
+        self.assertIn(
+            '--expected-src-identity "${snap_source_staging_identity}"', population
+        )
         self.assertNotIn('"${repo_dir}" "${snap_source_staging}"', population)
-        for forbidden in ("/.git/", "errors.log", "transcript", "recording", '"${repo_dir}/sys"'):
+        for forbidden in (
+            "/.git/",
+            "errors.log",
+            "transcript",
+            "recording",
+            '"${repo_dir}/sys"',
+        ):
             self.assertNotIn(forbidden, population)
         self.assertLess(
             source.index('"${snap_source_staging}" "${snap_source}"'),
             source.index('snapcraft pack "${snapcraft_args[@]}"'),
         )
 
-    def test_snap_source_staging_excludes_foreign_files_and_rejects_symlink(self) -> None:
+    def test_snap_source_staging_excludes_foreign_files_and_rejects_symlink(
+        self,
+    ) -> None:
         self._require_safe_local_fs_root_identity()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1740,8 +1799,7 @@ class BuildSnapStaticTest(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(current.st_mode), 0o700)
             self.assertFalse((workspace / ".snap-source.staging").exists())
             entries = {
-                path.relative_to(staged).as_posix()
-                for path in staged.rglob("*")
+                path.relative_to(staged).as_posix() for path in staged.rglob("*")
             }
             self.assertEqual(
                 entries,
@@ -1762,7 +1820,9 @@ class BuildSnapStaticTest(unittest.TestCase):
                     "src/speed_of_cinnamon/__init__.py",
                 },
             )
-            rendered_manifest = (staged / "snap/snapcraft.yaml").read_text(encoding="utf-8")
+            rendered_manifest = (staged / "snap/snapcraft.yaml").read_text(
+                encoding="utf-8"
+            )
             self.assertIn('version: "1.2.3"\n', rendered_manifest)
             self.assertIn("base: core22\n", rendered_manifest)
 
@@ -1776,7 +1836,9 @@ class BuildSnapStaticTest(unittest.TestCase):
             rejected = self._run_snap_source_staging(bad_repo, bad_workspace)
 
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("refusing to install unsafe Python source tree", rejected.stderr)
+            self.assertIn(
+                "refusing to install unsafe Python source tree", rejected.stderr
+            )
             self.assertIn("outside-link", rejected.stderr)
             self.assertFalse((bad_workspace / ".snap-source").exists())
 

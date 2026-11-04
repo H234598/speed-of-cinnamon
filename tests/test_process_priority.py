@@ -1,7 +1,6 @@
 import json
 import errno
 import os
-import select
 import signal
 import shutil
 import socket
@@ -31,7 +30,11 @@ def _different_mountinfo_device(path: Path) -> str:
     if minor < process_priority.MAX_CGROUP_DEVICE_COMPONENT:
         minor += 1
     else:
-        major = major + 1 if major < process_priority.MAX_CGROUP_DEVICE_COMPONENT else major - 1
+        major = (
+            major + 1
+            if major < process_priority.MAX_CGROUP_DEVICE_COMPONENT
+            else major - 1
+        )
     return f"{major}:{minor}"
 
 
@@ -213,7 +216,9 @@ def _scope_latch_listener(
 
     pending = list(datagrams)
 
-    def recvmsg(*_args: object) -> tuple[bytes, list[tuple[int, int, bytes]], int, None]:
+    def recvmsg(
+        *_args: object,
+    ) -> tuple[bytes, list[tuple[int, int, bytes]], int, None]:
         if pending:
             return pending.pop(0)
         raise BlockingIOError
@@ -271,7 +276,9 @@ class ProcessPriorityTests(unittest.TestCase):
             with self.subTest(invalid=invalid[:20]):
                 self.assertIsNone(process_priority._parse_cpu_list(invalid))
 
-    def test_scope_affinity_resolves_mount_root_and_intersects_online_cpus(self) -> None:
+    def test_scope_affinity_resolves_mount_root_and_intersects_online_cpus(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             generic_mount = root / "generic"
@@ -304,8 +311,8 @@ class ProcessPriorityTests(unittest.TestCase):
     def test_scope_affinity_uses_first_valid_parent_after_leaf_enoent(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            cgroup, mountinfo, online, mountpoint, _, _ = (
-                _write_affinity_scope_fixture(root)
+            cgroup, mountinfo, online, mountpoint, _, _ = _write_affinity_scope_fixture(
+                root
             )
             real_open = os.open
             real_close = os.close
@@ -668,9 +675,10 @@ class ProcessPriorityTests(unittest.TestCase):
 
     def test_scope_affinity_revalidates_membership_and_mapping_after_read(self) -> None:
         for changed_state in ("membership", "mapping"):
-            with self.subTest(
-                changed_state=changed_state
-            ), tempfile.TemporaryDirectory() as tmp:
+            with (
+                self.subTest(changed_state=changed_state),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
                 root = Path(tmp)
                 cgroup, mountinfo, online, _, parent, scope = (
                     _write_affinity_scope_fixture(root)
@@ -744,12 +752,13 @@ class ProcessPriorityTests(unittest.TestCase):
 
     def test_scope_affinity_revalidates_after_second_cpuset_snapshot(self) -> None:
         for changed_state in ("membership", "mapping"):
-            with self.subTest(
-                changed_state=changed_state
-            ), tempfile.TemporaryDirectory() as tmp:
+            with (
+                self.subTest(changed_state=changed_state),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
                 root = Path(tmp)
-                cgroup, mountinfo, online, _, parent, _ = (
-                    _write_affinity_scope_fixture(root)
+                cgroup, mountinfo, online, _, parent, _ = _write_affinity_scope_fixture(
+                    root
                 )
                 cpuset_stat = (parent / "cpuset.cpus.effective").stat()
                 replacement_mountinfo = None
@@ -980,14 +989,15 @@ class ProcessPriorityTests(unittest.TestCase):
             process_priority,
             "_read_affinity_file",
             return_value=(
-                mountinfo
-                + f"{fanout + 1} 1 0:1 /overflow /overflow "
+                mountinfo + f"{fanout + 1} 1 0:1 /overflow /overflow "
                 "rw - cgroup2 cgroup rw\n"
             ),
         ):
             self.assertIsNone(process_priority._cgroup2_mount_mappings())
 
-    def test_scope_identity_capture_and_pid_verify_use_specific_cgroup2_mount(self) -> None:
+    def test_scope_identity_capture_and_pid_verify_use_specific_cgroup2_mount(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             proc_root = root / "proc"
@@ -1019,7 +1029,9 @@ class ProcessPriorityTests(unittest.TestCase):
                     process_priority.verify_priority_scope_identity(identity, pid=4242)
                 )
 
-    def test_scope_identity_capture_rejects_pid_migration_during_weight_read(self) -> None:
+    def test_scope_identity_capture_rejects_pid_migration_during_weight_read(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             proc_root = root / "proc"
@@ -1057,14 +1069,18 @@ class ProcessPriorityTests(unittest.TestCase):
             with (
                 mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
                 mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
-                mock.patch.object(process_priority.os, "open", side_effect=migrating_open),
+                mock.patch.object(
+                    process_priority.os, "open", side_effect=migrating_open
+                ),
                 mock.patch.object(
                     process_priority,
                     "_cgroup2_path_for_pid",
                     wraps=process_priority._cgroup2_path_for_pid,
                 ) as map_pid,
             ):
-                self.assertIsNone(process_priority.priority_scope_identity_for_pid(4242))
+                self.assertIsNone(
+                    process_priority.priority_scope_identity_for_pid(4242)
+                )
 
             self.assertTrue(migrated)
             self.assertEqual(map_pid.call_count, 2)
@@ -1107,11 +1123,15 @@ class ProcessPriorityTests(unittest.TestCase):
                     side_effect=replace_on_final_remap,
                 ),
             ):
-                self.assertIsNone(process_priority.priority_scope_identity_for_pid(4242))
+                self.assertIsNone(
+                    process_priority.priority_scope_identity_for_pid(4242)
+                )
 
             self.assertEqual(remaps, 2)
 
-    def test_scope_identity_capture_reads_weights_relative_to_bound_directory(self) -> None:
+    def test_scope_identity_capture_reads_weights_relative_to_bound_directory(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             proc_root = root / "proc"
@@ -1167,10 +1187,14 @@ class ProcessPriorityTests(unittest.TestCase):
                     scope_stat.st_ino,
                 ),
             )
-            self.assertEqual([name for name, _ in relative_children], ["cpu.weight", "io.weight"])
+            self.assertEqual(
+                [name for name, _ in relative_children], ["cpu.weight", "io.weight"]
+            )
             self.assertTrue(all(dir_fd is not None for _, dir_fd in relative_children))
 
-    def test_scope_identity_capture_closes_fd_on_read_failure_and_requires_flags(self) -> None:
+    def test_scope_identity_capture_closes_fd_on_read_failure_and_requires_flags(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             mountpoint = root / "cgroup"
@@ -1209,11 +1233,19 @@ class ProcessPriorityTests(unittest.TestCase):
                     "_cgroup2_path_for_pid",
                     return_value=scope,
                 ),
-                mock.patch.object(process_priority.os, "open", side_effect=track_scope_open),
-                mock.patch.object(process_priority, "_read_scope_file", return_value=None),
-                mock.patch.object(process_priority.os, "close", wraps=real_close) as close_fd,
+                mock.patch.object(
+                    process_priority.os, "open", side_effect=track_scope_open
+                ),
+                mock.patch.object(
+                    process_priority, "_read_scope_file", return_value=None
+                ),
+                mock.patch.object(
+                    process_priority.os, "close", wraps=real_close
+                ) as close_fd,
             ):
-                self.assertIsNone(process_priority.priority_scope_identity_for_pid(4242))
+                self.assertIsNone(
+                    process_priority.priority_scope_identity_for_pid(4242)
+                )
 
             self.assertEqual(len(scope_descriptors), 1)
             close_fd.assert_any_call(scope_descriptors[0])
@@ -1227,7 +1259,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 ),
                 mock.patch.object(process_priority.os, "O_DIRECTORY", None),
             ):
-                self.assertIsNone(process_priority.priority_scope_identity_for_pid(4242))
+                self.assertIsNone(
+                    process_priority.priority_scope_identity_for_pid(4242)
+                )
 
     def test_control_group_identity_uses_canonical_specific_mount(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1377,7 +1411,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 mock.patch.object(
                     process_priority,
                     "_read_scope_file",
-                    side_effect=AssertionError("device mismatch reached scope contents"),
+                    side_effect=AssertionError(
+                        "device mismatch reached scope contents"
+                    ),
                 ) as read_scope,
                 mock.patch.object(process_priority.os, "open", side_effect=track_open),
                 mock.patch.object(
@@ -1392,8 +1428,12 @@ class ProcessPriorityTests(unittest.TestCase):
                         "/work.scope"
                     )
                 )
-                self.assertIsNone(process_priority.priority_scope_identity_for_pid(4242))
-                self.assertFalse(process_priority.verify_priority_scope_identity(identity))
+                self.assertIsNone(
+                    process_priority.priority_scope_identity_for_pid(4242)
+                )
+                self.assertFalse(
+                    process_priority.verify_priority_scope_identity(identity)
+                )
 
             read_scope.assert_not_called()
             self.assertEqual(len(scope_descriptors), 2)
@@ -1431,7 +1471,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 )
 
     def test_control_group_identity_rejects_untrusted_inputs_and_scope(self) -> None:
-        oversized = "/" + ("a" * process_priority.MAX_PRIORITY_SCOPE_IDENTITY_PATH_CHARS)
+        oversized = "/" + (
+            "a" * process_priority.MAX_PRIORITY_SCOPE_IDENTITY_PATH_CHARS
+        )
         for control_group in (
             None,
             True,
@@ -1580,7 +1622,9 @@ class ProcessPriorityTests(unittest.TestCase):
                     "_read_scope_file",
                     side_effect=racing_read,
                 ),
-                mock.patch.object(process_priority.os, "close", wraps=real_close) as close_fd,
+                mock.patch.object(
+                    process_priority.os, "close", wraps=real_close
+                ) as close_fd,
             ):
                 self.assertIsNone(
                     process_priority.priority_scope_identity_for_control_group(
@@ -1592,7 +1636,9 @@ class ProcessPriorityTests(unittest.TestCase):
             self.assertEqual(len(scope_descriptors), 1)
             close_fd.assert_any_call(scope_descriptors[0])
 
-    def test_pidless_scope_identity_accepts_only_canonical_specific_mount_path(self) -> None:
+    def test_pidless_scope_identity_accepts_only_canonical_specific_mount_path(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             generic_mount = root / "generic"
@@ -1666,14 +1712,18 @@ class ProcessPriorityTests(unittest.TestCase):
                 encoding="ascii",
             )
             with mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo):
-                self.assertFalse(process_priority.verify_priority_scope_identity(identity))
+                self.assertFalse(
+                    process_priority.verify_priority_scope_identity(identity)
+                )
 
             mountinfo.write_text(
                 f"bad record /root.slice {first_mount} - cgroup2\n",
                 encoding="ascii",
             )
             with mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo):
-                self.assertFalse(process_priority.verify_priority_scope_identity(identity))
+                self.assertFalse(
+                    process_priority.verify_priority_scope_identity(identity)
+                )
 
             outside = root / "outside.scope"
             outside.mkdir()
@@ -1687,7 +1737,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 process_priority.verify_priority_scope_identity(outside_identity)
             )
 
-    def test_scope_identity_rejects_directory_or_symlink_replacement_after_fd_bind(self) -> None:
+    def test_scope_identity_rejects_directory_or_symlink_replacement_after_fd_bind(
+        self,
+    ) -> None:
         for replacement_kind in ("directory", "symlink"):
             with self.subTest(replacement_kind=replacement_kind):
                 with tempfile.TemporaryDirectory() as tmp:
@@ -1725,7 +1777,9 @@ class ProcessPriorityTests(unittest.TestCase):
                             scope.rename(orphan)
                             if replacement_kind == "directory":
                                 scope.mkdir()
-                                (scope / "cpu.weight").write_text("200\n", encoding="ascii")
+                                (scope / "cpu.weight").write_text(
+                                    "200\n", encoding="ascii"
+                                )
                                 (scope / "io.weight").write_text(
                                     "default 200\n",
                                     encoding="ascii",
@@ -1742,7 +1796,9 @@ class ProcessPriorityTests(unittest.TestCase):
                             "_PROC_SELF_MOUNTINFO",
                             mountinfo,
                         ),
-                        mock.patch.object(process_priority.os, "open", side_effect=racing_open),
+                        mock.patch.object(
+                            process_priority.os, "open", side_effect=racing_open
+                        ),
                     ):
                         self.assertFalse(
                             process_priority.verify_priority_scope_identity(identity)
@@ -1849,7 +1905,9 @@ class ProcessPriorityTests(unittest.TestCase):
             with (
                 mock.patch.object(process_priority, "_PROC_ROOT", proc_root),
                 mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
-                mock.patch.object(process_priority.os, "open", side_effect=migrating_open),
+                mock.patch.object(
+                    process_priority.os, "open", side_effect=migrating_open
+                ),
             ):
                 self.assertFalse(
                     process_priority.verify_priority_scope_identity(identity, pid=4242)
@@ -1911,7 +1969,9 @@ class ProcessPriorityTests(unittest.TestCase):
                     "_cgroup2_path_for_pid",
                     side_effect=remap_after_reads,
                 ) as map_pid,
-                mock.patch.object(process_priority.os, "stat", side_effect=track_path_stat),
+                mock.patch.object(
+                    process_priority.os, "stat", side_effect=track_path_stat
+                ),
             ):
                 self.assertFalse(
                     process_priority.verify_priority_scope_identity(identity, pid=4242)
@@ -1920,7 +1980,9 @@ class ProcessPriorityTests(unittest.TestCase):
         self.assertEqual(map_pid.call_count, 2)
         self.assertEqual(events, ["remap", "path-stat"])
 
-    def test_scope_snapshot_closes_bound_directory_fd_after_child_read_failure(self) -> None:
+    def test_scope_snapshot_closes_bound_directory_fd_after_child_read_failure(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             mountpoint = root / "cgroup"
@@ -1995,14 +2057,18 @@ class ProcessPriorityTests(unittest.TestCase):
 
             with (
                 mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
-                mock.patch.object(process_priority.os, "fstat", side_effect=zero_sized_files),
+                mock.patch.object(
+                    process_priority.os, "fstat", side_effect=zero_sized_files
+                ),
             ):
                 self.assertEqual(
                     process_priority.priority_scope_process_ids(identity),
                     (123, 456),
                 )
 
-    def test_priority_scope_membership_reports_direct_and_hierarchical_members(self) -> None:
+    def test_priority_scope_membership_reports_direct_and_hierarchical_members(
+        self,
+    ) -> None:
         cases = (
             ("populated 0\nfrozen 0\n", "", (), False),
             ("populated 1\nfrozen 0\n", "456\n123\n123\n", (123, 456), True),
@@ -2021,7 +2087,9 @@ class ProcessPriorityTests(unittest.TestCase):
                         "_PROC_SELF_MOUNTINFO",
                         mountinfo,
                     ):
-                        membership = process_priority.priority_scope_membership(identity)
+                        membership = process_priority.priority_scope_membership(
+                            identity
+                        )
 
                 self.assertEqual(
                     membership,
@@ -2032,7 +2100,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 )
                 self.assertNotIn("123", repr(membership))
 
-    def test_priority_scope_membership_rejects_unpopulated_scope_with_processes(self) -> None:
+    def test_priority_scope_membership_rejects_unpopulated_scope_with_processes(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             identity, mountinfo, _scope = _write_scope_membership_fixture(
                 Path(tmp),
@@ -2078,7 +2148,9 @@ class ProcessPriorityTests(unittest.TestCase):
                             process_priority.priority_scope_membership(identity)
                         )
 
-    def test_priority_scope_membership_rejects_events_change_between_reads(self) -> None:
+    def test_priority_scope_membership_rejects_events_change_between_reads(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             identity, mountinfo, scope = _write_scope_membership_fixture(
                 Path(tmp),
@@ -2229,7 +2301,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 self.assertIsNone(process_priority.priority_scope_membership(identity))
             self.assertEqual(process_reads, 2)
 
-    def test_priority_scope_membership_rejects_noncanonical_process_grammar(self) -> None:
+    def test_priority_scope_membership_rejects_noncanonical_process_grammar(
+        self,
+    ) -> None:
         invalid_process_contents = (
             "0123\n",
             "2147483648\n",
@@ -2565,7 +2639,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
                 mock.patch.object(process_priority, "_CPU_ONLINE", online),
             ):
-                with self.assertRaisesRegex(process_priority.PriorityScopeError, "cgroup-v2"):
+                with self.assertRaisesRegex(
+                    process_priority.PriorityScopeError, "cgroup-v2"
+                ):
                     process_priority._scope_exec_allowed_cpus()
 
             mountpoint = root / "cgroup"
@@ -2584,7 +2660,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
                 mock.patch.object(process_priority, "_CPU_ONLINE", online),
             ):
-                with self.assertRaisesRegex(process_priority.PriorityScopeError, "cpuset"):
+                with self.assertRaisesRegex(
+                    process_priority.PriorityScopeError, "cpuset"
+                ):
                     process_priority._scope_exec_allowed_cpus()
 
     def test_scope_affinity_rejects_oversized_or_unreadable_cpu_lists(self) -> None:
@@ -2609,7 +2687,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
                 mock.patch.object(process_priority, "_CPU_ONLINE", online),
             ):
-                with self.assertRaisesRegex(process_priority.PriorityScopeError, "cpuset"):
+                with self.assertRaisesRegex(
+                    process_priority.PriorityScopeError, "cpuset"
+                ):
                     process_priority._scope_exec_allowed_cpus()
 
             cpuset.write_text("0-3\n", encoding="ascii")
@@ -2635,14 +2715,22 @@ class ProcessPriorityTests(unittest.TestCase):
                     side_effect=deny_cpuset,
                 ),
             ):
-                with self.assertRaisesRegex(process_priority.PriorityScopeError, "cpuset"):
+                with self.assertRaisesRegex(
+                    process_priority.PriorityScopeError, "cpuset"
+                ):
                     process_priority._scope_exec_allowed_cpus()
 
-    def test_scope_affinity_set_degrades_but_outside_verification_fails_closed(self) -> None:
+    def test_scope_affinity_set_degrades_but_outside_verification_fails_closed(
+        self,
+    ) -> None:
         target = frozenset({0, 1})
         with (
-            mock.patch.object(process_priority, "_scope_exec_allowed_cpus", return_value=target),
-            mock.patch.object(process_priority.os, "sched_getaffinity", return_value={0}),
+            mock.patch.object(
+                process_priority, "_scope_exec_allowed_cpus", return_value=target
+            ),
+            mock.patch.object(
+                process_priority.os, "sched_getaffinity", return_value={0}
+            ),
             mock.patch.object(
                 process_priority.os,
                 "sched_setaffinity",
@@ -2676,7 +2764,9 @@ class ProcessPriorityTests(unittest.TestCase):
             set_affinity.assert_called_once_with(0, target)
 
         with (
-            mock.patch.object(process_priority, "_scope_exec_allowed_cpus", return_value=target),
+            mock.patch.object(
+                process_priority, "_scope_exec_allowed_cpus", return_value=target
+            ),
             mock.patch.object(
                 process_priority.os,
                 "sched_getaffinity",
@@ -2690,7 +2780,9 @@ class ProcessPriorityTests(unittest.TestCase):
         self.assertEqual(getattr(raised.exception, "phase", None), "verify")
         set_affinity.assert_called_once_with(0, target)
 
-    def test_scope_exec_wrapper_continues_once_after_affinity_target_failure(self) -> None:
+    def test_scope_exec_wrapper_continues_once_after_affinity_target_failure(
+        self,
+    ) -> None:
         with (
             mock.patch.object(
                 process_priority,
@@ -2718,7 +2810,9 @@ class ProcessPriorityTests(unittest.TestCase):
         set_affinity.assert_not_called()
         execve.assert_called_once()
 
-    def test_scope_exec_wrapper_continues_once_after_affinity_read_failure(self) -> None:
+    def test_scope_exec_wrapper_continues_once_after_affinity_read_failure(
+        self,
+    ) -> None:
         with (
             mock.patch.object(
                 process_priority,
@@ -2780,7 +2874,9 @@ class ProcessPriorityTests(unittest.TestCase):
         self.assertEqual(set_affinity.call_count, 1)
         execve.assert_called_once()
 
-    def test_scope_exec_wrapper_executes_once_after_applied_affinity_readback(self) -> None:
+    def test_scope_exec_wrapper_executes_once_after_applied_affinity_readback(
+        self,
+    ) -> None:
         target = frozenset({0, 1})
         for readback in (OSError("readback unavailable"), {0}):
             with (
@@ -2842,7 +2938,9 @@ class ProcessPriorityTests(unittest.TestCase):
         set_affinity.assert_called_once_with(0, target)
         execve.assert_not_called()
 
-    def test_scope_exec_wrapper_normalizes_then_execs_exact_target_and_environment(self) -> None:
+    def test_scope_exec_wrapper_normalizes_then_execs_exact_target_and_environment(
+        self,
+    ) -> None:
         events: list[str] = []
         captured: dict[str, object] = {}
 
@@ -2861,7 +2959,9 @@ class ProcessPriorityTests(unittest.TestCase):
             raise OSError("private exec detail: /sensitive/path pid=1234")
 
         with (
-            mock.patch.dict(process_priority.os.environ, {"SOC_TEST_ENV": "kept"}, clear=True),
+            mock.patch.dict(
+                process_priority.os.environ, {"SOC_TEST_ENV": "kept"}, clear=True
+            ),
             mock.patch.object(
                 process_priority,
                 "_normalize_cpu_affinity_for_scope_exec",
@@ -2887,7 +2987,9 @@ class ProcessPriorityTests(unittest.TestCase):
             [os.path.realpath(sys.executable), "secret-argument"],
         )
         self.assertEqual(captured["env"], {"SOC_TEST_ENV": "kept"})
-        self.assertEqual(str(raised.exception), "SOC priority scope wrapper failed: exec")
+        self.assertEqual(
+            str(raised.exception), "SOC priority scope wrapper failed: exec"
+        )
         self.assertNotIn("secret-argument", str(raised.exception))
         self.assertNotIn("sensitive", str(raised.exception))
         self.assertNotIn("1234", str(raised.exception))
@@ -2900,7 +3002,9 @@ class ProcessPriorityTests(unittest.TestCase):
             target.chmod(0o700)
             original_stat = target.stat()
             wrapper = process_priority._scope_exec_wrapper_command([os.fspath(target)])
-            arguments = wrapper[wrapper.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN) :]
+            arguments = wrapper[
+                wrapper.index(process_priority._SCOPE_EXEC_WRAPPER_TOKEN) :
+            ]
             captured: dict[str, object] = {}
 
             def replace_then_fail_exec(
@@ -2948,7 +3052,9 @@ class ProcessPriorityTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 os.fstat(captured["descriptor"])
 
-    def test_scope_exec_file_identity_rejects_invalid_nofollow_before_open(self) -> None:
+    def test_scope_exec_file_identity_rejects_invalid_nofollow_before_open(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             target = Path(temporary) / "scope-target"
             target.write_bytes(b"\x7fELFbound")
@@ -2967,7 +3073,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 try:
                     delattr(process_priority.os, "O_NOFOLLOW")
                     self.assertIsNone(
-                        process_priority._scope_exec_file_identity(canonical, executable=False)
+                        process_priority._scope_exec_file_identity(
+                            canonical, executable=False
+                        )
                     )
                     opened.assert_not_called()
                 finally:
@@ -2979,11 +3087,14 @@ class ProcessPriorityTests(unittest.TestCase):
                     ("string", "invalid"),
                     ("none", None),
                 ):
-                    with self.subTest(flag=label), mock.patch.object(
-                        process_priority.os, "O_NOFOLLOW", flag
+                    with (
+                        self.subTest(flag=label),
+                        mock.patch.object(process_priority.os, "O_NOFOLLOW", flag),
                     ):
                         self.assertIsNone(
-                            process_priority._scope_exec_file_identity(canonical, executable=False)
+                            process_priority._scope_exec_file_identity(
+                                canonical, executable=False
+                            )
                         )
                         opened.assert_not_called()
 
@@ -3063,7 +3174,9 @@ class ProcessPriorityTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         self.assertEqual(result.stdout, b"scope-fd-exec-ok\n")
 
-    def test_scope_exec_wrapper_rejects_invalid_or_reentrant_argv_before_normalize(self) -> None:
+    def test_scope_exec_wrapper_rejects_invalid_or_reentrant_argv_before_normalize(
+        self,
+    ) -> None:
         runtime = os.path.realpath(sys.executable)
         entry = os.path.realpath(process_priority.__file__)
         invalid_arguments = (
@@ -3087,12 +3200,16 @@ class ProcessPriorityTests(unittest.TestCase):
             ],
         )
         with (
-            mock.patch.object(process_priority, "_normalize_cpu_affinity_for_scope_exec") as normalize,
+            mock.patch.object(
+                process_priority, "_normalize_cpu_affinity_for_scope_exec"
+            ) as normalize,
             mock.patch.object(process_priority.os, "execve") as execve,
         ):
             for arguments in invalid_arguments:
                 with self.subTest(arguments=arguments[:3]):
-                    with self.assertRaises(process_priority.PriorityScopeError) as raised:
+                    with self.assertRaises(
+                        process_priority.PriorityScopeError
+                    ) as raised:
                         process_priority._run_scope_exec_wrapper(arguments)
                     self.assertEqual(
                         str(raised.exception),
@@ -3117,7 +3234,9 @@ class ProcessPriorityTests(unittest.TestCase):
             with self.assertRaises(process_priority.PriorityScopeError) as raised:
                 process_priority._run_scope_exec_wrapper(_scope_exec_test_arguments())
 
-        self.assertEqual(str(raised.exception), "SOC priority scope wrapper failed: exec")
+        self.assertEqual(
+            str(raised.exception), "SOC priority scope wrapper failed: exec"
+        )
         self.assertNotIn("sensitive", str(raised.exception))
         self.assertNotIn("1234", str(raised.exception))
         execve.assert_called_once()
@@ -3135,7 +3254,9 @@ class ProcessPriorityTests(unittest.TestCase):
             with self.assertRaises(process_priority.PriorityScopeError) as raised:
                 process_priority._run_scope_exec_wrapper(_scope_exec_test_arguments())
 
-        self.assertEqual(str(raised.exception), "SOC priority scope wrapper failed: affinity")
+        self.assertEqual(
+            str(raised.exception), "SOC priority scope wrapper failed: affinity"
+        )
         self.assertNotIn(private_phase, str(raised.exception))
         self.assertNotIn("sensitive", str(raised.exception))
         self.assertNotIn("1234", str(raised.exception))
@@ -3152,10 +3273,13 @@ class ProcessPriorityTests(unittest.TestCase):
             "SOC priority scope wrapper failed: exec",
         )
         for failure in phase_failures:
-            with self.subTest(failure=failure), mock.patch.object(
-                process_priority,
-                "_run_scope_exec_wrapper",
-                side_effect=process_priority.PriorityScopeError(failure),
+            with (
+                self.subTest(failure=failure),
+                mock.patch.object(
+                    process_priority,
+                    "_run_scope_exec_wrapper",
+                    side_effect=process_priority.PriorityScopeError(failure),
+                ),
             ):
                 with self.assertRaises(SystemExit) as raised:
                     process_priority._scope_exec_main()
@@ -3202,8 +3326,7 @@ class ProcessPriorityTests(unittest.TestCase):
             online = root / "online"
             online.write_text(f"{target[0]},{target[1]}\n", encoding="ascii")
             probe = (
-                "import json, os; "
-                "print(json.dumps(sorted(os.sched_getaffinity(0))))"
+                "import json, os; " "print(json.dumps(sorted(os.sched_getaffinity(0))))"
             )
             wrapper = (
                 "import os, sys; from pathlib import Path; "
@@ -3214,7 +3337,7 @@ class ProcessPriorityTests(unittest.TestCase):
                 f"os.sched_setaffinity(0, {{{target[0]}}}); "
                 "command=p._scope_exec_wrapper_command([sys.executable, '-c', "
                 "os.environ['SOC_TEST_PROBE']]); "
-            "p._run_scope_exec_wrapper(command[command.index(p._SCOPE_EXEC_WRAPPER_TOKEN):])"
+                "p._run_scope_exec_wrapper(command[command.index(p._SCOPE_EXEC_WRAPPER_TOKEN):])"
             )
             environment = os.environ.copy()
             environment.update(
@@ -3245,7 +3368,9 @@ class ProcessPriorityTests(unittest.TestCase):
 
     def test_current_io_priority_preserves_idle_class(self) -> None:
         with (
-            mock.patch.object(process_priority.shutil, "which", return_value="/usr/bin/ionice"),
+            mock.patch.object(
+                process_priority.shutil, "which", return_value="/usr/bin/ionice"
+            ),
             mock.patch.object(
                 process_priority,
                 "_read_ionice_output_bounded",
@@ -3479,7 +3604,9 @@ class ProcessPriorityTests(unittest.TestCase):
         counts = [process_priority._current_uid_task_count() for _ in range(24)]
         self.assertTrue(all(type(count) is int and count > 0 for count in counts))
 
-    def test_current_uid_task_count_rejects_pid_identity_change_without_reopen(self) -> None:
+    def test_current_uid_task_count_rejects_pid_identity_change_without_reopen(
+        self,
+    ) -> None:
         uid = os.getuid()
         with tempfile.TemporaryDirectory() as temporary_directory:
             proc_root = Path(temporary_directory)
@@ -3798,7 +3925,9 @@ class ProcessPriorityTests(unittest.TestCase):
                     )
                 )
 
-    def test_local_model_direct_security_recounts_headroom_after_setrlimit(self) -> None:
+    def test_local_model_direct_security_recounts_headroom_after_setrlimit(
+        self,
+    ) -> None:
         initial_tasks = 5000
         nproc_hard = process_priority._LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT
         nproc_limit = process_priority._local_model_direct_nproc_limit(
@@ -3807,9 +3936,7 @@ class ProcessPriorityTests(unittest.TestCase):
         )
         self.assertIsNotNone(nproc_limit)
         raced_tasks = (
-            nproc_limit
-            - process_priority._LOCAL_MODEL_DIRECT_NPROC_MODEL_HEADROOM
-            + 1
+            nproc_limit - process_priority._LOCAL_MODEL_DIRECT_NPROC_MODEL_HEADROOM + 1
         )
         parent_pid = 1234
 
@@ -3866,7 +3993,9 @@ class ProcessPriorityTests(unittest.TestCase):
         install_seccomp.assert_not_called()
         popen.assert_not_called()
 
-    def test_current_io_priority_direct_fails_closed_for_unsupported_or_invalid_abi(self) -> None:
+    def test_current_io_priority_direct_fails_closed_for_unsupported_or_invalid_abi(
+        self,
+    ) -> None:
         libc = mock.Mock()
         libc.syscall = mock.Mock()
         with (
@@ -3876,7 +4005,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 "uname",
                 return_value=mock.Mock(machine="aarch64"),
             ),
-            mock.patch.object(process_priority.ctypes, "CDLL", return_value=libc) as cdll,
+            mock.patch.object(
+                process_priority.ctypes, "CDLL", return_value=libc
+            ) as cdll,
         ):
             self.assertIsNone(process_priority._current_io_priority_direct())
         cdll.assert_not_called()
@@ -3913,16 +4044,24 @@ class ProcessPriorityTests(unittest.TestCase):
         process = mock.Mock()
         process.stdout = mock.Mock()
         process.poll.return_value = None
-        process.wait.side_effect = process_priority.subprocess.TimeoutExpired("ionice", 1)
+        process.wait.side_effect = process_priority.subprocess.TimeoutExpired(
+            "ionice", 1
+        )
         selector = mock.Mock()
         selector.get_map.side_effect = [{"stdout": object()}]
         selector.select.return_value = []
 
         with (
-            mock.patch.object(process_priority.subprocess, "Popen", return_value=process),
-            mock.patch.object(process_priority.selectors, "DefaultSelector", return_value=selector),
+            mock.patch.object(
+                process_priority.subprocess, "Popen", return_value=process
+            ),
+            mock.patch.object(
+                process_priority.selectors, "DefaultSelector", return_value=selector
+            ),
         ):
-            output = process_priority._read_ionice_output_bounded(["ionice", "--pid", "1"])
+            output = process_priority._read_ionice_output_bounded(
+                ["ionice", "--pid", "1"]
+            )
 
         self.assertIsNone(output)
         process.kill.assert_called_once_with()
@@ -3939,14 +4078,18 @@ class ProcessPriorityTests(unittest.TestCase):
         process.poll.return_value = None
 
         with (
-            mock.patch.object(process_priority.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                process_priority.subprocess, "Popen", return_value=process
+            ),
             mock.patch.object(
                 process_priority.selectors,
                 "DefaultSelector",
                 side_effect=OSError("selector unavailable"),
             ),
         ):
-            output = process_priority._read_ionice_output_bounded(["ionice", "--pid", "1"])
+            output = process_priority._read_ionice_output_bounded(
+                ["ionice", "--pid", "1"]
+            )
 
         self.assertIsNone(output)
         process.kill.assert_called_once_with()
@@ -3960,21 +4103,34 @@ class ProcessPriorityTests(unittest.TestCase):
     def test_ionice_output_reader_bounds_reap_when_stdout_is_unavailable(self) -> None:
         process = mock.Mock()
         process.stdout = None
-        process.wait.side_effect = process_priority.subprocess.TimeoutExpired("ionice", 1)
+        process.wait.side_effect = process_priority.subprocess.TimeoutExpired(
+            "ionice", 1
+        )
 
-        with mock.patch.object(process_priority.subprocess, "Popen", return_value=process):
-            output = process_priority._read_ionice_output_bounded(["ionice", "--pid", "1"])
+        with mock.patch.object(
+            process_priority.subprocess, "Popen", return_value=process
+        ):
+            output = process_priority._read_ionice_output_bounded(
+                ["ionice", "--pid", "1"]
+            )
 
         self.assertIsNone(output)
         process.kill.assert_called_once_with()
-        process.wait.assert_called_once_with(timeout=process_priority.IONICE_TIMEOUT_SECONDS)
+        process.wait.assert_called_once_with(
+            timeout=process_priority.IONICE_TIMEOUT_SECONDS
+        )
 
-    def test_apply_process_priority_reports_scope_without_mutating_nice_or_io(self) -> None:
+    def test_apply_process_priority_reports_scope_without_mutating_nice_or_io(
+        self,
+    ) -> None:
         with (
             mock.patch.object(
                 process_priority,
                 "_current_priority_scope_weights",
-                return_value=(process_priority.SOC_CPU_WEIGHT, process_priority.SOC_IO_WEIGHT),
+                return_value=(
+                    process_priority.SOC_CPU_WEIGHT,
+                    process_priority.SOC_IO_WEIGHT,
+                ),
             ),
             mock.patch.object(process_priority.os, "setpriority") as setpriority,
             mock.patch.object(process_priority, "_set_io_priority") as set_io,
@@ -3985,13 +4141,19 @@ class ProcessPriorityTests(unittest.TestCase):
         setpriority.assert_not_called()
         set_io.assert_not_called()
 
-    def test_priority_scope_verification_fails_closed_when_scope_is_missing(self) -> None:
+    def test_priority_scope_verification_fails_closed_when_scope_is_missing(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(process_priority, "_current_priority_scope_weights", return_value=None),
+            mock.patch.object(
+                process_priority, "_current_priority_scope_weights", return_value=None
+            ),
         ):
             self.assertEqual(process_priority.apply_process_priority(), (False, False))
 
-    def test_priority_scope_verification_reports_each_weight_independently(self) -> None:
+    def test_priority_scope_verification_reports_each_weight_independently(
+        self,
+    ) -> None:
         with (
             mock.patch.object(
                 process_priority,
@@ -4009,9 +4171,7 @@ class ProcessPriorityTests(unittest.TestCase):
             return_value="/usr/bin/systemd-run",
         ):
             commands = (
-                process_priority.build_soc_priority_scope_command(
-                    [runtime, "soc"]
-                ),
+                process_priority.build_soc_priority_scope_command([runtime, "soc"]),
                 process_priority.build_recorder_priority_scope_command(
                     [runtime, "recorder"],
                     unit_name="speed-of-cinnamon-recorder-test.scope",
@@ -4042,7 +4202,9 @@ class ProcessPriorityTests(unittest.TestCase):
                         os.path.realpath(process_priority.__file__),
                     ],
                 )
-                self.assertEqual(wrapper[token_index], process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
+                self.assertEqual(
+                    wrapper[token_index], process_priority._SCOPE_EXEC_WRAPPER_TOKEN
+                )
                 identity_start = token_index + (2 if command_index == 0 else 1)
                 if command_index == 0:
                     self.assertEqual(
@@ -4097,7 +4259,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 os.path.realpath(process_priority.__file__),
             ],
         )
-        self.assertEqual(wrapper[token_index], process_priority._SCOPE_EXEC_WRAPPER_TOKEN)
+        self.assertEqual(
+            wrapper[token_index], process_priority._SCOPE_EXEC_WRAPPER_TOKEN
+        )
         identity_start = token_index + 1
         self.assertEqual(len(wrapper[identity_start : identity_start + 6]), 6)
         self.assertTrue(
@@ -4118,7 +4282,9 @@ class ProcessPriorityTests(unittest.TestCase):
             "which",
             return_value="/usr/bin/systemd-run",
         ):
-            with self.assertRaisesRegex(process_priority.PriorityScopeError, "unit name"):
+            with self.assertRaisesRegex(
+                process_priority.PriorityScopeError, "unit name"
+            ):
                 process_priority.build_recorder_priority_scope_command(
                     [sys.executable],
                     unit_name="../shared.scope",
@@ -4145,10 +4311,14 @@ class ProcessPriorityTests(unittest.TestCase):
                 process_priority,
                 "verify_priority_scope_identity",
             ) as reverify_identity,
-            mock.patch.object(process_priority, "build_soc_priority_scope_command") as build,
+            mock.patch.object(
+                process_priority, "build_soc_priority_scope_command"
+            ) as build,
             mock.patch.object(process_priority.os, "execvpe") as execvpe,
         ):
-            with self.assertRaisesRegex(process_priority.PriorityScopeError, "verification failed"):
+            with self.assertRaisesRegex(
+                process_priority.PriorityScopeError, "verification failed"
+            ):
                 process_priority.ensure_soc_priority_scope(["status", "--json"])
 
         capture_identity.assert_called_once_with(
@@ -4161,7 +4331,9 @@ class ProcessPriorityTests(unittest.TestCase):
         build.assert_not_called()
         execvpe.assert_not_called()
 
-    def test_scope_marker_normalizes_between_identity_capture_and_reverification(self) -> None:
+    def test_scope_marker_normalizes_between_identity_capture_and_reverification(
+        self,
+    ) -> None:
         identity = process_priority.PriorityScopeIdentity(
             path="/sys/fs/cgroup/user.slice/soc.scope",
             device=42,
@@ -4169,7 +4341,9 @@ class ProcessPriorityTests(unittest.TestCase):
         )
         events: list[str] = []
 
-        def capture(*_args: object, **_kwargs: object) -> process_priority.PriorityScopeIdentity:
+        def capture(
+            *_args: object, **_kwargs: object
+        ) -> process_priority.PriorityScopeIdentity:
             events.append("capture")
             return identity
 
@@ -4209,7 +4383,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 "verify_priority_scope_identity",
                 side_effect=reverify,
             ) as reverify_identity,
-            mock.patch.object(process_priority, "build_soc_priority_scope_command") as build,
+            mock.patch.object(
+                process_priority, "build_soc_priority_scope_command"
+            ) as build,
             mock.patch.object(process_priority.os, "execvpe") as execvpe,
         ):
             process_priority.ensure_soc_priority_scope(["status", "--json"])
@@ -4231,7 +4407,9 @@ class ProcessPriorityTests(unittest.TestCase):
         build.assert_not_called()
         execvpe.assert_not_called()
 
-    def test_scope_marker_rejects_scope_change_after_affinity_normalization(self) -> None:
+    def test_scope_marker_rejects_scope_change_after_affinity_normalization(
+        self,
+    ) -> None:
         identity = process_priority.PriorityScopeIdentity(
             path="/sys/fs/cgroup/user.slice/soc.scope",
             device=42,
@@ -4266,7 +4444,9 @@ class ProcessPriorityTests(unittest.TestCase):
             ) as reverify_identity,
             mock.patch.object(process_priority.os, "execvpe") as execvpe,
         ):
-            with self.assertRaisesRegex(process_priority.PriorityScopeError, "verification failed"):
+            with self.assertRaisesRegex(
+                process_priority.PriorityScopeError, "verification failed"
+            ):
                 process_priority.ensure_soc_priority_scope(["status", "--json"])
 
         self.assertEqual(events, ["capture", "normalize", "reverify"])
@@ -4278,7 +4458,9 @@ class ProcessPriorityTests(unittest.TestCase):
         )
         execvpe.assert_not_called()
 
-    def test_scope_marker_affinity_failure_stops_before_identity_reverification(self) -> None:
+    def test_scope_marker_affinity_failure_stops_before_identity_reverification(
+        self,
+    ) -> None:
         identity = process_priority.PriorityScopeIdentity(
             path="/sys/fs/cgroup/user.slice/soc.scope",
             device=42,
@@ -4307,13 +4489,17 @@ class ProcessPriorityTests(unittest.TestCase):
             ) as reverify_identity,
             mock.patch.object(process_priority.os, "execvpe") as execvpe,
         ):
-            with self.assertRaisesRegex(process_priority.PriorityScopeError, "affinity unavailable"):
+            with self.assertRaisesRegex(
+                process_priority.PriorityScopeError, "affinity unavailable"
+            ):
                 process_priority.ensure_soc_priority_scope(["status", "--json"])
 
         reverify_identity.assert_not_called()
         execvpe.assert_not_called()
 
-    def test_scope_marker_maps_non_root_mount_for_capture_and_reverification(self) -> None:
+    def test_scope_marker_maps_non_root_mount_for_capture_and_reverification(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             proc_root = root / "proc"
@@ -4352,7 +4538,9 @@ class ProcessPriorityTests(unittest.TestCase):
                     "sched_getaffinity",
                     side_effect=[{0}, {0, 1}],
                 ) as get_affinity,
-                mock.patch.object(process_priority.os, "sched_setaffinity") as set_affinity,
+                mock.patch.object(
+                    process_priority.os, "sched_setaffinity"
+                ) as set_affinity,
                 mock.patch.object(process_priority.os, "execvpe") as execvpe,
             ):
                 process_priority.ensure_soc_priority_scope(["status", "--json"])
@@ -4415,17 +4603,20 @@ class ProcessPriorityTests(unittest.TestCase):
         command = captured["argv"]
         self.assertIsInstance(command, list)
         assert isinstance(command, list)
-        self.assertEqual(command[0:9], [
-            "/usr/bin/systemd-run",
-            "--user",
-            "--scope",
-            "--quiet",
-            "--expand-environment=no",
-            "-p",
-            "CPUWeight=200",
-            "-p",
-            "IOWeight=200",
-        ])
+        self.assertEqual(
+            command[0:9],
+            [
+                "/usr/bin/systemd-run",
+                "--user",
+                "--scope",
+                "--quiet",
+                "--expand-environment=no",
+                "-p",
+                "CPUWeight=200",
+                "-p",
+                "IOWeight=200",
+            ],
+        )
         scope_delimiter = command.index("--")
         self.assertEqual(command[scope_delimiter], "--")
         self.assertIn("speed_of_cinnamon.cli", command)
@@ -4531,7 +4722,9 @@ class ProcessPriorityTests(unittest.TestCase):
 
     def test_required_latch_is_sent_before_launch_spec_validation(self) -> None:
         arguments = _scope_exec_test_arguments(latch_required=True)
-        identity_index = arguments.index(process_priority._SCOPE_EXEC_LATCH_REQUIRED_TOKEN) + 1
+        identity_index = (
+            arguments.index(process_priority._SCOPE_EXEC_LATCH_REQUIRED_TOKEN) + 1
+        )
         arguments[identity_index] = str(int(arguments[identity_index]) + 1)
         with (
             mock.patch.dict(
@@ -5222,8 +5415,7 @@ class ProcessPriorityTests(unittest.TestCase):
             signal.SIGQUIT,
         )
         prior_handlers = {
-            signal_number: object()
-            for signal_number in forwarded_signals
+            signal_number: object() for signal_number in forwarded_signals
         }
         installed_handlers: dict[int, object] = {}
         active_handlers = dict(prior_handlers)
@@ -5369,9 +5561,7 @@ class ProcessPriorityTests(unittest.TestCase):
         active_handlers = dict(prior_handlers)
         forwarded: list[tuple[int, int | None]] = []
 
-        class SignalAfterErrorTransition(
-            process_priority._ScopeExecSignalForwarder
-        ):
+        class SignalAfterErrorTransition(process_priority._ScopeExecSignalForwarder):
             def __init__(self) -> None:
                 super().__init__()
                 self.inject_cleanup_signal = True
@@ -5581,8 +5771,7 @@ class ProcessPriorityTests(unittest.TestCase):
             signal.SIGQUIT,
         )
         prior_handlers = {
-            signal_number: object()
-            for signal_number in forwarded_signals
+            signal_number: object() for signal_number in forwarded_signals
         }
         installed_handlers: dict[int, object] = {}
 
@@ -5823,8 +6012,7 @@ class ProcessPriorityTests(unittest.TestCase):
             signal.SIGQUIT,
         )
         prior_handlers = {
-            signal_number: object()
-            for signal_number in forwarded_signals
+            signal_number: object() for signal_number in forwarded_signals
         }
         installed_handlers: dict[int, object] = {}
         handler_returned = False
@@ -6108,9 +6296,7 @@ class ProcessPriorityTests(unittest.TestCase):
         listener = _scope_latch_listener()
         selector = mock.Mock()
 
-        class SignalAfterTimeoutTransition(
-            process_priority._ScopeExecSignalForwarder
-        ):
+        class SignalAfterTimeoutTransition(process_priority._ScopeExecSignalForwarder):
             def begin_error_cleanup(self) -> int | None:
                 primary_signal = super().begin_error_cleanup()
                 self.handle(signal.SIGHUP, None)
@@ -6128,7 +6314,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 "which",
                 return_value="/usr/bin/systemd-run",
             ),
-            mock.patch.object(process_priority.subprocess, "Popen", return_value=process) as popen,
+            mock.patch.object(
+                process_priority.subprocess, "Popen", return_value=process
+            ) as popen,
             mock.patch.object(
                 process_priority,
                 "_create_scope_exec_latch",
@@ -6162,7 +6350,9 @@ class ProcessPriorityTests(unittest.TestCase):
             ) as forward_signal,
             mock.patch.object(process_priority.os, "execvpe") as execvpe,
         ):
-            with self.assertRaisesRegex(process_priority.PriorityScopeError, "timed out"):
+            with self.assertRaisesRegex(
+                process_priority.PriorityScopeError, "timed out"
+            ):
                 process_priority.ensure_soc_priority_scope(["status"])
 
         self.assertIsNone(forwarder.primary_signal)
@@ -6178,7 +6368,9 @@ class ProcessPriorityTests(unittest.TestCase):
             listener,
             process_priority.selectors.EVENT_READ,
         )
-        selector.select.assert_called_once_with(process_priority._SCOPE_EXEC_POLL_SECONDS)
+        selector.select.assert_called_once_with(
+            process_priority._SCOPE_EXEC_POLL_SECONDS
+        )
         selector.close.assert_called_once_with()
         self.assertEqual(listener.recvmsg.call_count, 3)
         process.wait.assert_called_once_with(
@@ -6212,7 +6404,9 @@ class ProcessPriorityTests(unittest.TestCase):
                         clear=False,
                     ),
                     mock.patch.object(
-                        process_priority.shutil, "which", return_value="/usr/bin/systemd-run"
+                        process_priority.shutil,
+                        "which",
+                        return_value="/usr/bin/systemd-run",
                     ),
                     mock.patch.object(
                         process_priority.subprocess, "Popen", return_value=process
@@ -6228,14 +6422,20 @@ class ProcessPriorityTests(unittest.TestCase):
                         return_value=forwarder,
                     ),
                     mock.patch.object(
-                        process_priority.selectors, "DefaultSelector", return_value=selector
+                        process_priority.selectors,
+                        "DefaultSelector",
+                        return_value=selector,
                     ),
                     mock.patch.object(
                         process_priority.time, "monotonic", side_effect=clock_values
                     ),
-                    mock.patch.object(process_priority.os, "getpgid", return_value=4242),
                     mock.patch.object(
-                        process_priority, "_signal_scope_attempt_group", return_value=True
+                        process_priority.os, "getpgid", return_value=4242
+                    ),
+                    mock.patch.object(
+                        process_priority,
+                        "_signal_scope_attempt_group",
+                        return_value=True,
                     ) as forward_signal,
                     mock.patch.object(process_priority.os, "execvpe") as execvpe,
                 ):
@@ -6244,7 +6444,9 @@ class ProcessPriorityTests(unittest.TestCase):
                         if cleanup_failed
                         else "SOC status command timed out"
                     )
-                    with self.assertRaisesRegex(process_priority.PriorityScopeError, expected):
+                    with self.assertRaisesRegex(
+                        process_priority.PriorityScopeError, expected
+                    ):
                         process_priority.ensure_soc_priority_scope(
                             ["status"], status_invocation=True
                         )
@@ -6253,7 +6455,11 @@ class ProcessPriorityTests(unittest.TestCase):
                 self.assertEqual(selector.select.call_count, 1)
                 self.assertEqual(
                     [call.args[1] for call in forward_signal.call_args_list],
-                    [signal.SIGTERM, signal.SIGKILL] if cleanup_failed else [signal.SIGTERM],
+                    (
+                        [signal.SIGTERM, signal.SIGKILL]
+                        if cleanup_failed
+                        else [signal.SIGTERM]
+                    ),
                 )
                 self.assertEqual(process.wait.call_count, 2 if cleanup_failed else 1)
                 execvpe.assert_not_called()
@@ -6272,7 +6478,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 "which",
                 return_value="/usr/bin/systemd-run",
             ),
-            mock.patch.object(process_priority.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                process_priority.subprocess, "Popen", return_value=process
+            ),
             mock.patch.object(
                 process_priority,
                 "_create_scope_exec_latch",
@@ -6304,7 +6512,9 @@ class ProcessPriorityTests(unittest.TestCase):
         kill.assert_called_once_with(4343, signal.SIGTERM)
         execvpe.assert_not_called()
 
-    def test_soc_scope_supervisor_rejects_launch_spec_drift_before_fallback(self) -> None:
+    def test_soc_scope_supervisor_rejects_launch_spec_drift_before_fallback(
+        self,
+    ) -> None:
         process = _fake_scope_process(1)
         listener = mock.Mock()
         with (
@@ -6318,7 +6528,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 "which",
                 return_value="/usr/bin/systemd-run",
             ),
-            mock.patch.object(process_priority.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                process_priority.subprocess, "Popen", return_value=process
+            ),
             mock.patch.object(
                 process_priority,
                 "_create_scope_exec_latch",
@@ -6349,7 +6561,9 @@ class ProcessPriorityTests(unittest.TestCase):
         supervise.assert_called_once()
         execvpe.assert_not_called()
 
-    def test_scope_exec_wrapper_sends_entered_once_and_scrubs_status_environment(self) -> None:
+    def test_scope_exec_wrapper_sends_entered_once_and_scrubs_status_environment(
+        self,
+    ) -> None:
         captured_environment: dict[str, str] = {}
 
         def fail_exec(
@@ -6423,9 +6637,7 @@ class ProcessPriorityTests(unittest.TestCase):
                 process_priority.PriorityScopeError,
                 "SOC priority scope wrapper failed",
             ):
-                process_priority._run_scope_exec_wrapper(
-                    _scope_exec_test_arguments()
-                )
+                process_priority._run_scope_exec_wrapper(_scope_exec_test_arguments())
 
         send_latch.assert_called_once_with("a" * 32, "b" * 64)
         normalize.assert_not_called()
@@ -6508,7 +6720,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 "DefaultSelector",
                 return_value=selector,
             ),
-            mock.patch.object(process_priority.subprocess, "Popen", return_value=process),
+            mock.patch.object(
+                process_priority.subprocess, "Popen", return_value=process
+            ),
             mock.patch.object(process_priority.os, "execvpe") as execvpe,
         ):
             with self.assertRaisesRegex(
@@ -6572,7 +6786,9 @@ class ProcessPriorityTests(unittest.TestCase):
         )
         self.assertEqual(process.wait.call_count, 3)
 
-    def test_scope_attempt_forwarded_signal_grace_reaps_without_escalation(self) -> None:
+    def test_scope_attempt_forwarded_signal_grace_reaps_without_escalation(
+        self,
+    ) -> None:
         process = _fake_scope_process(None)
         process.wait.return_value = 73
         with (
@@ -6759,7 +6975,9 @@ class ProcessPriorityTests(unittest.TestCase):
             )
         kill_group.assert_not_called()
 
-    def test_local_model_scope_rejection_from_high_parent_never_reaches_launcher(self) -> None:
+    def test_local_model_scope_rejection_from_high_parent_never_reaches_launcher(
+        self,
+    ) -> None:
         with (
             mock.patch.dict(
                 process_priority.os.environ,
@@ -6818,7 +7036,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 200,
             )
 
-    def test_priority_scope_identity_round_trips_and_rejects_ambiguous_paths(self) -> None:
+    def test_priority_scope_identity_round_trips_and_rejects_ambiguous_paths(
+        self,
+    ) -> None:
         identity = process_priority.PriorityScopeIdentity(
             "/sys/fs/cgroup/user.slice/recording.scope",
             42,
@@ -6827,7 +7047,9 @@ class ProcessPriorityTests(unittest.TestCase):
         rendered = process_priority.serialize_priority_scope_identity(identity)
 
         self.assertIsNotNone(rendered)
-        self.assertEqual(process_priority.parse_priority_scope_identity(rendered), identity)
+        self.assertEqual(
+            process_priority.parse_priority_scope_identity(rendered), identity
+        )
         self.assertIsNone(
             process_priority.parse_priority_scope_identity(
                 "/sys/fs/cgroup/user.slice/recording|scope|42|1234"
@@ -6863,7 +7085,9 @@ class ProcessPriorityTests(unittest.TestCase):
             )
         )
 
-    def test_priority_scope_identity_parser_rejects_huge_numbers_without_exception(self) -> None:
+    def test_priority_scope_identity_parser_rejects_huge_numbers_without_exception(
+        self,
+    ) -> None:
         path = "/sys/fs/cgroup/user.slice/recording.scope"
         huge = "9" * 5000
 
@@ -6882,7 +7106,9 @@ class ProcessPriorityTests(unittest.TestCase):
         rendered = process_priority.serialize_priority_scope_identity(identity)
 
         self.assertEqual(rendered, f"{path}|18446744073709551615|18446744073709551615")
-        self.assertEqual(process_priority.parse_priority_scope_identity(rendered), identity)
+        self.assertEqual(
+            process_priority.parse_priority_scope_identity(rendered), identity
+        )
         too_large = maximum + 1
         self.assertIsNone(
             process_priority.serialize_priority_scope_identity(
@@ -6905,7 +7131,9 @@ class ProcessPriorityTests(unittest.TestCase):
             )
         )
 
-    def test_priority_scope_identity_rejects_oversized_path_and_total_value(self) -> None:
+    def test_priority_scope_identity_rejects_oversized_path_and_total_value(
+        self,
+    ) -> None:
         oversized_path = "/" + "a" * 4096
         self.assertIsNone(
             process_priority.serialize_priority_scope_identity(
@@ -6913,9 +7141,7 @@ class ProcessPriorityTests(unittest.TestCase):
             )
         )
         self.assertIsNone(
-            process_priority.parse_priority_scope_identity(
-                f"{oversized_path}|1|1"
-            )
+            process_priority.parse_priority_scope_identity(f"{oversized_path}|1|1")
         )
         self.assertIsNone(
             process_priority.parse_priority_scope_identity(
@@ -6924,11 +7150,15 @@ class ProcessPriorityTests(unittest.TestCase):
         )
 
     def test_scope_preflight_does_not_skip_unrelated_nonzero_host_error(self) -> None:
-        self.assertFalse(_scope_manager_unavailable(b"systemd-run: operation not supported\n"))
+        self.assertFalse(
+            _scope_manager_unavailable(b"systemd-run: operation not supported\n")
+        )
         self.assertFalse(_scope_manager_unavailable(b"systemd-run: not supported\n"))
 
     def test_real_soc_scope_expands_taskset_affinity_inside_target_cgroup(self) -> None:
-        systemd_run = shutil.which("systemd-run", path=process_priority._TRUSTED_COMMAND_PATH)
+        systemd_run = shutil.which(
+            "systemd-run", path=process_priority._TRUSTED_COMMAND_PATH
+        )
         current = os.sched_getaffinity(0)
         if (
             not systemd_run
@@ -6968,8 +7198,7 @@ class ProcessPriorityTests(unittest.TestCase):
                 process.wait(timeout=2.0)
         if outcome.returncode != 0 and _scope_manager_unavailable(stderr):
             self.skipTest(
-                "user systemd scope unavailable: "
-                f"{stderr.decode(errors='replace')}"
+                "user systemd scope unavailable: " f"{stderr.decode(errors='replace')}"
             )
         self.assertEqual(
             outcome,
@@ -6981,7 +7210,9 @@ class ProcessPriorityTests(unittest.TestCase):
         self.assertGreater(len(payload["allowed"]), 1)
 
     def test_real_soc_scope_preserves_identity_weights_and_term_cleanup(self) -> None:
-        systemd_run = shutil.which("systemd-run", path=process_priority._TRUSTED_COMMAND_PATH)
+        systemd_run = shutil.which(
+            "systemd-run", path=process_priority._TRUSTED_COMMAND_PATH
+        )
         if not systemd_run:
             self.skipTest("trusted systemd-run is unavailable")
         probe = (
@@ -7005,8 +7236,12 @@ class ProcessPriorityTests(unittest.TestCase):
                 nonce,
             )
             stdout, stderr = process.communicate(timeout=3.0)
-            if outcome.returncode != -signal.SIGTERM and _scope_manager_unavailable(stderr):
-                self.skipTest(f"user systemd scope unavailable: {stderr.decode(errors='replace')}")
+            if outcome.returncode != -signal.SIGTERM and _scope_manager_unavailable(
+                stderr
+            ):
+                self.skipTest(
+                    f"user systemd scope unavailable: {stderr.decode(errors='replace')}"
+                )
             self.assertEqual(
                 outcome,
                 process_priority._ScopeExecAttemptOutcome(
@@ -7038,8 +7273,14 @@ class ProcessPriorityTests(unittest.TestCase):
                 process.wait(timeout=3.0)
 
     def test_real_soc_scope_keeps_detached_child_for_recorder_persistence(self) -> None:
-        systemd_run = shutil.which("systemd-run", path=process_priority._TRUSTED_COMMAND_PATH)
-        if not systemd_run or not os.environ.get("DBUS_SESSION_BUS_ADDRESS") or not os.environ.get("XDG_RUNTIME_DIR"):
+        systemd_run = shutil.which(
+            "systemd-run", path=process_priority._TRUSTED_COMMAND_PATH
+        )
+        if (
+            not systemd_run
+            or not os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+            or not os.environ.get("XDG_RUNTIME_DIR")
+        ):
             self.skipTest("user systemd scope environment is unavailable")
         probe = (
             "import json, os, sys, time\n"
@@ -7077,19 +7318,24 @@ class ProcessPriorityTests(unittest.TestCase):
                 payload = json.loads(line.decode("utf-8"))
             except (UnicodeDecodeError, json.JSONDecodeError):
                 self.fail(
-                    "scope persistence probe produced invalid output: "
-                    f"line={line!r}"
+                    "scope persistence probe produced invalid output: " f"line={line!r}"
                 )
             child_pid = int(payload["child"])
             self.assertEqual(process.returncode, 0)
             os.kill(child_pid, 0)
             child_cgroup = Path(f"/proc/{child_pid}/cgroup").read_text(encoding="ascii")
-            child_relative = next(line[3:] for line in child_cgroup.splitlines() if line.startswith("0::"))
+            child_relative = next(
+                line[3:] for line in child_cgroup.splitlines() if line.startswith("0::")
+            )
             child_scope = Path("/sys/fs/cgroup") / child_relative.lstrip("/")
             self.assertTrue(str(child_scope).endswith(".scope"))
-            self.assertEqual((child_scope / "cpu.weight").read_text(encoding="ascii").strip(), "200")
+            self.assertEqual(
+                (child_scope / "cpu.weight").read_text(encoding="ascii").strip(), "200"
+            )
             self.assertTrue(
-                (child_scope / "io.weight").read_text(encoding="ascii").startswith("default 200")
+                (child_scope / "io.weight")
+                .read_text(encoding="ascii")
+                .startswith("default 200")
             )
             os.killpg(child_pid, signal.SIGTERM)
             for _ in range(40):
@@ -7116,7 +7362,9 @@ class ProcessPriorityTests(unittest.TestCase):
                 process.stderr.close()
 
     def test_real_soc_scope_preserves_exit_and_streams(self) -> None:
-        systemd_run = shutil.which("systemd-run", path=process_priority._TRUSTED_COMMAND_PATH)
+        systemd_run = shutil.which(
+            "systemd-run", path=process_priority._TRUSTED_COMMAND_PATH
+        )
         if not systemd_run:
             self.skipTest("trusted systemd-run is unavailable")
         capability_probe: socket.socket | None = None
@@ -7139,8 +7387,7 @@ class ProcessPriorityTests(unittest.TestCase):
             if error.errno not in _AF_UNIX_LATCH_CAPABILITY_ERRNOS:
                 raise
             self.skipTest(
-                "AF_UNIX credential capability is unavailable: "
-                f"errno={error.errno}"
+                "AF_UNIX credential capability is unavailable: " f"errno={error.errno}"
             )
         finally:
             if capability_probe is not None:
@@ -7170,11 +7417,7 @@ class ProcessPriorityTests(unittest.TestCase):
         def terminate_scope_once() -> None:
             nonlocal cleanup_started, cleanup_failed
             with cleanup_lock:
-                if (
-                    cleanup_started
-                    or process is None
-                    or process.poll() is not None
-                ):
+                if cleanup_started or process is None or process.poll() is not None:
                     return
                 cleanup_started = True
             try:
@@ -7274,8 +7517,14 @@ class ProcessPriorityTests(unittest.TestCase):
                     self.skipTest(skip_reason)
 
     def test_real_cli_entrypoint_keeps_json_after_high_scope_bootstrap(self) -> None:
-        systemd_run = shutil.which("systemd-run", path=process_priority._TRUSTED_COMMAND_PATH)
-        if not systemd_run or not os.environ.get("DBUS_SESSION_BUS_ADDRESS") or not os.environ.get("XDG_RUNTIME_DIR"):
+        systemd_run = shutil.which(
+            "systemd-run", path=process_priority._TRUSTED_COMMAND_PATH
+        )
+        if (
+            not systemd_run
+            or not os.environ.get("DBUS_SESSION_BUS_ADDRESS")
+            or not os.environ.get("XDG_RUNTIME_DIR")
+        ):
             self.skipTest("user systemd scope environment is unavailable")
         environment = os.environ.copy()
         environment.pop(process_priority.SOC_PRIORITY_SCOPE_MARKER, None)
@@ -7293,17 +7542,55 @@ class ProcessPriorityTests(unittest.TestCase):
                 shell=False,
             )
         if result.returncode != 0 and _scope_manager_unavailable(result.stderr):
-            self.skipTest(
-                "direct CLI scope unavailable: "
-                f"rc={result.returncode}, stderr={result.stderr.decode(errors='replace')}"
-            )
+            self.skipTest("direct CLI scope unavailable")
         self.assertEqual(result.returncode, 0)
         payload = json.loads(result.stdout.decode("utf-8"))
         self.assertIsInstance(payload, dict)
         self.assertIn("status", payload)
         self.assertEqual(result.stderr, b"")
 
-    def test_negative_nice_permission_denied_with_zero_exit_keeps_low_child_priority(self) -> None:
+    def test_real_cli_scope_skip_does_not_echo_child_stderr(self) -> None:
+        synthetic_stderr = b"SYNTHETIC_SECRET failed to connect to bus: no medium found"
+        synthetic_environment = {
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/nonexistent/soc-test-bus",
+            "XDG_RUNTIME_DIR": "/nonexistent/soc-test-runtime",
+            "TMPDIR": tempfile.gettempdir(),
+        }
+        completed = subprocess.CompletedProcess(
+            args=["synthetic-cli"], returncode=1, stdout=b"", stderr=synthetic_stderr
+        )
+        with (
+            mock.patch.object(os, "environ", synthetic_environment),
+            mock.patch.object(
+                shutil, "which", return_value="/usr/bin/systemd-run"
+            ) as mocked_which,
+            mock.patch.object(subprocess, "run", return_value=completed) as mocked_run,
+            mock.patch.object(subprocess, "Popen") as mocked_popen,
+            mock.patch.object(socket, "socket") as mocked_socket,
+            mock.patch.object(os, "kill") as mocked_kill,
+            mock.patch.object(os, "killpg") as mocked_killpg,
+            mock.patch.object(
+                signal, "pidfd_send_signal", create=True
+            ) as mocked_pidfd_signal,
+        ):
+            with self.assertRaises(unittest.SkipTest) as caught:
+                self.test_real_cli_entrypoint_keeps_json_after_high_scope_bootstrap()
+
+        self.assertEqual(str(caught.exception), "direct CLI scope unavailable")
+        self.assertNotIn("SYNTHETIC_SECRET", str(caught.exception))
+        mocked_which.assert_called_once_with(
+            "systemd-run", path=process_priority._TRUSTED_COMMAND_PATH
+        )
+        mocked_run.assert_called_once()
+        mocked_popen.assert_not_called()
+        mocked_socket.assert_not_called()
+        mocked_kill.assert_not_called()
+        mocked_killpg.assert_not_called()
+        mocked_pidfd_signal.assert_not_called()
+
+    def test_negative_nice_permission_denied_with_zero_exit_keeps_low_child_priority(
+        self,
+    ) -> None:
         nice = shutil.which("nice", path=process_priority._TRUSTED_COMMAND_PATH)
         if not nice or os.geteuid() == 0:
             self.skipTest("unprivileged nice semantics are not available")
@@ -7328,10 +7615,14 @@ class ProcessPriorityTests(unittest.TestCase):
         if "permission denied" not in result.stderr.lower():
             self.skipTest("host permits the negative nice adjustment")
         self.assertEqual(result.returncode, 0)
-        self.assertGreaterEqual(int(result.stdout.strip()), process_priority.LOCAL_MODEL_CPU_NICE)
+        self.assertGreaterEqual(
+            int(result.stdout.strip()), process_priority.LOCAL_MODEL_CPU_NICE
+        )
 
     def test_ionice_failure_falls_back_without_raising(self) -> None:
-        with mock.patch.object(process_priority, "_current_priority_scope_weights", return_value=(200, 100)):
+        with mock.patch.object(
+            process_priority, "_current_priority_scope_weights", return_value=(200, 100)
+        ):
             self.assertEqual(process_priority.apply_process_priority(), (True, False))
 
 
@@ -7465,9 +7756,7 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
             online.symlink_to(target)
             with (
                 mock.patch.object(process_priority, "_PROC_SELF_CGROUP", cgroup),
-                mock.patch.object(
-                    process_priority, "_PROC_SELF_MOUNTINFO", mountinfo
-                ),
+                mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
                 mock.patch.object(process_priority, "_CPU_ONLINE", online),
             ):
                 without_online = process_priority.current_cgroup_resource_snapshot()
@@ -7500,9 +7789,7 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
 
             with (
                 mock.patch.object(process_priority, "_PROC_SELF_CGROUP", cgroup),
-                mock.patch.object(
-                    process_priority, "_PROC_SELF_MOUNTINFO", mountinfo
-                ),
+                mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
                 mock.patch.object(process_priority, "_CPU_ONLINE", online),
                 mock.patch.object(
                     process_priority.os,
@@ -7539,9 +7826,7 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
 
             with (
                 mock.patch.object(process_priority, "_PROC_SELF_CGROUP", cgroup),
-                mock.patch.object(
-                    process_priority, "_PROC_SELF_MOUNTINFO", mountinfo
-                ),
+                mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
                 mock.patch.object(
                     process_priority,
                     "_cgroup_resource_snapshot_once",
@@ -7570,9 +7855,7 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
 
             with (
                 mock.patch.object(process_priority, "_PROC_SELF_CGROUP", cgroup),
-                mock.patch.object(
-                    process_priority, "_PROC_SELF_MOUNTINFO", mountinfo
-                ),
+                mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
                 mock.patch.object(
                     process_priority,
                     "_cgroup_resource_snapshot_once",
@@ -7603,9 +7886,7 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
 
             with (
                 mock.patch.object(process_priority, "_PROC_SELF_CGROUP", cgroup),
-                mock.patch.object(
-                    process_priority, "_PROC_SELF_MOUNTINFO", mountinfo
-                ),
+                mock.patch.object(process_priority, "_PROC_SELF_MOUNTINFO", mountinfo),
                 mock.patch.object(
                     process_priority,
                     "_mapped_cgroup2_location",
@@ -7656,9 +7937,7 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
             for name, identities in cases:
                 with (
                     self.subTest(name=name),
-                    mock.patch.object(
-                        process_priority, "_PROC_SELF_CGROUP", cgroup
-                    ),
+                    mock.patch.object(process_priority, "_PROC_SELF_CGROUP", cgroup),
                     mock.patch.object(
                         process_priority, "_PROC_SELF_MOUNTINFO", mountinfo
                     ),
@@ -7820,9 +8099,7 @@ class CgroupResourceSnapshotTests(unittest.TestCase):
                 "_normalize_cpu_affinity_for_scope_exec",
             ) as normalize,
         ):
-            self.assertTrue(
-                process_priority.ensure_resource_gate_priority_scope([])
-            )
+            self.assertTrue(process_priority.ensure_resource_gate_priority_scope([]))
 
         normalize.assert_not_called()
         verify.assert_called_once_with(
@@ -7909,9 +8186,7 @@ class InitialNamespaceIdentityTests(unittest.TestCase):
             if override is not None:
                 return override
             first_inode = int(configured_value(("inode", name), inode))
-            effective_inode = int(
-                configured_value(("after_inode", name), first_inode)
-            )
+            effective_inode = int(configured_value(("after_inode", name), first_inode))
             mode = int(configured_value(("mode", name), stat.S_IFREG | 0o444))
             return mock.Mock(st_mode=mode, st_dev=7, st_ino=effective_inode)
 
@@ -7921,9 +8196,7 @@ class InitialNamespaceIdentityTests(unittest.TestCase):
                 raise OSError(errno.EBADF, "invalid")
             name = spec[0]
             if operation == process_priority.fcntl.F_GETFL:
-                return int(
-                    configured_value(("status_flags", name), os.O_RDONLY)
-                )
+                return int(configured_value(("status_flags", name), os.O_RDONLY))
             if operation == process_priority.fcntl.F_GETFD:
                 return int(
                     configured_value(
@@ -8024,8 +8297,8 @@ class InitialNamespaceIdentityTests(unittest.TestCase):
                 ("inode", inode + 16),
             ):
                 with self.subTest(namespace=name, fault=fault):
-                    identity, _pidfd, _open, _ioctl, close, _events = (
-                        self._run_probe({(fault, name): value})
+                    identity, _pidfd, _open, _ioctl, close, _events = self._run_probe(
+                        {(fault, name): value}
                     )
                 self.assertIsNone(identity)
                 closed = [call.args[0] for call in close.call_args_list]
@@ -8059,8 +8332,8 @@ class InitialNamespaceIdentityTests(unittest.TestCase):
         }
         for failure, faults in cases.items():
             with self.subTest(failure=failure):
-                identity, _pidfd, path_open, _ioctl, close, _events = (
-                    self._run_probe(faults)
+                identity, _pidfd, path_open, _ioctl, close, _events = self._run_probe(
+                    faults
                 )
                 self.assertIsNone(identity)
                 path_open.assert_not_called()
@@ -8077,10 +8350,8 @@ class InitialNamespaceIdentityTests(unittest.TestCase):
             errno.EMFILE,
         ):
             with self.subTest(stage="pidfd_open", errno=error_number):
-                identity, _pidfd, path_open, _ioctl, close, _events = (
-                    self._run_probe(
-                        {"pidfd_open": OSError(error_number, "unavailable")}
-                    )
+                identity, _pidfd, path_open, _ioctl, close, _events = self._run_probe(
+                    {"pidfd_open": OSError(error_number, "unavailable")}
                 )
                 self.assertIsNone(identity)
                 path_open.assert_not_called()
@@ -8089,10 +8360,8 @@ class InitialNamespaceIdentityTests(unittest.TestCase):
         for index, spec in enumerate(self._SPECS):
             name = spec[0]
             with self.subTest(stage="pidfd_get", namespace=name):
-                identity, _pidfd, _open, _ioctl, close, _events = (
-                    self._run_probe(
-                        {("get", name): OSError(errno.ENOTTY, "unsupported")}
-                    )
+                identity, _pidfd, _open, _ioctl, close, _events = self._run_probe(
+                    {("get", name): OSError(errno.ENOTTY, "unsupported")}
                 )
                 self.assertIsNone(identity)
                 expected_closed = [self._PIDFD]
@@ -8103,10 +8372,8 @@ class InitialNamespaceIdentityTests(unittest.TestCase):
 
         for stage in ("type", "id_result"):
             with self.subTest(stage=stage):
-                identity, _pidfd, _open, _ioctl, close, _events = (
-                    self._run_probe(
-                        {(stage, "user"): OSError(errno.EACCES, "denied")}
-                    )
+                identity, _pidfd, _open, _ioctl, close, _events = self._run_probe(
+                    {(stage, "user"): OSError(errno.EACCES, "denied")}
                 )
                 self.assertIsNone(identity)
                 closed = [call.args[0] for call in close.call_args_list]
@@ -8140,8 +8407,8 @@ class InitialNamespaceIdentityTests(unittest.TestCase):
         }
         for failure, (faults, expected_closed) in cases.items():
             with self.subTest(failure=failure):
-                identity, _pidfd, path_open, _ioctl, close, _events = (
-                    self._run_probe(faults)
+                identity, _pidfd, path_open, _ioctl, close, _events = self._run_probe(
+                    faults
                 )
                 self.assertIsNone(identity)
                 path_open.assert_not_called()

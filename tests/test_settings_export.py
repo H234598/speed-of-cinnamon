@@ -42,7 +42,8 @@ class SettingsExportTest(unittest.TestCase):
             yield captured
         self.assertTrue(
             any(
-                issubclass(item.category, RuntimeWarning) and re.search(pattern, str(item.message))
+                issubclass(item.category, RuntimeWarning)
+                and re.search(pattern, str(item.message))
                 for item in captured
             ),
             f"expected RuntimeWarning matching {pattern!r}",
@@ -51,7 +52,9 @@ class SettingsExportTest(unittest.TestCase):
     def test_build_export_rejects_non_object_settings(self) -> None:
         for settings in (None, [], "bad", 1):
             with self.subTest(settings=settings):
-                with self.assertRaisesRegex(SettingsExportError, "settings export settings must be an object"):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "settings export settings must be an object"
+                ):
                     build_export(settings)  # type: ignore[arg-type]
 
     def test_backup_export_omits_volatile_timestamp(self) -> None:
@@ -99,9 +102,12 @@ class SettingsExportTest(unittest.TestCase):
     def test_read_export_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            path.write_text('{"app":"speed-of-cinnamon","version":2,"created_at":"","speed_of_cinnamon_version":"",'
-                            '"settings":{"language":"en","max-seconds":30},'
-                            '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}', encoding="utf-8")
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"created_at":"","speed_of_cinnamon_version":"",'
+                '"settings":{"language":"en","max-seconds":30},'
+                '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
+                encoding="utf-8",
+            )
             payload = read_export(path)
         self.assertEqual(payload["app"], "speed-of-cinnamon")
         self.assertTrue(mocked_open.called)
@@ -118,18 +124,27 @@ class SettingsExportTest(unittest.TestCase):
     def test_read_export_wraps_fdopen_value_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            path.write_text(json.dumps(build_export({"language": "en"})), encoding="utf-8")
-            with mock.patch.object(settings_export_module.os, "fdopen", side_effect=ValueError("bad fd")):
-                with self.assertRaisesRegex(SettingsExportError, "settings export could not be read"):
+            path.write_text(
+                json.dumps(build_export({"language": "en"})), encoding="utf-8"
+            )
+            with mock.patch.object(
+                settings_export_module.os, "fdopen", side_effect=ValueError("bad fd")
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "settings export could not be read"
+                ):
                     read_export(path)
 
     def test_read_export_rejects_hardlinked_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             hardlink = Path(tmp) / "hardlinked-settings-export.json"
-            path.write_text('{"app":"speed-of-cinnamon","version":2,"created_at":"","speed_of_cinnamon_version":"",'
-                            '"settings":{"language":"en","max-seconds":30},'
-                            '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}', encoding="utf-8")
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"created_at":"","speed_of_cinnamon_version":"",'
+                '"settings":{"language":"en","max-seconds":30},'
+                '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
+                encoding="utf-8",
+            )
             try:
                 os.link(path, hardlink)
             except OSError as exc:
@@ -205,7 +220,9 @@ class SettingsExportTest(unittest.TestCase):
             read_export(Path("a" * (MAX_SETTINGS_EXPORT_PATH_CHARS + 1)))
 
     def test_read_export_rejects_oversized_path_bytes(self) -> None:
-        with mock.patch("speed_of_cinnamon.settings_export.MAX_SETTINGS_EXPORT_PATH_CHARS", 4):
+        with mock.patch(
+            "speed_of_cinnamon.settings_export.MAX_SETTINGS_EXPORT_PATH_CHARS", 4
+        ):
             with self.assertRaisesRegex(SettingsExportError, "path is invalid"):
                 read_export(Path("é" * 3))
 
@@ -213,13 +230,20 @@ class SettingsExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("x" * (MAX_SETTINGS_EXPORT_BYTES + 1), encoding="utf-8")
-            with self.assertRaisesRegex(SettingsExportError, "settings export is too large"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "settings export is too large"
+            ):
                 read_export(path)
 
     def test_read_export_rejects_deeply_nested_json_before_normalization(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            path.write_text("[" * (MAX_SETTINGS_EXPORT_JSON_DEPTH + 1) + "0" + "]" * (MAX_SETTINGS_EXPORT_JSON_DEPTH + 1), encoding="utf-8")
+            path.write_text(
+                "[" * (MAX_SETTINGS_EXPORT_JSON_DEPTH + 1)
+                + "0"
+                + "]" * (MAX_SETTINGS_EXPORT_JSON_DEPTH + 1),
+                encoding="utf-8",
+            )
             with self.assertRaisesRegex(SettingsExportError, "too deeply nested"):
                 read_export(path)
 
@@ -229,10 +253,15 @@ class SettingsExportTest(unittest.TestCase):
             payload = {
                 "app": "speed-of-cinnamon",
                 "version": 2,
-                "settings": {f"k{index}": "" for index in range(MAX_SETTINGS_EXPORT_JSON_NODES + 1)},
+                "settings": {
+                    f"k{index}": ""
+                    for index in range(MAX_SETTINGS_EXPORT_JSON_NODES + 1)
+                },
                 "alarms": {"version": 2, "alarms": [], "last_checked_at": ""},
             }
-            path.write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+            path.write_text(
+                json.dumps(payload, separators=(",", ":")), encoding="utf-8"
+            )
             with self.assertRaisesRegex(SettingsExportError, "too complex"):
                 read_export(path)
 
@@ -241,7 +270,11 @@ class SettingsExportTest(unittest.TestCase):
             path = Path(tmp) / "settings-export.json"
             path.write_text("{}", encoding="utf-8")
             with (
-                mock.patch.object(settings_export_module.json, "loads", side_effect=MemoryError("too large")),
+                mock.patch.object(
+                    settings_export_module.json,
+                    "loads",
+                    side_effect=MemoryError("too large"),
+                ),
                 self.assertRaisesRegex(SettingsExportError, "could not be read"),
             ):
                 read_export(path)
@@ -250,7 +283,11 @@ class SettingsExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             with (
-                mock.patch.object(settings_export_module.json, "dumps", side_effect=MemoryError("too large")),
+                mock.patch.object(
+                    settings_export_module.json,
+                    "dumps",
+                    side_effect=MemoryError("too large"),
+                ),
                 self.assertRaisesRegex(SettingsExportError, "could not be rendered"),
             ):
                 write_export(path, {"language": "en"})
@@ -259,7 +296,11 @@ class SettingsExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             with (
-                mock.patch.object(settings_export_module.json, "dumps", side_effect=RecursionError("too deep")),
+                mock.patch.object(
+                    settings_export_module.json,
+                    "dumps",
+                    side_effect=RecursionError("too deep"),
+                ),
                 self.assertRaisesRegex(SettingsExportError, "could not be rendered"),
             ):
                 write_export(path, {"language": "en"})
@@ -270,7 +311,9 @@ class SettingsExportTest(unittest.TestCase):
                 _sanitize_text_field("😀" * 2, field_name="setting value")
 
     def test_normalize_setting_rejects_empty_url_userinfo(self) -> None:
-        with self.assertRaisesRegex(SettingsExportError, "must not contain URL credentials"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "must not contain URL credentials"
+        ):
             normalize_setting("openai-compatible-url", "https://@api.example.test/v1")
 
     def test_write_export_rejects_oversized_path(self) -> None:
@@ -278,11 +321,18 @@ class SettingsExportTest(unittest.TestCase):
         with self.assertRaisesRegex(SettingsExportError, "path is invalid"):
             write_export(path, {"language": "en"})
 
-    @mock.patch("speed_of_cinnamon.settings_export.json.dumps", return_value='{"setting":"\ud800"}')
-    def test_write_export_rejects_unencodable_rendered_payload(self, mocked_dumps: mock.Mock) -> None:
+    @mock.patch(
+        "speed_of_cinnamon.settings_export.json.dumps",
+        return_value='{"setting":"\ud800"}',
+    )
+    def test_write_export_rejects_unencodable_rendered_payload(
+        self, mocked_dumps: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            with self.assertRaisesRegex(SettingsExportError, "settings export payload contains invalid Unicode"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "settings export payload contains invalid Unicode"
+            ):
                 write_export(path, {"language": "en"})
         mocked_dumps.assert_called_once()
 
@@ -290,7 +340,9 @@ class SettingsExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_bytes(b"\xff")
-            with self.assertRaisesRegex(SettingsExportError, "settings export could not be read"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "settings export could not be read"
+            ):
                 read_export(path)
 
     def test_read_export_rejects_non_finite_numbers(self) -> None:
@@ -305,7 +357,9 @@ class SettingsExportTest(unittest.TestCase):
                         '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
                         encoding="utf-8",
                     )
-                    with self.assertRaisesRegex(SettingsExportError, "settings export could not be read"):
+                    with self.assertRaisesRegex(
+                        SettingsExportError, "settings export could not be read"
+                    ):
                         read_export(path)
 
     def test_read_export_rejects_duplicate_json_keys(self) -> None:
@@ -315,7 +369,9 @@ class SettingsExportTest(unittest.TestCase):
                 '{"app":"speed-of-cinnamon","app":"other", "version":2, "settings":{}}',
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SettingsExportError, "settings export could not be read"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "settings export could not be read"
+            ):
                 read_export(path)
 
     def test_read_export_does_not_echo_invalid_version(self) -> None:
@@ -325,17 +381,24 @@ class SettingsExportTest(unittest.TestCase):
                 payload = build_export({"language": "en"})
                 payload["version"] = version
                 path.write_text(json.dumps(payload), encoding="utf-8")
-                with self.assertRaisesRegex(SettingsExportError, "unsupported settings export version") as raised:
+                with self.assertRaisesRegex(
+                    SettingsExportError, "unsupported settings export version"
+                ) as raised:
                     read_export(path)
                 self.assertNotIn("SECRET_TOKEN", str(raised.exception))
 
     def test_read_export_rejects_control_char_settings(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            path.write_text('{"app":"speed-of-cinnamon","version":2,"created_at":"","speed_of_cinnamon_version":"",'
-                            '"settings":{"language":"en\\rde","max-seconds":30},'
-                            '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}', encoding="utf-8")
-            with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"created_at":"","speed_of_cinnamon_version":"",'
+                '"settings":{"language":"en\\rde","max-seconds":30},'
+                '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                SettingsExportError, "invalid control character"
+            ):
                 read_export(path)
 
     def test_read_export_rejects_control_char_metadata(self) -> None:
@@ -347,7 +410,9 @@ class SettingsExportTest(unittest.TestCase):
                 '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SettingsExportError, "invalid control character"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "invalid control character"
+            ):
                 read_export(path)
 
     def test_read_export_rejects_oversized_metadata(self) -> None:
@@ -365,35 +430,37 @@ class SettingsExportTest(unittest.TestCase):
                 read_export(path)
 
     def test_build_export_keeps_only_supported_settings(self) -> None:
-        payload = build_export({
-            "primary-language-keybinding": "<Super><Alt>z::",
-            "secondary-language-keybinding": "<Super><Shift>z::",
-            "cancel-keybinding": "<Super>Escape::",
-            "language": "de",
-            "show-panel-label": True,
-            "append-space": False,
-            "auto-transcribe-timeout": False,
-            "auto-relisten": True,
-            "keep-recording-artifacts": True,
-            "sanitize-special-chars": True,
-            "soften-profanity": True,
-            "typing-delay-ms": "12",
-            "max-transcript-files": "500",
-            "artifact-encryption": "passphrase",
-            "auto-paste-window-title": "Teams",
-            "post-process-backend": "ollama",
-            "ollama-model": "llama3.2:3b",
-            "openai-compatible-url": "http://127.0.0.1:8000/v1",
-            "openai-compatible-model": "local-llama",
-            "openai-compatible-text-model": "local-polisher",
-            "openai-compatible-flex-processing": False,
-            "post-process-preset": "code",
-            "post-process-preserve-code": True,
-            "post-process-never-add-content": True,
-            "post-process-mask-sensitive-data": True,
-            "cli-path": "/tmp/not-portable",
-            "unknown": "ignored",
-        })
+        payload = build_export(
+            {
+                "primary-language-keybinding": "<Super><Alt>z::",
+                "secondary-language-keybinding": "<Super><Shift>z::",
+                "cancel-keybinding": "<Super>Escape::",
+                "language": "de",
+                "show-panel-label": True,
+                "append-space": False,
+                "auto-transcribe-timeout": False,
+                "auto-relisten": True,
+                "keep-recording-artifacts": True,
+                "sanitize-special-chars": True,
+                "soften-profanity": True,
+                "typing-delay-ms": "12",
+                "max-transcript-files": "500",
+                "artifact-encryption": "passphrase",
+                "auto-paste-window-title": "Teams",
+                "post-process-backend": "ollama",
+                "ollama-model": "llama3.2:3b",
+                "openai-compatible-url": "http://127.0.0.1:8000/v1",
+                "openai-compatible-model": "local-llama",
+                "openai-compatible-text-model": "local-polisher",
+                "openai-compatible-flex-processing": False,
+                "post-process-preset": "code",
+                "post-process-preserve-code": True,
+                "post-process-never-add-content": True,
+                "post-process-mask-sensitive-data": True,
+                "cli-path": "/tmp/not-portable",
+                "unknown": "ignored",
+            }
+        )
         settings = payload["settings"]
         self.assertEqual(payload["app"], "speed-of-cinnamon")
         self.assertEqual(settings["primary-language-keybinding"], "<Super><Alt>z::")
@@ -424,16 +491,20 @@ class SettingsExportTest(unittest.TestCase):
         self.assertNotIn("cli-path", settings)
         self.assertNotIn("unknown", settings)
 
-    def test_build_export_preserves_transcript_visibility_and_status_icons(self) -> None:
-        settings = build_export({
-            "show-transcript-text": False,
-            "status-icon-ready": "ready-01",
-            "status-icon-recording": "recording-51",
-            "status-icon-processing": "processing-12",
-            "status-icon-recorded": "soc-original",
-            "status-icon-error": "error-03",
-            "status-icon-setup": "setup-20",
-        })["settings"]
+    def test_build_export_preserves_transcript_visibility_and_status_icons(
+        self,
+    ) -> None:
+        settings = build_export(
+            {
+                "show-transcript-text": False,
+                "status-icon-ready": "ready-01",
+                "status-icon-recording": "recording-51",
+                "status-icon-processing": "processing-12",
+                "status-icon-recorded": "soc-original",
+                "status-icon-error": "error-03",
+                "status-icon-setup": "setup-20",
+            }
+        )["settings"]
 
         self.assertFalse(settings["show-transcript-text"])
         self.assertEqual(settings["status-icon-ready"], "ready-01")
@@ -444,19 +515,23 @@ class SettingsExportTest(unittest.TestCase):
         self.assertEqual(settings["status-icon-setup"], "setup-20")
 
     def test_build_export_rejects_unknown_status_icon(self) -> None:
-        with self.assertRaisesRegex(SettingsExportError, "setting status-icon-ready has unsupported value"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "setting status-icon-ready has unsupported value"
+        ):
             build_export({"status-icon-ready": "ready-999"})
 
     def test_build_export_does_not_leak_command_settings(self) -> None:
-        payload = build_export({
-            "openai-compatible-api-key": "sk-live-secret",
-            "personal-context": "PRIVATE PERSONAL CONTEXT",
-            "transcriber-command": "custom-asr --token sk-secret-token",
-            "post-process-command": "polish --api-key ghp_secret",
-            "post-process-prompt": "PRIVATE POST PROCESS PROMPT",
-            "vocabulary": "PRIVATE VOCABULARY",
-            "language": "de",
-        })
+        payload = build_export(
+            {
+                "openai-compatible-api-key": "sk-live-secret",
+                "personal-context": "PRIVATE PERSONAL CONTEXT",
+                "transcriber-command": "custom-asr --token sk-secret-token",
+                "post-process-command": "polish --api-key ghp_secret",
+                "post-process-prompt": "PRIVATE POST PROCESS PROMPT",
+                "vocabulary": "PRIVATE VOCABULARY",
+                "language": "de",
+            }
+        )
         rendered = json.dumps(payload, sort_keys=True)
 
         self.assertNotIn("openai-compatible-api-key", payload["settings"])
@@ -486,12 +561,18 @@ class SettingsExportTest(unittest.TestCase):
             "post-process-prompt": "PRIVATE POST PROCESS PROMPT",
             "vocabulary": "PRIVATE VOCABULARY",
         }
-        with self.assertRaisesRegex(SettingsExportError, "private setting opt-in must be boolean"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "private setting opt-in must be boolean"
+        ):
             build_export(settings, include_private_settings=1)  # type: ignore[arg-type]
 
         payload = build_export(settings, include_private_settings=True)
-        self.assertEqual(payload["settings"]["personal-context"], settings["personal-context"])
-        self.assertEqual(payload["settings"]["post-process-prompt"], settings["post-process-prompt"])
+        self.assertEqual(
+            payload["settings"]["personal-context"], settings["personal-context"]
+        )
+        self.assertEqual(
+            payload["settings"]["post-process-prompt"], settings["post-process-prompt"]
+        )
         self.assertEqual(payload["settings"]["vocabulary"], settings["vocabulary"])
         self.assertNotIn("personal-context", payload["excluded_private_settings"])
         self.assertIn("personal-context", payload["included_private_settings"])
@@ -505,27 +586,59 @@ class SettingsExportTest(unittest.TestCase):
         for text in docs:
             self.assertIn("Backend URLs with embedded credentials", text)
             self.assertIn("fragments are rejected", text)
-        with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url must not contain URL credentials"):
-            build_export({"openai-compatible-url": "https://user:secret-token@api.example.test/v1"})
-        with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url must not contain URL query or fragment"):
-            build_export({"openai-compatible-url": "https://api.example.test/v1?api_key=secret-token"})
-        with self.assertRaisesRegex(SettingsExportError, "ollama-url must not contain URL query or fragment"):
+        with self.assertRaisesRegex(
+            SettingsExportError,
+            "openai-compatible-url must not contain URL credentials",
+        ):
+            build_export(
+                {
+                    "openai-compatible-url": "https://user:secret-token@api.example.test/v1"
+                }
+            )
+        with self.assertRaisesRegex(
+            SettingsExportError,
+            "openai-compatible-url must not contain URL query or fragment",
+        ):
+            build_export(
+                {
+                    "openai-compatible-url": "https://api.example.test/v1?api_key=secret-token"
+                }
+            )
+        with self.assertRaisesRegex(
+            SettingsExportError, "ollama-url must not contain URL query or fragment"
+        ):
             build_export({"ollama-url": "http://127.0.0.1:11434#secret-token"})
-        with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url must use https:// unless host is local loopback"):
+        with self.assertRaisesRegex(
+            SettingsExportError,
+            "openai-compatible-url must use https:// unless host is local loopback",
+        ):
             build_export({"openai-compatible-url": "http://api.example.test/v1"})
-        with self.assertRaisesRegex(SettingsExportError, "ollama-url must use https:// unless host is local loopback"):
+        with self.assertRaisesRegex(
+            SettingsExportError,
+            "ollama-url must use https:// unless host is local loopback",
+        ):
             build_export({"ollama-url": "http://api.example.test:11434"})
-        with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url must use http:// or https://"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "openai-compatible-url must use http:// or https://"
+        ):
             build_export({"openai-compatible-url": "ftp://127.0.0.1:8000/v1"})
-        with self.assertRaisesRegex(SettingsExportError, "openai-compatible-url has invalid port"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "openai-compatible-url has invalid port"
+        ):
             build_export({"openai-compatible-url": "https://api.example.test:bad/v1"})
-        with self.assertRaisesRegex(SettingsExportError, "setting openai-compatible-url is missing hostname"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "setting openai-compatible-url is missing hostname"
+        ):
             build_export({"openai-compatible-url": "https://:443/v1"})
-        with self.assertRaisesRegex(SettingsExportError, "setting ollama-url is missing hostname"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "setting ollama-url is missing hostname"
+        ):
             build_export({"ollama-url": "https://@/v1"})
 
         long_url = "http://127.0.0.1:11434/" + ("x" * MAX_SETTINGS_URL_CHARS)
-        with self.assertRaisesRegex(SettingsExportError, "setting ollama-url is too long"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "setting ollama-url is too long"
+        ):
             build_export({"ollama-url": long_url})
 
     def test_build_export_rejects_runtime_oversized_text_settings(self) -> None:
@@ -537,15 +650,23 @@ class SettingsExportTest(unittest.TestCase):
         }
         for key, limit in limits.items():
             with self.subTest(key=key):
-                with self.assertRaisesRegex(SettingsExportError, rf"setting {key} is too long"):
+                with self.assertRaisesRegex(
+                    SettingsExportError, rf"setting {key} is too long"
+                ):
                     build_export({key: "x" * (limit + 1)})
 
     def test_build_export_rejects_unknown_mode_values(self) -> None:
-        with self.assertRaisesRegex(SettingsExportError, "setting insert-method has unsupported value"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "setting insert-method has unsupported value"
+        ):
             build_export({"insert-method": "clipboard-paste\x20--unsafe"})
-        with self.assertRaisesRegex(SettingsExportError, "setting artifact-encryption has unsupported value"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "setting artifact-encryption has unsupported value"
+        ):
             build_export({"artifact-encryption": "plaintext"})
-        with self.assertRaisesRegex(SettingsExportError, "setting post-process-backend has unsupported value"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "setting post-process-backend has unsupported value"
+        ):
             build_export({"post-process-backend": "remote-shell"})
 
     def test_normalize_setting_canonicalizes_transcriber_aliases(self) -> None:
@@ -559,7 +680,9 @@ class SettingsExportTest(unittest.TestCase):
         }.items():
             with self.subTest(alias=alias):
                 self.assertEqual(normalize_setting("transcriber", alias), canonical)
-        with self.assertRaisesRegex(SettingsExportError, "setting transcriber has unsupported value"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "setting transcriber has unsupported value"
+        ):
             normalize_setting("transcriber", "shell")
 
     def test_normalize_setting_canonicalizes_legacy_output_alias(self) -> None:
@@ -632,7 +755,9 @@ class SettingsExportTest(unittest.TestCase):
             path = Path(tmp) / "settings-export.json"
             write_export(path, settings, include_private_settings=True)
             payload = read_export(path)
-        self.assertEqual(payload["settings"]["personal-context"], settings["personal-context"])
+        self.assertEqual(
+            payload["settings"]["personal-context"], settings["personal-context"]
+        )
         self.assertEqual(payload["settings"]["vocabulary"], settings["vocabulary"])
 
     def test_read_export_strips_private_settings_without_opt_in_metadata(self) -> None:
@@ -660,12 +785,16 @@ class SettingsExportTest(unittest.TestCase):
             path.write_text(json.dumps(payload), encoding="utf-8")
             imported = read_export(path)
 
-        self.assertEqual(imported["settings"]["personal-context"], "explicitly included")
+        self.assertEqual(
+            imported["settings"]["personal-context"], "explicitly included"
+        )
         self.assertIn("personal-context", imported["included_private_settings"])
         self.assertNotIn("personal-context", imported["excluded_private_settings"])
 
     def test_read_export_rejects_conflicting_private_metadata(self) -> None:
-        payload = build_export({"personal-context": "private"}, include_private_settings=True)
+        payload = build_export(
+            {"personal-context": "private"}, include_private_settings=True
+        )
         payload["excluded_private_settings"].append("personal-context")
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -682,28 +811,43 @@ class SettingsExportTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as tmp:
                     path = Path(tmp) / "settings-export.json"
                     path.write_text(json.dumps(payload), encoding="utf-8")
-                    with self.assertRaisesRegex(SettingsExportError, "unknown settings export"):
+                    with self.assertRaisesRegex(
+                        SettingsExportError, "unknown settings export"
+                    ):
                         read_export(path)
 
     def test_read_export_rejects_duplicate_private_metadata_name(self) -> None:
         cases = [
             build_export({"language": "de"}),
-            build_export({"personal-context": "private"}, include_private_settings=True),
+            build_export(
+                {"personal-context": "private"}, include_private_settings=True
+            ),
         ]
         for payload in cases:
             with self.subTest(field=payload["included_private_settings"]):
-                field = "included_private_settings" if payload["included_private_settings"] else "excluded_private_settings"
+                field = (
+                    "included_private_settings"
+                    if payload["included_private_settings"]
+                    else "excluded_private_settings"
+                )
                 payload[field].append(payload[field][0])
                 with tempfile.TemporaryDirectory() as tmp:
                     path = Path(tmp) / "settings-export.json"
                     path.write_text(json.dumps(payload), encoding="utf-8")
-                    with self.assertRaisesRegex(SettingsExportError, "duplicate settings export"):
+                    with self.assertRaisesRegex(
+                        SettingsExportError, "duplicate settings export"
+                    ):
                         read_export(path)
 
     def test_read_export_rejects_incomplete_private_metadata(self) -> None:
         cases = [
             (build_export({"language": "de"}), "excluded_private_settings"),
-            (build_export({"personal-context": "private"}, include_private_settings=True), "included_private_settings"),
+            (
+                build_export(
+                    {"personal-context": "private"}, include_private_settings=True
+                ),
+                "included_private_settings",
+            ),
         ]
         for payload, field in cases:
             with self.subTest(field=field):
@@ -711,7 +855,9 @@ class SettingsExportTest(unittest.TestCase):
                 with tempfile.TemporaryDirectory() as tmp:
                     path = Path(tmp) / "settings-export.json"
                     path.write_text(json.dumps(payload), encoding="utf-8")
-                    with self.assertRaisesRegex(SettingsExportError, "metadata is incomplete"):
+                    with self.assertRaisesRegex(
+                        SettingsExportError, "metadata is incomplete"
+                    ):
                         read_export(path)
 
     def test_read_export_uses_schema_aligned_defaults(self) -> None:
@@ -732,7 +878,10 @@ class SettingsExportTest(unittest.TestCase):
         self.assertFalse(settings["auto-transcribe-timeout"])
         self.assertTrue(settings["notify-complete"])
         self.assertTrue(settings["soften-profanity"])
-        self.assertEqual(settings["auto-paste-window-title"], "codex, Terminal, Telegram, Ghostty, Kitty")
+        self.assertEqual(
+            settings["auto-paste-window-title"],
+            "codex, Terminal, Telegram, Ghostty, Kitty",
+        )
         self.assertEqual(settings["transcriber"], "openai-compatible")
         self.assertEqual(settings["post-process-backend"], "openai-compatible")
         self.assertEqual(settings["openai-compatible-model"], "gpt-transcribe")
@@ -740,8 +889,12 @@ class SettingsExportTest(unittest.TestCase):
 
     def test_read_export_defaults_remain_aligned_with_schema(self) -> None:
         schema = json.loads(
-            (Path(__file__).parents[1] / "files" / "speed-of-cinnamon@H234598" / "settings-schema.json")
-            .read_text(encoding="utf-8")
+            (
+                Path(__file__).parents[1]
+                / "files"
+                / "speed-of-cinnamon@H234598"
+                / "settings-schema.json"
+            ).read_text(encoding="utf-8")
         )
         keys = (
             "show-panel-label",
@@ -777,9 +930,13 @@ class SettingsExportTest(unittest.TestCase):
             build_export({"max-seconds": -2})
         with self.assertRaisesRegex(SettingsExportError, "must be at most"):
             build_export({"typing-delay-ms": MAX_TYPING_DELAY_MS + 1})
-        with self.assertRaisesRegex(SettingsExportError, "max-transcript-files must be at least"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "max-transcript-files must be at least"
+        ):
             build_export({"max-transcript-files": 0})
-        with self.assertRaisesRegex(SettingsExportError, "max-transcript-files must be at most"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "max-transcript-files must be at most"
+        ):
             build_export({"max-transcript-files": 1001})
 
     def test_write_export_rejects_non_integer_numeric_settings(self) -> None:
@@ -803,7 +960,7 @@ class SettingsExportTest(unittest.TestCase):
             path.write_text(
                 '{"app":"speed-of-cinnamon","version":2,"settings":{"typing-delay-ms":'
                 + str(MAX_TYPING_DELAY_MS + 1)
-                + '},'
+                + "},"
                 + '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
                 encoding="utf-8",
             )
@@ -825,7 +982,9 @@ class SettingsExportTest(unittest.TestCase):
                 '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SettingsExportError, "max-transcript-files must be at least"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "max-transcript-files must be at least"
+            ):
                 read_export(path)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
@@ -834,7 +993,9 @@ class SettingsExportTest(unittest.TestCase):
                 '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SettingsExportError, "max-transcript-files must be at most"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "max-transcript-files must be at most"
+            ):
                 read_export(path)
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
@@ -865,28 +1026,40 @@ class SettingsExportTest(unittest.TestCase):
                 '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SettingsExportError, "setting transcriber has unsupported value"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "setting transcriber has unsupported value"
+            ):
                 read_export(path)
 
     def test_read_legacy_export_without_alarms_uses_empty_alarm_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            path.write_text('{"app":"speed-of-cinnamon","version":1,"settings":{"language":"de"}}\n', encoding="utf-8")
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":1,"settings":{"language":"de"}}\n',
+                encoding="utf-8",
+            )
             payload = read_export(path)
         self.assertEqual(payload["settings"]["language"], "de")
-        self.assertEqual(payload["alarms"], {"version": 1, "alarms": [], "last_checked_at": ""})
+        self.assertEqual(
+            payload["alarms"], {"version": 1, "alarms": [], "last_checked_at": ""}
+        )
 
     def test_read_export_rejects_other_app(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            path.write_text('{"app":"other","version":1,"settings":{}}\n', encoding="utf-8")
+            path.write_text(
+                '{"app":"other","version":1,"settings":{}}\n', encoding="utf-8"
+            )
             with self.assertRaisesRegex(SettingsExportError, "different app"):
                 read_export(path)
 
     def test_read_export_rejects_control_char_app_without_echoing_value(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            path.write_text('{"app":"evil\\u001b[31m","version":1,"settings":{}}\n', encoding="utf-8")
+            path.write_text(
+                '{"app":"evil\\u001b[31m","version":1,"settings":{}}\n',
+                encoding="utf-8",
+            )
             with self.assertRaisesRegex(SettingsExportError, "different app") as ctx:
                 read_export(path)
         self.assertNotIn("evil", str(ctx.exception))
@@ -894,15 +1067,25 @@ class SettingsExportTest(unittest.TestCase):
     def test_read_export_rejects_boolean_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            path.write_text('{"app":"speed-of-cinnamon","version":true,"settings":{"language":"en"}}', encoding="utf-8")
-            with self.assertRaisesRegex(SettingsExportError, "unsupported settings export version"):
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":true,"settings":{"language":"en"}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                SettingsExportError, "unsupported settings export version"
+            ):
                 read_export(path)
 
     def test_read_export_rejects_v2_payload_without_alarms(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            path.write_text('{"app":"speed-of-cinnamon","version":2,"settings":{"language":"de"}}', encoding="utf-8")
-            with self.assertRaisesRegex(SettingsExportError, "settings export alarms must be an object"):
+            path.write_text(
+                '{"app":"speed-of-cinnamon","version":2,"settings":{"language":"de"}}',
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                SettingsExportError, "settings export alarms must be an object"
+            ):
                 read_export(path)
 
     def test_read_export_rejects_non_object_alarms_payload(self) -> None:
@@ -912,7 +1095,9 @@ class SettingsExportTest(unittest.TestCase):
                 '{"app":"speed-of-cinnamon","version":2,"settings":{"language":"de"},"alarms":[]}',
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SettingsExportError, "settings export alarms must be an object"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "settings export alarms must be an object"
+            ):
                 read_export(path)
 
     def test_read_export_rejects_non_list_alarm_entries(self) -> None:
@@ -923,22 +1108,30 @@ class SettingsExportTest(unittest.TestCase):
                 '"alarms":{"version":2,"alarms":{},"last_checked_at":""}}',
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SettingsExportError, "settings export alarms must be a list"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "settings export alarms must be a list"
+            ):
                 read_export(path)
 
     def test_normalize_alarm_store_rejects_non_object_payload(self) -> None:
-        with self.assertRaisesRegex(SettingsExportError, "settings export alarms must be an object"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "settings export alarms must be an object"
+        ):
             normalize_alarm_store(True)  # type: ignore[arg-type]
 
     def test_normalize_alarm_store_assigns_unique_alarm_ids(self) -> None:
-        payload = normalize_alarm_store({
-            "alarms": [
-                {"id": "meeting", "hour": 9, "minute": 0, "days": ["mon"]},
-                {"id": "meeting", "hour": 10, "minute": 0, "days": ["mon"]},
-            ],
-        })
+        payload = normalize_alarm_store(
+            {
+                "alarms": [
+                    {"id": "meeting", "hour": 9, "minute": 0, "days": ["mon"]},
+                    {"id": "meeting", "hour": 10, "minute": 0, "days": ["mon"]},
+                ],
+            }
+        )
 
-        self.assertEqual([alarm["id"] for alarm in payload["alarms"]], ["meeting", "meeting-2"])
+        self.assertEqual(
+            [alarm["id"] for alarm in payload["alarms"]], ["meeting", "meeting-2"]
+        )
 
     def test_read_export_rejects_boolean_numeric_setting(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -948,39 +1141,66 @@ class SettingsExportTest(unittest.TestCase):
                 '"alarms":{"version":2,"alarms":[],"last_checked_at":""}}',
                 encoding="utf-8",
             )
-            with self.assertRaisesRegex(SettingsExportError, "setting max-seconds must be an integer"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "setting max-seconds must be an integer"
+            ):
                 read_export(path)
 
     def test_build_export_rejects_boolean_numeric_setting(self) -> None:
-        with self.assertRaisesRegex(SettingsExportError, "setting max-seconds must be an integer"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "setting max-seconds must be an integer"
+        ):
             build_export({"max-seconds": True})
-        with self.assertRaisesRegex(SettingsExportError, "setting typing-delay-ms must be an integer"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "setting typing-delay-ms must be an integer"
+        ):
             build_export({"typing-delay-ms": False})
 
     def test_build_export_rejects_non_object_alarm_store(self) -> None:
-        with self.assertRaisesRegex(SettingsExportError, "settings export alarms must be an object"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "settings export alarms must be an object"
+        ):
             build_export({"language": "en"}, alarm_store=True)  # type: ignore[arg-type]
-        with self.assertRaisesRegex(SettingsExportError, "settings export alarms must be an object"):
+        with self.assertRaisesRegex(
+            SettingsExportError, "settings export alarms must be an object"
+        ):
             build_export({"language": "en"}, alarm_store=[])  # type: ignore[arg-type]
 
     def test_write_export_preserves_primary_error_when_temp_cleanup_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             with (
-                mock.patch("speed_of_cinnamon.settings_export._rename_without_replacing", side_effect=OSError("disk full")),
-                mock.patch("speed_of_cinnamon.settings_export.os.unlink", side_effect=OSError("cleanup denied")),
+                mock.patch(
+                    "speed_of_cinnamon.settings_export._rename_without_replacing",
+                    side_effect=OSError("disk full"),
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.settings_export.os.unlink",
+                    side_effect=OSError("cleanup denied"),
+                ),
             ):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export") as caught:
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ) as caught:
                     write_export(path, {"language": "en"})
 
             self.assertFalse(path.exists())
-            leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".settings-export.json.") and child.name.endswith(".tmp")]
+            leftovers = [
+                child
+                for child in Path(tmp).iterdir()
+                if child.name.startswith(".settings-export.json.")
+                and child.name.endswith(".tmp")
+            ]
             self.assertEqual(len(leftovers), 1)
             self.assertEqual(leftovers[0].read_bytes(), b"")
         self.assertIsNotNone(caught.exception.__cause__)
-        self.assertEqual(str(caught.exception.__cause__), "settings export operation failed")
+        self.assertEqual(
+            str(caught.exception.__cause__), "settings export operation failed"
+        )
         self.assertNotIn("disk full", str(caught.exception.__cause__))
-        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn(
+            "settings export cleanup failed", "\n".join(caught.exception.__notes__)
+        )
         notes = "\n".join(caught.exception.__notes__)
         self.assertIn("settings export cleanup failed", notes)
         self.assertNotIn("cleanup denied", notes)
@@ -1005,10 +1225,18 @@ class SettingsExportTest(unittest.TestCase):
                 real_rename(*args, **kwargs)
 
             with (
-                mock.patch.object(settings_export_module, "_rename_without_replacing", side_effect=fail_activation_once),
-                mock.patch.object(settings_export_module.os, "unlink", side_effect=observe_unlink),
+                mock.patch.object(
+                    settings_export_module,
+                    "_rename_without_replacing",
+                    side_effect=fail_activation_once,
+                ),
+                mock.patch.object(
+                    settings_export_module.os, "unlink", side_effect=observe_unlink
+                ),
             ):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"personal-context": "PRIVATE EXPORT CONTENT"})
 
             self.assertEqual(len(observed_contents), 1)
@@ -1023,7 +1251,11 @@ class SettingsExportTest(unittest.TestCase):
             parent_fd = os.open(root, os.O_RDONLY | os.O_DIRECTORY)
             try:
                 expected_stat = os.stat(temp, follow_symlinks=False)
-                with mock.patch.object(settings_export_module, "_fsync_fd", side_effect=OSError("sync failed")):
+                with mock.patch.object(
+                    settings_export_module,
+                    "_fsync_fd",
+                    side_effect=OSError("sync failed"),
+                ):
                     with self.assertRaises((OSError, SettingsExportError)):
                         settings_export_module._scrub_temp_settings_export_file(
                             parent_fd,
@@ -1070,15 +1302,24 @@ class SettingsExportTest(unittest.TestCase):
                 "_rename_without_replacing",
                 side_effect=replace_backup_with_foreign,
             ):
-                with self._runtime_warning("settings export recovery backup cleanup failed"):
+                with self._runtime_warning(
+                    "settings export recovery backup cleanup failed"
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertEqual(read_export(path)["settings"]["language"], "de")
-            self.assertEqual(foreign_anchor.read_text(encoding="utf-8"), "FOREIGN RECOVERY CONTENT")
+            self.assertEqual(
+                foreign_anchor.read_text(encoding="utf-8"), "FOREIGN RECOVERY CONTENT"
+            )
             self.assertTrue(foreign_anchor.exists())
             residuals = list(root.glob(".settings-export.json.*.bak.*.cleanup"))
             self.assertTrue(residuals)
-            self.assertTrue(any(item.read_text(encoding="utf-8") == "FOREIGN RECOVERY CONTENT" for item in residuals))
+            self.assertTrue(
+                any(
+                    item.read_text(encoding="utf-8") == "FOREIGN RECOVERY CONTENT"
+                    for item in residuals
+                )
+            )
 
     def test_red_write_export_does_not_unlink_temp_when_scrub_sync_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1108,9 +1349,17 @@ class SettingsExportTest(unittest.TestCase):
                 real_unlink(name, *args, **kwargs)
 
             with (
-                mock.patch.object(settings_export_module, "_rename_without_replacing", side_effect=fail_activation),
-                mock.patch.object(settings_export_module, "_fsync_fd", side_effect=fail_scrub_sync),
-                mock.patch.object(settings_export_module.os, "unlink", side_effect=observe_unlink),
+                mock.patch.object(
+                    settings_export_module,
+                    "_rename_without_replacing",
+                    side_effect=fail_activation,
+                ),
+                mock.patch.object(
+                    settings_export_module, "_fsync_fd", side_effect=fail_scrub_sync
+                ),
+                mock.patch.object(
+                    settings_export_module.os, "unlink", side_effect=observe_unlink
+                ),
             ):
                 with self.assertRaises(SettingsExportError) as caught:
                     write_export(path, {"personal-context": "PRIVATE EXPORT CONTENT"})
@@ -1122,12 +1371,16 @@ class SettingsExportTest(unittest.TestCase):
             self.assertNotIn(b"PRIVATE EXPORT CONTENT", residuals[0].read_bytes())
             notes = "\n".join(caught.exception.__notes__)
             self.assertIsInstance(caught.exception.__cause__, OSError)
-            self.assertEqual(str(caught.exception.__cause__), "settings export operation failed")
+            self.assertEqual(
+                str(caught.exception.__cause__), "settings export operation failed"
+            )
             self.assertIn("settings export cleanup failed", notes)
             self.assertNotIn("scrub sync failed", notes)
             self.assertNotIn("PRIVATE EXPORT CONTENT", notes)
 
-    def test_red_scrub_rejects_replaced_nonregular_inode_before_early_return(self) -> None:
+    def test_red_scrub_rejects_replaced_nonregular_inode_before_early_return(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             temp = root / ".settings-export.json.tmp"
@@ -1144,7 +1397,9 @@ class SettingsExportTest(unittest.TestCase):
             )
             with (
                 mock.patch.object(settings_export_module.os, "open", return_value=123),
-                mock.patch.object(settings_export_module.os, "fstat", return_value=replaced_stat),
+                mock.patch.object(
+                    settings_export_module.os, "fstat", return_value=replaced_stat
+                ),
                 mock.patch.object(settings_export_module.os, "close"),
             ):
                 with self.assertRaises(SettingsExportError):
@@ -1154,7 +1409,9 @@ class SettingsExportTest(unittest.TestCase):
                         expected_stat=expected_stat,
                     )
 
-    @unittest.skipUnless(getattr(os, "O_CLOEXEC", None) is not None, "O_CLOEXEC unavailable")
+    @unittest.skipUnless(
+        getattr(os, "O_CLOEXEC", None) is not None, "O_CLOEXEC unavailable"
+    )
     def test_red_create_private_temp_file_passes_cloexec(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1162,10 +1419,14 @@ class SettingsExportTest(unittest.TestCase):
             original_close = os.close
             parent_fd = original_open(root, os.O_RDONLY | os.O_DIRECTORY)
             try:
-                with mock.patch.object(settings_export_module.os, "open", wraps=original_open) as mocked_open:
-                    temp_fd, temp_name = settings_export_module._create_private_temp_file(
-                        parent_fd,
-                        "settings-export.json",
+                with mock.patch.object(
+                    settings_export_module.os, "open", wraps=original_open
+                ) as mocked_open:
+                    temp_fd, temp_name = (
+                        settings_export_module._create_private_temp_file(
+                            parent_fd,
+                            "settings-export.json",
+                        )
                     )
                 original_close(temp_fd)
                 original_unlink = os.unlink
@@ -1176,7 +1437,9 @@ class SettingsExportTest(unittest.TestCase):
             flags = mocked_open.call_args.args[1]
             self.assertTrue(flags & os.O_CLOEXEC)
 
-    def test_red_recovery_backup_scrubs_before_unlink_and_does_not_restore_after_sync_failure(self) -> None:
+    def test_red_recovery_backup_scrubs_before_unlink_and_does_not_restore_after_sync_failure(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             path = root / "settings-export.json"
@@ -1188,7 +1451,9 @@ class SettingsExportTest(unittest.TestCase):
             real_fsync = os.fsync
             real_unlink = settings_export_module.os.unlink
 
-            def mark_backup_cleanup(source: object, target: object, *args: object, **kwargs: object) -> None:
+            def mark_backup_cleanup(
+                source: object, target: object, *args: object, **kwargs: object
+            ) -> None:
                 nonlocal cleanup_started
                 real_rename(source, target, *args, **kwargs)
                 if str(source).endswith(".bak") and str(target).endswith(".cleanup"):
@@ -1201,16 +1466,32 @@ class SettingsExportTest(unittest.TestCase):
                     raise OSError("backup scrub sync failed")
                 real_fsync(fd)
 
-            def observe_cleanup_unlink(name: object, *args: object, **kwargs: object) -> None:
+            def observe_cleanup_unlink(
+                name: object, *args: object, **kwargs: object
+            ) -> None:
                 if isinstance(name, str) and name in backup_cleanup_names:
                     observed_cleanup_unlinks.append((root / name).read_bytes())
                 real_unlink(name, *args, **kwargs)
 
-            with self._runtime_warning("settings export recovery backup cleanup failed"):
+            with self._runtime_warning(
+                "settings export recovery backup cleanup failed"
+            ):
                 with (
-                    mock.patch.object(settings_export_module, "_rename_without_replacing", side_effect=mark_backup_cleanup),
-                    mock.patch.object(settings_export_module, "_fsync_fd", side_effect=fail_backup_scrub_sync),
-                    mock.patch.object(settings_export_module.os, "unlink", side_effect=observe_cleanup_unlink),
+                    mock.patch.object(
+                        settings_export_module,
+                        "_rename_without_replacing",
+                        side_effect=mark_backup_cleanup,
+                    ),
+                    mock.patch.object(
+                        settings_export_module,
+                        "_fsync_fd",
+                        side_effect=fail_backup_scrub_sync,
+                    ),
+                    mock.patch.object(
+                        settings_export_module.os,
+                        "unlink",
+                        side_effect=observe_cleanup_unlink,
+                    ),
                 ):
                     write_export(path, {"language": "de"})
 
@@ -1222,7 +1503,9 @@ class SettingsExportTest(unittest.TestCase):
             self.assertEqual(len(residuals), 1)
             self.assertNotIn(b"old export\n", residuals[0].read_bytes())
 
-    def test_write_export_returns_fixed_post_commit_warning_payload_without_persisting_it(self) -> None:
+    def test_write_export_returns_fixed_post_commit_warning_payload_without_persisting_it(
+        self,
+    ) -> None:
         fixed_warning = (
             "settings export committed but settings export recovery backup cleanup failed; "
             "private backup data may remain"
@@ -1232,14 +1515,22 @@ class SettingsExportTest(unittest.TestCase):
             path.write_text("old export\n", encoding="utf-8")
             real_unlink = os.unlink
 
-            def fail_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and ".bak." in name and name.endswith(".cleanup"):
+            def fail_backup_cleanup(
+                name: object, *args: object, **kwargs: object
+            ) -> None:
+                if (
+                    isinstance(name, str)
+                    and ".bak." in name
+                    and name.endswith(".cleanup")
+                ):
                     raise OSError("/secret/recovery-cleanup")
                 real_unlink(name, *args, **kwargs)
 
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", RuntimeWarning)
-                with mock.patch.object(settings_export_module.os, "unlink", side_effect=fail_backup_cleanup):
+                with mock.patch.object(
+                    settings_export_module.os, "unlink", side_effect=fail_backup_cleanup
+                ):
                     payload = write_export(path, {"language": "de"})
 
             self.assertEqual(payload["post_commit_warnings"], [fixed_warning])
@@ -1258,14 +1549,22 @@ class SettingsExportTest(unittest.TestCase):
             path.write_text("old export\n", encoding="utf-8")
             real_unlink = os.unlink
 
-            def fail_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and ".bak." in name and name.endswith(".cleanup"):
+            def fail_backup_cleanup(
+                name: object, *args: object, **kwargs: object
+            ) -> None:
+                if (
+                    isinstance(name, str)
+                    and ".bak." in name
+                    and name.endswith(".cleanup")
+                ):
                     raise OSError("/secret/recovery-cleanup")
                 real_unlink(name, *args, **kwargs)
 
             with warnings.catch_warnings():
                 warnings.simplefilter("error", RuntimeWarning)
-                with mock.patch.object(settings_export_module.os, "unlink", side_effect=fail_backup_cleanup):
+                with mock.patch.object(
+                    settings_export_module.os, "unlink", side_effect=fail_backup_cleanup
+                ):
                     payload = write_export(path, {"language": "de"})
 
             self.assertEqual(payload["post_commit_warnings"], [fixed_warning])
@@ -1293,14 +1592,20 @@ class SettingsExportTest(unittest.TestCase):
             real_open = settings_export_module.os.open
             backup_claim_flags: list[int] = []
 
-            def record_backup_claim(name: object, flags: int, *args: object, **kwargs: object) -> int:
+            def record_backup_claim(
+                name: object, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 if isinstance(name, str) and name.endswith(".bak"):
                     backup_claim_flags.append(flags)
                 return real_open(name, flags, *args, **kwargs)
 
             with (
-                mock.patch.object(settings_export_module.os, "O_NONBLOCK", 0, create=True),
-                mock.patch.object(settings_export_module.os, "open", side_effect=record_backup_claim),
+                mock.patch.object(
+                    settings_export_module.os, "O_NONBLOCK", 0, create=True
+                ),
+                mock.patch.object(
+                    settings_export_module.os, "open", side_effect=record_backup_claim
+                ),
             ):
                 with self.assertRaises(SettingsExportError):
                     write_export(path, {"language": "de"})
@@ -1322,7 +1627,9 @@ class SettingsExportTest(unittest.TestCase):
                 field_name: str,
                 **kwargs: object,
             ) -> None:
-                is_claim = str(target).endswith(".cleanup") or str(source).endswith(".cleanup")
+                is_claim = str(target).endswith(".cleanup") or str(source).endswith(
+                    ".cleanup"
+                )
                 if is_claim and not {
                     "expected_source_stat",
                     "expected_source_fd",
@@ -1337,7 +1644,11 @@ class SettingsExportTest(unittest.TestCase):
                     **kwargs,
                 )
 
-            with mock.patch.object(settings_export_module, "_rename_without_replacing", side_effect=guarded_rename):
+            with mock.patch.object(
+                settings_export_module,
+                "_rename_without_replacing",
+                side_effect=guarded_rename,
+            ):
                 try:
                     write_export(path, {"language": "de"})
                 except TypeError as exc:
@@ -1345,7 +1656,9 @@ class SettingsExportTest(unittest.TestCase):
 
             self.assertEqual(unbound_claims, [])
 
-    @unittest.skipUnless(getattr(os, "O_PATH", None), "O_PATH is required for symlink cleanup claims")
+    @unittest.skipUnless(
+        getattr(os, "O_PATH", None), "O_PATH is required for symlink cleanup claims"
+    )
     def test_red_symlink_candidate_uses_bound_cleanup_claim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1357,7 +1670,9 @@ class SettingsExportTest(unittest.TestCase):
             candidate_claims: list[dict[str, object]] = []
             unbound_claims: list[tuple[object, object]] = []
 
-            def link_as_symlink(_source: object, target: object, **_kwargs: object) -> None:
+            def link_as_symlink(
+                _source: object, target: object, **_kwargs: object
+            ) -> None:
                 (root / str(target)).symlink_to(replacement)
 
             def guarded_rename(
@@ -1385,8 +1700,14 @@ class SettingsExportTest(unittest.TestCase):
                 )
 
             with (
-                mock.patch.object(settings_export_module.os, "link", side_effect=link_as_symlink),
-                mock.patch.object(settings_export_module, "_rename_without_replacing", side_effect=guarded_rename),
+                mock.patch.object(
+                    settings_export_module.os, "link", side_effect=link_as_symlink
+                ),
+                mock.patch.object(
+                    settings_export_module,
+                    "_rename_without_replacing",
+                    side_effect=guarded_rename,
+                ),
             ):
                 with self.assertRaises(SettingsExportError):
                     write_export(path, {"language": "de"})
@@ -1394,7 +1715,9 @@ class SettingsExportTest(unittest.TestCase):
             self.assertEqual(len(candidate_claims), 1)
             self.assertEqual(unbound_claims, [])
 
-    def test_write_export_does_not_copy_source_exception_notes_to_public_error(self) -> None:
+    def test_write_export_does_not_copy_source_exception_notes_to_public_error(
+        self,
+    ) -> None:
         secret = "/secret/settings-export-source-note"
         source_error = OSError("activation failed")
         source_error.add_note(secret)
@@ -1409,7 +1732,9 @@ class SettingsExportTest(unittest.TestCase):
                 "_rename_without_replacing",
                 side_effect=fail_activation,
             ):
-                with self.assertRaises(settings_export_module.SettingsExportError) as raised:
+                with self.assertRaises(
+                    settings_export_module.SettingsExportError
+                ) as raised:
                     write_export(target, {"language": "en"})
 
         public_error = raised.exception
@@ -1434,7 +1759,9 @@ class SettingsExportTest(unittest.TestCase):
             )
             self.assertFalse(residuals)
 
-    def test_write_export_preserves_primary_error_when_temp_cleanup_is_interrupted(self) -> None:
+    def test_write_export_preserves_primary_error_when_temp_cleanup_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             with (
@@ -1443,22 +1770,37 @@ class SettingsExportTest(unittest.TestCase):
                     "_rename_without_replacing",
                     side_effect=RuntimeError("activation failed"),
                 ),
-                mock.patch.object(settings_export_module.os, "unlink", side_effect=KeyboardInterrupt),
+                mock.patch.object(
+                    settings_export_module.os, "unlink", side_effect=KeyboardInterrupt
+                ),
             ):
-                with self.assertRaisesRegex(RuntimeError, "activation failed") as caught:
+                with self.assertRaisesRegex(
+                    RuntimeError, "activation failed"
+                ) as caught:
                     write_export(path, {"language": "en"})
 
-            self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+            self.assertIn(
+                "settings export cleanup failed", "\n".join(caught.exception.__notes__)
+            )
 
-    @mock.patch("speed_of_cinnamon.settings_export._rename_without_replacing", side_effect=OSError("disk full"))
-    def test_write_export_raises_when_atomic_activation_fails(self, mocked_rename: mock.Mock) -> None:
+    @mock.patch(
+        "speed_of_cinnamon.settings_export._rename_without_replacing",
+        side_effect=OSError("disk full"),
+    )
+    def test_write_export_raises_when_atomic_activation_fails(
+        self, mocked_rename: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "failed to write settings export"
+            ):
                 write_export(path, {"language": "en"})
         self.assertGreaterEqual(mocked_rename.call_count, 1)
 
-    def test_write_export_does_not_clobber_target_created_during_activation(self) -> None:
+    def test_write_export_does_not_clobber_target_created_during_activation(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             replacement = Path(tmp) / "replacement.json"
@@ -1475,14 +1817,22 @@ class SettingsExportTest(unittest.TestCase):
             ) -> None:
                 if target == path.name:
                     replacement.replace(path)
-                real_rename(source, target, directory_fd=directory_fd, field_name=field_name, **kwargs)
+                real_rename(
+                    source,
+                    target,
+                    directory_fd=directory_fd,
+                    field_name=field_name,
+                    **kwargs,
+                )
 
             with mock.patch.object(
                 settings_export_module,
                 "_rename_without_replacing",
                 side_effect=rename_then_create_target,
             ):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertEqual(path.read_text(encoding="utf-8"), "racing target")
@@ -1490,12 +1840,20 @@ class SettingsExportTest(unittest.TestCase):
 
     def test_create_private_temp_file_rejects_missing_nofollow(self) -> None:
         with (
-            mock.patch.object(settings_export_module.os, "O_NOFOLLOW", None, create=True),
-            self.assertRaisesRegex(SettingsExportError, "secure settings export temp file creation"),
+            mock.patch.object(
+                settings_export_module.os, "O_NOFOLLOW", None, create=True
+            ),
+            self.assertRaisesRegex(
+                SettingsExportError, "secure settings export temp file creation"
+            ),
         ):
-            settings_export_module._create_private_temp_file(456, "settings-export.json")
+            settings_export_module._create_private_temp_file(
+                456, "settings-export.json"
+            )
 
-    def test_write_export_does_not_overwrite_existing_recovery_backup_candidate(self) -> None:
+    def test_write_export_does_not_overwrite_existing_recovery_backup_candidate(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
@@ -1509,11 +1867,15 @@ class SettingsExportTest(unittest.TestCase):
             ):
                 write_export(path, {"language": "de"})
 
-            self.assertEqual(racing_candidate.read_text(encoding="utf-8"), "racing backup\n")
+            self.assertEqual(
+                racing_candidate.read_text(encoding="utf-8"), "racing backup\n"
+            )
             self.assertFalse((Path(tmp) / ".settings-export.json.free.bak").exists())
             self.assertEqual(read_export(path)["settings"]["language"], "de")
 
-    def test_write_export_restores_target_when_it_disappears_during_backup_inspection(self) -> None:
+    def test_write_export_restores_target_when_it_disappears_during_backup_inspection(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
@@ -1527,13 +1889,21 @@ class SettingsExportTest(unittest.TestCase):
             ) -> os.stat_result:
                 nonlocal target_removed
                 result = real_stat(name, *args, **kwargs)
-                if isinstance(name, str) and name.endswith(".bak") and not target_removed:
+                if (
+                    isinstance(name, str)
+                    and name.endswith(".bak")
+                    and not target_removed
+                ):
                     path.unlink()
                     target_removed = True
                 return result
 
-            with mock.patch.object(settings_export_module.os, "stat", side_effect=stat_then_remove_target):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with mock.patch.object(
+                settings_export_module.os, "stat", side_effect=stat_then_remove_target
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertTrue(target_removed)
@@ -1541,7 +1911,9 @@ class SettingsExportTest(unittest.TestCase):
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
 
-    @unittest.skipUnless(getattr(os, "O_PATH", None), "O_PATH is required for symlink cleanup claims")
+    @unittest.skipUnless(
+        getattr(os, "O_PATH", None), "O_PATH is required for symlink cleanup claims"
+    )
     def test_write_export_preserves_untrusted_recovery_symlink_candidate(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
@@ -1549,11 +1921,17 @@ class SettingsExportTest(unittest.TestCase):
             replacement = Path(tmp) / "replacement.json"
             replacement.write_text("foreign export\n", encoding="utf-8")
 
-            def link_as_symlink(_source: object, target: object, **_kwargs: object) -> None:
+            def link_as_symlink(
+                _source: object, target: object, **_kwargs: object
+            ) -> None:
                 (Path(tmp) / str(target)).symlink_to(replacement)
 
-            with mock.patch.object(settings_export_module.os, "link", side_effect=link_as_symlink):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with mock.patch.object(
+                settings_export_module.os, "link", side_effect=link_as_symlink
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertEqual(path.read_text(encoding="utf-8"), "old export\n")
@@ -1563,7 +1941,9 @@ class SettingsExportTest(unittest.TestCase):
             self.assertEqual(candidates[0].readlink(), replacement)
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
             self.assertTrue(replacement.exists())
-            self.assertEqual(replacement.read_text(encoding="utf-8"), "foreign export\n")
+            self.assertEqual(
+                replacement.read_text(encoding="utf-8"), "foreign export\n"
+            )
 
     def test_write_export_closes_temporary_fd_when_fdopen_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1577,17 +1957,29 @@ class SettingsExportTest(unittest.TestCase):
                 return fd, temp_name
 
             with (
-                mock.patch.object(settings_export_module, "_create_private_temp_file", side_effect=create_temp_file),
-                mock.patch.object(settings_export_module.os, "fdopen", side_effect=OSError("fdopen failed")),
+                mock.patch.object(
+                    settings_export_module,
+                    "_create_private_temp_file",
+                    side_effect=create_temp_file,
+                ),
+                mock.patch.object(
+                    settings_export_module.os,
+                    "fdopen",
+                    side_effect=OSError("fdopen failed"),
+                ),
             ):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "en"})
 
             self.assertEqual(len(created_fds), 1)
             with self.assertRaises(OSError):
                 os.fstat(created_fds[0])
 
-    def test_write_export_closes_and_removes_temp_when_fdopen_is_interrupted(self) -> None:
+    def test_write_export_closes_and_removes_temp_when_fdopen_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             created_fds: list[int] = []
@@ -1599,8 +1991,14 @@ class SettingsExportTest(unittest.TestCase):
                 return fd, temp_name
 
             with (
-                mock.patch.object(settings_export_module, "_create_private_temp_file", side_effect=create_temp_file),
-                mock.patch.object(settings_export_module.os, "fdopen", side_effect=KeyboardInterrupt),
+                mock.patch.object(
+                    settings_export_module,
+                    "_create_private_temp_file",
+                    side_effect=create_temp_file,
+                ),
+                mock.patch.object(
+                    settings_export_module.os, "fdopen", side_effect=KeyboardInterrupt
+                ),
             ):
                 with self.assertRaises(KeyboardInterrupt):
                     write_export(path, {"language": "en"})
@@ -1610,7 +2008,9 @@ class SettingsExportTest(unittest.TestCase):
                 os.fstat(created_fds[0])
             self.assertEqual(list(Path(tmp).iterdir()), [])
 
-    def test_write_export_does_not_write_when_initial_temp_identity_inspection_fails(self) -> None:
+    def test_write_export_does_not_write_when_initial_temp_identity_inspection_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             real_fstat = os.fstat
@@ -1624,8 +2024,12 @@ class SettingsExportTest(unittest.TestCase):
                     raise OSError("temp identity inspection failed")
                 return result
 
-            with mock.patch.object(settings_export_module.os, "fstat", side_effect=fail_once_for_temp_file):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with mock.patch.object(
+                settings_export_module.os, "fstat", side_effect=fail_once_for_temp_file
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "de", "personal-context": "SECRET"})
 
             self.assertEqual(failed_regular_fstats, 1)
@@ -1665,10 +2069,18 @@ class SettingsExportTest(unittest.TestCase):
                         os.close(temp_fd)
 
             with (
-                mock.patch.object(settings_export_module, "_create_private_temp_file", side_effect=create_temp_file),
-                mock.patch.object(settings_export_module.os, "fdopen", return_value=_Handle()),
+                mock.patch.object(
+                    settings_export_module,
+                    "_create_private_temp_file",
+                    side_effect=create_temp_file,
+                ),
+                mock.patch.object(
+                    settings_export_module.os, "fdopen", return_value=_Handle()
+                ),
             ):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "en"})
 
             self.assertIsNotNone(temp_path)
@@ -1705,39 +2117,63 @@ class SettingsExportTest(unittest.TestCase):
                         os.close(temp_fd)
 
             with (
-                mock.patch.object(settings_export_module, "_create_private_temp_file", side_effect=create_temp_file),
-                mock.patch.object(settings_export_module.os, "fdopen", return_value=_Handle()),
+                mock.patch.object(
+                    settings_export_module,
+                    "_create_private_temp_file",
+                    side_effect=create_temp_file,
+                ),
+                mock.patch.object(
+                    settings_export_module.os, "fdopen", return_value=_Handle()
+                ),
             ):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "en"})
 
             self.assertIsNotNone(temp_path)
             self.assertEqual(temp_path.read_bytes(), b"in-place replacement")
 
-    def test_write_export_preserves_fdopen_error_when_temp_fd_close_is_interrupted(self) -> None:
+    def test_write_export_preserves_fdopen_error_when_temp_fd_close_is_interrupted(
+        self,
+    ) -> None:
         def close(fd: int) -> None:
             if fd == 123:
                 raise KeyboardInterrupt
 
         with (
             mock.patch.object(settings_export_module, "_assert_clean_path"),
-            mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                settings_export_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
-            mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock()),
-            mock.patch.object(settings_export_module.os, "stat", side_effect=FileNotFoundError),
+            mock.patch.object(
+                settings_export_module.os, "fstat", return_value=mock.Mock()
+            ),
+            mock.patch.object(
+                settings_export_module.os, "stat", side_effect=FileNotFoundError
+            ),
             mock.patch.object(
                 settings_export_module,
                 "_create_private_temp_file",
                 return_value=(123, ".settings-export.json.tmp"),
             ),
-            mock.patch.object(settings_export_module.os, "fdopen", side_effect=RuntimeError("fdopen failed")),
+            mock.patch.object(
+                settings_export_module.os,
+                "fdopen",
+                side_effect=RuntimeError("fdopen failed"),
+            ),
             mock.patch.object(settings_export_module.os, "unlink"),
             mock.patch.object(settings_export_module.os, "close", side_effect=close),
         ):
             with self.assertRaisesRegex(RuntimeError, "fdopen failed") as caught:
                 write_export(Path("/probe/settings-export.json"), {"language": "en"})
 
-        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn(
+            "settings export cleanup failed", "\n".join(caught.exception.__notes__)
+        )
 
     def test_write_export_preserves_fdopen_error_when_temp_fd_close_fails(self) -> None:
         def close(fd: int) -> None:
@@ -1746,16 +2182,28 @@ class SettingsExportTest(unittest.TestCase):
 
         with (
             mock.patch.object(settings_export_module, "_assert_clean_path"),
-            mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                settings_export_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
-            mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock()),
-            mock.patch.object(settings_export_module.os, "stat", side_effect=FileNotFoundError),
+            mock.patch.object(
+                settings_export_module.os, "fstat", return_value=mock.Mock()
+            ),
+            mock.patch.object(
+                settings_export_module.os, "stat", side_effect=FileNotFoundError
+            ),
             mock.patch.object(
                 settings_export_module,
                 "_create_private_temp_file",
                 return_value=(123, ".settings-export.json.tmp"),
             ),
-            mock.patch.object(settings_export_module.os, "fdopen", side_effect=RuntimeError("fdopen failed")),
+            mock.patch.object(
+                settings_export_module.os,
+                "fdopen",
+                side_effect=RuntimeError("fdopen failed"),
+            ),
             mock.patch.object(settings_export_module.os, "unlink"),
             mock.patch.object(settings_export_module.os, "fsync"),
             mock.patch.object(settings_export_module.os, "close", side_effect=close),
@@ -1763,12 +2211,16 @@ class SettingsExportTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "fdopen failed") as caught:
                 write_export(Path("/probe/settings-export.json"), {"language": "en"})
 
-        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn(
+            "settings export cleanup failed", "\n".join(caught.exception.__notes__)
+        )
         notes = "\n".join(caught.exception.__notes__)
         self.assertIn("settings export cleanup failed", notes)
         self.assertNotIn("temp close failed", notes)
 
-    def test_write_export_preserves_write_error_when_temporary_handle_close_fails(self) -> None:
+    def test_write_export_preserves_write_error_when_temporary_handle_close_fails(
+        self,
+    ) -> None:
         class _Handle:
             def fileno(self) -> int:
                 return 123
@@ -1784,26 +2236,40 @@ class SettingsExportTest(unittest.TestCase):
 
         with (
             mock.patch.object(settings_export_module, "_assert_clean_path"),
-            mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                settings_export_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(settings_export_module, "assert_fd_is_private_directory"),
-            mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock()),
-            mock.patch.object(settings_export_module.os, "stat", side_effect=FileNotFoundError),
+            mock.patch.object(
+                settings_export_module.os, "fstat", return_value=mock.Mock()
+            ),
+            mock.patch.object(
+                settings_export_module.os, "stat", side_effect=FileNotFoundError
+            ),
             mock.patch.object(
                 settings_export_module,
                 "_create_private_temp_file",
                 return_value=(123, ".settings-export.json.tmp"),
             ),
-            mock.patch.object(settings_export_module.os, "fdopen", return_value=_Handle()),
+            mock.patch.object(
+                settings_export_module.os, "fdopen", return_value=_Handle()
+            ),
             mock.patch.object(settings_export_module.os, "fchmod"),
             mock.patch.object(settings_export_module.os, "unlink"),
             mock.patch.object(settings_export_module.os, "fsync"),
             mock.patch.object(settings_export_module.os, "close"),
         ):
-            with self.assertRaisesRegex(SettingsExportError, "failed to write settings export") as caught:
+            with self.assertRaisesRegex(
+                SettingsExportError, "failed to write settings export"
+            ) as caught:
                 write_export(Path("/probe/settings-export.json"), {"language": "en"})
 
         self.assertIsInstance(caught.exception.__cause__, OSError)
-        self.assertEqual(str(caught.exception.__cause__), "settings export operation failed")
+        self.assertEqual(
+            str(caught.exception.__cause__), "settings export operation failed"
+        )
         notes = "\n".join(caught.exception.__notes__)
         self.assertIn("settings export cleanup failed", notes)
         self.assertNotIn("close failed", notes)
@@ -1832,29 +2298,47 @@ class SettingsExportTest(unittest.TestCase):
             def fdopen(fd: int, _mode: str, **_kwargs: object) -> _Handle:
                 return _Handle(fd)
 
-            with mock.patch.object(settings_export_module.os, "fdopen", side_effect=fdopen):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with mock.patch.object(
+                settings_export_module.os, "fdopen", side_effect=fdopen
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "en"})
 
             self.assertFalse(path.exists())
             self.assertEqual(list(Path(tmp).glob(".settings-export.json.*.tmp")), [])
 
-    def test_read_export_preserves_fd_validation_error_when_fd_close_fails(self) -> None:
+    def test_read_export_preserves_fd_validation_error_when_fd_close_fails(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(settings_export_module, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                settings_export_module,
+                "open_file_without_following_symlinks",
+                return_value=123,
+            ),
             mock.patch.object(
                 settings_export_module,
                 "assert_fd_is_regular_private_file",
                 side_effect=RuntimeError("not private"),
             ),
-            mock.patch.object(settings_export_module.os, "close", side_effect=OSError("close failed")),
+            mock.patch.object(
+                settings_export_module.os, "close", side_effect=OSError("close failed")
+            ),
         ):
             with self.assertRaisesRegex(SettingsExportError, "not private") as caught:
-                settings_export_module._read_text_capped_without_following_symlinks(Path("/settings.json"))
+                settings_export_module._read_text_capped_without_following_symlinks(
+                    Path("/settings.json")
+                )
 
-        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn(
+            "settings export cleanup failed", "\n".join(caught.exception.__notes__)
+        )
 
-    def test_read_export_preserves_read_interrupt_with_redacted_cleanup_note(self) -> None:
+    def test_read_export_preserves_read_interrupt_with_redacted_cleanup_note(
+        self,
+    ) -> None:
         class _Handle:
             def read(self, _size: int = -1) -> str:
                 raise KeyboardInterrupt("read interrupted")
@@ -1863,66 +2347,124 @@ class SettingsExportTest(unittest.TestCase):
                 raise OSError("close failed")
 
         with (
-            mock.patch.object(settings_export_module, "open_file_without_following_symlinks", return_value=123),
-            mock.patch.object(settings_export_module, "assert_fd_is_regular_private_file"),
-            mock.patch.object(settings_export_module.os, "fstat", return_value=mock.Mock(st_size=0)),
-            mock.patch.object(settings_export_module.os, "fdopen", return_value=_Handle()),
+            mock.patch.object(
+                settings_export_module,
+                "open_file_without_following_symlinks",
+                return_value=123,
+            ),
+            mock.patch.object(
+                settings_export_module, "assert_fd_is_regular_private_file"
+            ),
+            mock.patch.object(
+                settings_export_module.os, "fstat", return_value=mock.Mock(st_size=0)
+            ),
+            mock.patch.object(
+                settings_export_module.os, "fdopen", return_value=_Handle()
+            ),
         ):
-            with self.assertRaisesRegex(KeyboardInterrupt, "read interrupted") as caught:
-                settings_export_module._read_text_capped_without_following_symlinks(Path("/settings.json"))
+            with self.assertRaisesRegex(
+                KeyboardInterrupt, "read interrupted"
+            ) as caught:
+                settings_export_module._read_text_capped_without_following_symlinks(
+                    Path("/settings.json")
+                )
 
-        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn(
+            "settings export cleanup failed", "\n".join(caught.exception.__notes__)
+        )
         notes = "\n".join(caught.exception.__notes__)
         self.assertIn("settings export cleanup failed", notes)
         self.assertNotIn("close failed", notes)
 
-    def test_read_export_preserves_fd_validation_error_when_fd_close_is_interrupted(self) -> None:
+    def test_read_export_preserves_fd_validation_error_when_fd_close_is_interrupted(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(settings_export_module, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                settings_export_module,
+                "open_file_without_following_symlinks",
+                return_value=123,
+            ),
             mock.patch.object(
                 settings_export_module,
                 "assert_fd_is_regular_private_file",
                 side_effect=RuntimeError("not private"),
             ),
-            mock.patch.object(settings_export_module.os, "close", side_effect=KeyboardInterrupt),
+            mock.patch.object(
+                settings_export_module.os, "close", side_effect=KeyboardInterrupt
+            ),
         ):
             with self.assertRaisesRegex(SettingsExportError, "not private") as caught:
-                settings_export_module._read_text_capped_without_following_symlinks(Path("/settings.json"))
+                settings_export_module._read_text_capped_without_following_symlinks(
+                    Path("/settings.json")
+                )
 
-        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn(
+            "settings export cleanup failed", "\n".join(caught.exception.__notes__)
+        )
 
     def test_scrub_preserves_inspection_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(settings_export_module.os, "open", return_value=123),
-            mock.patch.object(settings_export_module.os, "fstat", side_effect=OSError("inspect failed")),
-            mock.patch.object(settings_export_module.os, "close", side_effect=OSError("close failed")),
+            mock.patch.object(
+                settings_export_module.os,
+                "fstat",
+                side_effect=OSError("inspect failed"),
+            ),
+            mock.patch.object(
+                settings_export_module.os, "close", side_effect=OSError("close failed")
+            ),
         ):
             with self.assertRaisesRegex(OSError, "inspect failed") as caught:
-                settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
+                settings_export_module._scrub_temp_settings_export_file(
+                    456, ".settings.tmp"
+                )
 
-        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn(
+            "settings export cleanup failed", "\n".join(caught.exception.__notes__)
+        )
 
-    def test_scrub_preserves_inspection_error_when_fd_close_is_interrupted(self) -> None:
+    def test_scrub_preserves_inspection_error_when_fd_close_is_interrupted(
+        self,
+    ) -> None:
         with (
             mock.patch.object(settings_export_module.os, "open", return_value=123),
-            mock.patch.object(settings_export_module.os, "fstat", side_effect=RuntimeError("inspect failed")),
-            mock.patch.object(settings_export_module.os, "close", side_effect=KeyboardInterrupt),
+            mock.patch.object(
+                settings_export_module.os,
+                "fstat",
+                side_effect=RuntimeError("inspect failed"),
+            ),
+            mock.patch.object(
+                settings_export_module.os, "close", side_effect=KeyboardInterrupt
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "inspect failed") as caught:
-                settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
+                settings_export_module._scrub_temp_settings_export_file(
+                    456, ".settings.tmp"
+                )
 
-        self.assertIn("settings export cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn(
+            "settings export cleanup failed", "\n".join(caught.exception.__notes__)
+        )
 
     def test_scrub_temp_file_rejects_missing_nofollow(self) -> None:
         with (
-            mock.patch.object(settings_export_module.os, "O_NOFOLLOW", None, create=True),
-            self.assertRaisesRegex(SettingsExportError, "secure settings export temp file scrubbing"),
+            mock.patch.object(
+                settings_export_module.os, "O_NOFOLLOW", None, create=True
+            ),
+            self.assertRaisesRegex(
+                SettingsExportError, "secure settings export temp file scrubbing"
+            ),
         ):
-            settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
+            settings_export_module._scrub_temp_settings_export_file(
+                456, ".settings.tmp"
+            )
 
     def test_scrub_temp_file_opens_nonblocking(self) -> None:
         with (
-            mock.patch.object(settings_export_module.os, "open", return_value=123) as mocked_open,
+            mock.patch.object(
+                settings_export_module.os, "open", return_value=123
+            ) as mocked_open,
             mock.patch.object(
                 settings_export_module.os,
                 "fstat",
@@ -1932,7 +2474,9 @@ class SettingsExportTest(unittest.TestCase):
             mock.patch.object(settings_export_module.os, "close"),
             mock.patch.object(settings_export_module, "_fsync_fd"),
         ):
-            settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
+            settings_export_module._scrub_temp_settings_export_file(
+                456, ".settings.tmp"
+            )
 
         flags = mocked_open.call_args.args[1]
         self.assertTrue(flags & getattr(os, "O_NONBLOCK", 0))
@@ -1943,7 +2487,9 @@ class SettingsExportTest(unittest.TestCase):
             mock.patch.object(
                 settings_export_module.os,
                 "fstat",
-                return_value=mock.Mock(st_mode=stat.S_IFREG, st_size=3, st_dev=1, st_ino=2, st_nlink=1),
+                return_value=mock.Mock(
+                    st_mode=stat.S_IFREG, st_size=3, st_dev=1, st_ino=2, st_nlink=1
+                ),
             ),
             mock.patch.object(settings_export_module.os, "lseek"),
             mock.patch.object(
@@ -1955,7 +2501,9 @@ class SettingsExportTest(unittest.TestCase):
             mock.patch.object(settings_export_module.os, "close"),
             mock.patch.object(settings_export_module, "_fsync_fd"),
         ):
-            settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
+            settings_export_module._scrub_temp_settings_export_file(
+                456, ".settings.tmp"
+            )
 
         self.assertEqual(mocked_write.call_count, 2)
 
@@ -1979,15 +2527,21 @@ class SettingsExportTest(unittest.TestCase):
             ) as mocked_fsync,
             mock.patch.object(settings_export_module.os, "close"),
         ):
-            settings_export_module._scrub_temp_settings_export_file(456, ".settings.tmp")
+            settings_export_module._scrub_temp_settings_export_file(
+                456, ".settings.tmp"
+            )
 
         self.assertEqual(mocked_ftruncate.call_count, 2)
         self.assertEqual(mocked_fsync.call_count, 2)
 
-    def test_write_export_warns_on_parent_close_failure_after_successful_write(self) -> None:
+    def test_write_export_warns_on_parent_close_failure_after_successful_write(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            real_ensure = settings_export_module.ensure_directory_without_following_symlinks
+            real_ensure = (
+                settings_export_module.ensure_directory_without_following_symlinks
+            )
             real_close = os.close
             parent_fds: list[int] = []
 
@@ -2002,8 +2556,14 @@ class SettingsExportTest(unittest.TestCase):
                 real_close(fd)
 
             with (
-                mock.patch.object(settings_export_module, "ensure_directory_without_following_symlinks", side_effect=ensure_parent),
-                mock.patch.object(settings_export_module.os, "close", side_effect=close_wrapper),
+                mock.patch.object(
+                    settings_export_module,
+                    "ensure_directory_without_following_symlinks",
+                    side_effect=ensure_parent,
+                ),
+                mock.patch.object(
+                    settings_export_module.os, "close", side_effect=close_wrapper
+                ),
             ):
                 with self._runtime_warning("settings export directory close failed"):
                     write_export(path, {"language": "en"})
@@ -2019,9 +2579,13 @@ class SettingsExportTest(unittest.TestCase):
                 mock.patch.object(
                     settings_export_module,
                     "_scrub_settings_export_fd",
-                    side_effect=OSError("backup scrub write failed: /secret/old-export"),
+                    side_effect=OSError(
+                        "backup scrub write failed: /secret/old-export"
+                    ),
                 ),
-                self._runtime_warning("settings export recovery backup cleanup failed") as captured_warnings,
+                self._runtime_warning(
+                    "settings export recovery backup cleanup failed"
+                ) as captured_warnings,
             ):
                 write_export(path, {"language": "de"})
 
@@ -2034,7 +2598,9 @@ class SettingsExportTest(unittest.TestCase):
             self.assertNotIn(str(path), warning_text)
             self.assertNotIn("/secret/old-export", warning_text)
 
-    def test_write_export_propagates_recovery_backup_scrub_interrupt_after_commit(self) -> None:
+    def test_write_export_propagates_recovery_backup_scrub_interrupt_after_commit(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
@@ -2042,14 +2608,18 @@ class SettingsExportTest(unittest.TestCase):
             with mock.patch.object(
                 settings_export_module,
                 "_scrub_settings_export_fd",
-                side_effect=KeyboardInterrupt("backup scrub interrupted: /secret/old-export"),
+                side_effect=KeyboardInterrupt(
+                    "backup scrub interrupted: /secret/old-export"
+                ),
             ):
                 with self.assertRaises(KeyboardInterrupt):
                     write_export(path, {"language": "de"})
 
             self.assertEqual(read_export(path)["settings"]["language"], "de")
 
-    def test_write_export_preserves_claim_rename_error_when_claim_close_fails(self) -> None:
+    def test_write_export_preserves_claim_rename_error_when_claim_close_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
@@ -2057,7 +2627,9 @@ class SettingsExportTest(unittest.TestCase):
             real_close = settings_export_module.os.close
             claim_fds: list[int] = []
 
-            def record_claim_open(name: object, flags: int, *args: object, **kwargs: object) -> int:
+            def record_claim_open(
+                name: object, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 fd = real_open(name, flags, *args, **kwargs)
                 if isinstance(name, str) and name == path.name:
                     claim_fds.append(fd)
@@ -2074,8 +2646,12 @@ class SettingsExportTest(unittest.TestCase):
                     "_rename_without_replacing",
                     side_effect=OSError("claim rename failed: /secret/claim"),
                 ),
-                mock.patch.object(settings_export_module.os, "open", side_effect=record_claim_open),
-                mock.patch.object(settings_export_module.os, "close", side_effect=close_with_failure),
+                mock.patch.object(
+                    settings_export_module.os, "open", side_effect=record_claim_open
+                ),
+                mock.patch.object(
+                    settings_export_module.os, "close", side_effect=close_with_failure
+                ),
             ):
                 with self.assertRaises(SettingsExportError) as caught:
                     write_export(path, {"language": "de"})
@@ -2090,7 +2666,9 @@ class SettingsExportTest(unittest.TestCase):
             self.assertNotIn("claim close failed", cause_notes)
             self.assertNotIn("/secret/claim", cause_notes)
 
-    @unittest.skipUnless(getattr(os, "O_NONBLOCK", None) is not None, "O_NONBLOCK unavailable")
+    @unittest.skipUnless(
+        getattr(os, "O_NONBLOCK", None) is not None, "O_NONBLOCK unavailable"
+    )
     def test_write_export_uses_nonblocking_recovery_backup_claim(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
@@ -2098,25 +2676,35 @@ class SettingsExportTest(unittest.TestCase):
             real_open = settings_export_module.os.open
             claim_open_calls: list[tuple[str, int]] = []
 
-            def record_backup_claim(name: object, flags: int, *args: object, **kwargs: object) -> int:
+            def record_backup_claim(
+                name: object, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 if isinstance(name, str) and name.endswith(".bak"):
                     claim_open_calls.append((name, flags))
                 return real_open(name, flags, *args, **kwargs)
 
-            with mock.patch.object(settings_export_module.os, "open", side_effect=record_backup_claim):
+            with mock.patch.object(
+                settings_export_module.os, "open", side_effect=record_backup_claim
+            ):
                 write_export(path, {"language": "de"})
 
             self.assertTrue(claim_open_calls)
             self.assertTrue(
-                all(flags & getattr(os, "O_NONBLOCK", 0) for _name, flags in claim_open_calls),
+                all(
+                    flags & getattr(os, "O_NONBLOCK", 0)
+                    for _name, flags in claim_open_calls
+                ),
                 claim_open_calls,
             )
 
     @unittest.skipUnless(
-        getattr(os, "O_NOFOLLOW", None) is not None and getattr(os, "O_NONBLOCK", None) is not None,
+        getattr(os, "O_NOFOLLOW", None) is not None
+        and getattr(os, "O_NONBLOCK", None) is not None,
         "portable leaf-claim flags unavailable",
     )
-    def test_write_export_fallback_leaf_claims_use_nonblocking_open_without_o_path(self) -> None:
+    def test_write_export_fallback_leaf_claims_use_nonblocking_open_without_o_path(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
@@ -2125,10 +2713,16 @@ class SettingsExportTest(unittest.TestCase):
             leaf_claim_calls: list[tuple[str, int]] = []
             parent_syncs = 0
 
-            def record_leaf_claim(name: object, flags: int, *args: object, **kwargs: object) -> int:
+            def record_leaf_claim(
+                name: object, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 if isinstance(name, str):
                     basename = Path(name).name
-                    if basename == path.name or basename.endswith(".bak") or basename.endswith(".cleanup"):
+                    if (
+                        basename == path.name
+                        or basename.endswith(".bak")
+                        or basename.endswith(".cleanup")
+                    ):
                         leaf_claim_calls.append((name, flags))
                 return real_open(name, flags, *args, **kwargs)
 
@@ -2146,10 +2740,18 @@ class SettingsExportTest(unittest.TestCase):
 
             with (
                 mock.patch.object(settings_export_module.os, "O_PATH", 0, create=True),
-                mock.patch.object(settings_export_module.os, "open", side_effect=record_leaf_claim),
-                mock.patch.object(settings_export_module, "_fsync_fd", side_effect=fail_activation_sync),
+                mock.patch.object(
+                    settings_export_module.os, "open", side_effect=record_leaf_claim
+                ),
+                mock.patch.object(
+                    settings_export_module,
+                    "_fsync_fd",
+                    side_effect=fail_activation_sync,
+                ),
             ):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertGreaterEqual(parent_syncs, 2)
@@ -2159,13 +2761,19 @@ class SettingsExportTest(unittest.TestCase):
                 leaf_claim_calls,
             )
 
-    def test_write_export_restores_backup_when_recovery_backup_fchmod_fails(self) -> None:
+    def test_write_export_restores_backup_when_recovery_backup_fchmod_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
 
             with (
-                mock.patch.object(settings_export_module.os, "fchmod", side_effect=OSError("backup chmod failed")),
+                mock.patch.object(
+                    settings_export_module.os,
+                    "fchmod",
+                    side_effect=OSError("backup chmod failed"),
+                ),
                 self._runtime_warning("settings export recovery backup cleanup failed"),
             ):
                 write_export(path, {"language": "de"})
@@ -2174,21 +2782,31 @@ class SettingsExportTest(unittest.TestCase):
             backups = list(Path(tmp).glob(".settings-export.json.*.bak"))
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_text(encoding="utf-8"), "old export\n")
-            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak.*.cleanup")))
+            self.assertFalse(
+                list(Path(tmp).glob(".settings-export.json.*.bak.*.cleanup"))
+            )
 
-    def test_write_export_restores_backup_when_recovery_backup_scrub_open_fails(self) -> None:
+    def test_write_export_restores_backup_when_recovery_backup_scrub_open_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
             real_open = settings_export_module.os.open
 
-            def fail_backup_scrub_open(name: object, flags: int, *args: object, **kwargs: object) -> int:
+            def fail_backup_scrub_open(
+                name: object, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 if isinstance(name, str) and name.endswith(".cleanup"):
                     raise OSError("backup scrub open failed")
                 return real_open(name, flags, *args, **kwargs)
 
             with (
-                mock.patch.object(settings_export_module.os, "open", side_effect=fail_backup_scrub_open),
+                mock.patch.object(
+                    settings_export_module.os,
+                    "open",
+                    side_effect=fail_backup_scrub_open,
+                ),
                 self._runtime_warning("settings export recovery backup cleanup failed"),
             ):
                 write_export(path, {"language": "de"})
@@ -2197,7 +2815,9 @@ class SettingsExportTest(unittest.TestCase):
             backups = list(Path(tmp).glob(".settings-export.json.*.bak"))
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_text(encoding="utf-8"), "old export\n")
-            self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak.*.cleanup")))
+            self.assertFalse(
+                list(Path(tmp).glob(".settings-export.json.*.bak.*.cleanup"))
+            )
 
     def test_write_export_rejects_leaf_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2206,7 +2826,9 @@ class SettingsExportTest(unittest.TestCase):
             path = Path(tmp) / "settings-export.json"
             path.symlink_to(target)
 
-            with self.assertRaisesRegex(SettingsExportError, "must not pass through a symlink"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "must not pass through a symlink"
+            ):
                 write_export(path, {"language": "en"})
 
             self.assertTrue(path.is_symlink())
@@ -2220,7 +2842,9 @@ class SettingsExportTest(unittest.TestCase):
             linked_parent.symlink_to(outside, target_is_directory=True)
             path = linked_parent / "settings-export.json"
 
-            with self.assertRaisesRegex(SettingsExportError, "must not pass through a symlink"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "must not pass through a symlink"
+            ):
                 write_export(path, {"language": "en"})
 
             self.assertFalse((outside / "settings-export.json").exists())
@@ -2228,59 +2852,95 @@ class SettingsExportTest(unittest.TestCase):
     def test_write_export_fsyncs_temp_file_and_parent_directory(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            with mock.patch("speed_of_cinnamon.settings_export.os.fsync", wraps=os.fsync) as mocked_fsync:
+            with mock.patch(
+                "speed_of_cinnamon.settings_export.os.fsync", wraps=os.fsync
+            ) as mocked_fsync:
                 write_export(path, {"language": "en"})
 
             self.assertTrue(path.exists())
             self.assertGreaterEqual(mocked_fsync.call_count, 2)
 
-    def test_write_export_preserves_success_when_recovery_backup_cleanup_fails(self) -> None:
+    def test_write_export_preserves_success_when_recovery_backup_cleanup_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
             real_unlink = os.unlink
 
-            def fail_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and ".bak." in name and name.endswith(".cleanup"):
+            def fail_backup_cleanup(
+                name: object, *args: object, **kwargs: object
+            ) -> None:
+                if (
+                    isinstance(name, str)
+                    and ".bak." in name
+                    and name.endswith(".cleanup")
+                ):
                     raise OSError("backup cleanup failed")
                 real_unlink(name, *args, **kwargs)
 
-            with self._runtime_warning("settings export recovery backup cleanup failed"):
-                with mock.patch.object(settings_export_module.os, "unlink", side_effect=fail_backup_cleanup):
+            with self._runtime_warning(
+                "settings export recovery backup cleanup failed"
+            ):
+                with mock.patch.object(
+                    settings_export_module.os, "unlink", side_effect=fail_backup_cleanup
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertEqual(read_export(path)["settings"]["language"], "de")
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
-            cleanup_files = list(Path(tmp).glob(".settings-export.json.*.bak.*.cleanup"))
+            cleanup_files = list(
+                Path(tmp).glob(".settings-export.json.*.bak.*.cleanup")
+            )
             self.assertEqual(len(cleanup_files), 1)
             self.assertTrue(cleanup_files)
-            self.assertTrue(all(b"old export\n" not in item.read_bytes() for item in cleanup_files))
+            self.assertTrue(
+                all(b"old export\n" not in item.read_bytes() for item in cleanup_files)
+            )
 
-    def test_write_export_preserves_success_when_recovery_backup_cleanup_is_interrupted(self) -> None:
+    def test_write_export_preserves_success_when_recovery_backup_cleanup_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
             real_unlink = os.unlink
 
-            def interrupt_backup_cleanup(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and ".bak." in name and name.endswith(".cleanup"):
+            def interrupt_backup_cleanup(
+                name: object, *args: object, **kwargs: object
+            ) -> None:
+                if (
+                    isinstance(name, str)
+                    and ".bak." in name
+                    and name.endswith(".cleanup")
+                ):
                     raise KeyboardInterrupt("backup cleanup interrupted")
                 real_unlink(name, *args, **kwargs)
 
             with mock.patch.object(settings_export_module.warnings, "warn") as warned:
-                with mock.patch.object(settings_export_module.os, "unlink", side_effect=interrupt_backup_cleanup):
+                with mock.patch.object(
+                    settings_export_module.os,
+                    "unlink",
+                    side_effect=interrupt_backup_cleanup,
+                ):
                     with self.assertRaises(KeyboardInterrupt):
                         write_export(path, {"language": "de"})
 
             self.assertEqual(read_export(path)["settings"]["language"], "de")
             warned.assert_not_called()
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
-            cleanup_files = list(Path(tmp).glob(".settings-export.json.*.bak.*.cleanup"))
+            cleanup_files = list(
+                Path(tmp).glob(".settings-export.json.*.bak.*.cleanup")
+            )
             self.assertEqual(len(cleanup_files), 1)
             self.assertTrue(cleanup_files)
-            self.assertTrue(all(b"old export\n" not in item.read_bytes() for item in cleanup_files))
+            self.assertTrue(
+                all(b"old export\n" not in item.read_bytes() for item in cleanup_files)
+            )
 
-    def test_write_export_preserves_changed_recovery_backup_during_cleanup(self) -> None:
+    def test_write_export_preserves_changed_recovery_backup_during_cleanup(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             replacement = Path(tmp) / "replacement.json"
@@ -2310,7 +2970,9 @@ class SettingsExportTest(unittest.TestCase):
                 "stat",
                 side_effect=stat_then_swap_after_cleanup_check,
             ):
-                with self._runtime_warning("settings export recovery backup cleanup failed"):
+                with self._runtime_warning(
+                    "settings export recovery backup cleanup failed"
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertEqual(read_export(path)["settings"]["language"], "de")
@@ -2318,7 +2980,9 @@ class SettingsExportTest(unittest.TestCase):
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_text(encoding="utf-8"), "foreign export\n")
 
-    def test_write_export_rolls_back_after_activation_parent_fsync_failure(self) -> None:
+    def test_write_export_rolls_back_after_activation_parent_fsync_failure(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
@@ -2335,15 +2999,25 @@ class SettingsExportTest(unittest.TestCase):
                         raise OSError("activation directory sync failed")
                 real_fsync(fd)
 
-            with mock.patch.object(settings_export_module.os, "fsync", side_effect=fail_activation_sync):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with mock.patch.object(
+                settings_export_module.os, "fsync", side_effect=fail_activation_sync
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertEqual(path.read_text(encoding="utf-8"), "old export\n")
-            leftovers = [child for child in Path(tmp).iterdir() if child.name.startswith(".settings-export.json.")]
+            leftovers = [
+                child
+                for child in Path(tmp).iterdir()
+                if child.name.startswith(".settings-export.json.")
+            ]
             self.assertEqual(leftovers, [])
 
-    def test_write_export_keeps_new_target_when_recovery_backup_is_replaced_during_rollback(self) -> None:
+    def test_write_export_keeps_new_target_when_recovery_backup_is_replaced_during_rollback(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
@@ -2365,16 +3039,26 @@ class SettingsExportTest(unittest.TestCase):
                         raise OSError("activation directory sync failed")
                 real_fsync(fd)
 
-            with mock.patch.object(settings_export_module.os, "fsync", side_effect=fail_after_replacing_backup):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with mock.patch.object(
+                settings_export_module.os,
+                "fsync",
+                side_effect=fail_after_replacing_backup,
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertEqual(read_export(path)["settings"]["language"], "de")
             backups = list(Path(tmp).glob(".settings-export.json.*.bak"))
             self.assertEqual(len(backups), 1)
-            self.assertEqual(backups[0].read_text(encoding="utf-8"), "replacement export\n")
+            self.assertEqual(
+                backups[0].read_text(encoding="utf-8"), "replacement export\n"
+            )
 
-    def test_write_export_restores_target_when_backup_unlink_is_interrupted(self) -> None:
+    def test_write_export_restores_target_when_backup_unlink_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
@@ -2382,15 +3066,23 @@ class SettingsExportTest(unittest.TestCase):
             real_unlink = os.unlink
             interrupted = False
 
-            def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
+            def unlink_then_interrupt(
+                name: object, *args: object, **kwargs: object
+            ) -> None:
                 nonlocal interrupted
-                if isinstance(name, str) and name.endswith(".cleanup") and not interrupted:
+                if (
+                    isinstance(name, str)
+                    and name.endswith(".cleanup")
+                    and not interrupted
+                ):
                     interrupted = True
                     real_unlink(name, *args, **kwargs)
                     raise KeyboardInterrupt
                 real_unlink(name, *args, **kwargs)
 
-            with mock.patch.object(settings_export_module.os, "unlink", side_effect=unlink_then_interrupt):
+            with mock.patch.object(
+                settings_export_module.os, "unlink", side_effect=unlink_then_interrupt
+            ):
                 with self.assertRaises(KeyboardInterrupt):
                     write_export(path, {"language": "de"})
 
@@ -2408,21 +3100,31 @@ class SettingsExportTest(unittest.TestCase):
             real_exchange = settings_export_module._rename_exchange
             swapped = False
 
-            def exchange_then_swap(source: object, target: object, *args: object, **kwargs: object) -> None:
+            def exchange_then_swap(
+                source: object, target: object, *args: object, **kwargs: object
+            ) -> None:
                 nonlocal swapped
                 if not swapped and target == path.name:
                     replacement.replace(path)
                     swapped = True
                 real_exchange(source, target, *args, **kwargs)
 
-            with mock.patch.object(settings_export_module, "_rename_exchange", side_effect=exchange_then_swap):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with mock.patch.object(
+                settings_export_module,
+                "_rename_exchange",
+                side_effect=exchange_then_swap,
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertEqual(path.read_text(encoding="utf-8"), "replacement export\n")
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.bak")))
 
-    def test_write_export_rejects_target_replacement_during_activation_inspection(self) -> None:
+    def test_write_export_rejects_target_replacement_during_activation_inspection(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             replacement = Path(tmp) / "replacement.json"
@@ -2445,14 +3147,20 @@ class SettingsExportTest(unittest.TestCase):
                         return real_stat(name, *args, **kwargs)
                 return result
 
-            with mock.patch.object(settings_export_module.os, "stat", side_effect=stat_then_swap):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with mock.patch.object(
+                settings_export_module.os, "stat", side_effect=stat_then_swap
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "de"})
 
             self.assertEqual(path.read_text(encoding="utf-8"), "replacement export\n")
             self.assertFalse(list(Path(tmp).glob(".settings-export.json.*.tmp")))
 
-    def test_write_export_preserves_in_place_target_change_after_activation(self) -> None:
+    def test_write_export_preserves_in_place_target_change_after_activation(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             path.write_text("old export\n", encoding="utf-8")
@@ -2473,8 +3181,14 @@ class SettingsExportTest(unittest.TestCase):
                         raise OSError("post-activation inspection failed")
                 return real_stat(name, *args, **kwargs)
 
-            with mock.patch.object(settings_export_module.os, "stat", side_effect=mutate_before_post_activation_stat):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with mock.patch.object(
+                settings_export_module.os,
+                "stat",
+                side_effect=mutate_before_post_activation_stat,
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "de"})
 
             payload = path.read_bytes()
@@ -2495,18 +3209,27 @@ class SettingsExportTest(unittest.TestCase):
                     raise OSError("sync failed")
                 real_fsync(fd)
 
-            with mock.patch("speed_of_cinnamon.settings_export.os.fsync", side_effect=failing_file_fsync):
-                with self.assertRaisesRegex(SettingsExportError, "failed to write settings export"):
+            with mock.patch(
+                "speed_of_cinnamon.settings_export.os.fsync",
+                side_effect=failing_file_fsync,
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "failed to write settings export"
+                ):
                     write_export(path, {"language": "en"})
 
             self.assertFalse(path.exists())
             residual_tmp = list(Path(tmp).glob(".settings-export.json.*.tmp"))
             self.assertEqual(len(residual_tmp), 1)
-            self.assertTrue(all(b"language" not in item.read_bytes() for item in residual_tmp))
+            self.assertTrue(
+                all(b"language" not in item.read_bytes() for item in residual_tmp)
+            )
             self.assertTrue(fsynced_modes)
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
-    def test_write_export_uses_secure_parent_directory_open(self, mocked_open: mock.Mock) -> None:
+    def test_write_export_uses_secure_parent_directory_open(
+        self, mocked_open: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             write_export(path, {"language": "en"})
@@ -2524,7 +3247,9 @@ class SettingsExportTest(unittest.TestCase):
     def test_write_export_creates_parent_without_pathlib_mkdir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "nested" / "settings-export.json"
-            with mock.patch.object(Path, "mkdir", side_effect=AssertionError("unsafe mkdir")):
+            with mock.patch.object(
+                Path, "mkdir", side_effect=AssertionError("unsafe mkdir")
+            ):
                 write_export(path, {"language": "en"})
 
             self.assertTrue(path.exists())
@@ -2533,7 +3258,9 @@ class SettingsExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.chmod(tmp, 0o777)
             path = Path(tmp) / "settings-export.json"
-            with self.assertRaisesRegex(SettingsExportError, "settings export directory must be private"):
+            with self.assertRaisesRegex(
+                SettingsExportError, "settings export directory must be private"
+            ):
                 write_export(path, {"language": "en"})
 
     def test_write_export_sets_private_permissions(self) -> None:
@@ -2579,7 +3306,13 @@ class SettingsExportTest(unittest.TestCase):
 
     def test_read_export_truncates_oversized_alarm_list(self) -> None:
         long_alarms = [
-            {"id": f"alarm-{index}", "hour": 9, "minute": index % 60, "days": ["mon"], "name": "name"}
+            {
+                "id": f"alarm-{index}",
+                "hour": 9,
+                "minute": index % 60,
+                "days": ["mon"],
+                "name": "name",
+            }
             for index in range(MAX_ALARM_COUNT + 5)
         ]
         with tempfile.TemporaryDirectory() as tmp:
@@ -2590,7 +3323,11 @@ class SettingsExportTest(unittest.TestCase):
                 "created_at": "2026-06-01T09:00:00Z",
                 "speed_of_cinnamon_version": "1.0",
                 "settings": {"language": "de"},
-                "alarms": {"version": 2, "alarms": long_alarms, "last_checked_at": "2026-06-01T09:00:00Z"},
+                "alarms": {
+                    "version": 2,
+                    "alarms": long_alarms,
+                    "last_checked_at": "2026-06-01T09:00:00Z",
+                },
             }
             path.write_text(json.dumps(payload), encoding="utf-8")
             loaded = read_export(path)
@@ -2620,8 +3357,12 @@ class SettingsExportTest(unittest.TestCase):
                 read_export(path)
 
     def test_build_export_rejects_alarm_store_timestamp_above_store_limit(self) -> None:
-        with self.assertRaisesRegex(SettingsExportError, "settings export alarm last_checked_at is too long"):
-            build_export({"language": "de"}, {"alarms": [], "last_checked_at": "T" * 41})
+        with self.assertRaisesRegex(
+            SettingsExportError, "settings export alarm last_checked_at is too long"
+        ):
+            build_export(
+                {"language": "de"}, {"alarms": [], "last_checked_at": "T" * 41}
+            )
 
     def test_build_export_rejects_oversized_setting_value(self) -> None:
         with self.assertRaisesRegex(SettingsExportError, "is too long"):
@@ -2651,7 +3392,9 @@ class SettingsExportTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
             with self.assertRaisesRegex(SettingsExportError, "is too long"):
-                write_export(path, {"personal-context": "A" * (MAX_SETTINGS_TEXT_CHARS + 10)})
+                write_export(
+                    path, {"personal-context": "A" * (MAX_SETTINGS_TEXT_CHARS + 10)}
+                )
 
     def test_read_export_skips_invalid_alarm_entry(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2685,12 +3428,19 @@ class SettingsExportTest(unittest.TestCase):
     def test_write_export_rejects_oversized_payload(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "settings-export.json"
-            with mock.patch("speed_of_cinnamon.settings_export.MAX_SETTINGS_EXPORT_BYTES", 1):
-                with self.assertRaisesRegex(SettingsExportError, "settings export is too large"):
+            with mock.patch(
+                "speed_of_cinnamon.settings_export.MAX_SETTINGS_EXPORT_BYTES", 1
+            ):
+                with self.assertRaisesRegex(
+                    SettingsExportError, "settings export is too large"
+                ):
                     write_export(path, {"language": "en"})
 
+
 class SettingsExportSecurityRegressionTests(unittest.TestCase):
-    def test_write_export_rollback_preserves_target_after_partial_write_mutation(self) -> None:
+    def test_write_export_rollback_preserves_target_after_partial_write_mutation(
+        self,
+    ) -> None:
         from speed_of_cinnamon import settings_export as settings_export_module
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2735,7 +3485,9 @@ class SettingsExportSecurityRegressionTests(unittest.TestCase):
                 "_rename_without_replacing",
                 side_effect=source_error,
             ):
-                with self.assertRaises(settings_export_module.SettingsExportError) as caught:
+                with self.assertRaises(
+                    settings_export_module.SettingsExportError
+                ) as caught:
                     settings_export_module.write_export(path, {"language": "en"})
 
             public_error = caught.exception

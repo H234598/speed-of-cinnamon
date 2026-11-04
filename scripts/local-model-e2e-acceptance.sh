@@ -17,9 +17,9 @@ unset HF_TOKEN HUGGINGFACE_HUB_TOKEN
 
 # Real local-model acceptance. It generates audio only and never accesses a
 # microphone, clipboard, paste target, downloaded model, or persistent text.
-if [[ "${SOC_LOCAL_MODEL_E2E:-0}" != "1" ]]; then
-  printf 'Refusing local model acceptance test. Set SOC_LOCAL_MODEL_E2E=1.\n' >&2
-  exit 2
+if [[ ${SOC_LOCAL_MODEL_E2E:-0} != "1" ]]; then
+	printf 'Refusing local model acceptance test. Set SOC_LOCAL_MODEL_E2E=1.\n' >&2
+	exit 2
 fi
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -31,26 +31,26 @@ tmp_root=""
 tmp_identity=""
 
 for tool in espeak-ng ffmpeg python3 mktemp git timeout; do
-  command -v -- "${tool}" >/dev/null 2>&1 || {
-    printf 'local-model-e2e: required tool missing: %s\n' "${tool}" >&2
-    exit 2
-  }
+	command -v -- "${tool}" >/dev/null 2>&1 || {
+		printf 'local-model-e2e: required tool missing: %s\n' "${tool}" >&2
+		exit 2
+	}
 done
-[[ -x "${backend}" ]] || {
-  printf 'local-model-e2e: development backend is unavailable.\n' >&2
-  exit 2
+[[ -x ${backend} ]] || {
+	printf 'local-model-e2e: development backend is unavailable.\n' >&2
+	exit 2
 }
-[[ -f "${safe_fs}" && ! -L "${safe_fs}" ]] || {
-  printf 'local-model-e2e: invalid safe filesystem helper.\n' >&2
-  exit 2
+[[ -f ${safe_fs} && ! -L ${safe_fs} ]] || {
+	printf 'local-model-e2e: invalid safe filesystem helper.\n' >&2
+	exit 2
 }
 
 cleanup() {
-  set +e
-  if [[ -n "${tmp_root}" && -n "${tmp_identity}" ]]; then
-    python3 "${safe_fs}" remove local-model-e2e "${tmp_root}" --kind dir \
-      --expected-identity "${tmp_identity}" >/dev/null 2>&1 || true
-  fi
+	set +e
+	if [[ -n ${tmp_root} && -n ${tmp_identity} ]]; then
+		python3 "${safe_fs}" remove local-model-e2e "${tmp_root}" --kind dir \
+			--expected-identity "${tmp_identity}" >/dev/null 2>&1 || true
+	fi
 }
 trap cleanup EXIT INT TERM
 
@@ -65,9 +65,9 @@ cases_file="${tmp_root}/cases.tsv"
 models_manifest="${tmp_root}/models-manifest.json"
 
 espeak-ng -v de -s 145 -w "${tmp_root}/source-de.wav" \
-  'Eins zwei drei vier fünf. Dies ist ein lokaler deutscher Transkriptionstest.'
+	'Eins zwei drei vier fünf. Dies ist ein lokaler deutscher Transkriptionstest.'
 espeak-ng -v en-us -s 145 -w "${tmp_root}/source-en.wav" \
-  'One two three four five. This is a local English transcription test.'
+	'One two three four five. This is a local English transcription test.'
 ffmpeg -nostdin -loglevel error -y -i "${tmp_root}/source-de.wav" -ac 1 -ar 16000 "${tmp_root}/speech-de.flac"
 ffmpeg -nostdin -loglevel error -y -i "${tmp_root}/source-en.wav" -ac 1 -ar 16000 "${tmp_root}/speech-en.flac"
 
@@ -209,29 +209,29 @@ case_count=0
 ggml_case_count=0
 ct2_case_count=0
 while IFS=$'\t' read -r model_backend model_name model_path language; do
-  [[ -n "${model_backend}" && -n "${model_name}" && -n "${model_path}" && -n "${language}" ]] || {
-    printf 'local-model-e2e: malformed test case.\n' >&2
-    exit 1
-  }
-  audio_path="${tmp_root}/speech-${language}.flac"
-  [[ -f "${audio_path}" ]] || {
-    printf 'local-model-e2e: generated fixture is missing.\n' >&2
-    exit 1
-  }
-  for requested_backend in "${model_backend}" auto; do
-    result_path="${tmp_root}/result-${case_count}.json"
-    if ! "${backend}" transcribe-file "${audio_path}" --json \
-      --language "${language}" \
-      --transcriber "${requested_backend}" \
-      --whisper-model "${model_path}" \
-      --post-process-backend none \
-      --artifact-encryption off \
-      --confirm-plaintext-output >"${result_path}"; then
-      printf 'local-model-e2e: failed backend=%s model=%s language=%s mode=%s.\n' \
-        "${model_backend}" "${model_name}" "${language}" "${requested_backend}" >&2
-      exit 1
-    fi
-    python3 - "${result_path}" <<'PY'
+	[[ -n ${model_backend} && -n ${model_name} && -n ${model_path} && -n ${language} ]] || {
+		printf 'local-model-e2e: malformed test case.\n' >&2
+		exit 1
+	}
+	audio_path="${tmp_root}/speech-${language}.flac"
+	[[ -f ${audio_path} ]] || {
+		printf 'local-model-e2e: generated fixture is missing.\n' >&2
+		exit 1
+	}
+	for requested_backend in "${model_backend}" auto; do
+		result_path="${tmp_root}/result-${case_count}.json"
+		if ! "${backend}" transcribe-file "${audio_path}" --json \
+			--language "${language}" \
+			--transcriber "${requested_backend}" \
+			--whisper-model "${model_path}" \
+			--post-process-backend none \
+			--artifact-encryption off \
+			--confirm-plaintext-output >"${result_path}"; then
+			printf 'local-model-e2e: failed backend=%s model=%s language=%s mode=%s.\n' \
+				"${model_backend}" "${model_name}" "${language}" "${requested_backend}" >&2
+			exit 1
+		fi
+		python3 - "${result_path}" <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -274,18 +274,18 @@ text = payload.get("transcript")
 if payload.get("status") != "done" or not isinstance(text, str) or len(text.strip()) < 3:
     raise SystemExit("local-model-e2e: transcription did not produce usable text")
 PY
-    case_count=$((case_count + 1))
-    if [[ "${model_backend}" == "whisper-cpp" ]]; then
-      ggml_case_count=$((ggml_case_count + 1))
-    else
-      ct2_case_count=$((ct2_case_count + 1))
-    fi
-  done
+		case_count=$((case_count + 1))
+		if [[ ${model_backend} == "whisper-cpp" ]]; then
+			ggml_case_count=$((ggml_case_count + 1))
+		else
+			ct2_case_count=$((ct2_case_count + 1))
+		fi
+	done
 done <"${cases_file}"
 
-(( case_count > 0 && ggml_case_count > 0 && ct2_case_count > 0 )) || {
-  printf 'local-model-e2e: no complete GGML and CT2 matrix was executed.\n' >&2
-  exit 1
+((case_count > 0 && ggml_case_count > 0 && ct2_case_count > 0)) || {
+	printf 'local-model-e2e: no complete GGML and CT2 matrix was executed.\n' >&2
+	exit 1
 }
 
 git_head="$(timeout --signal=TERM --kill-after=2s "${GIT_TIMEOUT_SECONDS}s" git -C "${repo_dir}" rev-parse HEAD)"

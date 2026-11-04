@@ -16,7 +16,9 @@ class SourceAttestationLimitTests(unittest.TestCase):
             source.mkdir()
             (source / "module.py").write_text("print('ok')\n", encoding="utf-8")
 
-            with mock.patch.object(models, "_LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS", ("src",)):
+            with mock.patch.object(
+                models, "_LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS", ("src",)
+            ):
                 snapshot = models.source_attestation_snapshot(root)
 
         self.assertEqual([entry["path"] for entry in snapshot], ["src/module.py"])
@@ -30,7 +32,9 @@ class SourceAttestationLimitTests(unittest.TestCase):
             (source / "two.py").write_text("2\n", encoding="utf-8")
 
             with (
-                mock.patch.object(models, "_LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS", ("src",)),
+                mock.patch.object(
+                    models, "_LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS", ("src",)
+                ),
                 mock.patch.object(models, "MAX_SOURCE_ATTESTATION_FILES", 1),
             ):
                 with self.assertRaisesRegex(models.ModelError, "exceeds 1 files"):
@@ -44,7 +48,9 @@ class SourceAttestationLimitTests(unittest.TestCase):
             (source / "module.py").write_bytes(b"12345")
 
             with (
-                mock.patch.object(models, "_LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS", ("src",)),
+                mock.patch.object(
+                    models, "_LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS", ("src",)
+                ),
                 mock.patch.object(models, "MAX_SOURCE_ATTESTATION_BYTES", 4),
             ):
                 with self.assertRaisesRegex(models.ModelError, "exceeds 4 bytes"):

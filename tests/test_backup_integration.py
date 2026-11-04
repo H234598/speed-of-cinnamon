@@ -27,19 +27,28 @@ from speed_of_cinnamon.backup_state import BackupStateError, BackupStateStore
 
 class BackupIntegrationTests(unittest.TestCase):
     def test_backup_state_lock_requires_bounded_timeout(self):
-        with self.assertRaisesRegex(BackupStateError, "backup state lock timeout is required"):
+        with self.assertRaisesRegex(
+            BackupStateError, "backup state lock timeout is required"
+        ):
             backup_state_module._flock_retry(1, backup_state_module.fcntl.LOCK_EX)
 
     def test_backup_state_lock_rejects_non_finite_timeout(self):
-        with self.assertRaisesRegex(BackupStateError, "backup state lock timeout is invalid"):
-            backup_state_module._flock_retry(1, backup_state_module.fcntl.LOCK_EX, timeout_seconds=float("inf"))
+        with self.assertRaisesRegex(
+            BackupStateError, "backup state lock timeout is invalid"
+        ):
+            backup_state_module._flock_retry(
+                1, backup_state_module.fcntl.LOCK_EX, timeout_seconds=float("inf")
+            )
 
     def test_backup_state_lock_rejects_oversized_timeout(self):
-        with self.assertRaisesRegex(BackupStateError, "backup state lock timeout exceeds safe limit"):
+        with self.assertRaisesRegex(
+            BackupStateError, "backup state lock timeout exceeds safe limit"
+        ):
             backup_state_module._flock_retry(
                 1,
                 backup_state_module.fcntl.LOCK_EX,
-                timeout_seconds=backup_state_module.BACKUP_STATE_LOCK_TIMEOUT_SECONDS + 1,
+                timeout_seconds=backup_state_module.BACKUP_STATE_LOCK_TIMEOUT_SECONDS
+                + 1,
             )
 
     def setUp(self) -> None:
@@ -62,15 +71,23 @@ class BackupIntegrationTests(unittest.TestCase):
 
     def _inputs(self) -> list[BackupInput]:
         return [
-            BackupInput("config", "config/settings.json", "config-settings", self.config),
-            BackupInput("transcript", "transcripts/one.txt", "transcript-one", self.transcript),
+            BackupInput(
+                "config", "config/settings.json", "config-settings", self.config
+            ),
+            BackupInput(
+                "transcript", "transcripts/one.txt", "transcript-one", self.transcript
+            ),
             BackupInput("audio", "audio/one.flac", "audio-one", self.audio),
         ]
 
-    def _selection(self, *, config: bool = True, transcripts: bool = True, audio: bool = False) -> dict[str, bool]:
+    def _selection(
+        self, *, config: bool = True, transcripts: bool = True, audio: bool = False
+    ) -> dict[str, bool]:
         return {"config": config, "transcripts": transcripts, "audio": audio}
 
-    def test_selective_bundle_is_verified_and_contains_only_selected_categories(self) -> None:
+    def test_selective_bundle_is_verified_and_contains_only_selected_categories(
+        self,
+    ) -> None:
         result = create_backup(
             self.target,
             sources=self._inputs(),
@@ -83,14 +100,23 @@ class BackupIntegrationTests(unittest.TestCase):
         self.assertIsNotNone(result.archive_path)
         assert result.archive_path is not None
         manifest = verify_backup(result.archive_path)
-        self.assertEqual([artifact.kind for artifact in manifest.artifacts], ["transcript"])
+        self.assertEqual(
+            [artifact.kind for artifact in manifest.artifacts], ["transcript"]
+        )
         with tarfile.open(result.archive_path, "r:") as archive:
-            self.assertEqual(sorted(member.name for member in archive.getmembers()), ["manifest.json", "transcripts/one.txt"])
+            self.assertEqual(
+                sorted(member.name for member in archive.getmembers()),
+                ["manifest.json", "transcripts/one.txt"],
+            )
         self.assertEqual(self.transcript.read_text(encoding="utf-8"), "hello\n")
 
     def test_all_nonempty_category_combinations_are_verified(self) -> None:
         category_keys = ("config", "transcripts", "audio")
-        category_kinds = {"config": "config", "transcripts": "transcript", "audio": "audio"}
+        category_kinds = {
+            "config": "config",
+            "transcripts": "transcript",
+            "audio": "audio",
+        }
         for mask in range(1, 1 << len(category_keys)):
             with self.subTest(mask=mask):
                 selection = {
@@ -105,22 +131,28 @@ class BackupIntegrationTests(unittest.TestCase):
                     app_version="0.2.5",
                     job_id=f"category-matrix-{mask}",
                     created_at_utc=f"2026-08-14T00:00:{mask:02d}Z",
-                    state_store=BackupStateStore(self.root / "state" / f"matrix-{mask}.json"),
+                    state_store=BackupStateStore(
+                        self.root / "state" / f"matrix-{mask}.json"
+                    ),
                 )
                 self.assertIsNotNone(result.archive_path)
                 assert result.archive_path is not None
                 manifest = verify_backup(result.archive_path)
                 expected_kinds = {
-                    category_kinds[key]
-                    for key in category_keys
-                    if selection[key]
+                    category_kinds[key] for key in category_keys if selection[key]
                 }
-                self.assertEqual({artifact.kind for artifact in manifest.artifacts}, expected_kinds)
+                self.assertEqual(
+                    {artifact.kind for artifact in manifest.artifacts}, expected_kinds
+                )
 
     def test_copy_retries_interrupted_reads_and_writes(self) -> None:
         real_pread = os.pread
         real_write = os.write
-        state = {"pread_interrupt": True, "write_interrupt": True, "copy_started": False}
+        state = {
+            "pread_interrupt": True,
+            "write_interrupt": True,
+            "copy_started": False,
+        }
 
         def flaky_pread(fd: int, size: int, offset: int) -> bytes:
             if state["pread_interrupt"]:
@@ -141,7 +173,11 @@ class BackupIntegrationTests(unittest.TestCase):
         ):
             result = create_backup(
                 self.target,
-                sources=(BackupInput("transcript", "transcripts/one.txt", "one", self.transcript),),
+                sources=(
+                    BackupInput(
+                        "transcript", "transcripts/one.txt", "one", self.transcript
+                    ),
+                ),
                 source_roots=(self.source,),
                 selection=self._selection(config=False),
                 app_version="0.2.5",
@@ -159,7 +195,10 @@ class BackupIntegrationTests(unittest.TestCase):
         )
 
     def test_archive_member_limit_is_checked_during_iteration(self) -> None:
-        members = [tarfile.TarInfo(f"entries/{index}") for index in range(backup_module.MAX_BACKUP_MEMBER_COUNT + 1)]
+        members = [
+            tarfile.TarInfo(f"entries/{index}")
+            for index in range(backup_module.MAX_BACKUP_MEMBER_COUNT + 1)
+        ]
 
         class BoundedArchive:
             def __iter__(self):
@@ -178,7 +217,9 @@ class BackupIntegrationTests(unittest.TestCase):
         with self.assertRaisesRegex(BackupError, "archive is too large"):
             verify_backup(archive_path)
 
-    def test_existing_archive_is_not_overwritten_and_temporary_files_are_removed(self) -> None:
+    def test_existing_archive_is_not_overwritten_and_temporary_files_are_removed(
+        self,
+    ) -> None:
         first = create_backup(
             self.target,
             sources=self._inputs(),
@@ -331,13 +372,17 @@ class BackupIntegrationTests(unittest.TestCase):
                 job_id="ledger-warning",
                 state_store=self.ledger,
             )
-        self.assertEqual(result.warnings, ("backup published but post-publish bookkeeping failed",))
+        self.assertEqual(
+            result.warnings, ("backup published but post-publish bookkeeping failed",)
+        )
         self.assertIsNotNone(result.archive_path)
         assert result.archive_path is not None
         self.assertTrue(result.archive_path.is_file())
         self.assertEqual(self.ledger.load()["jobs"][-1]["status"], "success")
 
-    def test_persisted_running_entry_is_marked_failed_when_start_cleanup_fails(self) -> None:
+    def test_persisted_running_entry_is_marked_failed_when_start_cleanup_fails(
+        self,
+    ) -> None:
         original_record_job = self.ledger.record_job
 
         def record_job(**kwargs: object) -> dict[str, object]:
@@ -365,7 +410,9 @@ class BackupIntegrationTests(unittest.TestCase):
         with self.assertRaises(BackupError):
             create_backup(
                 self.target,
-                sources=(BackupInput("transcript", "transcripts/link.txt", "link", unsafe),),
+                sources=(
+                    BackupInput("transcript", "transcripts/link.txt", "link", unsafe),
+                ),
                 source_roots=(self.source,),
                 selection=self._selection(config=False),
                 app_version="0.2.5",
@@ -376,7 +423,9 @@ class BackupIntegrationTests(unittest.TestCase):
         self.assertEqual(self.ledger.load()["jobs"][-1]["status"], "failed")
 
     def test_running_ledger_entry_survives_crash(self) -> None:
-        self.ledger.record_job(job_id="crashed", status="running", created_at_utc="2026-08-14T00:00:00Z")
+        self.ledger.record_job(
+            job_id="crashed", status="running", created_at_utc="2026-08-14T00:00:00Z"
+        )
         self.assertEqual(self.ledger.load()["jobs"][0]["status"], "running")
 
     def test_duplicate_content_is_copied_once(self) -> None:
@@ -385,8 +434,12 @@ class BackupIntegrationTests(unittest.TestCase):
         result = create_backup(
             self.target,
             sources=(
-                BackupInput("transcript", "transcripts/one.txt", "one", self.transcript),
-                BackupInput("transcript", "transcripts/duplicate.txt", "duplicate", duplicate),
+                BackupInput(
+                    "transcript", "transcripts/one.txt", "one", self.transcript
+                ),
+                BackupInput(
+                    "transcript", "transcripts/duplicate.txt", "duplicate", duplicate
+                ),
             ),
             source_roots=(self.source,),
             selection=self._selection(config=False),
@@ -401,7 +454,9 @@ class BackupIntegrationTests(unittest.TestCase):
     def test_unchanged_config_can_be_skipped_from_repeated_job(self) -> None:
         first = create_backup(
             self.target,
-            sources=(BackupInput("config", "config/settings.json", "settings", self.config),),
+            sources=(
+                BackupInput("config", "config/settings.json", "settings", self.config),
+            ),
             source_roots=(self.source,),
             selection=self._selection(config=True, transcripts=False),
             app_version="0.2.5",
@@ -409,16 +464,24 @@ class BackupIntegrationTests(unittest.TestCase):
             state_store=self.ledger,
         )
         assert first.archive_path is not None
-        self.assertTrue(self.ledger.has_unchanged_artifact(
-            kind="config", source_identity="settings", size=self.config.stat().st_size,
-            sha256=hashlib.sha256(self.config.read_bytes()).hexdigest(),
-            mtime_ns=self.config.stat().st_mtime_ns,
-        ))
+        self.assertTrue(
+            self.ledger.has_unchanged_artifact(
+                kind="config",
+                source_identity="settings",
+                size=self.config.stat().st_size,
+                sha256=hashlib.sha256(self.config.read_bytes()).hexdigest(),
+                mtime_ns=self.config.stat().st_mtime_ns,
+            )
+        )
         current_stat = self.config.stat()
-        os.utime(self.config, ns=(current_stat.st_atime_ns, current_stat.st_mtime_ns + 1))
+        os.utime(
+            self.config, ns=(current_stat.st_atime_ns, current_stat.st_mtime_ns + 1)
+        )
         second = create_backup(
             self.target,
-            sources=(BackupInput("config", "config/settings.json", "settings", self.config),),
+            sources=(
+                BackupInput("config", "config/settings.json", "settings", self.config),
+            ),
             source_roots=(self.source,),
             selection=self._selection(config=True, transcripts=False),
             app_version="0.2.5",
@@ -440,7 +503,9 @@ class BackupIntegrationTests(unittest.TestCase):
         )
         assert result.archive_path is not None
         destination = self.root / "restore-target"
-        plan = restore_dry_run(result.archive_path, destination, source_roots=(self.source,))
+        plan = restore_dry_run(
+            result.archive_path, destination, source_roots=(self.source,)
+        )
         self.assertFalse(destination.exists())
         self.assertIn("manifest.json", plan.archive_members)
         self.assertEqual(plan.conflicts, ())
@@ -458,12 +523,19 @@ class BackupIntegrationTests(unittest.TestCase):
         assert result.archive_path is not None
         destination = self.root / "restored"
 
-        plan = restore_backup(result.archive_path, destination, source_roots=(self.source,))
+        plan = restore_backup(
+            result.archive_path, destination, source_roots=(self.source,)
+        )
 
         self.assertEqual(plan.conflicts, ())
         self.assertTrue((destination / "manifest.json").is_file())
-        self.assertEqual((destination / "transcripts" / "one.txt").read_text(encoding="utf-8"), "hello\n")
-        self.assertEqual((destination / "audio" / "one.flac").read_bytes(), b"audio\0bytes")
+        self.assertEqual(
+            (destination / "transcripts" / "one.txt").read_text(encoding="utf-8"),
+            "hello\n",
+        )
+        self.assertEqual(
+            (destination / "audio" / "one.flac").read_bytes(), b"audio\0bytes"
+        )
 
     def test_restore_rejects_existing_destination_without_writing(self) -> None:
         result = create_backup(
@@ -479,15 +551,22 @@ class BackupIntegrationTests(unittest.TestCase):
         destination = self.root / "restored-existing"
         destination.mkdir(mode=0o700)
 
-        with self.assertRaisesRegex(BackupError, "restore destination already exists|restore destination contains existing"):
-            restore_backup(result.archive_path, destination, source_roots=(self.source,))
+        with self.assertRaisesRegex(
+            BackupError,
+            "restore destination already exists|restore destination contains existing",
+        ):
+            restore_backup(
+                result.archive_path, destination, source_roots=(self.source,)
+            )
         self.assertEqual(list(destination.iterdir()), [])
 
     def test_restore_reads_verified_passphrase_encrypted_archive(self) -> None:
         with mock.patch.dict(
             os.environ,
             {
-                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(
+                    bytes(range(32))
+                ),
                 artifact_crypto.PASSPHRASE_FILE_ENV: "",
             },
             clear=False,
@@ -505,11 +584,18 @@ class BackupIntegrationTests(unittest.TestCase):
             assert result.archive_path is not None
             destination = self.root / "restored-passphrase"
 
-            restore_backup(result.archive_path, destination, source_roots=(self.source,))
+            restore_backup(
+                result.archive_path, destination, source_roots=(self.source,)
+            )
 
-        self.assertEqual((destination / "transcripts" / "one.txt").read_text(encoding="utf-8"), "hello\n")
+        self.assertEqual(
+            (destination / "transcripts" / "one.txt").read_text(encoding="utf-8"),
+            "hello\n",
+        )
 
-    def test_restore_dry_run_reports_existing_member_conflicts_without_writing(self) -> None:
+    def test_restore_dry_run_reports_existing_member_conflicts_without_writing(
+        self,
+    ) -> None:
         result = create_backup(
             self.target,
             sources=self._inputs(),
@@ -522,11 +608,20 @@ class BackupIntegrationTests(unittest.TestCase):
         assert result.archive_path is not None
         destination = self.root / "restore-conflict-target"
         (destination / "transcripts").mkdir(parents=True, mode=0o700)
-        (destination / "manifest.json").write_text("existing manifest\n", encoding="utf-8")
-        (destination / "transcripts" / "one.txt").write_text("existing\n", encoding="utf-8")
-        plan = restore_dry_run(result.archive_path, destination, source_roots=(self.source,))
+        (destination / "manifest.json").write_text(
+            "existing manifest\n", encoding="utf-8"
+        )
+        (destination / "transcripts" / "one.txt").write_text(
+            "existing\n", encoding="utf-8"
+        )
+        plan = restore_dry_run(
+            result.archive_path, destination, source_roots=(self.source,)
+        )
         self.assertEqual(plan.conflicts, ("manifest.json", "transcripts/one.txt"))
-        self.assertEqual((destination / "transcripts" / "one.txt").read_text(encoding="utf-8"), "existing\n")
+        self.assertEqual(
+            (destination / "transcripts" / "one.txt").read_text(encoding="utf-8"),
+            "existing\n",
+        )
 
     def test_restore_dry_run_rejects_existing_non_directory_destination(self) -> None:
         result = create_backup(
@@ -542,7 +637,9 @@ class BackupIntegrationTests(unittest.TestCase):
         destination = self.root / "restore-file-target"
         destination.write_text("not a directory\n", encoding="utf-8")
         with self.assertRaises(BackupError):
-            restore_dry_run(result.archive_path, destination, source_roots=(self.source,))
+            restore_dry_run(
+                result.archive_path, destination, source_roots=(self.source,)
+            )
 
     def test_restore_dry_run_rejects_symlink_member_path(self) -> None:
         result = create_backup(
@@ -561,7 +658,9 @@ class BackupIntegrationTests(unittest.TestCase):
         outside.write_text("must remain\n", encoding="utf-8")
         (destination / "transcripts" / "one.txt").symlink_to(outside)
         with self.assertRaises(BackupError):
-            restore_dry_run(result.archive_path, destination, source_roots=(self.source,))
+            restore_dry_run(
+                result.archive_path, destination, source_roots=(self.source,)
+            )
         self.assertEqual(outside.read_text(encoding="utf-8"), "must remain\n")
 
     def test_target_inside_source_is_rejected(self) -> None:
@@ -575,11 +674,15 @@ class BackupIntegrationTests(unittest.TestCase):
                 state_store=self.ledger,
             )
 
-    def test_passphrase_encrypted_bundle_has_no_plaintext_sibling_and_verifies(self) -> None:
+    def test_passphrase_encrypted_bundle_has_no_plaintext_sibling_and_verifies(
+        self,
+    ) -> None:
         with mock.patch.dict(
             os.environ,
             {
-                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(
+                    bytes(range(32))
+                ),
                 artifact_crypto.PASSPHRASE_FILE_ENV: "",
             },
             clear=False,
@@ -596,16 +699,24 @@ class BackupIntegrationTests(unittest.TestCase):
             )
             assert result.archive_path is not None
             self.assertTrue(result.archive_path.name.endswith(".socbackup.socenc"))
-            self.assertFalse((self.target / result.archive_path.name.removesuffix(".socenc")).exists())
+            self.assertFalse(
+                (
+                    self.target / result.archive_path.name.removesuffix(".socenc")
+                ).exists()
+            )
             self.assertNotIn(b"hello", result.archive_path.read_bytes())
-            self.assertEqual(verify_backup(result.archive_path).encryption_mode, "passphrase")
+            self.assertEqual(
+                verify_backup(result.archive_path).encryption_mode, "passphrase"
+            )
 
     def test_encrypted_archive_write_failure_cleans_partial_ciphertext(self) -> None:
         with (
             mock.patch.dict(
                 os.environ,
                 {
-                    artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+                    artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(
+                        bytes(range(32))
+                    ),
                     artifact_crypto.PASSPHRASE_FILE_ENV: "",
                 },
                 clear=False,
@@ -743,7 +854,9 @@ class BackupIntegrationTests(unittest.TestCase):
         )
         try:
             with self.assertRaisesRegex(BackupError, "timeout is invalid"):
-                backup_module._acquire_backup_lock(target_fd, timeout_seconds=float("inf"))
+                backup_module._acquire_backup_lock(
+                    target_fd, timeout_seconds=float("inf")
+                )
             with self.assertRaisesRegex(BackupError, "exceeds safe limit"):
                 backup_module._acquire_backup_lock(
                     target_fd,
@@ -769,13 +882,17 @@ class BackupIntegrationTests(unittest.TestCase):
                 state_store=self.ledger,
             )
             assert result.archive_path is not None
-            self.assertEqual(verify_backup(result.archive_path).encryption_mode, "keyring")
+            self.assertEqual(
+                verify_backup(result.archive_path).encryption_mode, "keyring"
+            )
 
     def test_tampered_encrypted_bundle_fails_closed(self) -> None:
         with mock.patch.dict(
             os.environ,
             {
-                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(
+                    bytes(range(32))
+                ),
                 artifact_crypto.PASSPHRASE_FILE_ENV: "",
             },
             clear=False,
@@ -793,8 +910,12 @@ class BackupIntegrationTests(unittest.TestCase):
             assert result.archive_path is not None
             envelope = json.loads(result.archive_path.read_text(encoding="utf-8"))
             ciphertext = envelope["ciphertext"]
-            envelope["ciphertext"] = ("A" if ciphertext[0] != "A" else "B") + ciphertext[1:]
-            result.archive_path.write_text(json.dumps(envelope) + "\n", encoding="utf-8")
+            envelope["ciphertext"] = (
+                "A" if ciphertext[0] != "A" else "B"
+            ) + ciphertext[1:]
+            result.archive_path.write_text(
+                json.dumps(envelope) + "\n", encoding="utf-8"
+            )
             result.archive_path.chmod(0o600)
             with self.assertRaises(BackupError):
                 verify_backup(result.archive_path)
@@ -803,7 +924,9 @@ class BackupIntegrationTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32))),
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(
+                    bytes(range(32))
+                ),
                 artifact_crypto.PASSPHRASE_FILE_ENV: "",
             },
             clear=False,
@@ -822,7 +945,9 @@ class BackupIntegrationTests(unittest.TestCase):
         with mock.patch.dict(
             os.environ,
             {
-                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(bytes(range(32, 64))),
+                artifact_crypto.PASSPHRASE_ENV: artifact_crypto._b64encode(
+                    bytes(range(32, 64))
+                ),
                 artifact_crypto.PASSPHRASE_FILE_ENV: "",
             },
             clear=False,
@@ -846,11 +971,17 @@ class BackupIntegrationTests(unittest.TestCase):
         with self.assertRaises(BackupError):
             verify_backup(result.archive_path)
 
-    def test_parallel_writers_keep_ledger_valid_and_do_not_apply_retention(self) -> None:
+    def test_parallel_writers_keep_ledger_valid_and_do_not_apply_retention(
+        self,
+    ) -> None:
         def run(index: int) -> Path:
             result = create_backup(
                 self.target,
-                sources=(BackupInput("transcript", "transcripts/one.txt", "one", self.transcript),),
+                sources=(
+                    BackupInput(
+                        "transcript", "transcripts/one.txt", "one", self.transcript
+                    ),
+                ),
                 source_roots=(self.source,),
                 selection=self._selection(config=False),
                 app_version="0.2.5",
@@ -869,7 +1000,11 @@ class BackupIntegrationTests(unittest.TestCase):
 
     def test_backup_state_lock_preserves_primary_error_when_parent_close_fails(self):
         with (
-            mock.patch.object(backup_state_module, "ensure_directory_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                backup_state_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=123,
+            ),
             mock.patch.object(
                 backup_state_module,
                 "assert_fd_is_private_directory",
@@ -881,7 +1016,9 @@ class BackupIntegrationTests(unittest.TestCase):
                 side_effect=OSError("private state path leaked"),
             ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "directory not private") as caught:
+            with self.assertRaisesRegex(
+                RuntimeError, "directory not private"
+            ) as caught:
                 with self.ledger._locked():
                     pass
         notes = "\n".join(getattr(caught.exception, "__notes__", ()))
@@ -890,7 +1027,11 @@ class BackupIntegrationTests(unittest.TestCase):
 
     def test_backup_state_lock_fails_closed_without_no_follow_support(self):
         with (
-            mock.patch.object(backup_state_module, "ensure_directory_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                backup_state_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=123,
+            ),
             mock.patch.object(backup_state_module, "assert_fd_is_private_directory"),
             mock.patch.object(backup_state_module.os, "O_NOFOLLOW", None, create=True),
             mock.patch.object(backup_state_module.os, "open") as mocked_open,
@@ -904,10 +1045,15 @@ class BackupIntegrationTests(unittest.TestCase):
         self.ledger.path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self.ledger.path.write_text("{}\n", encoding="utf-8")
         for failure in (RecursionError("nested"), MemoryError("budget")):
-            with self.subTest(failure=type(failure).__name__), mock.patch.object(
-                backup_state_module.json, "loads", side_effect=failure
+            with (
+                self.subTest(failure=type(failure).__name__),
+                mock.patch.object(
+                    backup_state_module.json, "loads", side_effect=failure
+                ),
             ):
-                with self.assertRaisesRegex(BackupStateError, "backup state is invalid"):
+                with self.assertRaisesRegex(
+                    BackupStateError, "backup state is invalid"
+                ):
                     self.ledger.load()
 
     def test_backup_state_read_does_not_probe_through_symlink(self):
@@ -934,7 +1080,9 @@ class BackupIntegrationTests(unittest.TestCase):
                 raise InterruptedError()
             return real_read(fd, size)
 
-        with mock.patch.object(backup_state_module.os, "read", side_effect=interrupted_once):
+        with mock.patch.object(
+            backup_state_module.os, "read", side_effect=interrupted_once
+        ):
             state = self.ledger.load()
         self.assertEqual(attempts, 3)
         self.assertEqual(state["jobs"][0]["job_id"], "eintr-read")
@@ -963,7 +1111,11 @@ class BackupIntegrationTests(unittest.TestCase):
                 raise OSError("lock fd close failed")
 
         with (
-            mock.patch.object(backup_state_module, "ensure_directory_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                backup_state_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=123,
+            ),
             mock.patch.object(backup_state_module, "assert_fd_is_private_directory"),
             mock.patch.object(
                 backup_state_module,
@@ -972,9 +1124,13 @@ class BackupIntegrationTests(unittest.TestCase):
             ),
             mock.patch.object(backup_state_module.os, "open", return_value=456),
             mock.patch.object(backup_state_module.fcntl, "flock"),
-            mock.patch.object(backup_state_module.os, "close", side_effect=fail_lock_close),
+            mock.patch.object(
+                backup_state_module.os, "close", side_effect=fail_lock_close
+            ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "lock file not private") as caught:
+            with self.assertRaisesRegex(
+                RuntimeError, "lock file not private"
+            ) as caught:
                 with self.ledger._locked():
                     pass
         self.assertEqual(close_calls, [456, 123])
@@ -983,14 +1139,22 @@ class BackupIntegrationTests(unittest.TestCase):
 
     def test_backup_state_lock_cleanup_failure_is_reported_without_primary_error(self):
         with (
-            mock.patch.object(backup_state_module, "ensure_directory_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                backup_state_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=123,
+            ),
             mock.patch.object(backup_state_module, "assert_fd_is_private_directory"),
             mock.patch.object(backup_state_module, "assert_fd_is_regular_private_file"),
             mock.patch.object(backup_state_module.os, "open", return_value=456),
             mock.patch.object(backup_state_module.fcntl, "flock"),
-            mock.patch.object(backup_state_module.os, "close", side_effect=OSError("close failed")),
+            mock.patch.object(
+                backup_state_module.os, "close", side_effect=OSError("close failed")
+            ),
         ):
-            with self.assertRaisesRegex(BackupStateError, "backup state lock cleanup failed"):
+            with self.assertRaisesRegex(
+                BackupStateError, "backup state lock cleanup failed"
+            ):
                 with self.ledger._locked():
                     pass
 

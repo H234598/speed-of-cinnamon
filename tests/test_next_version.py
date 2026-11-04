@@ -10,11 +10,17 @@ from pathlib import Path
 from unittest import mock
 
 
-def _run_version(*args: str, expect_ok: bool, cwd: Path | None = None, path: str | None = None) -> subprocess.CompletedProcess[str]:
+def _run_version(
+    *args: str, expect_ok: bool, cwd: Path | None = None, path: str | None = None
+) -> subprocess.CompletedProcess[str]:
     root = Path(__file__).resolve().parents[1]
     cmd = [sys.executable, str(root / "scripts" / "next_version.py")]
     cmd.extend(args)
-    env_patch = mock.patch.dict("os.environ", {"PATH": path}) if path is not None else nullcontext()
+    env_patch = (
+        mock.patch.dict("os.environ", {"PATH": path})
+        if path is not None
+        else nullcontext()
+    )
     with env_patch:
         result = subprocess.run(
             cmd,
@@ -35,14 +41,18 @@ def run_version_fail(*args: str) -> int:
     return _run_version(*args, expect_ok=False).returncode
 
 
-def run_version_fail_stdout_stderr(*args: str, path: str | None = None, cwd: Path | None = None) -> tuple[int, str]:
+def run_version_fail_stdout_stderr(
+    *args: str, path: str | None = None, cwd: Path | None = None
+) -> tuple[int, str]:
     result = _run_version(*args, expect_ok=False, path=path, cwd=cwd)
     return result.returncode, (result.stderr or "")
 
 
 def load_next_version_module() -> object:
     root = Path(__file__).resolve().parents[1]
-    spec = importlib.util.spec_from_file_location("next_version", root / "scripts" / "next_version.py")
+    spec = importlib.util.spec_from_file_location(
+        "next_version", root / "scripts" / "next_version.py"
+    )
     module = importlib.util.module_from_spec(spec)
     assert spec is not None and spec.loader is not None
     spec.loader.exec_module(module)  # type: ignore[union-attr]
@@ -54,13 +64,19 @@ next_version = load_next_version_module()
 
 class NextVersionTest(unittest.TestCase):
     def test_single_commit_keeps_patch(self) -> None:
-        self.assertEqual(run_version("--base", "0.1.26", "--add-commits", "1"), "0.1.26")
+        self.assertEqual(
+            run_version("--base", "0.1.26", "--add-commits", "1"), "0.1.26"
+        )
 
     def test_hundred_commits_increase_patch(self) -> None:
-        self.assertEqual(run_version("--base", "0.1.26", "--add-commits", "100"), "0.1.27")
+        self.assertEqual(
+            run_version("--base", "0.1.26", "--add-commits", "100"), "0.1.27"
+        )
 
     def test_minor_rolls_over_every_100_patches(self) -> None:
-        self.assertEqual(run_version("--base", "0.1.99", "--add-commits", "100"), "0.2.0")
+        self.assertEqual(
+            run_version("--base", "0.1.99", "--add-commits", "100"), "0.2.0"
+        )
 
     def test_default_mode_falls_back_to_last_version_tag(self) -> None:
         self.assertEqual(
@@ -69,7 +85,9 @@ class NextVersionTest(unittest.TestCase):
         )
 
     def test_major_rolls_over_every_100_minors(self) -> None:
-        self.assertEqual(run_version("--base", "0.99.0", "--add-commits", "10000"), "1.0.0")
+        self.assertEqual(
+            run_version("--base", "0.99.0", "--add-commits", "10000"), "1.0.0"
+        )
 
     def test_feature_increase_moves_minor(self) -> None:
         self.assertEqual(
@@ -107,22 +125,30 @@ class NextVersionTest(unittest.TestCase):
         self.assertIn("error:", stderr)
 
     def test_negative_add_commits_is_rejected(self) -> None:
-        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "-10")
+        code, stderr = run_version_fail_stdout_stderr(
+            "--base", "0.1.20", "--add-commits", "-10"
+        )
         self.assertEqual(code, 2)
         self.assertIn("error", stderr.lower())
 
     def test_non_numeric_add_commits_is_rejected(self) -> None:
-        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "oops")
+        code, stderr = run_version_fail_stdout_stderr(
+            "--base", "0.1.20", "--add-commits", "oops"
+        )
         self.assertEqual(code, 2)
         self.assertIn("error", stderr.lower())
 
     def test_float_add_commits_is_rejected(self) -> None:
-        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "1.0")
+        code, stderr = run_version_fail_stdout_stderr(
+            "--base", "0.1.20", "--add-commits", "1.0"
+        )
         self.assertEqual(code, 2)
         self.assertIn("error", stderr.lower())
 
     def test_whitespace_add_commits_is_rejected(self) -> None:
-        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "   ")
+        code, stderr = run_version_fail_stdout_stderr(
+            "--base", "0.1.20", "--add-commits", "   "
+        )
         self.assertEqual(code, 2)
         self.assertIn("error", stderr.lower())
 
@@ -134,23 +160,33 @@ class NextVersionTest(unittest.TestCase):
             " 0.1.20 ",
         ]:
             with self.subTest(version=version):
-                self.assertEqual(run_version("--base", version, "--add-commits", "0"), "0.1.20")
+                self.assertEqual(
+                    run_version("--base", version, "--add-commits", "0"), "0.1.20"
+                )
 
     def test_base_with_whitespace_is_accepted(self) -> None:
-        self.assertEqual(run_version("--base", "  0.1.20  ", "--add-commits", "0"), "0.1.20")
+        self.assertEqual(
+            run_version("--base", "  0.1.20  ", "--add-commits", "0"), "0.1.20"
+        )
 
     def test_base_with_only_whitespace_is_rejected(self) -> None:
-        code, stderr = run_version_fail_stdout_stderr("--base", "   ", "--add-commits", "0")
+        code, stderr = run_version_fail_stdout_stderr(
+            "--base", "   ", "--add-commits", "0"
+        )
         self.assertEqual(code, 2)
         self.assertIn("error", stderr.lower())
 
     def test_base_empty_is_rejected(self) -> None:
-        code, stderr = run_version_fail_stdout_stderr("--base", "", "--add-commits", "0")
+        code, stderr = run_version_fail_stdout_stderr(
+            "--base", "", "--add-commits", "0"
+        )
         self.assertEqual(code, 2)
         self.assertIn("error", stderr.lower())
 
     def test_add_commits_empty_is_rejected(self) -> None:
-        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "")
+        code, stderr = run_version_fail_stdout_stderr(
+            "--base", "0.1.20", "--add-commits", ""
+        )
         self.assertEqual(code, 2)
         self.assertIn("error", stderr.lower())
 
@@ -175,7 +211,9 @@ class NextVersionTest(unittest.TestCase):
             "vv0.1.20",
         ]:
             with self.subTest(version=version):
-                code, stderr = run_version_fail_stdout_stderr("--base", version, "--add-commits", "0")
+                code, stderr = run_version_fail_stdout_stderr(
+                    "--base", version, "--add-commits", "0"
+                )
                 self.assertEqual(code, 2)
                 self.assertIn("error", stderr.lower())
 
@@ -184,18 +222,27 @@ class NextVersionTest(unittest.TestCase):
             next_version.parse_version(None)  # type: ignore[arg-type]
 
     def test_from_tag_without_prefix_is_accepted(self) -> None:
-        self.assertEqual(next_version.normalize_tag("0.1.20"), next_version.normalize_tag("v0.1.20"))
+        self.assertEqual(
+            next_version.normalize_tag("0.1.20"), next_version.normalize_tag("v0.1.20")
+        )
 
     def test_from_tag_with_whitespace_is_accepted(self) -> None:
-        self.assertEqual(next_version.normalize_tag("  0.1.20  "), next_version.normalize_tag("v0.1.20"))
+        self.assertEqual(
+            next_version.normalize_tag("  0.1.20  "),
+            next_version.normalize_tag("v0.1.20"),
+        )
 
-    def test_from_tag_matching_current_version_without_git_tag_uses_zero_commits(self) -> None:
+    def test_from_tag_matching_current_version_without_git_tag_uses_zero_commits(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "pyproject.toml").write_text(
-                "[project]\nname = \"example\"\nversion = \"0.1.20\"\n",
+                '[project]\nname = "example"\nversion = "0.1.20"\n',
                 encoding="utf-8",
             )
-            result = _run_version("--from-tag", "0.1.20", expect_ok=True, cwd=Path(tmpdir))
+            result = _run_version(
+                "--from-tag", "0.1.20", expect_ok=True, cwd=Path(tmpdir)
+            )
 
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.strip(), "0.1.20")
@@ -207,12 +254,16 @@ class NextVersionTest(unittest.TestCase):
         self.assertIn("error", stderr.lower())
 
     def test_feature_and_breaking_are_mutually_exclusive(self) -> None:
-        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--feature", "--breaking")
+        code, stderr = run_version_fail_stdout_stderr(
+            "--base", "0.1.20", "--feature", "--breaking"
+        )
         self.assertNotEqual(code, 0)
         self.assertIn("error:", stderr)
 
     def test_explicit_add_commits_does_not_require_git_command(self) -> None:
-        code, stderr = run_version_fail_stdout_stderr("--base", "0.1.20", "--add-commits", "10", path="/nonexistent")
+        code, stderr = run_version_fail_stdout_stderr(
+            "--base", "0.1.20", "--add-commits", "10", path="/nonexistent"
+        )
         self.assertEqual(code, 0)
         self.assertEqual(stderr, "")
 
@@ -231,14 +282,20 @@ class NextVersionTest(unittest.TestCase):
 
     def test_missing_pyproject_is_user_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            code, stderr = run_version_fail_stdout_stderr("--add-commits", "10", cwd=Path(tmpdir))
+            code, stderr = run_version_fail_stdout_stderr(
+                "--add-commits", "10", cwd=Path(tmpdir)
+            )
             self.assertEqual(code, 2)
             self.assertIn("error:", stderr)
 
     def test_malformed_pyproject_is_user_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            Path(tmpdir, "pyproject.toml").write_text("not a valid toml", encoding="utf-8")
-            code, stderr = run_version_fail_stdout_stderr("--add-commits", "10", cwd=Path(tmpdir))
+            Path(tmpdir, "pyproject.toml").write_text(
+                "not a valid toml", encoding="utf-8"
+            )
+            code, stderr = run_version_fail_stdout_stderr(
+                "--add-commits", "10", cwd=Path(tmpdir)
+            )
             self.assertEqual(code, 2)
             self.assertIn("error:", stderr)
 
@@ -263,8 +320,10 @@ class NextVersionTest(unittest.TestCase):
     def test_read_current_version_unreadable_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir, "pyproject.toml")
-            path.write_text("[project]\nname=\"x\"\n", encoding="utf-8")
-            with mock.patch.object(next_version.os, "open", side_effect=OSError("unreadable")):
+            path.write_text('[project]\nname="x"\n', encoding="utf-8")
+            with mock.patch.object(
+                next_version.os, "open", side_effect=OSError("unreadable")
+            ):
                 with self.assertRaises(next_version.UserInputError):
                     next_version.read_current_version(path)
 
@@ -288,7 +347,7 @@ class NextVersionTest(unittest.TestCase):
     def test_read_current_version_missing_version_key(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             path = Path(tmpdir, "pyproject.toml")
-            path.write_text("[tool]\nname=\"x\"\n", encoding="utf-8")
+            path.write_text('[tool]\nname="x"\n', encoding="utf-8")
             with self.assertRaises(next_version.UserInputError):
                 next_version.read_current_version(path)
 
@@ -308,15 +367,21 @@ class NextVersionTest(unittest.TestCase):
 
     def test_pyproject_missing_version_is_user_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
-            Path(tmpdir, "pyproject.toml").write_text("[project]\nname=\"x\"\n", encoding="utf-8")
-            code, stderr = run_version_fail_stdout_stderr("--add-commits", "10", cwd=Path(tmpdir))
+            Path(tmpdir, "pyproject.toml").write_text(
+                '[project]\nname="x"\n', encoding="utf-8"
+            )
+            code, stderr = run_version_fail_stdout_stderr(
+                "--add-commits", "10", cwd=Path(tmpdir)
+            )
             self.assertEqual(code, 2)
             self.assertIn("error:", stderr)
 
     def test_pyproject_empty_project_section_is_user_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmpdir:
             Path(tmpdir, "pyproject.toml").write_text("[project]\n", encoding="utf-8")
-            code, stderr = run_version_fail_stdout_stderr("--add-commits", "10", cwd=Path(tmpdir))
+            code, stderr = run_version_fail_stdout_stderr(
+                "--add-commits", "10", cwd=Path(tmpdir)
+            )
             self.assertEqual(code, 2)
             self.assertIn("error:", stderr)
 
@@ -465,7 +530,9 @@ class NextVersionTest(unittest.TestCase):
         with mock.patch.object(
             next_version,
             "_run_git_bounded",
-            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="7\n", stderr=""),
+            return_value=subprocess.CompletedProcess(
+                args=["git"], returncode=0, stdout="7\n", stderr=""
+            ),
         ) as run:
             self.assertEqual(next_version.commits_since_ref("v0.1.20"), 7)
             run.assert_called_once()
@@ -474,7 +541,9 @@ class NextVersionTest(unittest.TestCase):
         with mock.patch.object(
             next_version,
             "_run_git_bounded",
-            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="8\n", stderr=""),
+            return_value=subprocess.CompletedProcess(
+                args=["git"], returncode=0, stdout="8\n", stderr=""
+            ),
         ) as run:
             self.assertEqual(next_version.commits_since_ref("  0.1.20  "), 8)
             run.assert_called_once_with(
@@ -485,7 +554,9 @@ class NextVersionTest(unittest.TestCase):
         with mock.patch.object(
             next_version,
             "_run_git_bounded",
-            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="8\n", stderr=""),
+            return_value=subprocess.CompletedProcess(
+                args=["git"], returncode=0, stdout="8\n", stderr=""
+            ),
         ) as run:
             self.assertEqual(next_version.commits_since_ref("--all"), 8)
             self.assertEqual(
@@ -506,8 +577,12 @@ class NextVersionTest(unittest.TestCase):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.commits_since_ref("v0.1.20")
 
-    def test_commits_since_ref_calledprocesserror_without_stderr_is_handled(self) -> None:
-        called = subprocess.CalledProcessError(1, ["git", "rev-list", "--count", "v0.1.20..HEAD"], stderr=None)
+    def test_commits_since_ref_calledprocesserror_without_stderr_is_handled(
+        self,
+    ) -> None:
+        called = subprocess.CalledProcessError(
+            1, ["git", "rev-list", "--count", "v0.1.20..HEAD"], stderr=None
+        )
         with mock.patch.object(next_version, "_run_git_bounded", side_effect=called):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.commits_since_ref("v0.1.20")
@@ -516,7 +591,9 @@ class NextVersionTest(unittest.TestCase):
         with mock.patch.object(
             next_version,
             "_run_git_bounded",
-            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="-1\n", stderr=""),
+            return_value=subprocess.CompletedProcess(
+                args=["git"], returncode=0, stdout="-1\n", stderr=""
+            ),
         ):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.commits_since_ref("v0.1.20")
@@ -525,7 +602,9 @@ class NextVersionTest(unittest.TestCase):
         with mock.patch.object(
             next_version,
             "_run_git_bounded",
-            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="   \n", stderr=""),
+            return_value=subprocess.CompletedProcess(
+                args=["git"], returncode=0, stdout="   \n", stderr=""
+            ),
         ):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.commits_since_ref("v0.1.20")
@@ -536,13 +615,17 @@ class NextVersionTest(unittest.TestCase):
             "-c",
             "import sys; sys.stdout.write('x' * 4097)",
         ]
-        with self.assertRaisesRegex(next_version.GitEnvironmentError, "output is too large"):
+        with self.assertRaisesRegex(
+            next_version.GitEnvironmentError, "output is too large"
+        ):
             next_version._run_git_bounded(command)
 
     def test_run_git_bounded_times_out_and_reaps(self) -> None:
         command = [sys.executable, "-c", "import time; time.sleep(1)"]
         with mock.patch.object(next_version, "GIT_TIMEOUT_SECONDS", 0.01):
-            with self.assertRaisesRegex(next_version.GitEnvironmentError, "git command timed out"):
+            with self.assertRaisesRegex(
+                next_version.GitEnvironmentError, "git command timed out"
+            ):
                 next_version._run_git_bounded(command)
 
     def test_run_git_bounded_reaps_when_selector_setup_fails(self) -> None:
@@ -554,13 +637,19 @@ class NextVersionTest(unittest.TestCase):
 
         with (
             mock.patch.object(next_version.subprocess, "Popen", return_value=process),
-            mock.patch.object(next_version.selectors, "DefaultSelector", side_effect=OSError("selector unavailable")),
+            mock.patch.object(
+                next_version.selectors,
+                "DefaultSelector",
+                side_effect=OSError("selector unavailable"),
+            ),
         ):
             with self.assertRaisesRegex(OSError, "selector unavailable"):
                 next_version._run_git_bounded(["git", "status"])
 
         process.kill.assert_called_once_with()
-        process.wait.assert_called_once_with(timeout=next_version.GIT_REAP_TIMEOUT_SECONDS)
+        process.wait.assert_called_once_with(
+            timeout=next_version.GIT_REAP_TIMEOUT_SECONDS
+        )
 
     def test_commits_since_ref_rejects_empty_ref(self) -> None:
         with self.assertRaises(next_version.UserInputError):
@@ -578,7 +667,9 @@ class NextVersionTest(unittest.TestCase):
         with mock.patch.object(
             next_version,
             "_run_git_bounded",
-            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="4\n", stderr=""),
+            return_value=subprocess.CompletedProcess(
+                args=["git"], returncode=0, stdout="4\n", stderr=""
+            ),
         ) as run:
             self.assertEqual(next_version.commits_since_tag("  0.1.20  "), 4)
             run.assert_called_once_with(
@@ -595,7 +686,9 @@ class NextVersionTest(unittest.TestCase):
         with mock.patch.object(
             next_version,
             "_run_git_bounded",
-            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="v0.1.20\n", stderr=""),
+            return_value=subprocess.CompletedProcess(
+                args=["git"], returncode=0, stdout="v0.1.20\n", stderr=""
+            ),
         ) as run:
             self.assertTrue(next_version.tag_exists("0.1.20"))
             called_cmd = run.call_args.args[0]
@@ -605,7 +698,9 @@ class NextVersionTest(unittest.TestCase):
         with mock.patch.object(
             next_version,
             "_run_git_bounded",
-            return_value=subprocess.CompletedProcess(args=["git"], returncode=0, stdout="v0.1.19\n", stderr=""),
+            return_value=subprocess.CompletedProcess(
+                args=["git"], returncode=0, stdout="v0.1.19\n", stderr=""
+            ),
         ):
             self.assertFalse(next_version.tag_exists("0.1.20"))
         with self.assertRaises(next_version.UserInputError):
@@ -660,7 +755,9 @@ class NextVersionTest(unittest.TestCase):
                 next_version.tag_exists("0.1.20")
 
     def test_tag_exists_calledprocesserror_is_git_error(self) -> None:
-        called = subprocess.CalledProcessError(1, ["git", "tag", "-l", "v0.1.20"], stderr="boom")
+        called = subprocess.CalledProcessError(
+            1, ["git", "tag", "-l", "v0.1.20"], stderr="boom"
+        )
         with mock.patch.object(next_version, "_run_git_bounded", side_effect=called):
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.tag_exists("0.1.20")
@@ -670,11 +767,21 @@ class NextVersionTest(unittest.TestCase):
             mock.patch.object(next_version, "parse_args") as parse_args,
             mock.patch.object(next_version, "ensure_tag_exists") as ensure_tag_exists,
             mock.patch.object(next_version, "tag_exists", return_value=True),
-            mock.patch.object(next_version, "commits_since_tag", return_value=2) as commits_since_tag,
-            mock.patch.object(next_version, "add_patches", return_value=(2, 3, 4)) as add_patches,
-            mock.patch.object(next_version, "print")
+            mock.patch.object(
+                next_version, "commits_since_tag", return_value=2
+            ) as commits_since_tag,
+            mock.patch.object(
+                next_version, "add_patches", return_value=(2, 3, 4)
+            ) as add_patches,
+            mock.patch.object(next_version, "print"),
         ):
-            parse_args.return_value = mock.Mock(from_tag="v9.9.9", add_commits=None, feature=False, breaking=False, base=None)
+            parse_args.return_value = mock.Mock(
+                from_tag="v9.9.9",
+                add_commits=None,
+                feature=False,
+                breaking=False,
+                base=None,
+            )
             next_version.main()
             self.assertFalse(ensure_tag_exists.called)
             commits_since_tag.assert_called_once_with("v9.9.9")
@@ -684,11 +791,21 @@ class NextVersionTest(unittest.TestCase):
         with (
             mock.patch.object(next_version, "parse_args") as parse_args,
             mock.patch.object(next_version, "tag_exists", return_value=True),
-            mock.patch.object(next_version, "commits_since_tag", return_value=7) as commits_since_tag,
-            mock.patch.object(next_version, "add_patches", return_value=(9, 9, 10)) as add_patches,
+            mock.patch.object(
+                next_version, "commits_since_tag", return_value=7
+            ) as commits_since_tag,
+            mock.patch.object(
+                next_version, "add_patches", return_value=(9, 9, 10)
+            ) as add_patches,
             mock.patch.object(next_version, "print"),
         ):
-            parse_args.return_value = mock.Mock(from_tag="9.9.9", add_commits=None, feature=False, breaking=False, base=None)
+            parse_args.return_value = mock.Mock(
+                from_tag="9.9.9",
+                add_commits=None,
+                feature=False,
+                breaking=False,
+                base=None,
+            )
             next_version.main()
             commits_since_tag.assert_called_once_with("v9.9.9")
             add_patches.assert_called_once_with((9, 9, 9), 7)
@@ -696,13 +813,23 @@ class NextVersionTest(unittest.TestCase):
     def test_main_unprefixed_from_tag_falls_back_for_current_missing_tag(self) -> None:
         with (
             mock.patch.object(next_version, "parse_args") as parse_args,
-            mock.patch.object(next_version, "read_current_version", return_value=(9, 9, 9)),
+            mock.patch.object(
+                next_version, "read_current_version", return_value=(9, 9, 9)
+            ),
             mock.patch.object(next_version, "tag_exists", return_value=False),
             mock.patch.object(next_version, "commits_since_tag") as commits_since_tag,
-            mock.patch.object(next_version, "add_patches", return_value=(9, 9, 9)) as add_patches,
+            mock.patch.object(
+                next_version, "add_patches", return_value=(9, 9, 9)
+            ) as add_patches,
             mock.patch.object(next_version, "print"),
         ):
-            parse_args.return_value = mock.Mock(from_tag="9.9.9", add_commits=None, feature=False, breaking=False, base=None)
+            parse_args.return_value = mock.Mock(
+                from_tag="9.9.9",
+                add_commits=None,
+                feature=False,
+                breaking=False,
+                base=None,
+            )
             next_version.main()
             self.assertFalse(commits_since_tag.called)
             add_patches.assert_called_once_with((9, 9, 9), 0)
@@ -710,53 +837,95 @@ class NextVersionTest(unittest.TestCase):
     def test_main_prefixed_from_tag_missing_current_tag_errors(self) -> None:
         with (
             mock.patch.object(next_version, "parse_args") as parse_args,
-            mock.patch.object(next_version, "read_current_version", return_value=(9, 9, 9)),
+            mock.patch.object(
+                next_version, "read_current_version", return_value=(9, 9, 9)
+            ),
             mock.patch.object(next_version, "tag_exists", return_value=False),
             mock.patch.object(next_version, "commits_since_tag") as commits_since_tag,
         ):
-            parse_args.return_value = mock.Mock(from_tag="v9.9.9", add_commits=None, feature=False, breaking=False, base=None)
+            parse_args.return_value = mock.Mock(
+                from_tag="v9.9.9",
+                add_commits=None,
+                feature=False,
+                breaking=False,
+                base=None,
+            )
             with self.assertRaises(next_version.UserInputError):
                 next_version.main()
             self.assertFalse(commits_since_tag.called)
 
     def test_main_uses_add_commits_when_provided(self) -> None:
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "ensure_tag_exists") as ensure_tag_exists, \
-            mock.patch.object(next_version, "commits_since_tag") as commits_since_tag, \
-            mock.patch.object(next_version, "add_patches", return_value=(2, 3, 4)) as add_patches, \
-            mock.patch.object(next_version, "print"):
-            parse_args.return_value = mock.Mock(from_tag=None, add_commits=77, feature=False, breaking=False, base="1.2.3")
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(next_version, "ensure_tag_exists") as ensure_tag_exists,
+            mock.patch.object(next_version, "commits_since_tag") as commits_since_tag,
+            mock.patch.object(
+                next_version, "add_patches", return_value=(2, 3, 4)
+            ) as add_patches,
+            mock.patch.object(next_version, "print"),
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag=None,
+                add_commits=77,
+                feature=False,
+                breaking=False,
+                base="1.2.3",
+            )
             next_version.main()
             self.assertFalse(ensure_tag_exists.called)
             self.assertFalse(commits_since_tag.called)
             add_patches.assert_called_once_with((1, 2, 3), 77)
 
     def test_main_prefers_feature_over_no_change(self) -> None:
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "add_patches", return_value=(1, 2, 3)) as add_patches, \
-            mock.patch.object(next_version, "apply_feature_increase", return_value=(1, 3, 3)) as apply_feature, \
-            mock.patch.object(next_version, "print"):
-            parse_args.return_value = mock.Mock(from_tag=None, add_commits=0, feature=True, breaking=False, base="1.2.0")
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(
+                next_version, "add_patches", return_value=(1, 2, 3)
+            ) as add_patches,
+            mock.patch.object(
+                next_version, "apply_feature_increase", return_value=(1, 3, 3)
+            ) as apply_feature,
+            mock.patch.object(next_version, "print"),
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag=None, add_commits=0, feature=True, breaking=False, base="1.2.0"
+            )
             next_version.main()
             add_patches.assert_called_once_with((1, 2, 0), 0)
             apply_feature.assert_called_once_with(1, 2, 3)
 
     def test_main_breaking_overrides_feature(self) -> None:
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "add_patches", return_value=(1, 2, 3)), \
-            mock.patch.object(next_version, "apply_feature_increase") as apply_feature, \
-            mock.patch.object(next_version, "apply_breaking_change", return_value=(2, 0, 0)) as apply_breaking, \
-            mock.patch.object(next_version, "print"):
-            parse_args.return_value = mock.Mock(from_tag=None, add_commits=0, feature=False, breaking=True, base="1.2.0")
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(next_version, "add_patches", return_value=(1, 2, 3)),
+            mock.patch.object(next_version, "apply_feature_increase") as apply_feature,
+            mock.patch.object(
+                next_version, "apply_breaking_change", return_value=(2, 0, 0)
+            ) as apply_breaking,
+            mock.patch.object(next_version, "print"),
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag=None, add_commits=0, feature=False, breaking=True, base="1.2.0"
+            )
             next_version.main()
             self.assertFalse(apply_feature.called)
             apply_breaking.assert_called_once_with(1, 2, 3)
 
     def test_main_rejects_whitespace_from_tag(self) -> None:
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "ensure_tag_exists") as ensure_tag_exists, \
-            mock.patch.object(next_version, "read_current_version") as read_current_version:
-            parse_args.return_value = mock.Mock(from_tag="   ", add_commits=None, feature=False, breaking=False, base=None)
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(next_version, "ensure_tag_exists") as ensure_tag_exists,
+            mock.patch.object(
+                next_version, "read_current_version"
+            ) as read_current_version,
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag="   ",
+                add_commits=None,
+                feature=False,
+                breaking=False,
+                base=None,
+            )
             with self.assertRaises(next_version.UserInputError):
                 next_version.main()
             self.assertFalse(ensure_tag_exists.called)
@@ -764,43 +933,93 @@ class NextVersionTest(unittest.TestCase):
 
     def test_main_rejects_non_int_add_commits(self) -> None:
         with mock.patch.object(next_version, "parse_args") as parse_args:
-            parse_args.return_value = mock.Mock(from_tag=None, add_commits=True, feature=False, breaking=False, base="0.1.20")
+            parse_args.return_value = mock.Mock(
+                from_tag=None,
+                add_commits=True,
+                feature=False,
+                breaking=False,
+                base="0.1.20",
+            )
             with self.assertRaises(next_version.UserInputError):
                 next_version.main()
 
     def test_main_rejects_non_string_base_and_from_tag(self) -> None:
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "read_current_version") as read_current_version:
-            parse_args.return_value = mock.Mock(from_tag="0.1.20", add_commits=0, feature=False, breaking=False, base=True)
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(
+                next_version, "read_current_version"
+            ) as read_current_version,
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag="0.1.20",
+                add_commits=0,
+                feature=False,
+                breaking=False,
+                base=True,
+            )
             with self.assertRaises(next_version.UserInputError):
                 next_version.main()
             self.assertFalse(read_current_version.called)
 
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "read_current_version") as read_current_version:
-            parse_args.return_value = mock.Mock(from_tag=123, add_commits=0, feature=False, breaking=False, base=None)
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(
+                next_version, "read_current_version"
+            ) as read_current_version,
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag=123, add_commits=0, feature=False, breaking=False, base=None
+            )
             with self.assertRaises(next_version.UserInputError):
                 next_version.main()
             self.assertFalse(read_current_version.called)
 
     def test_main_propagates_commits_since_tag_git_error(self) -> None:
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "tag_exists", return_value=True), \
-            mock.patch.object(next_version, "commits_since_tag", side_effect=next_version.GitEnvironmentError("boom")) as commits_since_tag:
-            parse_args.return_value = mock.Mock(from_tag="v1.2.3", add_commits=None, feature=False, breaking=False, base=None)
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(next_version, "tag_exists", return_value=True),
+            mock.patch.object(
+                next_version,
+                "commits_since_tag",
+                side_effect=next_version.GitEnvironmentError("boom"),
+            ) as commits_since_tag,
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag="v1.2.3",
+                add_commits=None,
+                feature=False,
+                breaking=False,
+                base=None,
+            )
             with self.assertRaises(next_version.GitEnvironmentError):
                 next_version.main()
             commits_since_tag.assert_called_once_with("v1.2.3")
 
     def test_main_falls_back_to_tag_not_existing(self) -> None:
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "read_current_version", return_value=(3, 4, 5)) as read_current_version, \
-            mock.patch.object(next_version, "tag_for_version", return_value="v3.4.5") as tag_for_version, \
-            mock.patch.object(next_version, "tag_exists", return_value=False) as tag_exists, \
-            mock.patch.object(next_version, "commits_since_tag") as commits_since_tag, \
-            mock.patch.object(next_version, "add_patches", return_value=(3, 4, 6)) as add_patches, \
-            mock.patch.object(next_version, "print"):
-            parse_args.return_value = mock.Mock(from_tag=None, add_commits=None, feature=False, breaking=False, base=None)
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(
+                next_version, "read_current_version", return_value=(3, 4, 5)
+            ) as read_current_version,
+            mock.patch.object(
+                next_version, "tag_for_version", return_value="v3.4.5"
+            ) as tag_for_version,
+            mock.patch.object(
+                next_version, "tag_exists", return_value=False
+            ) as tag_exists,
+            mock.patch.object(next_version, "commits_since_tag") as commits_since_tag,
+            mock.patch.object(
+                next_version, "add_patches", return_value=(3, 4, 6)
+            ) as add_patches,
+            mock.patch.object(next_version, "print"),
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag=None,
+                add_commits=None,
+                feature=False,
+                breaking=False,
+                base=None,
+            )
             next_version.main()
             read_current_version.assert_called_once_with()
             tag_for_version.assert_called_once_with((3, 4, 5))
@@ -837,22 +1056,50 @@ class NextVersionTest(unittest.TestCase):
                 next_version.implicit_commits_since_tag("v3.4.5")
 
     def test_main_add_patches_failure_propagates(self) -> None:
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "add_patches", side_effect=next_version.UserInputError("bad")) as add_patches:
-            parse_args.return_value = mock.Mock(from_tag=None, add_commits=10, feature=False, breaking=False, base="0.1.20")
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(
+                next_version,
+                "add_patches",
+                side_effect=next_version.UserInputError("bad"),
+            ) as add_patches,
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag=None,
+                add_commits=10,
+                feature=False,
+                breaking=False,
+                base="0.1.20",
+            )
             with self.assertRaises(next_version.UserInputError):
                 next_version.main()
             add_patches.assert_called_once_with((0, 1, 20), 10)
 
     def test_main_uses_auto_tag_when_tag_exists(self) -> None:
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "read_current_version", return_value=(2, 0, 0)) as read_current_version, \
-            mock.patch.object(next_version, "tag_for_version", return_value="v2.0.0"), \
-            mock.patch.object(next_version, "tag_exists", return_value=True) as tag_exists, \
-            mock.patch.object(next_version, "commits_since_tag", return_value=42) as commits_since_tag, \
-            mock.patch.object(next_version, "add_patches", return_value=(2, 1, 0)) as add_patches, \
-            mock.patch.object(next_version, "print"):
-            parse_args.return_value = mock.Mock(from_tag=None, add_commits=None, feature=False, breaking=False, base=None)
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(
+                next_version, "read_current_version", return_value=(2, 0, 0)
+            ) as read_current_version,
+            mock.patch.object(next_version, "tag_for_version", return_value="v2.0.0"),
+            mock.patch.object(
+                next_version, "tag_exists", return_value=True
+            ) as tag_exists,
+            mock.patch.object(
+                next_version, "commits_since_tag", return_value=42
+            ) as commits_since_tag,
+            mock.patch.object(
+                next_version, "add_patches", return_value=(2, 1, 0)
+            ) as add_patches,
+            mock.patch.object(next_version, "print"),
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag=None,
+                add_commits=None,
+                feature=False,
+                breaking=False,
+                base=None,
+            )
             next_version.main()
             read_current_version.assert_called_once_with()
             tag_exists.assert_called_once_with("v2.0.0")
@@ -860,9 +1107,21 @@ class NextVersionTest(unittest.TestCase):
             add_patches.assert_called_once_with((2, 0, 0), 42)
 
     def test_main_default_path_invalid_read_current_version(self) -> None:
-        with mock.patch.object(next_version, "parse_args") as parse_args, \
-            mock.patch.object(next_version, "read_current_version", side_effect=next_version.UserInputError("bad")) as read_current_version:
-            parse_args.return_value = mock.Mock(from_tag=None, add_commits=None, feature=False, breaking=False, base=None)
+        with (
+            mock.patch.object(next_version, "parse_args") as parse_args,
+            mock.patch.object(
+                next_version,
+                "read_current_version",
+                side_effect=next_version.UserInputError("bad"),
+            ) as read_current_version,
+        ):
+            parse_args.return_value = mock.Mock(
+                from_tag=None,
+                add_commits=None,
+                feature=False,
+                breaking=False,
+                base=None,
+            )
             with self.assertRaises(next_version.UserInputError):
                 next_version.main()
             self.assertTrue(read_current_version.called)
@@ -877,7 +1136,9 @@ class NextVersionTest(unittest.TestCase):
             self.assertEqual(result, 2)
 
     def test_run_reports_systemexit_non_int(self) -> None:
-        with mock.patch.object(next_version, "main", side_effect=SystemExit("bad exit")):
+        with mock.patch.object(
+            next_version, "main", side_effect=SystemExit("bad exit")
+        ):
             result = next_version.run()
             self.assertEqual(result, 2)
 

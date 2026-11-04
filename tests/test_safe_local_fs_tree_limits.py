@@ -13,7 +13,9 @@ SAFE_LOCAL_FS = REPO_ROOT / "scripts" / "safe-local-fs.py"
 
 
 def load_safe_local_fs():
-    spec = importlib.util.spec_from_file_location("safe_local_fs_tree_limits", SAFE_LOCAL_FS)
+    spec = importlib.util.spec_from_file_location(
+        "safe_local_fs_tree_limits", SAFE_LOCAL_FS
+    )
     if spec is None or spec.loader is None:
         raise RuntimeError("could not load safe-local-fs.py")
     module = importlib.util.module_from_spec(spec)

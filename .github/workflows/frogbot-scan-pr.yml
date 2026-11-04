@@ -12,7 +12,7 @@
 name: "Frogbot Scan Pull Request"
 on:
   pull_request:
-    types: [ opened, synchronize ]
+    types: [opened, synchronize]
 permissions:
   contents: read
 jobs:
@@ -51,7 +51,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha }}
           persist-credentials: false
 
-      - uses: jfrog/frogbot@5d9c42c30f1169d8be4ba5510b40e75ffcbbc2a9  # v2.21.2
+      - uses: jfrog/frogbot@5d9c42c30f1169d8be4ba5510b40e75ffcbbc2a9 # v2.21.2
         env:
           # [Mandatory if the two conditions below are met]
           # 1. The project uses npm, yarn 2, NuGet or .NET to download its dependencies

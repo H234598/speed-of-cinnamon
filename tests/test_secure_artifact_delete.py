@@ -47,7 +47,9 @@ class SecureArtifactDeleteTest(unittest.TestCase):
             os.link(artifact, alias)
             parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
-                with self.assertRaisesRegex(RuntimeError, "changed before secure deletion"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "changed before secure deletion"
+                ):
                     secure_delete.secure_wipe_regular_file_at(
                         parent_fd,
                         artifact.name,
@@ -66,8 +68,12 @@ class SecureArtifactDeleteTest(unittest.TestCase):
             try:
                 with (
                     mock.patch.object(secure_delete, "_OS_PWRITE", None),
-                    mock.patch.object(secure_delete, "_OS_LSEEK", wraps=os.lseek) as lseek,
-                    mock.patch.object(secure_delete, "_OS_WRITE", wraps=os.write) as write,
+                    mock.patch.object(
+                        secure_delete, "_OS_LSEEK", wraps=os.lseek
+                    ) as lseek,
+                    mock.patch.object(
+                        secure_delete, "_OS_WRITE", wraps=os.write
+                    ) as write,
                 ):
                     secure_delete.secure_wipe_regular_file_at(
                         parent_fd,
@@ -97,7 +103,9 @@ class SecureArtifactDeleteTest(unittest.TestCase):
                 return written
 
             try:
-                with mock.patch.object(secure_delete, "_OS_PWRITE", side_effect=wipe_then_append):
+                with mock.patch.object(
+                    secure_delete, "_OS_PWRITE", side_effect=wipe_then_append
+                ):
                     secure_delete.secure_wipe_regular_file_at(
                         parent_fd,
                         artifact.name,
@@ -119,7 +127,9 @@ class SecureArtifactDeleteTest(unittest.TestCase):
             real_unlink = cli.os.unlink
 
             def observe_unlink(name: str, *, dir_fd: int = -1) -> None:
-                fd = os.open(name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=dir_fd)
+                fd = os.open(
+                    name, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0), dir_fd=dir_fd
+                )
                 try:
                     observed.append(os.read(fd, len(secret)))
                 finally:
@@ -156,8 +166,12 @@ class SecureArtifactDeleteTest(unittest.TestCase):
                     raise OSError("/private/secret-recording.flac")
 
                 with (
-                    mock.patch.object(secure_delete, "_OS_FSYNC", side_effect=OSError("wipe failed")),
-                    mock.patch.object(secure_delete, "_OS_CLOSE", side_effect=close_and_fail),
+                    mock.patch.object(
+                        secure_delete, "_OS_FSYNC", side_effect=OSError("wipe failed")
+                    ),
+                    mock.patch.object(
+                        secure_delete, "_OS_CLOSE", side_effect=close_and_fail
+                    ),
                 ):
                     with self.assertRaises(OSError) as raised:
                         secure_delete.secure_wipe_regular_file_at(

@@ -41,10 +41,14 @@ def _ready_gate_capability_unavailable_reason() -> str | None:
     )
     for owner, name in required_attributes:
         if not hasattr(owner, name):
-            return f"local model ready gate host capability is unavailable: missing {name}"
+            return (
+                f"local model ready gate host capability is unavailable: missing {name}"
+            )
     pidfd_open = getattr(os, "pidfd_open", None)
     if not callable(pidfd_open):
-        return "local model ready gate host capability is unavailable: missing pidfd_open"
+        return (
+            "local model ready gate host capability is unavailable: missing pidfd_open"
+        )
 
     endpoints: list[socket.socket] = []
     descriptors: list[int] = []
@@ -82,14 +86,18 @@ def _ready_gate_capability_unavailable_reason() -> str | None:
             socket.MSG_CMSG_CLOEXEC,
         )
         if data != b"x" or message_flags & (socket.MSG_TRUNC | socket.MSG_CTRUNC):
-            raise AssertionError("ready gate capability probe received invalid datagram")
+            raise AssertionError(
+                "ready gate capability probe received invalid datagram"
+            )
 
         credentials: list[tuple[int, int, int]] = []
         for level, kind, payload in ancillary:
             if level != socket.SOL_SOCKET:
                 continue
             if kind == socket.SCM_CREDENTIALS and len(payload) >= struct.calcsize("3i"):
-                credentials.append(struct.unpack("3i", payload[: struct.calcsize("3i")]))
+                credentials.append(
+                    struct.unpack("3i", payload[: struct.calcsize("3i")])
+                )
             elif kind == process_priority._SCM_PIDFD:
                 usable = len(payload) - (len(payload) % struct.calcsize("i"))
                 for (received,) in struct.iter_unpack("i", payload[:usable]):
@@ -136,11 +144,19 @@ def _ready_gate_capability_unavailable_reason() -> str | None:
 class LocalModelPriorityTests(unittest.TestCase):
     def test_local_model_scope_lowers_and_restores_cpu_and_io_priority(self) -> None:
         with (
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=-5),
-            mock.patch.object(process_priority, "_current_io_priority", return_value=("2", 4)),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=-5
+            ),
+            mock.patch.object(
+                process_priority, "_current_io_priority", return_value=("2", 4)
+            ),
             mock.patch.object(process_priority.os, "geteuid", return_value=0),
-            mock.patch.object(process_priority, "_set_cpu_priority", return_value=True) as set_cpu,
-            mock.patch.object(process_priority, "_set_io_priority", return_value=True) as set_io,
+            mock.patch.object(
+                process_priority, "_set_cpu_priority", return_value=True
+            ) as set_cpu,
+            mock.patch.object(
+                process_priority, "_set_io_priority", return_value=True
+            ) as set_io,
         ):
             with process_priority.local_model_priority():
                 pass
@@ -159,10 +175,16 @@ class LocalModelPriorityTests(unittest.TestCase):
 
     def test_local_model_scope_restores_non_default_io_class(self) -> None:
         with (
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=0),
-            mock.patch.object(process_priority, "_current_io_priority", return_value=("3", 0)),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=0
+            ),
+            mock.patch.object(
+                process_priority, "_current_io_priority", return_value=("3", 0)
+            ),
             mock.patch.object(process_priority, "_set_cpu_priority", return_value=True),
-            mock.patch.object(process_priority, "_set_io_priority", return_value=True) as set_io,
+            mock.patch.object(
+                process_priority, "_set_io_priority", return_value=True
+            ) as set_io,
         ):
             with process_priority.local_model_priority():
                 pass
@@ -175,12 +197,20 @@ class LocalModelPriorityTests(unittest.TestCase):
             ],
         )
 
-    def test_local_model_scope_does_not_stick_nice_for_unprivileged_process(self) -> None:
+    def test_local_model_scope_does_not_stick_nice_for_unprivileged_process(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=0),
-            mock.patch.object(process_priority, "_current_io_priority", return_value=("2", 4)),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=0
+            ),
+            mock.patch.object(
+                process_priority, "_current_io_priority", return_value=("2", 4)
+            ),
             mock.patch.object(process_priority.os, "geteuid", return_value=1000),
-            mock.patch.object(process_priority, "_set_cpu_priority", return_value=True) as set_cpu,
+            mock.patch.object(
+                process_priority, "_set_cpu_priority", return_value=True
+            ) as set_cpu,
             mock.patch.object(process_priority, "_set_io_priority", return_value=True),
         ):
             with process_priority.local_model_priority():
@@ -188,13 +218,23 @@ class LocalModelPriorityTests(unittest.TestCase):
 
         set_cpu.assert_not_called()
 
-    def test_local_model_scope_does_not_lower_inherited_negative_nice_unprivileged(self) -> None:
+    def test_local_model_scope_does_not_lower_inherited_negative_nice_unprivileged(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=-5),
-            mock.patch.object(process_priority, "_current_io_priority", return_value=("2", 4)),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=-5
+            ),
+            mock.patch.object(
+                process_priority, "_current_io_priority", return_value=("2", 4)
+            ),
             mock.patch.object(process_priority.os, "geteuid", return_value=1000),
-            mock.patch.object(process_priority, "_set_cpu_priority", return_value=True) as set_cpu,
-            mock.patch.object(process_priority, "_set_io_priority", return_value=True) as set_io,
+            mock.patch.object(
+                process_priority, "_set_cpu_priority", return_value=True
+            ) as set_cpu,
+            mock.patch.object(
+                process_priority, "_set_io_priority", return_value=True
+            ) as set_io,
         ):
             with process_priority.local_model_priority():
                 pass
@@ -208,12 +248,22 @@ class LocalModelPriorityTests(unittest.TestCase):
             ],
         )
 
-    def test_local_model_scope_does_not_change_io_when_previous_value_is_unknown(self) -> None:
+    def test_local_model_scope_does_not_change_io_when_previous_value_is_unknown(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=0),
-            mock.patch.object(process_priority, "_current_io_priority", return_value=None),
-            mock.patch.object(process_priority, "_set_cpu_priority", return_value=True) as set_cpu,
-            mock.patch.object(process_priority, "_set_io_priority", return_value=True) as set_io,
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=0
+            ),
+            mock.patch.object(
+                process_priority, "_current_io_priority", return_value=None
+            ),
+            mock.patch.object(
+                process_priority, "_set_cpu_priority", return_value=True
+            ) as set_cpu,
+            mock.patch.object(
+                process_priority, "_set_io_priority", return_value=True
+            ) as set_io,
         ):
             with process_priority.local_model_priority():
                 pass
@@ -222,11 +272,16 @@ class LocalModelPriorityTests(unittest.TestCase):
         set_io.assert_not_called()
 
     def test_local_model_command_adds_low_priority_wrappers(self) -> None:
-        with mock.patch.object(
-            process_priority.shutil,
-            "which",
-            side_effect=lambda name, path=None: f"/usr/bin/{name}",
-        ), mock.patch.object(process_priority, "_current_cpu_priority", return_value=0):
+        with (
+            mock.patch.object(
+                process_priority.shutil,
+                "which",
+                side_effect=lambda name, path=None: f"/usr/bin/{name}",
+            ),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=0
+            ),
+        ):
             command = process_priority.local_model_command(
                 ["/usr/bin/whisper", "audio.flac"]
             )
@@ -401,14 +456,18 @@ class LocalModelPriorityTests(unittest.TestCase):
                 unit_name="../ct2.scope",
             )
 
-    def test_local_model_command_uses_nonnegative_adjustment_for_inherited_high_nice(self) -> None:
+    def test_local_model_command_uses_nonnegative_adjustment_for_inherited_high_nice(
+        self,
+    ) -> None:
         with (
             mock.patch.object(
                 process_priority.shutil,
                 "which",
                 side_effect=lambda name, path=None: f"/usr/bin/{name}",
             ),
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=-5),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=-5
+            ),
         ):
             command = process_priority.local_model_command(["/usr/bin/whisper"])
 
@@ -422,7 +481,9 @@ class LocalModelPriorityTests(unittest.TestCase):
                 "which",
                 side_effect=lambda name, path=None: f"/usr/bin/{name}",
             ),
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=0),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=0
+            ),
         ):
             command = process_priority.local_model_command(["/usr/bin/whisper"])
 
@@ -435,7 +496,9 @@ class LocalModelPriorityTests(unittest.TestCase):
                 "which",
                 side_effect=lambda name, path=None: f"/usr/bin/{name}",
             ),
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=12),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=12
+            ),
         ):
             command = process_priority.local_model_command(["/usr/bin/whisper"])
 
@@ -445,7 +508,9 @@ class LocalModelPriorityTests(unittest.TestCase):
         with mock.patch.object(
             process_priority.shutil,
             "which",
-            side_effect=lambda name, path=None: None if name == "ionice" else f"/usr/bin/{name}",
+            side_effect=lambda name, path=None: (
+                None if name == "ionice" else f"/usr/bin/{name}"
+            ),
         ):
             with self.assertRaisesRegex(
                 process_priority.LocalModelPriorityError,
@@ -457,7 +522,9 @@ class LocalModelPriorityTests(unittest.TestCase):
         with mock.patch.object(
             process_priority.shutil,
             "which",
-            side_effect=lambda name, path=None: None if name == "nice" else f"/usr/bin/{name}",
+            side_effect=lambda name, path=None: (
+                None if name == "nice" else f"/usr/bin/{name}"
+            ),
         ):
             with self.assertRaisesRegex(
                 process_priority.LocalModelPriorityError,
@@ -465,10 +532,16 @@ class LocalModelPriorityTests(unittest.TestCase):
             ):
                 process_priority.local_model_command(["/usr/bin/whisper"])
 
-    def test_local_model_command_fails_closed_when_cpu_priority_is_unknown(self) -> None:
+    def test_local_model_command_fails_closed_when_cpu_priority_is_unknown(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(process_priority.shutil, "which", return_value="/usr/bin/tool"),
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=None),
+            mock.patch.object(
+                process_priority.shutil, "which", return_value="/usr/bin/tool"
+            ),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=None
+            ),
         ):
             with self.assertRaisesRegex(
                 process_priority.LocalModelPriorityError,
@@ -481,9 +554,13 @@ class LocalModelPriorityTests(unittest.TestCase):
             mock.patch.object(
                 process_priority.shutil,
                 "which",
-                side_effect=lambda name, path=None: None if name == "systemd-run" else f"/usr/bin/{name}",
+                side_effect=lambda name, path=None: (
+                    None if name == "systemd-run" else f"/usr/bin/{name}"
+                ),
             ),
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=0),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=0
+            ),
         ):
             with self.assertRaisesRegex(
                 process_priority.LocalModelPriorityError,
@@ -498,7 +575,9 @@ class LocalModelPriorityTests(unittest.TestCase):
                 "which",
                 side_effect=lambda name, path=None: f"/usr/bin/{name}",
             ),
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=0),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=0
+            ),
         ):
             command = process_priority.local_model_scope_probe_command()
 
@@ -514,7 +593,9 @@ class LocalModelPriorityTests(unittest.TestCase):
                 "which",
                 side_effect=lambda name, path=None: f"/usr/bin/{name}",
             ),
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=0),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=0
+            ),
         ):
             command = process_priority.local_model_direct_command(["/usr/bin/true"])
 
@@ -608,12 +689,22 @@ class LocalModelPriorityTests(unittest.TestCase):
                 {"PATH": "/usr/bin:/bin"},
                 clear=True,
             ),
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=10),
-            mock.patch.object(process_priority, "_current_io_priority", return_value=("2", 7)),
-            mock.patch.object(process_priority, "_open_scope_exec_launch_fd", return_value=91),
-            mock.patch.object(process_priority, "_descriptor_is_cloexec", return_value=True),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=10
+            ),
+            mock.patch.object(
+                process_priority, "_current_io_priority_direct", return_value=("2", 7)
+            ),
+            mock.patch.object(
+                process_priority, "_open_scope_exec_launch_fd", return_value=91
+            ),
+            mock.patch.object(
+                process_priority, "_descriptor_is_cloexec", return_value=True
+            ),
             mock.patch.object(process_priority.os, "open", side_effect=tracked_open),
-            mock.patch.object(process_priority.os, "close", side_effect=checked_close) as close,
+            mock.patch.object(
+                process_priority.os, "close", side_effect=checked_close
+            ) as close,
             mock.patch.object(
                 process_priority.os,
                 "execve",
@@ -641,12 +732,22 @@ class LocalModelPriorityTests(unittest.TestCase):
                 {"PATH": "/usr/bin:/bin"},
                 clear=True,
             ),
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=10),
-            mock.patch.object(process_priority, "_current_io_priority", return_value=("2", 7)),
-            mock.patch.object(process_priority, "_open_scope_exec_launch_fd", return_value=92),
-            mock.patch.object(process_priority, "_descriptor_is_cloexec", return_value=False),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=10
+            ),
+            mock.patch.object(
+                process_priority, "_current_io_priority_direct", return_value=("2", 7)
+            ),
+            mock.patch.object(
+                process_priority, "_open_scope_exec_launch_fd", return_value=92
+            ),
+            mock.patch.object(
+                process_priority, "_descriptor_is_cloexec", return_value=False
+            ) as cloexec,
             mock.patch.object(process_priority.os, "open", side_effect=tracked_open),
-            mock.patch.object(process_priority.os, "close", side_effect=checked_close) as close,
+            mock.patch.object(
+                process_priority.os, "close", side_effect=checked_close
+            ) as close,
             mock.patch.object(process_priority.os, "execve") as target,
         ):
             with self.assertRaisesRegex(
@@ -655,6 +756,7 @@ class LocalModelPriorityTests(unittest.TestCase):
             ):
                 process_priority._run_local_model_direct_exec_wrapper(arguments)
 
+        cloexec.assert_called_once_with(92)
         target.assert_not_called()
         self.assertEqual(len(identity_fds), 1)
         self.assertEqual(
@@ -662,7 +764,9 @@ class LocalModelPriorityTests(unittest.TestCase):
             [mock.call(identity_fds[0]), mock.call(92)],
         )
 
-    def test_direct_verifier_rejects_identity_drift_and_systemd_environment(self) -> None:
+    def test_direct_verifier_rejects_identity_drift_and_systemd_environment(
+        self,
+    ) -> None:
         wrapper = process_priority._local_model_direct_exec_wrapper_command(
             ["/usr/bin/true"]
         )
@@ -675,9 +779,15 @@ class LocalModelPriorityTests(unittest.TestCase):
                 {"PATH": "/usr/bin:/bin"},
                 clear=True,
             ),
-            mock.patch.object(process_priority, "_current_cpu_priority", return_value=10),
-            mock.patch.object(process_priority, "_current_io_priority", return_value=("2", 7)),
-            mock.patch.object(process_priority, "_open_scope_exec_launch_fd", return_value=None),
+            mock.patch.object(
+                process_priority, "_current_cpu_priority", return_value=10
+            ),
+            mock.patch.object(
+                process_priority, "_current_io_priority", return_value=("2", 7)
+            ),
+            mock.patch.object(
+                process_priority, "_open_scope_exec_launch_fd", return_value=None
+            ),
             mock.patch.object(process_priority.os, "execve") as target,
         ):
             with self.assertRaisesRegex(
@@ -724,9 +834,7 @@ class LocalModelDirectHardeningRegressionTests(unittest.TestCase):
             "_local_model_direct_prctl",
             side_effect=(0, 0),
         ) as prctl:
-            self.assertTrue(
-                process_priority._harden_local_model_direct_supervisor()
-            )
+            self.assertTrue(process_priority._harden_local_model_direct_supervisor())
         self.assertEqual(
             prctl.call_args_list,
             [
@@ -740,9 +848,7 @@ class LocalModelDirectHardeningRegressionTests(unittest.TestCase):
             "_local_model_direct_prctl",
             side_effect=(0, 1),
         ):
-            self.assertFalse(
-                process_priority._harden_local_model_direct_supervisor()
-            )
+            self.assertFalse(process_priority._harden_local_model_direct_supervisor())
 
     def test_children_overflow_is_returned_as_incomplete_batch(self) -> None:
         with (
@@ -842,7 +948,7 @@ class LocalModelDirectHardeningRegressionTests(unittest.TestCase):
             ),
             mock.patch.object(
                 process_priority,
-                "_current_io_priority",
+                "_current_io_priority_direct",
                 return_value=("2", 7),
             ) as io_priority,
             mock.patch.object(
@@ -1137,10 +1243,14 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
             readable, _, _ = select.select([gate.fileno()], [], [], 2.0)
             self.assertEqual(readable, [gate.fileno()])
             self.assertFalse(completed.is_set())
-            identity_patch, membership_patch, verify_patch = (
-                self._scope_verification(process_id)
+            identity_patch, membership_patch, verify_patch = self._scope_verification(
+                process_id
             )
-            with identity_patch as identity_for_pid, membership_patch as membership, verify_patch as verify:
+            with (
+                identity_patch as identity_for_pid,
+                membership_patch as membership,
+                verify_patch as verify,
+            ):
                 self.assertTrue(gate.try_verify_ready())
                 self.assertFalse(completed.is_set())
                 self.assertFalse(os.path.lexists(gate_directory))
@@ -1164,11 +1274,7 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
                     self.assertEqual(
                         call.kwargs,
                         {
-                            **(
-                                {"pid": process_id}
-                                if checked is verify
-                                else {}
-                            ),
+                            **({"pid": process_id} if checked is verify else {}),
                             "cpu_weight": process_priority.LOCAL_MODEL_CPU_WEIGHT,
                             "io_weight": process_priority.LOCAL_MODEL_IO_WEIGHT,
                         },
@@ -1482,12 +1588,7 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
             self.assertEqual(len(second), len(expected))
             self.assertEqual(len(scan_opens), 2)
             self.assertEqual(len(scan_descriptors), 2)
-            required = (
-                os.O_DIRECTORY
-                | os.O_NOFOLLOW
-                | os.O_CLOEXEC
-                | os.O_NONBLOCK
-            )
+            required = os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
             for flags, descriptor in scan_opens:
                 self.assertEqual(flags & required, required)
                 with self.assertRaises(OSError):
@@ -1544,7 +1645,9 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
 
         self.assertNotEqual(gate.state, "closed")
         self.assertTrue(os.path.isfile(sentinel))
-        self.assertFalse(os.path.lexists(os.path.join(moved_domain, os.path.basename(endpoint))))
+        self.assertFalse(
+            os.path.lexists(os.path.join(moved_domain, os.path.basename(endpoint)))
+        )
         os.unlink(sentinel)
         os.rmdir(domain)
         os.rename(moved_domain, domain)
@@ -1667,7 +1770,11 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
 
         def replace_before_rmdir(path, *, dir_fd=None):
             nonlocal replaced
-            if not replaced and path == binding.gate_name and dir_fd == runtime_descriptor:
+            if (
+                not replaced
+                and path == binding.gate_name
+                and dir_fd == runtime_descriptor
+            ):
                 replaced = True
                 os.rename(domain, moved_domain)
                 os.mkdir(domain, 0o700)
@@ -1758,9 +1865,7 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
 
             self.assertEqual(post_rmdir_states, ["retired"])
             self.assertTrue(
-                process_priority._local_model_gate_domain_is_retired(
-                    gate._resources
-                )
+                process_priority._local_model_gate_domain_is_retired(gate._resources)
             )
             self.assertEqual(gate._listener_owner[0].send(b"x"), 1)
             sender.settimeout(1.0)
@@ -1819,7 +1924,9 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
         self.assertNotIn("private cleanup detail", " ".join(body_error.__notes__))
         gate.close()
 
-    def test_context_manager_propagates_cleanup_failure_without_body_error(self) -> None:
+    def test_context_manager_propagates_cleanup_failure_without_body_error(
+        self,
+    ) -> None:
         gate = self._prepare()
         cleanup_error = KeyboardInterrupt("cleanup")
         with (
@@ -2006,8 +2113,7 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
         try:
             self.assertFalse(
                 any(
-                    call.args
-                    and call.args[0] == self._runtime_directory.name
+                    call.args and call.args[0] == self._runtime_directory.name
                     for call in opened.call_args_list
                 )
             )
@@ -2018,10 +2124,7 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
             ]
             self.assertGreaterEqual(len(component_calls), 2)
             required_flags = (
-                os.O_DIRECTORY
-                | os.O_NOFOLLOW
-                | os.O_CLOEXEC
-                | os.O_NONBLOCK
+                os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK
             )
             for call in component_calls:
                 self.assertIsInstance(call.kwargs.get("dir_fd"), int)
@@ -2084,9 +2187,7 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
                 values = {
                     "cpu.weight": "11\n" if wrong_weight == "cpu" else "10\n",
                     "io.weight": (
-                        "default 11\n"
-                        if wrong_weight == "io"
-                        else "default 10\n"
+                        "default 11\n" if wrong_weight == "io" else "default 10\n"
                     ),
                 }
                 for name, value in values.items():
@@ -2917,7 +3018,9 @@ class LocalModelReadyAckGateTests(unittest.TestCase):
                     )
                 )
                 with (
-                    mock.patch.dict(process_priority.os.environ, environment, clear=True),
+                    mock.patch.dict(
+                        process_priority.os.environ, environment, clear=True
+                    ),
                     liveness,
                     clock,
                     self.assertRaisesRegex(
@@ -3475,9 +3578,7 @@ class LocalModelDirectCapabilityTests(unittest.TestCase):
     def test_direct_capability_gate_accepts_current_unprivileged_process(self) -> None:
         if os.getuid() == 0 or os.geteuid() == 0:
             self.skipTest("requires an unprivileged test process")
-        self.assertTrue(
-            process_priority._local_model_direct_cap_sys_nice_is_absent()
-        )
+        self.assertTrue(process_priority._local_model_direct_cap_sys_nice_is_absent())
 
     def test_direct_capability_gate_rejects_setuid_in_active_sets(self) -> None:
         cap_setuid = 1 << 7

@@ -46,10 +46,7 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(logger.handlers, [])
             self.assertTrue(all(handler._closed for handler in handlers))
             self.assertTrue(
-                all(
-                    getattr(handler, "stream", None) is None
-                    for handler in handlers
-                )
+                all(getattr(handler, "stream", None) is None for handler in handlers)
             )
 
     def test_log_lock_retries_interrupted_exclusive_lock(self) -> None:
@@ -62,7 +59,9 @@ class AppLoggingTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
-            with mock.patch.object(app_logging.fcntl, "flock", side_effect=interrupt_first_lock):
+            with mock.patch.object(
+                app_logging.fcntl, "flock", side_effect=interrupt_first_lock
+            ):
                 fd = app_logging._acquire_log_lock(log_dir)
                 app_logging._release_log_lock(fd)
 
@@ -79,15 +78,23 @@ class AppLoggingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             with (
                 mock.patch.object(app_logging, "LOG_LOCK_TIMEOUT_SECONDS", 0.01),
-                mock.patch.object(app_logging.fcntl, "flock", side_effect=BlockingIOError),
-                mock.patch.object(app_logging.time, "monotonic", side_effect=(0.0, 0.02)),
+                mock.patch.object(
+                    app_logging.fcntl, "flock", side_effect=BlockingIOError
+                ),
+                mock.patch.object(
+                    app_logging.time, "monotonic", side_effect=(0.0, 0.02)
+                ),
                 mock.patch.object(app_logging.time, "sleep"),
             ):
-                with self.assertRaisesRegex(RuntimeError, "log lock acquisition timed out"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log lock acquisition timed out"
+                ):
                     app_logging._acquire_log_lock(Path(tmp))
 
     def test_fsync_retries_interrupted_calls(self) -> None:
-        with mock.patch.object(app_logging.os, "fsync", side_effect=[InterruptedError(), None]) as mocked_fsync:
+        with mock.patch.object(
+            app_logging.os, "fsync", side_effect=[InterruptedError(), None]
+        ) as mocked_fsync:
             app_logging._fsync_fd(123)
 
         self.assertEqual(mocked_fsync.call_args_list, [mock.call(123), mock.call(123)])
@@ -104,16 +111,25 @@ class AppLoggingTest(unittest.TestCase):
         self.assertNotIn("cleanup-secret", notes)
         self.assertNotIn("/private/cleanup", notes)
 
-    def test_sanitize_error_message_redacts_detail_marker_after_scan_limit(self) -> None:
-        value = "x" * (app_logging._ERROR_SCAN_MAX_CHARS + 800) + " stderr: secret-after-limit"
+    def test_sanitize_error_message_redacts_detail_marker_after_scan_limit(
+        self,
+    ) -> None:
+        value = (
+            "x" * (app_logging._ERROR_SCAN_MAX_CHARS + 800)
+            + " stderr: secret-after-limit"
+        )
 
         sanitized = app_logging.sanitize_error_message(value, max_chars=len(value))
 
         self.assertEqual(sanitized, "[redacted error details]")
         self.assertNotIn("secret-after-limit", sanitized)
 
-    def test_sanitize_error_message_does_not_use_backtracking_prefix_match(self) -> None:
-        with mock.patch.object(app_logging.re, "match", side_effect=AssertionError("unsafe regex path")):
+    def test_sanitize_error_message_does_not_use_backtracking_prefix_match(
+        self,
+    ) -> None:
+        with mock.patch.object(
+            app_logging.re, "match", side_effect=AssertionError("unsafe regex path")
+        ):
             sanitized = app_logging.sanitize_error_message("ffmpeg failed: safe detail")
 
         self.assertEqual(sanitized, "ffmpeg failed: safe detail")
@@ -127,7 +143,9 @@ class AppLoggingTest(unittest.TestCase):
             observed_lengths.append(len(text))
             return original_sanitize_text(text, max_chars=max_chars)
 
-        with mock.patch.object(app_logging, "sanitize_text", side_effect=observe_sanitize):
+        with mock.patch.object(
+            app_logging, "sanitize_text", side_effect=observe_sanitize
+        ):
             sanitized = app_logging.sanitize_error_message(value, max_chars=10_000_000)
 
         self.assertTrue(observed_lengths)
@@ -144,7 +162,9 @@ class AppLoggingTest(unittest.TestCase):
             observed_lengths.append(len(text))
             return original_projection(text, *args, **kwargs)
 
-        with mock.patch.object(app_logging, "_sub_with_ignored_projection", side_effect=observe_projection):
+        with mock.patch.object(
+            app_logging, "_sub_with_ignored_projection", side_effect=observe_projection
+        ):
             sanitized = app_logging.sanitize_text(value, max_chars=64)
 
         self.assertTrue(observed_lengths)
@@ -160,12 +180,18 @@ class AppLoggingTest(unittest.TestCase):
             raise OSError("temp open failed")
 
         with (
-            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                app_logging,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(app_logging.os, "open", side_effect=open_temp),
             mock.patch.object(app_logging.os, "close"),
         ):
             with self.assertRaisesRegex(OSError, "temp open failed"):
-                app_logging._create_log_temp_file(Path("/probe"), prefix="daily", suffix=".tmp")
+                app_logging._create_log_temp_file(
+                    Path("/probe"), prefix="daily", suffix=".tmp"
+                )
 
         self.assertEqual(len(captured_flags), 1)
         cloexec_flag = getattr(app_logging.os, "O_CLOEXEC", 0)
@@ -182,7 +208,9 @@ class AppLoggingTest(unittest.TestCase):
             fd: int | None = None
             try:
                 with self.assertRaisesRegex(RuntimeError, "must be private"):
-                    fd = app_logging._open_log_source_file(path, field_name="log source file")
+                    fd = app_logging._open_log_source_file(
+                        path, field_name="log source file"
+                    )
             finally:
                 if fd is not None:
                     os.close(fd)
@@ -192,9 +220,13 @@ class AppLoggingTest(unittest.TestCase):
             path = Path(tmp) / "source.log"
             path.write_text("content\n", encoding="utf-8")
 
-            with mock.patch.object(app_logging.os, "getuid", return_value=os.getuid() + 1):
+            with mock.patch.object(
+                app_logging.os, "getuid", return_value=os.getuid() + 1
+            ):
                 with self.assertRaisesRegex(RuntimeError, "owned by the current user"):
-                    app_logging._assert_regular_unlinked_file(path, field_name="log source file")
+                    app_logging._assert_regular_unlinked_file(
+                        path, field_name="log source file"
+                    )
 
     def test_public_log_directory_error_is_chain_free(self) -> None:
         secret = "/srv/private/log-directory token=directory-secret"
@@ -203,7 +235,9 @@ class AppLoggingTest(unittest.TestCase):
             "ensure_directory_without_following_symlinks",
             side_effect=OSError(secret),
         ):
-            with self.assertRaisesRegex(RuntimeError, "failed to prepare log directory") as caught:
+            with self.assertRaisesRegex(
+                RuntimeError, "failed to prepare log directory"
+            ) as caught:
                 app_logging._ensure_log_directory(Path("/private/logs"))
 
         error = caught.exception
@@ -215,11 +249,23 @@ class AppLoggingTest(unittest.TestCase):
     def test_public_log_source_error_is_chain_free(self) -> None:
         secret = "/private/source token=source-secret"
         with (
-            mock.patch.object(app_logging, "_assert_regular_unlinked_file", return_value=os.stat(__file__)),
-            mock.patch.object(app_logging, "open_file_without_following_symlinks", side_effect=OSError(secret)),
+            mock.patch.object(
+                app_logging,
+                "_assert_regular_unlinked_file",
+                return_value=os.stat(__file__),
+            ),
+            mock.patch.object(
+                app_logging,
+                "open_file_without_following_symlinks",
+                side_effect=OSError(secret),
+            ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "log source file is not readable") as caught:
-                app_logging._open_log_source_file(Path("/private/source.log"), field_name="log source file")
+            with self.assertRaisesRegex(
+                RuntimeError, "log source file is not readable"
+            ) as caught:
+                app_logging._open_log_source_file(
+                    Path("/private/source.log"), field_name="log source file"
+                )
 
         error = caught.exception
         self.assertNotIn(secret, repr(error))
@@ -231,7 +277,9 @@ class AppLoggingTest(unittest.TestCase):
         secret = "/srv/internal/archive token=archive-secret"
         with (
             mock.patch.object(app_logging, "_ensure_log_directory"),
-            mock.patch.object(app_logging, "_merge_old_months", side_effect=OSError(secret)),
+            mock.patch.object(
+                app_logging, "_merge_old_months", side_effect=OSError(secret)
+            ),
         ):
             with self.assertRaisesRegex(OSError, "log operation failed") as caught:
                 app_logging.maintain_logs(Path("/private/logs"))
@@ -243,18 +291,34 @@ class AppLoggingTest(unittest.TestCase):
         self.assertIsNone(error.__context__)
 
     def test_handler_permission_error_is_chain_free(self) -> None:
-        handler = app_logging.SizeCappedJsonFileHandler(Path("/private/active.log"), Path("/private"))
+        handler = app_logging.SizeCappedJsonFileHandler(
+            Path("/private/active.log"), Path("/private")
+        )
         file_stat = os.stat(__file__)
         with (
-            mock.patch.object(Path, "lstat", side_effect=[FileNotFoundError(), file_stat]),
-            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                Path, "lstat", side_effect=[FileNotFoundError(), file_stat]
+            ),
+            mock.patch.object(
+                app_logging,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(app_logging, "assert_fd_is_private_directory"),
-            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                app_logging, "open_file_without_following_symlinks", return_value=123
+            ),
             mock.patch.object(app_logging.os, "fstat", return_value=file_stat),
-            mock.patch.object(app_logging.os, "fchmod", side_effect=OSError("/private/permission token=chmod-secret")),
+            mock.patch.object(
+                app_logging.os,
+                "fchmod",
+                side_effect=OSError("/private/permission token=chmod-secret"),
+            ),
             mock.patch.object(app_logging.os, "close"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "permissions could not be restricted") as caught:
+            with self.assertRaisesRegex(
+                RuntimeError, "permissions could not be restricted"
+            ) as caught:
                 handler._open()
 
         error = caught.exception
@@ -264,19 +328,33 @@ class AppLoggingTest(unittest.TestCase):
         self.assertIsNone(error.__context__)
 
     def test_handler_path_probe_oserror_is_chain_free(self) -> None:
-        handler = app_logging.SizeCappedJsonFileHandler(Path("/private/active.log"), Path("/private"))
+        handler = app_logging.SizeCappedJsonFileHandler(
+            Path("/private/active.log"), Path("/private")
+        )
         file_stat = os.stat(__file__)
         secret = "/private/probe token=probe-secret"
         with (
-            mock.patch.object(Path, "lstat", side_effect=[FileNotFoundError(), PermissionError(secret)]),
-            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                Path,
+                "lstat",
+                side_effect=[FileNotFoundError(), PermissionError(secret)],
+            ),
+            mock.patch.object(
+                app_logging,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(app_logging, "assert_fd_is_private_directory"),
-            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                app_logging, "open_file_without_following_symlinks", return_value=123
+            ),
             mock.patch.object(app_logging.os, "fstat", return_value=file_stat),
             mock.patch.object(app_logging.os, "fchmod"),
             mock.patch.object(app_logging.os, "close"),
         ):
-            with self.assertRaisesRegex(RuntimeError, "log file changed while opening") as caught:
+            with self.assertRaisesRegex(
+                RuntimeError, "log file changed while opening"
+            ) as caught:
                 handler._open()
 
         error = caught.exception
@@ -287,11 +365,15 @@ class AppLoggingTest(unittest.TestCase):
 
     def test_sanitize_error_message_redacts_tokens_and_commands(self) -> None:
         self.assertEqual(
-            app_logging.sanitize_error_message("Bearer sk-secret token=abc123", max_chars=120),
+            app_logging.sanitize_error_message(
+                "Bearer sk-secret token=abc123", max_chars=120
+            ),
             "Bearer [redacted] token=[redacted]",
         )
         self.assertEqual(
-            app_logging.sanitize_error_message("backend stderr: secret transcript words", max_chars=120),
+            app_logging.sanitize_error_message(
+                "backend stderr: secret transcript words", max_chars=120
+            ),
             "[redacted error details]",
         )
 
@@ -303,28 +385,40 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertEqual(sanitized, "[redacted error details]")
 
-    def test_sanitize_error_message_redacts_secret_even_after_text_mutation(self) -> None:
+    def test_sanitize_error_message_redacts_secret_even_after_text_mutation(
+        self,
+    ) -> None:
         with mock.patch("speed_of_cinnamon.app_logging.HOME_DIR", "/tmp/fake-home"):
             self.assertEqual(
-                app_logging.sanitize_error_message("/tmp/fake-home/.config/secret/settings", max_chars=120),
+                app_logging.sanitize_error_message(
+                    "/tmp/fake-home/.config/secret/settings", max_chars=120
+                ),
                 "[redacted error details]",
             )
         self.assertEqual(
-            app_logging.sanitize_error_message("line1\r\nline2 secret payload", max_chars=120),
+            app_logging.sanitize_error_message(
+                "line1\r\nline2 secret payload", max_chars=120
+            ),
             "[redacted error details]",
         )
         self.assertEqual(
-            app_logging.sanitize_error_message("x" * 400 + " secret tail", max_chars=40),
+            app_logging.sanitize_error_message(
+                "x" * 400 + " secret tail", max_chars=40
+            ),
             "[redacted error details]",
         )
 
     def test_sanitize_text_escapes_c1_control_characters(self) -> None:
-        self.assertEqual(app_logging.sanitize_text("alpha\x85beta", max_chars=120), "alpha\\x85beta")
+        self.assertEqual(
+            app_logging.sanitize_text("alpha\x85beta", max_chars=120), "alpha\\x85beta"
+        )
 
     def test_validate_log_level_rejects_control_characters_before_strip(self) -> None:
         for value in ("\x85debug", "debug\\x85"):
             with self.subTest(value=value):
-                with self.assertRaisesRegex(RuntimeError, "log level contains invalid control character"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log level contains invalid control character"
+                ):
                     app_logging.validate_log_level(value)
 
     def test_sanitize_key_rejects_control_characters_before_strip(self) -> None:
@@ -364,17 +458,25 @@ class AppLoggingTest(unittest.TestCase):
 
     def test_sanitize_error_message_preserves_short_failed_error_details(self) -> None:
         self.assertEqual(
-            app_logging.sanitize_error_message("ls failed: missing permission", max_chars=120),
+            app_logging.sanitize_error_message(
+                "ls failed: missing permission", max_chars=120
+            ),
             "ls failed: missing permission",
         )
 
-    def test_sanitize_error_message_redacts_failed_error_output_excerpt_with_newline(self) -> None:
+    def test_sanitize_error_message_redacts_failed_error_output_excerpt_with_newline(
+        self,
+    ) -> None:
         self.assertEqual(
-            app_logging.sanitize_error_message("ffmpeg failed: Traceback (most recent call last):\n  File \"stdin\", line 1"),
+            app_logging.sanitize_error_message(
+                'ffmpeg failed: Traceback (most recent call last):\n  File "stdin", line 1'
+            ),
             "[redacted error details]",
         )
 
-    def test_sanitize_error_message_redacts_long_failed_error_output_excerpt(self) -> None:
+    def test_sanitize_error_message_redacts_long_failed_error_output_excerpt(
+        self,
+    ) -> None:
         self.assertEqual(
             app_logging.sanitize_error_message(
                 "cmd failed: " + ("A" * 200),
@@ -385,16 +487,28 @@ class AppLoggingTest(unittest.TestCase):
 
     def test_sanitize_error_message_redacts_short_failed_secret_details(self) -> None:
         self.assertEqual(
-            app_logging.sanitize_error_message("cmd failed: secret customer phrase", max_chars=120),
+            app_logging.sanitize_error_message(
+                "cmd failed: secret customer phrase", max_chars=120
+            ),
             "[redacted error details]",
         )
 
     def test_sanitize_value_redacts_hyphenated_and_passphrase_keys(self) -> None:
-        self.assertEqual(app_logging.sanitize_value("api-key", "sk-short"), "[redacted]")
-        self.assertEqual(app_logging.sanitize_value("passphrase", "correct horse battery staple"), "[redacted]")
-        self.assertEqual(app_logging.sanitize_value("openai-compatible-api-key", "sk-short"), "[redacted]")
+        self.assertEqual(
+            app_logging.sanitize_value("api-key", "sk-short"), "[redacted]"
+        )
+        self.assertEqual(
+            app_logging.sanitize_value("passphrase", "correct horse battery staple"),
+            "[redacted]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_value("openai-compatible-api-key", "sk-short"),
+            "[redacted]",
+        )
 
-    def test_sanitize_value_redacts_sensitive_suffix_before_key_truncation(self) -> None:
+    def test_sanitize_value_redacts_sensitive_suffix_before_key_truncation(
+        self,
+    ) -> None:
         record = logging.LogRecord("test", logging.INFO, __file__, 1, "event", (), None)
         record.fields = {("a" * 65) + "_password": "visible"}
         rendered = app_logging.JsonLogFormatter().format(record)
@@ -424,7 +538,9 @@ class AppLoggingTest(unittest.TestCase):
             with self.subTest(value=value):
                 self.assertIsNone(app_logging.sanitize_value("elapsed", value))
 
-                record = logging.LogRecord("test", logging.INFO, __file__, 1, "event", (), None)
+                record = logging.LogRecord(
+                    "test", logging.INFO, __file__, 1, "event", (), None
+                )
                 record.fields = {"elapsed": value}
                 rendered = app_logging.JsonLogFormatter().format(record)
                 self.assertNotIn("NaN", rendered)
@@ -432,10 +548,20 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertIsNone(json.loads(rendered)["elapsed"])
 
     def test_sanitize_text_redacts_short_token_like_values(self) -> None:
-        self.assertEqual(app_logging.sanitize_text("session sk-abc", max_chars=120), "session [redacted]")
-        self.assertEqual(app_logging.sanitize_text("session sess-abc", max_chars=120), "session [redacted]")
-        self.assertEqual(app_logging.sanitize_text("sk-standalone", max_chars=120), "[redacted]")
-        self.assertEqual(app_logging.sanitize_text("sess-standalone", max_chars=120), "[redacted]")
+        self.assertEqual(
+            app_logging.sanitize_text("session sk-abc", max_chars=120),
+            "session [redacted]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("session sess-abc", max_chars=120),
+            "session [redacted]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("sk-standalone", max_chars=120), "[redacted]"
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("sess-standalone", max_chars=120), "[redacted]"
+        )
 
     def test_sanitize_text_redacts_token_like_values_with_ignored_unicode(self) -> None:
         for value in (
@@ -471,24 +597,32 @@ class AppLoggingTest(unittest.TestCase):
             "[redacted error details]",
         )
         self.assertEqual(
-            app_logging.sanitize_error_message("cmd failed: file not found", max_chars=120),
+            app_logging.sanitize_error_message(
+                "cmd failed: file not found", max_chars=120
+            ),
             "cmd failed: file not found",
         )
 
     def test_sanitize_error_message_preserves_api_key_policy_errors(self) -> None:
         self.assertEqual(
-            app_logging.sanitize_error_message("openai-compatible API key is too large", max_chars=120),
+            app_logging.sanitize_error_message(
+                "openai-compatible API key is too large", max_chars=120
+            ),
             "openai-compatible API key is too large",
         )
 
     def test_sanitize_text_redacts_url_credentials_with_colon_in_password(self) -> None:
-        sanitized = app_logging.sanitize_text("https://user:p:a:s@example.test/path", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "https://user:p:a:s@example.test/path", max_chars=120
+        )
         self.assertEqual(sanitized, "https://[redacted]@example.test/path")
         self.assertNotIn("user", sanitized)
         self.assertNotIn("p:a:s", sanitized)
 
     def test_sanitize_text_redacts_url_userinfo_without_password(self) -> None:
-        sanitized = app_logging.sanitize_text("https://secret-token@example.test/path", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "https://secret-token@example.test/path", max_chars=120
+        )
         self.assertEqual(sanitized, "https://[redacted]@example.test/path")
         self.assertNotIn("secret-token", sanitized)
 
@@ -510,26 +644,38 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertNotIn(secret, sanitized)
 
     def test_sanitize_text_redacts_local_absolute_paths(self) -> None:
-        sanitized = app_logging.sanitize_text("failed to read /tmp/private/transcript.txt", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "failed to read /tmp/private/transcript.txt", max_chars=120
+        )
         self.assertEqual(sanitized, "failed to read [redacted path]")
         self.assertNotIn("/tmp/private", sanitized)
 
     def test_sanitize_text_redacts_network_share_style_double_slash_path(self) -> None:
-        sanitized = app_logging.sanitize_text("failed to read //srv/private/token", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "failed to read //srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "failed to read [redacted path]")
         self.assertNotIn("//srv/private", sanitized)
 
     def test_sanitize_text_redacts_repeated_leading_slash_paths(self) -> None:
-        sanitized = app_logging.sanitize_text("failed to read ///srv/private/token", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "failed to read ///srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "failed to read [redacted path]")
         self.assertNotIn("///srv/private", sanitized)
 
-    def test_sanitize_text_redacts_double_slash_paths_after_control_and_delimiter_boundaries(self) -> None:
-        sanitized = app_logging.sanitize_text("line1\n//srv/private/token", max_chars=120)
+    def test_sanitize_text_redacts_double_slash_paths_after_control_and_delimiter_boundaries(
+        self,
+    ) -> None:
+        sanitized = app_logging.sanitize_text(
+            "line1\n//srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "line1\\n[redacted path]")
         self.assertNotIn("//srv/private", sanitized)
 
-        sanitized = app_logging.sanitize_text("line1|//srv/private/token", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "line1|//srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "line1|[redacted path]")
         self.assertNotIn("//srv/private", sanitized)
 
@@ -542,55 +688,107 @@ class AppLoggingTest(unittest.TestCase):
         self.assertNotIn("//srv/private", sanitized)
 
     def test_sanitize_text_redacts_bypassy_boundary_variants(self) -> None:
-        sanitized = app_logging.sanitize_text("artifact@/srv/private/token", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "artifact@/srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "artifact@[redacted path]")
         self.assertNotIn("/srv/private/token", sanitized)
 
         sanitized = app_logging.sanitize_text("x?/srv/private/token", max_chars=120)
         self.assertEqual(sanitized, "x?[redacted path]")
 
-        sanitized = app_logging.sanitize_text("K" + "\u001b[0K/srv/private/token", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "K" + "\u001b[0K/srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "K\\x1b[0K[redacted path]")
 
         sanitizer = "K" + "\u001b" + ("9" * 65) + "m/srv/private/token"
-        self.assertNotIn("/srv/private/token", app_logging.sanitize_text(sanitizer, max_chars=240))
+        self.assertNotIn(
+            "/srv/private/token", app_logging.sanitize_text(sanitizer, max_chars=240)
+        )
 
-        sanitized = app_logging.sanitize_text("J" + "\u001b[1J/srv/private/token", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "J" + "\u001b[1J/srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "J\\x1b[1J[redacted path]")
 
-        sanitized = app_logging.sanitize_text("H" + "\u001b[1;1H/srv/private/token", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "H" + "\u001b[1;1H/srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "H\\x1b[1;1H[redacted path]")
 
-        sanitized = app_logging.sanitize_text("l" + "\u001b[?25l/srv/private/token", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "l" + "\u001b[?25l/srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "l\\x1b[?25l[redacted path]")
 
-        sanitized = app_logging.sanitize_text("c1" + "\x9b[31m/srv/private/token", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "c1" + "\x9b[31m/srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "c1\\x9b[31m[redacted path]")
 
-        sanitized = app_logging.sanitize_text("\u001b[31m/srv/private/token", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "\u001b[31m/srv/private/token", max_chars=120
+        )
         self.assertEqual(sanitized, "\\x1b[31m[redacted path]")
 
         c1_direct = "\x9b" + "31m/srv/private/token"
-        self.assertEqual(app_logging.sanitize_text("c" + c1_direct, max_chars=120), "c\\x9b31m[redacted path]")
+        self.assertEqual(
+            app_logging.sanitize_text("c" + c1_direct, max_chars=120),
+            "c\\x9b31m[redacted path]",
+        )
 
-        self.assertEqual(app_logging.sanitize_text("\u001b[31/srv/private/token", max_chars=120), "\\x1b[31[redacted path]")
+        self.assertEqual(
+            app_logging.sanitize_text("\u001b[31/srv/private/token", max_chars=120),
+            "\\x1b[31[redacted path]",
+        )
 
-        self.assertEqual(app_logging.sanitize_text("x:/private/token", max_chars=120), "[redacted path]")
-        self.assertEqual(app_logging.sanitize_text("C://Users/Alice/token.txt", max_chars=120), "[redacted path]")
-        self.assertEqual(app_logging.sanitize_text("c://Users/Alice/token.txt", max_chars=120), "[redacted path]")
-        self.assertEqual(app_logging.sanitize_text("x://example.test/path", max_chars=120), "[redacted path]")
-        self.assertEqual(app_logging.sanitize_text("X:\\private\\token", max_chars=120), "[redacted path]")
-        self.assertEqual(app_logging.sanitize_text(r"\secret", max_chars=120), "[redacted path]")
-        self.assertEqual(app_logging.sanitize_text(r"\Users\Alice\token.txt", max_chars=120), "[redacted path]")
-        self.assertEqual(app_logging.sanitize_text(r"\[redacted-secret]", max_chars=120), "[redacted path]]")
-        self.assertEqual(app_logging.sanitize_text(r"\\x41\\private\\secret", max_chars=120), "[redacted path]")
+        self.assertEqual(
+            app_logging.sanitize_text("x:/private/token", max_chars=120),
+            "[redacted path]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("C://Users/Alice/token.txt", max_chars=120),
+            "[redacted path]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("c://Users/Alice/token.txt", max_chars=120),
+            "[redacted path]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("x://example.test/path", max_chars=120),
+            "[redacted path]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text("X:\\private\\token", max_chars=120),
+            "[redacted path]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text(r"\secret", max_chars=120), "[redacted path]"
+        )
+        self.assertEqual(
+            app_logging.sanitize_text(r"\Users\Alice\token.txt", max_chars=120),
+            "[redacted path]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text(r"\[redacted-secret]", max_chars=120),
+            "[redacted path]]",
+        )
+        self.assertEqual(
+            app_logging.sanitize_text(r"\\x41\\private\\secret", max_chars=120),
+            "[redacted path]",
+        )
 
         redacted_marker = app_logging.sanitize_text(r"\secret", max_chars=120)
         self.assertEqual(redacted_marker, "[redacted path]")
-        self.assertEqual(app_logging.sanitize_text(redacted_marker, max_chars=120), "[redacted path]")
+        self.assertEqual(
+            app_logging.sanitize_text(redacted_marker, max_chars=120), "[redacted path]"
+        )
 
     def test_sanitize_text_does_not_redact_scheme_urls(self) -> None:
-        sanitized = app_logging.sanitize_text("download from https://example.test/path", max_chars=120)
+        sanitized = app_logging.sanitize_text(
+            "download from https://example.test/path", max_chars=120
+        )
         self.assertEqual(sanitized, "download from https://example.test/path")
         self.assertNotEqual(sanitized, "[redacted path]")
 
@@ -604,7 +802,9 @@ class AppLoggingTest(unittest.TestCase):
             "Bearer [redacted]",
         )
         self.assertEqual(
-            app_logging.sanitize_text("Authorization: token=abc;secret-tail", max_chars=120),
+            app_logging.sanitize_text(
+                "Authorization: token=abc;secret-tail", max_chars=120
+            ),
             "Authorization: token=[redacted]",
         )
 
@@ -645,17 +845,25 @@ class AppLoggingTest(unittest.TestCase):
         )
 
     def test_sanitize_error_message_redacts_local_absolute_paths(self) -> None:
-        sanitized = app_logging.sanitize_error_message("settings export not found: /var/tmp/private/settings.json", max_chars=120)
+        sanitized = app_logging.sanitize_error_message(
+            "settings export not found: /var/tmp/private/settings.json", max_chars=120
+        )
         self.assertEqual(sanitized, "settings export not found: [redacted path]")
         self.assertNotIn("/var/tmp/private", sanitized)
 
     def test_sanitize_error_message_redacts_arbitrary_absolute_paths(self) -> None:
         for value, private_path in (
-            ("failed: /srv/internal/transcript.owner", "/srv/internal/transcript.owner"),
+            (
+                "failed: /srv/internal/transcript.owner",
+                "/srv/internal/transcript.owner",
+            ),
             ("failed: /private/token-value", "/private/token-value"),
             (r"failed: C:\Users\Alice\token.txt", r"C:\Users\Alice\token.txt"),
             (r"failed: \\server\share\token.txt", r"\\server\share\token.txt"),
-            ("failed: [/srv/internal/transcript.owner]", "/srv/internal/transcript.owner"),
+            (
+                "failed: [/srv/internal/transcript.owner]",
+                "/srv/internal/transcript.owner",
+            ),
             (r"failed: {C:\Users\Alice\token.txt}", r"C:\Users\Alice\token.txt"),
             (r"failed: item,\\server\share\token.txt", r"\\server\share\token.txt"),
             ("failed: value)/private/token-value", "/private/token-value"),
@@ -666,12 +874,18 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertIn("[redacted path]", sanitized)
 
         self.assertEqual(
-            app_logging.sanitize_error_message("failed: https://example.test/path", max_chars=120),
+            app_logging.sanitize_error_message(
+                "failed: https://example.test/path", max_chars=120
+            ),
             "failed: https://example.test/path",
         )
 
     def test_sanitize_hint_detects_url_userinfo_without_password(self) -> None:
-        self.assertIsNotNone(app_logging._SANITIZE_HINT_RE.search("https://secret-token@example.test/path"))
+        self.assertIsNotNone(
+            app_logging._SANITIZE_HINT_RE.search(
+                "https://secret-token@example.test/path"
+            )
+        )
 
     def test_sanitize_text_bounds_long_plaintext_scan(self) -> None:
         value = "x" * 32_000
@@ -690,28 +904,31 @@ class AppLoggingTest(unittest.TestCase):
 
         self.assertLess(elapsed, 3.0)
         self.assertNotIn("abc,secret-tail", sanitized)
-        self.assertTrue("..." in sanitized or "[redacted]" in sanitized or "[redacted error details]" in sanitized)
+        self.assertTrue(
+            "..." in sanitized
+            or "[redacted]" in sanitized
+            or "[redacted error details]" in sanitized
+        )
 
     def test_sanitize_text_adversarial_path_boundary_scan(self) -> None:
         value = (
-            (
-                "x" * 2_000
-                + "artifact@/srv/private/token "
-                + "x" * 2_000
-                + "x?/srv/private/token "
-                + "x" * 2_000
-                + "\u001b[?25l/srv/private/token "
-                + "x" * 2_000
-                + "X:/private/token "
-                + "x" * 2_000
-                + "\x1b[31/srv/private/token "
-                + "x" * 2_000
-                + "\x9b" + ("0" * 70) + "m/srv/private/token "
-                + "\x9b[31m/srv/private/token "
-                + "\n"
-            )
-            * 10
-        )
+            "x" * 2_000
+            + "artifact@/srv/private/token "
+            + "x" * 2_000
+            + "x?/srv/private/token "
+            + "x" * 2_000
+            + "\u001b[?25l/srv/private/token "
+            + "x" * 2_000
+            + "X:/private/token "
+            + "x" * 2_000
+            + "\x1b[31/srv/private/token "
+            + "x" * 2_000
+            + "\x9b"
+            + ("0" * 70)
+            + "m/srv/private/token "
+            + "\x9b[31m/srv/private/token "
+            + "\n"
+        ) * 10
         started = time.perf_counter()
         sanitized = app_logging.sanitize_text(value, max_chars=1_000_000)
 
@@ -724,7 +941,9 @@ class AppLoggingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             os.chmod(log_dir, 0o777)
-            handler = app_logging.SizeCappedJsonFileHandler(log_dir / "speed-of-cinnamon.log", log_dir)
+            handler = app_logging.SizeCappedJsonFileHandler(
+                log_dir / "speed-of-cinnamon.log", log_dir
+            )
 
             self.assertTrue(handler._is_log_path_insecure())
 
@@ -775,16 +994,29 @@ class AppLoggingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
-            app_logging.log_event("error", "first error", group="clipboard", error_message="line one\nline two")
-            app_logging.log_event("error", "second error", group="backend", error_message="safe message")
+            app_logging.log_event(
+                "error",
+                "first error",
+                group="clipboard",
+                error_message="line one\nline two",
+            )
+            app_logging.log_event(
+                "error", "second error", group="backend", error_message="safe message"
+            )
 
-            lines = (log_dir / app_logging.ERROR_MARKDOWN_FILENAME).read_text(encoding="utf-8").splitlines()
+            lines = (
+                (log_dir / app_logging.ERROR_MARKDOWN_FILENAME)
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
             self.assertEqual(len(lines), 2)
             self.assertTrue(all(line.startswith("- [ ] ") for line in lines))
             self.assertIn("line one line two", lines[0])
             self.assertIn("backend", lines[1])
 
-    def test_configure_logging_creates_empty_error_journals_for_discoverability(self) -> None:
+    def test_configure_logging_creates_empty_error_journals_for_discoverability(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
@@ -822,13 +1054,22 @@ class AppLoggingTest(unittest.TestCase):
 
             app_logging.configure_logging("error", base_dir=log_dir)
 
-            lines = (log_dir / app_logging.ERROR_MARKDOWN_FILENAME).read_text(encoding="utf-8").splitlines()
+            lines = (
+                (log_dir / app_logging.ERROR_MARKDOWN_FILENAME)
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
             self.assertEqual(len(lines), 2)
-            self.assertTrue(all("old_error" in line and "old message" in line for line in lines))
+            self.assertTrue(
+                all("old_error" in line and "old message" in line for line in lines)
+            )
 
     def test_markdown_rebuild_does_not_rewrite_identical_content(self) -> None:
         for populated in (False, True):
-            with self.subTest(populated=populated), tempfile.TemporaryDirectory() as tmp:
+            with (
+                self.subTest(populated=populated),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
                 log_dir = Path(tmp)
                 app_logging.configure_logging("error", base_dir=log_dir)
                 error_file = log_dir / app_logging.ERROR_LOG_FILENAME
@@ -851,12 +1092,16 @@ class AppLoggingTest(unittest.TestCase):
                     app_logging._rebuild_error_markdown(log_dir)
                 before = markdown_file.stat()
 
-                with mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate:
+                with mock.patch.object(
+                    app_logging.os, "ftruncate", wraps=os.ftruncate
+                ) as mocked_truncate:
                     app_logging._rebuild_error_markdown(log_dir)
 
                 after = markdown_file.stat()
                 mocked_truncate.assert_not_called()
-                self.assertEqual((after.st_dev, after.st_ino), (before.st_dev, before.st_ino))
+                self.assertEqual(
+                    (after.st_dev, after.st_ino), (before.st_dev, before.st_ino)
+                )
                 self.assertEqual(after.st_mtime_ns, before.st_mtime_ns)
 
     def test_markdown_rebuild_does_not_chmod_identical_private_content(self) -> None:
@@ -884,8 +1129,12 @@ class AppLoggingTest(unittest.TestCase):
             before = markdown_file.stat()
 
             with (
-                mock.patch.object(app_logging.os, "fchmod", wraps=os.fchmod) as mocked_chmod,
-                mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate,
+                mock.patch.object(
+                    app_logging.os, "fchmod", wraps=os.fchmod
+                ) as mocked_chmod,
+                mock.patch.object(
+                    app_logging.os, "ftruncate", wraps=os.ftruncate
+                ) as mocked_truncate,
             ):
                 app_logging._rebuild_error_markdown(log_dir)
 
@@ -899,8 +1148,12 @@ class AppLoggingTest(unittest.TestCase):
             expected = markdown_file.read_bytes()
             markdown_file.chmod(0o640)
             with (
-                mock.patch.object(app_logging.os, "fchmod", wraps=os.fchmod) as mocked_chmod,
-                mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate,
+                mock.patch.object(
+                    app_logging.os, "fchmod", wraps=os.fchmod
+                ) as mocked_chmod,
+                mock.patch.object(
+                    app_logging.os, "ftruncate", wraps=os.ftruncate
+                ) as mocked_truncate,
             ):
                 app_logging._rebuild_error_markdown(log_dir)
 
@@ -909,9 +1162,15 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(markdown_file.stat().st_mode & 0o777, 0o600)
             self.assertEqual(markdown_file.read_bytes(), expected)
 
-    def test_markdown_rebuild_identical_hotpath_uses_noatime_without_metadata_changes(self) -> None:
+    def test_markdown_rebuild_identical_hotpath_uses_noatime_without_metadata_changes(
+        self,
+    ) -> None:
         noatime_flag = getattr(os, "O_NOATIME", None)
-        if isinstance(noatime_flag, bool) or not isinstance(noatime_flag, int) or noatime_flag <= 0:
+        if (
+            isinstance(noatime_flag, bool)
+            or not isinstance(noatime_flag, int)
+            or noatime_flag <= 0
+        ):
             self.skipTest("O_NOATIME is unavailable")
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -938,7 +1197,9 @@ class AppLoggingTest(unittest.TestCase):
             opened_flags: dict[str, int] = {}
             real_open = app_logging.open_file_without_following_symlinks
 
-            def record_flags(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+            def record_flags(
+                path: Path, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 field_name = kwargs.get("field_name")
                 if isinstance(field_name, str):
                     opened_flags[field_name] = flags
@@ -953,13 +1214,33 @@ class AppLoggingTest(unittest.TestCase):
 
             after = tuple(path.stat() for path in paths)
             self.assertEqual(set(opened_flags), {"error log", "error Markdown file"})
-            self.assertTrue(all(flags & noatime_flag for flags in opened_flags.values()))
+            self.assertTrue(
+                all(flags & noatime_flag for flags in opened_flags.values())
+            )
             self.assertEqual(
-                tuple((value.st_ino, value.st_atime_ns, value.st_mtime_ns, value.st_ctime_ns) for value in after),
-                tuple((value.st_ino, value.st_atime_ns, value.st_mtime_ns, value.st_ctime_ns) for value in before),
+                tuple(
+                    (
+                        value.st_ino,
+                        value.st_atime_ns,
+                        value.st_mtime_ns,
+                        value.st_ctime_ns,
+                    )
+                    for value in after
+                ),
+                tuple(
+                    (
+                        value.st_ino,
+                        value.st_atime_ns,
+                        value.st_mtime_ns,
+                        value.st_ctime_ns,
+                    )
+                    for value in before
+                ),
             )
 
-    def test_markdown_rebuild_fails_closed_when_noatime_is_unavailable_or_rejected(self) -> None:
+    def test_markdown_rebuild_fails_closed_when_noatime_is_unavailable_or_rejected(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
@@ -985,7 +1266,9 @@ class AppLoggingTest(unittest.TestCase):
 
             with (
                 mock.patch.object(app_logging.os, "O_NOATIME", None, create=True),
-                mock.patch.object(app_logging, "open_file_without_following_symlinks") as mocked_open,
+                mock.patch.object(
+                    app_logging, "open_file_without_following_symlinks"
+                ) as mocked_open,
             ):
                 app_logging._rebuild_error_markdown(log_dir)
 
@@ -993,14 +1276,20 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(markdown_file.read_bytes(), expected)
 
             noatime_flag = getattr(os, "O_NOATIME", None)
-            if isinstance(noatime_flag, bool) or not isinstance(noatime_flag, int) or noatime_flag <= 0:
+            if (
+                isinstance(noatime_flag, bool)
+                or not isinstance(noatime_flag, int)
+                or noatime_flag <= 0
+            ):
                 return
             real_open = app_logging.open_file_without_following_symlinks
             for denied_field in ("error log", "error Markdown file"):
                 with self.subTest(denied_field=denied_field):
                     opened_fields: list[str] = []
 
-                    def reject_noatime(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+                    def reject_noatime(
+                        path: Path, flags: int, *args: object, **kwargs: object
+                    ) -> int:
                         field_name = kwargs.get("field_name")
                         self.assertIsInstance(field_name, str)
                         opened_fields.append(field_name)
@@ -1022,7 +1311,9 @@ class AppLoggingTest(unittest.TestCase):
                     self.assertEqual(opened_fields, expected_fields)
                     self.assertEqual(markdown_file.read_bytes(), expected)
 
-    def test_markdown_rebuild_replaces_equal_size_invalid_utf8_without_reopening(self) -> None:
+    def test_markdown_rebuild_replaces_equal_size_invalid_utf8_without_reopening(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
@@ -1049,7 +1340,9 @@ class AppLoggingTest(unittest.TestCase):
             target_opens = 0
             real_open = app_logging.open_file_without_following_symlinks
 
-            def count_target_open(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+            def count_target_open(
+                path: Path, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 nonlocal target_opens
                 if kwargs.get("field_name") == "error Markdown file":
                     target_opens += 1
@@ -1065,7 +1358,9 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(target_opens, 1)
             self.assertEqual(markdown_file.read_bytes(), expected)
 
-    def test_markdown_rebuild_compares_identical_content_in_bounded_blocks(self) -> None:
+    def test_markdown_rebuild_compares_identical_content_in_bounded_blocks(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
@@ -1098,13 +1393,17 @@ class AppLoggingTest(unittest.TestCase):
                     target_read_sizes.append(size)
                 return real_read(fd, size)
 
-            with mock.patch.object(app_logging.os, "read", side_effect=record_target_reads):
+            with mock.patch.object(
+                app_logging.os, "read", side_effect=record_target_reads
+            ):
                 app_logging._rebuild_error_markdown(log_dir)
 
             self.assertGreater(len(target_read_sizes), 1)
             self.assertLessEqual(max(target_read_sizes), 65_536)
 
-    def test_markdown_rebuild_does_not_truncate_after_in_place_comparison_race(self) -> None:
+    def test_markdown_rebuild_does_not_truncate_after_in_place_comparison_race(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
@@ -1145,8 +1444,12 @@ class AppLoggingTest(unittest.TestCase):
                 return chunk
 
             with (
-                mock.patch.object(app_logging.os, "read", side_effect=mutate_after_target_read),
-                mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate,
+                mock.patch.object(
+                    app_logging.os, "read", side_effect=mutate_after_target_read
+                ),
+                mock.patch.object(
+                    app_logging.os, "ftruncate", wraps=os.ftruncate
+                ) as mocked_truncate,
             ):
                 app_logging._rebuild_error_markdown(log_dir)
 
@@ -1154,7 +1457,9 @@ class AppLoggingTest(unittest.TestCase):
             mocked_truncate.assert_not_called()
             self.assertTrue(markdown_file.read_bytes().startswith(b"X"))
 
-    def test_markdown_rebuild_does_not_truncate_when_comparison_read_fails(self) -> None:
+    def test_markdown_rebuild_does_not_truncate_when_comparison_read_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
@@ -1186,18 +1491,24 @@ class AppLoggingTest(unittest.TestCase):
 
             with (
                 mock.patch.object(app_logging.os, "read", side_effect=fail_target_read),
-                mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate,
+                mock.patch.object(
+                    app_logging.os, "ftruncate", wraps=os.ftruncate
+                ) as mocked_truncate,
             ):
                 app_logging._rebuild_error_markdown(log_dir)
 
             mocked_truncate.assert_not_called()
             self.assertEqual(markdown_file.read_bytes(), expected)
 
-    def test_markdown_rebuild_clears_stale_content_when_error_log_is_empty(self) -> None:
+    def test_markdown_rebuild_clears_stale_content_when_error_log_is_empty(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
-            app_logging.log_event("error", "stale error", group="test", error_message="stale message")
+            app_logging.log_event(
+                "error", "stale error", group="test", error_message="stale message"
+            )
             error_file = log_dir / app_logging.ERROR_LOG_FILENAME
             markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
             markdown_file.write_text("- [ ] stale entry\n", encoding="utf-8")
@@ -1205,14 +1516,19 @@ class AppLoggingTest(unittest.TestCase):
             error_file.write_text("", encoding="utf-8")
             os.chmod(error_file, 0o600)
             error_stat = error_file.stat()
-            os.utime(markdown_file, ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)))
+            os.utime(
+                markdown_file,
+                ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)),
+            )
 
             app_logging._rebuild_error_markdown(log_dir)
 
             self.assertEqual(markdown_file.read_text(encoding="utf-8"), "")
             self.assertEqual(markdown_file.stat().st_mode & 0o777, 0o600)
 
-    def test_markdown_rebuild_clears_stale_content_without_valid_error_records(self) -> None:
+    def test_markdown_rebuild_clears_stale_content_without_valid_error_records(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
@@ -1223,7 +1539,10 @@ class AppLoggingTest(unittest.TestCase):
             error_file.write_text("not-json\n", encoding="utf-8")
             os.chmod(error_file, 0o600)
             error_stat = error_file.stat()
-            os.utime(markdown_file, ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)))
+            os.utime(
+                markdown_file,
+                ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)),
+            )
 
             app_logging._rebuild_error_markdown(log_dir)
 
@@ -1242,7 +1561,12 @@ class AppLoggingTest(unittest.TestCase):
 
             app_logging._rebuild_error_markdown(log_dir)
 
-            self.assertEqual((log_dir / app_logging.ERROR_MARKDOWN_FILENAME).read_text(encoding="utf-8"), "")
+            self.assertEqual(
+                (log_dir / app_logging.ERROR_MARKDOWN_FILENAME).read_text(
+                    encoding="utf-8"
+                ),
+                "",
+            )
 
     def test_markdown_rebuild_does_not_truncate_hardlinked_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1257,13 +1581,20 @@ class AppLoggingTest(unittest.TestCase):
             error_file.write_text("", encoding="utf-8")
             os.chmod(error_file, 0o600)
             error_stat = error_file.stat()
-            os.utime(external_file, ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)))
+            os.utime(
+                external_file,
+                ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)),
+            )
 
             app_logging._rebuild_error_markdown(log_dir)
 
-            self.assertEqual(external_file.read_text(encoding="utf-8"), "keep this content\n")
+            self.assertEqual(
+                external_file.read_text(encoding="utf-8"), "keep this content\n"
+            )
 
-    def test_markdown_rebuild_does_not_truncate_hardlinked_target_with_errors(self) -> None:
+    def test_markdown_rebuild_does_not_truncate_hardlinked_target_with_errors(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
@@ -1288,15 +1619,26 @@ class AppLoggingTest(unittest.TestCase):
             )
             os.chmod(error_file, 0o600)
             error_stat = error_file.stat()
-            os.utime(external_file, ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)))
+            os.utime(
+                external_file,
+                ns=(error_stat.st_atime_ns, max(0, error_stat.st_mtime_ns - 1_000_000)),
+            )
 
             app_logging._rebuild_error_markdown(log_dir)
 
-            self.assertEqual(external_file.read_text(encoding="utf-8"), "keep this content\n")
+            self.assertEqual(
+                external_file.read_text(encoding="utf-8"), "keep this content\n"
+            )
 
-    def test_markdown_rebuild_rejects_hardlink_created_after_private_check(self) -> None:
+    def test_markdown_rebuild_rejects_hardlink_created_after_private_check(
+        self,
+    ) -> None:
         noatime_flag = getattr(os, "O_NOATIME", None)
-        if isinstance(noatime_flag, bool) or not isinstance(noatime_flag, int) or noatime_flag <= 0:
+        if (
+            isinstance(noatime_flag, bool)
+            or not isinstance(noatime_flag, int)
+            or noatime_flag <= 0
+        ):
             self.skipTest("O_NOATIME is unavailable")
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -1325,7 +1667,9 @@ class AppLoggingTest(unittest.TestCase):
 
             def link_after_private_check(fd: int, **kwargs: object) -> None:
                 real_assert(fd, **kwargs)
-                if kwargs.get("field_name") == "error Markdown file" and kwargs.get("require_private_mode"):
+                if kwargs.get("field_name") == "error Markdown file" and kwargs.get(
+                    "require_private_mode"
+                ):
                     raced_link.hardlink_to(markdown_file)
 
             with (
@@ -1334,8 +1678,12 @@ class AppLoggingTest(unittest.TestCase):
                     "assert_fd_is_regular_private_file",
                     side_effect=link_after_private_check,
                 ),
-                mock.patch.object(app_logging.os, "ftruncate", wraps=os.ftruncate) as mocked_truncate,
-                mock.patch.object(app_logging.os, "write", wraps=os.write) as mocked_write,
+                mock.patch.object(
+                    app_logging.os, "ftruncate", wraps=os.ftruncate
+                ) as mocked_truncate,
+                mock.patch.object(
+                    app_logging.os, "write", wraps=os.write
+                ) as mocked_write,
             ):
                 app_logging._rebuild_error_markdown(log_dir)
 
@@ -1371,13 +1719,20 @@ class AppLoggingTest(unittest.TestCase):
             markdown_file.unlink()
             markdown_file.hardlink_to(external_file)
             source_stat = error_file.stat()
-            os.utime(external_file, ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns + 1_000_000))
+            os.utime(
+                external_file,
+                ns=(source_stat.st_atime_ns, source_stat.st_mtime_ns + 1_000_000),
+            )
 
             app_logging._rebuild_error_markdown(log_dir)
 
-            self.assertEqual(external_file.read_text(encoding="utf-8"), "foreign content\n")
+            self.assertEqual(
+                external_file.read_text(encoding="utf-8"), "foreign content\n"
+            )
 
-    def test_markdown_rebuild_preserves_existing_content_when_error_log_is_replaced(self) -> None:
+    def test_markdown_rebuild_preserves_existing_content_when_error_log_is_replaced(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
@@ -1401,7 +1756,13 @@ class AppLoggingTest(unittest.TestCase):
             markdown_file.write_text("- [ ] preserve this\n", encoding="utf-8")
             os.chmod(markdown_file, 0o600)
             source_stat = error_file.stat()
-            os.utime(markdown_file, ns=(source_stat.st_atime_ns, max(0, source_stat.st_mtime_ns - 1_000_000)))
+            os.utime(
+                markdown_file,
+                ns=(
+                    source_stat.st_atime_ns,
+                    max(0, source_stat.st_mtime_ns - 1_000_000),
+                ),
+            )
             replacement.write_text(
                 json.dumps(
                     {
@@ -1419,7 +1780,9 @@ class AppLoggingTest(unittest.TestCase):
             real_open = app_logging.open_file_without_following_symlinks
             swapped = False
 
-            def open_after_swap(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+            def open_after_swap(
+                path: Path, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 nonlocal swapped
                 if kwargs.get("field_name") == "error log" and not swapped:
                     swapped = True
@@ -1434,8 +1797,12 @@ class AppLoggingTest(unittest.TestCase):
                 app_logging._rebuild_error_markdown(log_dir)
 
             self.assertTrue(swapped)
-            self.assertEqual(markdown_file.read_text(encoding="utf-8"), "- [ ] preserve this\n")
-            self.assertNotIn("replacement_error", markdown_file.read_text(encoding="utf-8"))
+            self.assertEqual(
+                markdown_file.read_text(encoding="utf-8"), "- [ ] preserve this\n"
+            )
+            self.assertNotIn(
+                "replacement_error", markdown_file.read_text(encoding="utf-8")
+            )
 
     def test_markdown_rebuild_does_not_truncate_replaced_target(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1461,13 +1828,21 @@ class AppLoggingTest(unittest.TestCase):
             markdown_file.write_text("keep target content\n", encoding="utf-8")
             os.chmod(markdown_file, 0o600)
             source_stat = error_file.stat()
-            os.utime(markdown_file, ns=(source_stat.st_atime_ns, max(0, source_stat.st_mtime_ns - 1_000_000)))
+            os.utime(
+                markdown_file,
+                ns=(
+                    source_stat.st_atime_ns,
+                    max(0, source_stat.st_mtime_ns - 1_000_000),
+                ),
+            )
             replacement.write_text("keep replacement content\n", encoding="utf-8")
             os.chmod(replacement, 0o600)
             real_open = app_logging.open_file_without_following_symlinks
             swapped = False
 
-            def open_after_target_swap(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+            def open_after_target_swap(
+                path: Path, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 nonlocal swapped
                 if kwargs.get("field_name") == "error Markdown file" and not swapped:
                     swapped = True
@@ -1482,19 +1857,28 @@ class AppLoggingTest(unittest.TestCase):
                 app_logging._rebuild_error_markdown(log_dir)
 
             self.assertTrue(swapped)
-            self.assertEqual(markdown_file.read_text(encoding="utf-8"), "keep replacement content\n")
+            self.assertEqual(
+                markdown_file.read_text(encoding="utf-8"), "keep replacement content\n"
+            )
 
-    def test_markdown_rebuild_repairs_stale_content_even_when_target_is_newer(self) -> None:
+    def test_markdown_rebuild_repairs_stale_content_even_when_target_is_newer(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             app_logging.configure_logging("error", base_dir=log_dir)
-            app_logging.log_event("error", "current error", group="test", error_message="current message")
+            app_logging.log_event(
+                "error", "current error", group="test", error_message="current message"
+            )
             error_file = log_dir / app_logging.ERROR_LOG_FILENAME
             markdown_file = log_dir / app_logging.ERROR_MARKDOWN_FILENAME
             markdown_file.write_text("- [ ] stale content\n", encoding="utf-8")
             os.chmod(markdown_file, 0o600)
             error_stat = error_file.stat()
-            os.utime(markdown_file, ns=(error_stat.st_atime_ns, error_stat.st_mtime_ns + 1_000_000))
+            os.utime(
+                markdown_file,
+                ns=(error_stat.st_atime_ns, error_stat.st_mtime_ns + 1_000_000),
+            )
 
             app_logging._rebuild_error_markdown(log_dir)
 
@@ -1522,11 +1906,15 @@ class AppLoggingTest(unittest.TestCase):
             os.chmod(error_file, 0o600)
             with (
                 mock.patch.object(app_logging, "MAX_ERROR_LOG_BYTES", 100),
-                mock.patch.object(app_logging, "_read_private_error_log", return_value=raw),
+                mock.patch.object(
+                    app_logging, "_read_private_error_log", return_value=raw
+                ),
             ):
                 app_logging._rebuild_error_markdown(log_dir)
 
-            rendered = (log_dir / app_logging.ERROR_MARKDOWN_FILENAME).read_text(encoding="utf-8")
+            rendered = (log_dir / app_logging.ERROR_MARKDOWN_FILENAME).read_text(
+                encoding="utf-8"
+            )
             self.assertLessEqual(len(rendered.encode("utf-8")), 100)
             self.assertIn("error_2", rendered)
             self.assertNotIn("error_0", rendered)
@@ -1540,12 +1928,20 @@ class AppLoggingTest(unittest.TestCase):
                     error_file = log_dir / app_logging.ERROR_LOG_FILENAME
                     error_file.write_text("{}\n", encoding="utf-8")
                     os.chmod(error_file, 0o600)
-                    with mock.patch.object(app_logging.json, "loads", side_effect=parser_error):
+                    with mock.patch.object(
+                        app_logging.json, "loads", side_effect=parser_error
+                    ):
                         app_logging._rebuild_error_markdown(log_dir)
 
     def test_error_journals_recheck_size_after_open(self) -> None:
-        for handler_type in (app_logging.ErrorJsonFileHandler, app_logging.ErrorMarkdownFileHandler):
-            with self.subTest(handler_type=handler_type.__name__), tempfile.TemporaryDirectory() as tmp:
+        for handler_type in (
+            app_logging.ErrorJsonFileHandler,
+            app_logging.ErrorMarkdownFileHandler,
+        ):
+            with (
+                self.subTest(handler_type=handler_type.__name__),
+                tempfile.TemporaryDirectory() as tmp,
+            ):
                 log_dir = Path(tmp)
                 journal_path = log_dir / (
                     app_logging.ERROR_LOG_FILENAME
@@ -1582,7 +1978,9 @@ class AppLoggingTest(unittest.TestCase):
                 self.assertLessEqual(journal_path.stat().st_size, 200)
 
     def test_formatter_redacts_exception_field_with_error_rules(self) -> None:
-        record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+        record = logging.LogRecord(
+            app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+        )
         record.fields = {"error": RuntimeError("backend output: TOP_SECRET_VALUE")}
 
         payload = json.loads(app_logging.JsonLogFormatter().format(record))
@@ -1593,7 +1991,9 @@ class AppLoggingTest(unittest.TestCase):
     def test_info_is_not_logged_when_default_error_level_is_used(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
-            app_logging.configure_logging(app_logging.DEFAULT_LOG_LEVEL, base_dir=log_dir)
+            app_logging.configure_logging(
+                app_logging.DEFAULT_LOG_LEVEL, base_dir=log_dir
+            )
             app_logging.log_event("info", "command_start", command="doctor")
 
             log_files = list(log_dir.glob("speed-of-cinnamon-*.log"))
@@ -1607,8 +2007,12 @@ class AppLoggingTest(unittest.TestCase):
                 log_dir,
             )
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
-            with mock.patch("speed_of_cinnamon.app_logging.maintain_logs") as mocked_maintain:
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
+            with mock.patch(
+                "speed_of_cinnamon.app_logging.maintain_logs"
+            ) as mocked_maintain:
                 handler.emit(record)
                 handler.emit(record)
                 handler.close()
@@ -1622,10 +2026,14 @@ class AppLoggingTest(unittest.TestCase):
             active.write_bytes(b"x" * 90)
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "rotated", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "rotated", (), None
+            )
             with (
                 mock.patch("speed_of_cinnamon.app_logging.MAX_DAILY_LOG_BYTES", 100),
-                mock.patch("speed_of_cinnamon.app_logging.maintain_logs") as mocked_maintain,
+                mock.patch(
+                    "speed_of_cinnamon.app_logging.maintain_logs"
+                ) as mocked_maintain,
             ):
                 handler.emit(record)
                 handler.close()
@@ -1640,7 +2048,15 @@ class AppLoggingTest(unittest.TestCase):
             active.chmod(0o600)
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "growth race", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME,
+                logging.ERROR,
+                __file__,
+                1,
+                "growth race",
+                (),
+                None,
+            )
             real_open = handler._open
             grown = False
 
@@ -1661,7 +2077,9 @@ class AppLoggingTest(unittest.TestCase):
             handler.close()
 
             self.assertLessEqual(active.stat().st_size, 200)
-            self.assertTrue(active.with_name(f"{active.stem}.1{active.suffix}").exists())
+            self.assertTrue(
+                active.with_name(f"{active.stem}.1{active.suffix}").exists()
+            )
 
     def test_file_handler_reopens_after_external_active_rotation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1669,7 +2087,9 @@ class AppLoggingTest(unittest.TestCase):
             active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
 
             with mock.patch("speed_of_cinnamon.app_logging.MAX_DAILY_LOG_BYTES", 1):
                 handler.emit(record)
@@ -1693,8 +2113,12 @@ class AppLoggingTest(unittest.TestCase):
             active = log_dir / f"speed-of-cinnamon-{first_day.isoformat()}.log"
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler.setFormatter(app_logging.JsonLogFormatter())
-            first_record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "first", (), None)
-            next_record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "next", (), None)
+            first_record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "first", (), None
+            )
+            next_record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "next", (), None
+            )
 
             class FirstDay(date):
                 @classmethod
@@ -1712,8 +2136,16 @@ class AppLoggingTest(unittest.TestCase):
                 handler.emit(next_record)
             handler.close()
 
-            first_lines = (log_dir / f"speed-of-cinnamon-{first_day.isoformat()}.log").read_text(encoding="utf-8").splitlines()
-            next_lines = (log_dir / f"speed-of-cinnamon-{next_day.isoformat()}.log").read_text(encoding="utf-8").splitlines()
+            first_lines = (
+                (log_dir / f"speed-of-cinnamon-{first_day.isoformat()}.log")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
+            next_lines = (
+                (log_dir / f"speed-of-cinnamon-{next_day.isoformat()}.log")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
             self.assertEqual(len(first_lines), 1)
             self.assertIn('"event":"first"', first_lines[0])
             self.assertEqual(len(next_lines), 1)
@@ -1733,11 +2165,17 @@ class AppLoggingTest(unittest.TestCase):
             os.utime(newest, (200, 200))
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "burst", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "burst", (), None
+            )
             with (
                 mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 300),
-                mock.patch("speed_of_cinnamon.app_logging.maintain_logs") as mocked_maintain,
-                mock.patch("speed_of_cinnamon.app_logging._enforce_total_size_limit") as mocked_total_enforce,
+                mock.patch(
+                    "speed_of_cinnamon.app_logging.maintain_logs"
+                ) as mocked_maintain,
+                mock.patch(
+                    "speed_of_cinnamon.app_logging._enforce_total_size_limit"
+                ) as mocked_total_enforce,
             ):
                 handler.emit(record)
             handler.close()
@@ -1756,7 +2194,9 @@ class AppLoggingTest(unittest.TestCase):
                 log_dir,
             )
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
             stderr = io.StringIO()
             with (
                 mock.patch.object(handler, "_open", side_effect=OSError("read only")),
@@ -1778,11 +2218,15 @@ class AppLoggingTest(unittest.TestCase):
             )
             handler.setFormatter(app_logging.JsonLogFormatter())
             handler.stream = io.StringIO()
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
 
             with (
                 mock.patch.object(handler, "_open", side_effect=OSError("read only")),
-                mock.patch.object(handler.stream, "close", side_effect=OSError("close failed")),
+                mock.patch.object(
+                    handler.stream, "close", side_effect=OSError("close failed")
+                ),
             ):
                 handler.emit(record)
 
@@ -1797,11 +2241,21 @@ class AppLoggingTest(unittest.TestCase):
                 log_dir,
             )
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
 
             with (
-                mock.patch.object(app_logging.json, "dumps", side_effect=MemoryError("render exhausted")),
-                mock.patch.object(handler, "_is_log_path_insecure", side_effect=MemoryError("check exhausted")),
+                mock.patch.object(
+                    app_logging.json,
+                    "dumps",
+                    side_effect=MemoryError("render exhausted"),
+                ),
+                mock.patch.object(
+                    handler,
+                    "_is_log_path_insecure",
+                    side_effect=MemoryError("check exhausted"),
+                ),
             ):
                 handler.emit(record)
 
@@ -1823,8 +2277,14 @@ class AppLoggingTest(unittest.TestCase):
                 active.write_text("replacement\n", encoding="utf-8")
                 return fd
 
-            with mock.patch.object(app_logging, "open_file_without_following_symlinks", side_effect=open_and_swap):
-                with self.assertRaisesRegex(RuntimeError, "log file changed while opening"):
+            with mock.patch.object(
+                app_logging,
+                "open_file_without_following_symlinks",
+                side_effect=open_and_swap,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log file changed while opening"
+                ):
                     handler._open()
 
             self.assertIsNone(handler.stream)
@@ -1838,12 +2298,18 @@ class AppLoggingTest(unittest.TestCase):
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             real_open = app_logging.open_file_without_following_symlinks
 
-            def open_after_create(path: Path, flags: int, *args: object, **kwargs: object) -> int:
+            def open_after_create(
+                path: Path, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 if path == active and not active.exists():
                     active.write_text("foreign\n", encoding="utf-8")
                 return real_open(path, flags, *args, **kwargs)
 
-            with mock.patch.object(app_logging, "open_file_without_following_symlinks", side_effect=open_after_create):
+            with mock.patch.object(
+                app_logging,
+                "open_file_without_following_symlinks",
+                side_effect=open_after_create,
+            ):
                 with self.assertRaises(FileExistsError):
                     handler._open()
 
@@ -1851,18 +2317,30 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(active.read_text(encoding="utf-8"), "foreign\n")
             handler.close()
 
-    def test_file_handler_preserves_validation_error_when_fd_close_is_interrupted(self) -> None:
-        handler = app_logging.SizeCappedJsonFileHandler(Path("/probe.log"), Path("/probe"))
+    def test_file_handler_preserves_validation_error_when_fd_close_is_interrupted(
+        self,
+    ) -> None:
+        handler = app_logging.SizeCappedJsonFileHandler(
+            Path("/probe.log"), Path("/probe")
+        )
 
         def close(fd: int) -> None:
             if fd == 123:
                 raise KeyboardInterrupt
 
         with (
-            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                app_logging,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(app_logging, "assert_fd_is_private_directory"),
-            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
-            mock.patch.object(app_logging.os, "fstat", side_effect=RuntimeError("not regular")),
+            mock.patch.object(
+                app_logging, "open_file_without_following_symlinks", return_value=123
+            ),
+            mock.patch.object(
+                app_logging.os, "fstat", side_effect=RuntimeError("not regular")
+            ),
             mock.patch.object(app_logging.os, "close", side_effect=close),
         ):
             with self.assertRaisesRegex(RuntimeError, "not regular") as caught:
@@ -1873,7 +2351,9 @@ class AppLoggingTest(unittest.TestCase):
     def test_copy_log_content_closes_source_fd_when_fdopen_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
-            mock.patch.object(app_logging.os, "fdopen", side_effect=ValueError("bad source fd")),
+            mock.patch.object(
+                app_logging.os, "fdopen", side_effect=ValueError("bad source fd")
+            ),
             mock.patch.object(app_logging.os, "close") as mocked_close,
         ):
             with self.assertRaisesRegex(ValueError, "bad source fd"):
@@ -1891,42 +2371,74 @@ class AppLoggingTest(unittest.TestCase):
             path.write_text("replacement\n", encoding="utf-8")
 
             with self.assertRaisesRegex(RuntimeError, "changed before opening"):
-                app_logging._copy_log_content(path, mock.Mock(), expected_stat=expected_stat)
+                app_logging._copy_log_content(
+                    path, mock.Mock(), expected_stat=expected_stat
+                )
 
-    def test_open_log_source_preserves_validation_error_when_fd_close_fails(self) -> None:
+    def test_open_log_source_preserves_validation_error_when_fd_close_fails(
+        self,
+    ) -> None:
         with (
             mock.patch.object(app_logging, "_assert_regular_unlinked_file"),
-            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
-            mock.patch.object(app_logging, "assert_fd_is_regular_private_file", side_effect=RuntimeError("not regular")),
-            mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")),
+            mock.patch.object(
+                app_logging, "open_file_without_following_symlinks", return_value=123
+            ),
+            mock.patch.object(
+                app_logging,
+                "assert_fd_is_regular_private_file",
+                side_effect=RuntimeError("not regular"),
+            ),
+            mock.patch.object(
+                app_logging.os, "close", side_effect=OSError("close failed")
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "not regular") as caught:
-                app_logging._open_log_source_file(Path("/probe.log"), field_name="log source file")
+                app_logging._open_log_source_file(
+                    Path("/probe.log"), field_name="log source file"
+                )
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
-    def test_open_log_source_preserves_validation_error_when_fd_close_is_interrupted(self) -> None:
+    def test_open_log_source_preserves_validation_error_when_fd_close_is_interrupted(
+        self,
+    ) -> None:
         with (
             mock.patch.object(app_logging, "_assert_regular_unlinked_file"),
-            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
-            mock.patch.object(app_logging, "assert_fd_is_regular_private_file", side_effect=RuntimeError("not regular")),
+            mock.patch.object(
+                app_logging, "open_file_without_following_symlinks", return_value=123
+            ),
+            mock.patch.object(
+                app_logging,
+                "assert_fd_is_regular_private_file",
+                side_effect=RuntimeError("not regular"),
+            ),
             mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
         ):
             with self.assertRaisesRegex(RuntimeError, "not regular") as caught:
-                app_logging._open_log_source_file(Path("/probe.log"), field_name="log source file")
+                app_logging._open_log_source_file(
+                    Path("/probe.log"), field_name="log source file"
+                )
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_open_log_source_closes_fd_when_validation_is_interrupted(self) -> None:
         with (
-            mock.patch.object(app_logging, "_assert_regular_unlinked_file", return_value=os.stat(__file__)),
-            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                app_logging,
+                "_assert_regular_unlinked_file",
+                return_value=os.stat(__file__),
+            ),
+            mock.patch.object(
+                app_logging, "open_file_without_following_symlinks", return_value=123
+            ),
             mock.patch.object(app_logging, "assert_fd_is_regular_private_file"),
             mock.patch.object(app_logging.os, "fstat", side_effect=KeyboardInterrupt),
             mock.patch.object(app_logging.os, "close") as mocked_close,
         ):
             with self.assertRaises(KeyboardInterrupt):
-                app_logging._open_log_source_file(Path("/probe.log"), field_name="log source file")
+                app_logging._open_log_source_file(
+                    Path("/probe.log"), field_name="log source file"
+                )
 
         mocked_close.assert_called_once_with(123)
 
@@ -1943,27 +2455,41 @@ class AppLoggingTest(unittest.TestCase):
                 path.write_text("replacement\n", encoding="utf-8")
                 return fd
 
-            with mock.patch.object(app_logging, "open_file_without_following_symlinks", side_effect=open_and_swap):
+            with mock.patch.object(
+                app_logging,
+                "open_file_without_following_symlinks",
+                side_effect=open_and_swap,
+            ):
                 with self.assertRaisesRegex(RuntimeError, "changed while opening"):
-                    app_logging._open_log_source_file(path, field_name="log source file")
+                    app_logging._open_log_source_file(
+                        path, field_name="log source file"
+                    )
 
             self.assertEqual(path.read_text(encoding="utf-8"), "replacement\n")
 
     def test_copy_log_content_preserves_fdopen_error_when_fd_close_fails(self) -> None:
         with (
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
-            mock.patch.object(app_logging.os, "fdopen", side_effect=ValueError("bad source fd")),
-            mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")),
+            mock.patch.object(
+                app_logging.os, "fdopen", side_effect=ValueError("bad source fd")
+            ),
+            mock.patch.object(
+                app_logging.os, "close", side_effect=OSError("close failed")
+            ),
         ):
             with self.assertRaisesRegex(ValueError, "bad source fd") as caught:
                 app_logging._copy_log_content(Path("/probe.log"), mock.Mock())
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
-    def test_copy_log_content_preserves_fdopen_error_when_fd_close_is_interrupted(self) -> None:
+    def test_copy_log_content_preserves_fdopen_error_when_fd_close_is_interrupted(
+        self,
+    ) -> None:
         with (
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
-            mock.patch.object(app_logging.os, "fdopen", side_effect=ValueError("bad source fd")),
+            mock.patch.object(
+                app_logging.os, "fdopen", side_effect=ValueError("bad source fd")
+            ),
             mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
         ):
             with self.assertRaisesRegex(ValueError, "bad source fd") as caught:
@@ -1982,7 +2508,9 @@ class AppLoggingTest(unittest.TestCase):
 
         mocked_close.assert_called_once_with(123)
 
-    def test_copy_log_content_preserves_read_interrupt_when_source_close_fails(self) -> None:
+    def test_copy_log_content_preserves_read_interrupt_when_source_close_fails(
+        self,
+    ) -> None:
         class _Source:
             def read(self, _size: int = -1) -> bytes:
                 raise KeyboardInterrupt("log read interrupted")
@@ -1994,7 +2522,9 @@ class AppLoggingTest(unittest.TestCase):
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
             mock.patch.object(app_logging.os, "fdopen", return_value=_Source()),
         ):
-            with self.assertRaisesRegex(KeyboardInterrupt, "log read interrupted") as caught:
+            with self.assertRaisesRegex(
+                KeyboardInterrupt, "log read interrupted"
+            ) as caught:
                 app_logging._copy_log_content(Path("/probe.log"), mock.Mock())
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
@@ -2013,17 +2543,29 @@ class AppLoggingTest(unittest.TestCase):
         gzip_output.__exit__.return_value = False
 
         with (
-            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(
+                app_logging,
+                "_create_log_temp_file",
+                return_value=(456, 789, ".target.tmp"),
+            ),
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
             mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
-            mock.patch.object(app_logging.os, "fdopen", side_effect=[input_file, raw_output]),
+            mock.patch.object(
+                app_logging.os, "fdopen", side_effect=[input_file, raw_output]
+            ),
             mock.patch.object(app_logging.gzip, "GzipFile", return_value=gzip_output),
-            mock.patch.object(app_logging, "_copy_stream_capped", side_effect=RuntimeError("copy failed")),
+            mock.patch.object(
+                app_logging,
+                "_copy_stream_capped",
+                side_effect=RuntimeError("copy failed"),
+            ),
             mock.patch.object(app_logging, "_unlink_log_temp"),
             mock.patch.object(app_logging.os, "close"),
         ):
             with self.assertRaisesRegex(RuntimeError, "copy failed") as caught:
-                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+                app_logging._gzip_file(
+                    Path("/probe/source.log"), Path("/probe/target.log.gz")
+                )
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
         self.assertNotIn("source close failed", "\n".join(caught.exception.__notes__))
@@ -2044,10 +2586,20 @@ class AppLoggingTest(unittest.TestCase):
 
             try:
                 with (
-                    mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=parent_fd),
-                    mock.patch.object(app_logging.os, "close", side_effect=close_wrapper),
+                    mock.patch.object(
+                        app_logging,
+                        "ensure_directory_without_following_symlinks",
+                        return_value=parent_fd,
+                    ),
+                    mock.patch.object(
+                        app_logging.os, "close", side_effect=close_wrapper
+                    ),
                 ):
-                    self.assertTrue(app_logging._unlink_log_file_with_parent_fsync(path, expected_stat, field_name="log file"))
+                    self.assertTrue(
+                        app_logging._unlink_log_file_with_parent_fsync(
+                            path, expected_stat, field_name="log file"
+                        )
+                    )
             finally:
                 real_close(parent_fd)
 
@@ -2078,8 +2630,12 @@ class AppLoggingTest(unittest.TestCase):
                         replacement.replace(path)
                 return result
 
-            with mock.patch.object(app_logging.os, "stat", side_effect=stat_then_replace):
-                with self.assertRaisesRegex(RuntimeError, "log file changed before deletion"):
+            with mock.patch.object(
+                app_logging.os, "stat", side_effect=stat_then_replace
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log file changed before deletion"
+                ):
                     app_logging._unlink_log_file_with_parent_fsync(
                         path,
                         expected_stat,
@@ -2089,12 +2645,20 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(path.read_bytes(), b"foreign log")
             self.assertFalse(list(root.glob("source.log.*.cleanup")))
 
-    def test_unlink_log_file_preserves_delete_error_when_parent_close_is_interrupted(self) -> None:
+    def test_unlink_log_file_preserves_delete_error_when_parent_close_is_interrupted(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                app_logging,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(app_logging.os, "stat", return_value=os.stat(__file__)),
             mock.patch.object(app_logging, "_rename_without_replacing"),
-            mock.patch.object(app_logging.os, "unlink", side_effect=OSError("delete failed")),
+            mock.patch.object(
+                app_logging.os, "unlink", side_effect=OSError("delete failed")
+            ),
             mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
         ):
             with self.assertRaisesRegex(OSError, "delete failed") as caught:
@@ -2116,7 +2680,9 @@ class AppLoggingTest(unittest.TestCase):
             parent_fd = os.open(tmp, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
                 with self.assertRaisesRegex(RuntimeError, "changed before cleanup"):
-                    app_logging._unlink_log_temp(parent_fd, temp_path.name, expected_stat=expected_stat)
+                    app_logging._unlink_log_temp(
+                        parent_fd, temp_path.name, expected_stat=expected_stat
+                    )
             finally:
                 os.close(parent_fd)
 
@@ -2149,9 +2715,15 @@ class AppLoggingTest(unittest.TestCase):
                 return result
 
             try:
-                with mock.patch.object(app_logging.os, "stat", side_effect=stat_then_replace):
-                    with self.assertRaisesRegex(RuntimeError, "log temporary file changed before cleanup"):
-                        app_logging._unlink_log_temp(parent_fd, temp_path.name, expected_stat=expected_stat)
+                with mock.patch.object(
+                    app_logging.os, "stat", side_effect=stat_then_replace
+                ):
+                    with self.assertRaisesRegex(
+                        RuntimeError, "log temporary file changed before cleanup"
+                    ):
+                        app_logging._unlink_log_temp(
+                            parent_fd, temp_path.name, expected_stat=expected_stat
+                        )
             finally:
                 os.close(parent_fd)
 
@@ -2160,68 +2732,116 @@ class AppLoggingTest(unittest.TestCase):
 
     def test_gzip_file_closes_source_when_source_inspection_fails(self) -> None:
         with (
-            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(
+                app_logging,
+                "_create_log_temp_file",
+                return_value=(456, 789, ".target.tmp"),
+            ),
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
-            mock.patch.object(app_logging.os, "fstat", side_effect=OSError("inspect failed")),
+            mock.patch.object(
+                app_logging.os, "fstat", side_effect=OSError("inspect failed")
+            ),
             mock.patch.object(app_logging, "_unlink_log_temp"),
-            mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")),
+            mock.patch.object(
+                app_logging.os, "close", side_effect=OSError("close failed")
+            ),
         ):
             with self.assertRaisesRegex(OSError, "inspect failed") as caught:
-                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+                app_logging._gzip_file(
+                    Path("/probe/source.log"), Path("/probe/target.log.gz")
+                )
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
-    def test_gzip_file_preserves_source_inspection_error_when_fd_close_is_interrupted(self) -> None:
+    def test_gzip_file_preserves_source_inspection_error_when_fd_close_is_interrupted(
+        self,
+    ) -> None:
         def close(fd: int) -> None:
             if fd == 123:
                 raise KeyboardInterrupt
 
         with (
-            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(
+                app_logging,
+                "_create_log_temp_file",
+                return_value=(456, 789, ".target.tmp"),
+            ),
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
-            mock.patch.object(app_logging.os, "fstat", side_effect=OSError("inspect failed")),
+            mock.patch.object(
+                app_logging.os, "fstat", side_effect=OSError("inspect failed")
+            ),
             mock.patch.object(app_logging, "_unlink_log_temp"),
             mock.patch.object(app_logging.os, "close", side_effect=close),
         ):
             with self.assertRaisesRegex(OSError, "inspect failed") as caught:
-                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+                app_logging._gzip_file(
+                    Path("/probe/source.log"), Path("/probe/target.log.gz")
+                )
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_gzip_file_preserves_source_fdopen_error_when_close_fails(self) -> None:
         with (
-            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(
+                app_logging,
+                "_create_log_temp_file",
+                return_value=(456, 789, ".target.tmp"),
+            ),
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
             mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
-            mock.patch.object(app_logging.os, "fdopen", side_effect=ValueError("source fdopen failed")),
+            mock.patch.object(
+                app_logging.os, "fdopen", side_effect=ValueError("source fdopen failed")
+            ),
             mock.patch.object(app_logging, "_unlink_log_temp"),
-            mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")),
+            mock.patch.object(
+                app_logging.os, "close", side_effect=OSError("close failed")
+            ),
         ):
             with self.assertRaisesRegex(ValueError, "source fdopen failed") as caught:
-                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+                app_logging._gzip_file(
+                    Path("/probe/source.log"), Path("/probe/target.log.gz")
+                )
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_gzip_file_closes_temp_fd_when_output_fdopen_fails(self) -> None:
         input_file = mock.Mock()
         with (
-            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(
+                app_logging,
+                "_create_log_temp_file",
+                return_value=(456, 789, ".target.tmp"),
+            ),
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
             mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
-            mock.patch.object(app_logging.os, "fdopen", side_effect=[input_file, ValueError("output fdopen failed")]),
+            mock.patch.object(
+                app_logging.os,
+                "fdopen",
+                side_effect=[input_file, ValueError("output fdopen failed")],
+            ),
             mock.patch.object(app_logging, "_unlink_log_temp"),
-            mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")) as mocked_close,
+            mock.patch.object(
+                app_logging.os, "close", side_effect=OSError("close failed")
+            ) as mocked_close,
         ):
             with self.assertRaisesRegex(ValueError, "output fdopen failed") as caught:
-                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+                app_logging._gzip_file(
+                    Path("/probe/source.log"), Path("/probe/target.log.gz")
+                )
 
         input_file.close.assert_called_once_with()
         self.assertIn(mock.call(456), mocked_close.call_args_list)
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
-    def test_gzip_file_closes_source_and_temp_fds_when_fdopen_is_interrupted(self) -> None:
+    def test_gzip_file_closes_source_and_temp_fds_when_fdopen_is_interrupted(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(
+                app_logging,
+                "_create_log_temp_file",
+                return_value=(456, 789, ".target.tmp"),
+            ),
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
             mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
             mock.patch.object(app_logging.os, "fdopen", side_effect=KeyboardInterrupt),
@@ -2229,7 +2849,9 @@ class AppLoggingTest(unittest.TestCase):
             mock.patch.object(app_logging.os, "close") as mocked_close,
         ):
             with self.assertRaises(KeyboardInterrupt):
-                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+                app_logging._gzip_file(
+                    Path("/probe/source.log"), Path("/probe/target.log.gz")
+                )
 
         mocked_close.assert_any_call(123)
         mocked_close.assert_any_call(456)
@@ -2238,25 +2860,39 @@ class AppLoggingTest(unittest.TestCase):
     def test_gzip_file_closes_temp_fd_when_output_fdopen_is_interrupted(self) -> None:
         input_file = mock.Mock()
         with (
-            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(
+                app_logging,
+                "_create_log_temp_file",
+                return_value=(456, 789, ".target.tmp"),
+            ),
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
             mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
-            mock.patch.object(app_logging.os, "fdopen", side_effect=[input_file, KeyboardInterrupt]),
+            mock.patch.object(
+                app_logging.os, "fdopen", side_effect=[input_file, KeyboardInterrupt]
+            ),
             mock.patch.object(app_logging, "_unlink_log_temp"),
             mock.patch.object(app_logging.os, "close") as mocked_close,
         ):
             with self.assertRaises(KeyboardInterrupt):
-                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+                app_logging._gzip_file(
+                    Path("/probe/source.log"), Path("/probe/target.log.gz")
+                )
 
         input_file.close.assert_called_once_with()
         mocked_close.assert_any_call(456)
         mocked_close.assert_any_call(789)
 
-    def test_gzip_file_preserves_output_fdopen_error_when_input_close_is_interrupted(self) -> None:
+    def test_gzip_file_preserves_output_fdopen_error_when_input_close_is_interrupted(
+        self,
+    ) -> None:
         input_file = mock.Mock()
         input_file.close.side_effect = KeyboardInterrupt("input close interrupted")
         with (
-            mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".target.tmp")),
+            mock.patch.object(
+                app_logging,
+                "_create_log_temp_file",
+                return_value=(456, 789, ".target.tmp"),
+            ),
             mock.patch.object(app_logging, "_open_log_source_file", return_value=123),
             mock.patch.object(app_logging.os, "fstat", return_value=os.stat(__file__)),
             mock.patch.object(
@@ -2268,7 +2904,9 @@ class AppLoggingTest(unittest.TestCase):
             mock.patch.object(app_logging.os, "close") as mocked_close,
         ):
             with self.assertRaisesRegex(ValueError, "output fdopen failed") as caught:
-                app_logging._gzip_file(Path("/probe/source.log"), Path("/probe/target.log.gz"))
+                app_logging._gzip_file(
+                    Path("/probe/source.log"), Path("/probe/target.log.gz")
+                )
 
         input_file.close.assert_called_once_with()
         mocked_close.assert_any_call(456)
@@ -2282,8 +2920,14 @@ class AppLoggingTest(unittest.TestCase):
             source.write_text("source\n", encoding="utf-8")
             source.chmod(0o600)
             with (
-                mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".archive.tmp")),
-                mock.patch.object(app_logging.os, "fdopen", side_effect=KeyboardInterrupt),
+                mock.patch.object(
+                    app_logging,
+                    "_create_log_temp_file",
+                    return_value=(456, 789, ".archive.tmp"),
+                ),
+                mock.patch.object(
+                    app_logging.os, "fdopen", side_effect=KeyboardInterrupt
+                ),
                 mock.patch.object(app_logging.os, "close") as mocked_close,
             ):
                 with self.assertRaises(KeyboardInterrupt):
@@ -2292,7 +2936,9 @@ class AppLoggingTest(unittest.TestCase):
             mocked_close.assert_any_call(456)
             mocked_close.assert_any_call(789)
 
-    def test_monthly_merge_preserves_fdopen_error_when_temp_fd_close_is_interrupted(self) -> None:
+    def test_monthly_merge_preserves_fdopen_error_when_temp_fd_close_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             source = log_dir / "speed-of-cinnamon-2026-05-30.log"
@@ -2304,8 +2950,16 @@ class AppLoggingTest(unittest.TestCase):
                     raise KeyboardInterrupt
 
             with (
-                mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".archive.tmp")),
-                mock.patch.object(app_logging.os, "fdopen", side_effect=ValueError("temp fdopen failed")),
+                mock.patch.object(
+                    app_logging,
+                    "_create_log_temp_file",
+                    return_value=(456, 789, ".archive.tmp"),
+                ),
+                mock.patch.object(
+                    app_logging.os,
+                    "fdopen",
+                    side_effect=ValueError("temp fdopen failed"),
+                ),
                 mock.patch.object(app_logging, "_unlink_log_temp"),
                 mock.patch.object(app_logging.os, "close", side_effect=close),
             ):
@@ -2329,10 +2983,20 @@ class AppLoggingTest(unittest.TestCase):
             gzip_output.__exit__.return_value = False
 
             with (
-                mock.patch.object(app_logging, "_create_log_temp_file", return_value=(456, 789, ".archive.tmp")),
+                mock.patch.object(
+                    app_logging,
+                    "_create_log_temp_file",
+                    return_value=(456, 789, ".archive.tmp"),
+                ),
                 mock.patch.object(app_logging.os, "fdopen", return_value=raw_output),
-                mock.patch.object(app_logging.gzip, "GzipFile", return_value=gzip_output),
-                mock.patch.object(app_logging, "_copy_log_content", side_effect=RuntimeError("copy failed")),
+                mock.patch.object(
+                    app_logging.gzip, "GzipFile", return_value=gzip_output
+                ),
+                mock.patch.object(
+                    app_logging,
+                    "_copy_log_content",
+                    side_effect=RuntimeError("copy failed"),
+                ),
                 mock.patch.object(app_logging, "_unlink_log_temp"),
                 mock.patch.object(app_logging.os, "close"),
             ):
@@ -2340,7 +3004,9 @@ class AppLoggingTest(unittest.TestCase):
                     app_logging._merge_old_months(log_dir, date(2026, 6, 1))
 
             self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
-            self.assertNotIn("archive close failed", "\n".join(caught.exception.__notes__))
+            self.assertNotIn(
+                "archive close failed", "\n".join(caught.exception.__notes__)
+            )
 
     def test_monthly_merge_removes_temp_archive_when_copy_is_interrupted(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2348,7 +3014,9 @@ class AppLoggingTest(unittest.TestCase):
             source = log_dir / "speed-of-cinnamon-2026-05-30.log"
             source.write_text("source\n", encoding="utf-8")
             source.chmod(0o600)
-            with mock.patch.object(app_logging, "_copy_log_content", side_effect=KeyboardInterrupt):
+            with mock.patch.object(
+                app_logging, "_copy_log_content", side_effect=KeyboardInterrupt
+            ):
                 with self.assertRaises(KeyboardInterrupt):
                     app_logging._merge_old_months(log_dir, date(2026, 6, 1))
 
@@ -2367,7 +3035,11 @@ class AppLoggingTest(unittest.TestCase):
             def fstat(fd: int) -> os.stat_result:
                 nonlocal failed
                 result = real_fstat(fd)
-                if not failed and stat_module.S_ISREG(result.st_mode) and result.st_size == 0:
+                if (
+                    not failed
+                    and stat_module.S_ISREG(result.st_mode)
+                    and result.st_size == 0
+                ):
                     failed = True
                     raise OSError("temporary identity inspection failed")
                 return result
@@ -2383,7 +3055,9 @@ class AppLoggingTest(unittest.TestCase):
 
             with (
                 mock.patch.object(app_logging.os, "fstat", side_effect=fstat),
-                mock.patch.object(app_logging, "_copy_log_content", side_effect=copy_then_fail),
+                mock.patch.object(
+                    app_logging, "_copy_log_content", side_effect=copy_then_fail
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "copy failed after write"):
                     app_logging._merge_old_months(log_dir, date(2026, 6, 1))
@@ -2393,38 +3067,177 @@ class AppLoggingTest(unittest.TestCase):
 
     def test_create_log_temp_preserves_open_error_when_parent_close_fails(self) -> None:
         with (
-            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
-            mock.patch.object(app_logging.os, "open", side_effect=OSError("temp open failed")),
-            mock.patch.object(app_logging.os, "close", side_effect=OSError("close failed")),
+            mock.patch.object(
+                app_logging,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
+            mock.patch.object(
+                app_logging.os, "open", side_effect=OSError("temp open failed")
+            ),
+            mock.patch.object(
+                app_logging.os, "close", side_effect=OSError("close failed")
+            ),
         ):
             with self.assertRaisesRegex(OSError, "temp open failed") as caught:
-                app_logging._create_log_temp_file(Path("/probe"), prefix="daily", suffix=".tmp")
+                app_logging._create_log_temp_file(
+                    Path("/probe"), prefix="daily", suffix=".tmp"
+                )
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
-    def test_create_log_temp_preserves_open_error_when_parent_close_is_interrupted(self) -> None:
+    def test_create_log_temp_preserves_open_error_when_parent_close_is_interrupted(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
-            mock.patch.object(app_logging.os, "open", side_effect=OSError("temp open failed")),
+            mock.patch.object(
+                app_logging,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
+            mock.patch.object(
+                app_logging.os, "open", side_effect=OSError("temp open failed")
+            ),
             mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
         ):
             with self.assertRaisesRegex(OSError, "temp open failed") as caught:
-                app_logging._create_log_temp_file(Path("/probe"), prefix="daily", suffix=".tmp")
+                app_logging._create_log_temp_file(
+                    Path("/probe"), prefix="daily", suffix=".tmp"
+                )
 
         self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
     def test_create_log_temp_closes_parent_when_open_is_interrupted(self) -> None:
         with (
-            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                app_logging,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(app_logging.os, "open", side_effect=KeyboardInterrupt),
             mock.patch.object(app_logging.os, "close") as mocked_close,
         ):
             with self.assertRaises(KeyboardInterrupt):
-                app_logging._create_log_temp_file(Path("/probe"), prefix="daily", suffix=".tmp")
+                app_logging._create_log_temp_file(
+                    Path("/probe"), prefix="daily", suffix=".tmp"
+                )
 
         mocked_close.assert_called_once_with(456)
 
-    def test_file_handler_transient_emit_failure_retries_after_temporary_error(self) -> None:
+    def test_json_persistence_uncertainty_is_sticky_and_handler_local(self) -> None:
+        for handler_type in (
+            app_logging.SizeCappedJsonFileHandler,
+            app_logging.ErrorJsonFileHandler,
+        ):
+            for failure in ("write", "flush", "emit", "lock", "unlock", "close"):
+                with self.subTest(handler=handler_type.__name__, failure=failure):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        directory = Path(tmp)
+                        path = (
+                            app_logging._active_log_path(directory)
+                            if handler_type is app_logging.SizeCappedJsonFileHandler
+                            else directory / "error.log"
+                        )
+                        handler = handler_type(path, directory)
+                        healthy = handler_type(directory / "healthy.log", directory)
+                        formatter = app_logging.JsonLogFormatter()
+                        handler.setFormatter(formatter)
+                        healthy.setFormatter(formatter)
+                        handler._retry_base_delay = 0.0
+                        record = logging.makeLogRecord(
+                            {
+                                "msg": "safe event",
+                                "fields": {"persistence_uncertain": "forged"},
+                            }
+                        )
+                        snapshot = record.__dict__.copy()
+                        fields_snapshot = record.fields.copy()
+                        fields_identity = record.fields
+                        try:
+                            if failure in {"write", "flush", "close"}:
+                                handler._open()
+                                with mock.patch.object(
+                                    handler.stream,
+                                    failure,
+                                    side_effect=OSError("private failure"),
+                                ):
+                                    if failure == "close":
+                                        stream = handler.stream
+                                        handler.close()
+                                    else:
+                                        handler.emit(record)
+                                if failure == "close":
+                                    stream.close()
+                            else:
+                                target, name = {
+                                    "emit": (handler, "_emit_locked"),
+                                    "lock": (app_logging, "_acquire_log_lock"),
+                                    "unlock": (app_logging, "_release_log_lock"),
+                                }[failure]
+                                original = getattr(target, name)
+
+                                def fail(*args: object) -> None:
+                                    if failure == "unlock":
+                                        original(*args)
+                                    raise OSError("private failure")
+
+                                with mock.patch.object(target, name, side_effect=fail):
+                                    handler.emit(record)
+                            handler.emit(record)
+                            handler.emit(record)
+                            rows = [
+                                json.loads(line)
+                                for line in handler.path.read_text().splitlines()
+                            ]
+                            self.assertIs(rows[-2]["persistence_uncertain"], True)
+                            self.assertIs(rows[-1]["persistence_uncertain"], True)
+                            self.assertIs(
+                                json.loads(healthy.format(record))[
+                                    "persistence_uncertain"
+                                ],
+                                False,
+                            )
+                            self.assertEqual(record.__dict__, snapshot)
+                            self.assertEqual(record.fields, fields_snapshot)
+                            self.assertIs(record.fields, fields_identity)
+                            self.assertEqual(
+                                (handler._retry_count, handler._retry_until), (0, 0.0)
+                            )
+                        finally:
+                            handler.close()
+                            healthy.close()
+
+    def test_json_persistence_uncertainty_survives_oversized_fallback(self) -> None:
+        for handler_type, limit in (
+            (app_logging.SizeCappedJsonFileHandler, "MAX_DAILY_LOG_BYTES"),
+            (app_logging.ErrorJsonFileHandler, "MAX_ERROR_LOG_BYTES"),
+        ):
+            with self.subTest(handler=handler_type.__name__):
+                with tempfile.TemporaryDirectory() as tmp:
+                    directory = Path(tmp)
+                    handler = handler_type(directory / "error.log", directory)
+                    handler.setFormatter(app_logging.JsonLogFormatter())
+                    handler._retry_base_delay = 0.0
+                    record = logging.makeLogRecord({"msg": "x" * 300})
+                    try:
+                        with mock.patch.object(
+                            handler, "_emit_locked", side_effect=OSError("failure")
+                        ):
+                            handler.emit(record)
+                        with mock.patch.object(app_logging, limit, 200):
+                            handler.emit(record)
+                        payload = json.loads(handler.path.read_text())
+                        self.assertEqual(
+                            payload["event"], "oversized_log_record_redacted"
+                        )
+                        self.assertIs(payload["persistence_uncertain"], True)
+                        self.assertLessEqual(handler.path.stat().st_size, 200)
+                    finally:
+                        handler.close()
+
+    def test_file_handler_transient_emit_failure_retries_after_temporary_error(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             handler = app_logging.SizeCappedJsonFileHandler(
@@ -2433,7 +3246,9 @@ class AppLoggingTest(unittest.TestCase):
             )
             handler._retry_base_delay = 0.0
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
             original_open = handler._open
             open_calls = 0
 
@@ -2544,9 +3359,13 @@ class AppLoggingTest(unittest.TestCase):
             active.symlink_to(target)
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
 
-            with mock.patch.object(handler, "_open", side_effect=RuntimeError("must not be a symlink")) as mocked_open:
+            with mock.patch.object(
+                handler, "_open", side_effect=RuntimeError("must not be a symlink")
+            ) as mocked_open:
                 handler.emit(record)
                 handler.emit(record)
 
@@ -2561,9 +3380,13 @@ class AppLoggingTest(unittest.TestCase):
             real_dir.mkdir()
             log_dir = root / "logs"
             log_dir.symlink_to(real_dir, target_is_directory=True)
-            handler = app_logging.SizeCappedJsonFileHandler(log_dir / "active.log", log_dir)
+            handler = app_logging.SizeCappedJsonFileHandler(
+                log_dir / "active.log", log_dir
+            )
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
 
             handler.emit(record)
             handler.close()
@@ -2571,31 +3394,51 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(handler._disabled)
             self.assertFalse((real_dir / "active.log").exists())
 
-    def test_file_handler_preserves_directory_validation_error_when_close_is_interrupted(self) -> None:
+    def test_file_handler_preserves_directory_validation_error_when_close_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "active.log"
             handler = app_logging.SizeCappedJsonFileHandler(path, Path(tmp))
             with (
-                mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
-                mock.patch.object(app_logging, "assert_fd_is_private_directory", side_effect=RuntimeError("not private")),
-                mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
+                mock.patch.object(
+                    app_logging,
+                    "ensure_directory_without_following_symlinks",
+                    return_value=456,
+                ),
+                mock.patch.object(
+                    app_logging,
+                    "assert_fd_is_private_directory",
+                    side_effect=RuntimeError("not private"),
+                ),
+                mock.patch.object(
+                    app_logging.os, "close", side_effect=KeyboardInterrupt
+                ),
             ):
                 with self.assertRaisesRegex(RuntimeError, "not private") as caught:
                     handler._open()
 
             self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
-    def test_file_handler_disables_permanently_on_log_path_permission_error(self) -> None:
+    def test_file_handler_disables_permanently_on_log_path_permission_error(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
 
             with (
-                mock.patch.object(handler, "_open", side_effect=OSError("read only")) as mocked_open,
-                mock.patch.object(type(active), "lstat", side_effect=PermissionError("denied")),
+                mock.patch.object(
+                    handler, "_open", side_effect=OSError("read only")
+                ) as mocked_open,
+                mock.patch.object(
+                    type(active), "lstat", side_effect=PermissionError("denied")
+                ),
             ):
                 handler.emit(record)
                 handler.emit(record)
@@ -2613,7 +3456,9 @@ class AppLoggingTest(unittest.TestCase):
             active.symlink_to(target)
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
 
             handler.emit(record)
             handler.close()
@@ -2633,14 +3478,18 @@ class AppLoggingTest(unittest.TestCase):
                 return
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
 
             handler.emit(record)
             handler.close()
 
             self.assertEqual(real.read_text(encoding="utf-8"), "old\n")
 
-    def test_file_handler_does_not_write_when_log_permissions_cannot_be_restricted(self) -> None:
+    def test_file_handler_does_not_write_when_log_permissions_cannot_be_restricted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             active = log_dir / f"speed-of-cinnamon-{date.today().isoformat()}.log"
@@ -2648,21 +3497,34 @@ class AppLoggingTest(unittest.TestCase):
             active.chmod(0o666)
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "event", (), None
+            )
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.fchmod", side_effect=OSError("chmod denied")):
+            with mock.patch(
+                "speed_of_cinnamon.app_logging.os.fchmod",
+                side_effect=OSError("chmod denied"),
+            ):
                 handler.emit(record)
                 handler.close()
 
             self.assertEqual(active.read_text(encoding="utf-8"), "old\n")
 
     def test_file_handler_closes_fd_when_open_validation_is_interrupted(self) -> None:
-        handler = app_logging.SizeCappedJsonFileHandler(Path("/probe.log"), Path("/probe"))
+        handler = app_logging.SizeCappedJsonFileHandler(
+            Path("/probe.log"), Path("/probe")
+        )
         with (
             mock.patch.object(Path, "lstat", side_effect=FileNotFoundError),
-            mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                app_logging,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(app_logging, "assert_fd_is_private_directory"),
-            mock.patch.object(app_logging, "open_file_without_following_symlinks", return_value=123),
+            mock.patch.object(
+                app_logging, "open_file_without_following_symlinks", return_value=123
+            ),
             mock.patch.object(app_logging.os, "fstat", side_effect=KeyboardInterrupt),
             mock.patch.object(app_logging.os, "close") as mocked_close,
         ):
@@ -2686,7 +3548,9 @@ class AppLoggingTest(unittest.TestCase):
             handler = app_logging.SizeCappedJsonFileHandler(active, log_dir)
             handler._next_maintenance_at = 0.0
             handler.setFormatter(app_logging.JsonLogFormatter())
-            record = logging.LogRecord(app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "burst", (), None)
+            record = logging.LogRecord(
+                app_logging.LOGGER_NAME, logging.ERROR, __file__, 1, "burst", (), None
+            )
             with mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 300):
                 handler.emit(record)
             handler.close()
@@ -2706,12 +3570,16 @@ class AppLoggingTest(unittest.TestCase):
                 app_logging.log_event("error", "rotated")
 
             self.assertTrue(active.exists())
-            self.assertTrue(active.with_name(f"{active.stem}.1{active.suffix}").exists())
+            self.assertTrue(
+                active.with_name(f"{active.stem}.1{active.suffix}").exists()
+            )
             self.assertIn("rotated", active.read_text(encoding="utf-8"))
             for log_file in log_dir.glob("speed-of-cinnamon-*.log"):
                 self.assertLessEqual(log_file.stat().st_size, 256)
 
-    def test_maintain_logs_compresses_oversized_rotated_daily_log_without_rename_chain(self) -> None:
+    def test_maintain_logs_compresses_oversized_rotated_daily_log_without_rename_chain(
+        self,
+    ) -> None:
         today = date(2026, 7, 10)
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
@@ -2742,9 +3610,10 @@ class AppLoggingTest(unittest.TestCase):
                 app_logging.maintain_logs(log_dir, today=today)
 
             self.assertFalse(active.exists())
-            self.assertTrue(active.with_name(f"{active.stem}.1{active.suffix}").exists())
+            self.assertTrue(
+                active.with_name(f"{active.stem}.1{active.suffix}").exists()
+            )
             self.assertFalse(Path(f"{active}.gz").exists())
-
 
     def test_rotate_active_if_needed_is_noop_for_missing_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2755,16 +3624,30 @@ class AppLoggingTest(unittest.TestCase):
 
             self.assertFalse(missing.exists())
 
-    def test_rotate_active_preserves_rotation_error_when_parent_close_is_interrupted(self) -> None:
+    def test_rotate_active_preserves_rotation_error_when_parent_close_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             active = Path(tmp) / f"speed-of-cinnamon-{date.today().isoformat()}.log"
             active.write_text("content\n", encoding="utf-8")
             active.chmod(0o600)
             with (
-                mock.patch.object(app_logging, "_assert_regular_unlinked_file", return_value=os.stat(__file__)),
-                mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", return_value=456),
-                mock.patch.object(app_logging.os, "link", side_effect=OSError("link failed")),
-                mock.patch.object(app_logging.os, "close", side_effect=KeyboardInterrupt),
+                mock.patch.object(
+                    app_logging,
+                    "_assert_regular_unlinked_file",
+                    return_value=os.stat(__file__),
+                ),
+                mock.patch.object(
+                    app_logging,
+                    "ensure_directory_without_following_symlinks",
+                    return_value=456,
+                ),
+                mock.patch.object(
+                    app_logging.os, "link", side_effect=OSError("link failed")
+                ),
+                mock.patch.object(
+                    app_logging.os, "close", side_effect=KeyboardInterrupt
+                ),
             ):
                 with self.assertRaisesRegex(OSError, "link failed") as caught:
                     app_logging._rotate_active_if_needed(active, force=True)
@@ -2781,7 +3664,9 @@ class AppLoggingTest(unittest.TestCase):
                 mock.patch.object(app_logging.Path, "exists", return_value=True),
                 mock.patch.object(app_logging.Path, "is_symlink", return_value=False),
             ):
-                with self.assertRaisesRegex(RuntimeError, "failed to allocate log rotation slot"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "failed to allocate log rotation slot"
+                ):
                     app_logging._rotate_active_if_needed(active, force=True)
 
     def test_rotate_active_if_needed_does_not_overwrite_racing_candidate(self) -> None:
@@ -2791,21 +3676,31 @@ class AppLoggingTest(unittest.TestCase):
             racing_candidate = active.with_name(f"{active.stem}.1{active.suffix}")
             real_ensure = app_logging.ensure_directory_without_following_symlinks
 
-            def ensure_and_race(directory: object, *args: object, **kwargs: object) -> int:
+            def ensure_and_race(
+                directory: object, *args: object, **kwargs: object
+            ) -> int:
                 if directory == active.parent and not racing_candidate.exists():
                     racing_candidate.write_text("racing\n", encoding="utf-8")
                 return real_ensure(directory, *args, **kwargs)
 
-            with mock.patch.object(app_logging, "ensure_directory_without_following_symlinks", side_effect=ensure_and_race):
+            with mock.patch.object(
+                app_logging,
+                "ensure_directory_without_following_symlinks",
+                side_effect=ensure_and_race,
+            ):
                 app_logging._rotate_active_if_needed(active, force=True)
 
             self.assertEqual(racing_candidate.read_text(encoding="utf-8"), "racing\n")
             self.assertEqual(
-                active.with_name(f"{active.stem}.2{active.suffix}").read_text(encoding="utf-8"),
+                active.with_name(f"{active.stem}.2{active.suffix}").read_text(
+                    encoding="utf-8"
+                ),
                 "active\n",
             )
 
-    def test_rotate_active_preserves_candidate_when_source_unlink_outcome_is_unknown(self) -> None:
+    def test_rotate_active_preserves_candidate_when_source_unlink_outcome_is_unknown(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             active = Path(tmp) / f"speed-of-cinnamon-{date.today().isoformat()}.log"
             active.write_text("active\n", encoding="utf-8")
@@ -2818,7 +3713,9 @@ class AppLoggingTest(unittest.TestCase):
                     raise OSError("source unlink outcome unknown")
                 real_unlink(name, dir_fd=dir_fd)
 
-            with mock.patch.object(app_logging.os, "unlink", side_effect=unlink_then_fail):
+            with mock.patch.object(
+                app_logging.os, "unlink", side_effect=unlink_then_fail
+            ):
                 with self.assertRaisesRegex(OSError, "source unlink outcome unknown"):
                     app_logging._rotate_active_if_needed(active, force=True)
 
@@ -2850,7 +3747,9 @@ class AppLoggingTest(unittest.TestCase):
                 return result
 
             with mock.patch.object(app_logging.os, "stat", side_effect=stat_with_swap):
-                with self.assertRaisesRegex(RuntimeError, "active log changed during rotation"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "active log changed during rotation"
+                ):
                     app_logging._rotate_active_if_needed(active, force=True)
 
             self.assertEqual(active.read_text(encoding="utf-8"), "must survive\n")
@@ -2866,7 +3765,9 @@ class AppLoggingTest(unittest.TestCase):
             real_stat = app_logging.os.stat
             source_stat_calls = 0
 
-            def stat_with_swap(name: object, *args: object, **kwargs: object) -> os.stat_result:
+            def stat_with_swap(
+                name: object, *args: object, **kwargs: object
+            ) -> os.stat_result:
                 nonlocal source_stat_calls
                 if name == active.name and kwargs.get("dir_fd") is not None:
                     source_stat_calls += 1
@@ -2876,7 +3777,9 @@ class AppLoggingTest(unittest.TestCase):
                 return real_stat(name, *args, **kwargs)
 
             with mock.patch.object(app_logging.os, "stat", side_effect=stat_with_swap):
-                with self.assertRaisesRegex(RuntimeError, "active log changed during rotation"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "active log changed during rotation"
+                ):
                     app_logging._rotate_active_if_needed(active, force=True)
 
             self.assertEqual(source_stat_calls, 2)
@@ -2986,7 +3889,9 @@ class AppLoggingTest(unittest.TestCase):
                 app_logging.maintain_logs(symlink_dir, today=date(2026, 6, 5))
 
             self.assertTrue(old_daily.exists())
-            self.assertFalse((real_dir / "speed-of-cinnamon-2026-06-01.log.gz").exists())
+            self.assertFalse(
+                (real_dir / "speed-of-cinnamon-2026-06-01.log.gz").exists()
+            )
             self.assertTrue(symlink_dir.is_symlink())
 
     def test_maintain_logs_rejects_symlinked_daily_log(self) -> None:
@@ -2997,7 +3902,9 @@ class AppLoggingTest(unittest.TestCase):
             old_daily = log_dir / "speed-of-cinnamon-2026-06-01.log"
             old_daily.symlink_to(real)
 
-            with self.assertRaisesRegex(RuntimeError, "daily log file must not be a symlink"):
+            with self.assertRaisesRegex(
+                RuntimeError, "daily log file must not be a symlink"
+            ):
                 app_logging.maintain_logs(log_dir, today=date(2026, 6, 5))
 
             self.assertTrue(real.exists())
@@ -3053,7 +3960,9 @@ class AppLoggingTest(unittest.TestCase):
             self.assertIn("may-30", content)
             self.assertIn("may-31", content)
 
-    def test_maintain_logs_monthly_merge_deletes_sources_with_dir_fd_and_fsync(self) -> None:
+    def test_maintain_logs_monthly_merge_deletes_sources_with_dir_fd_and_fsync(
+        self,
+    ) -> None:
         fsync_modes: list[int] = []
         real_fsync = os.fsync
 
@@ -3068,8 +3977,12 @@ class AppLoggingTest(unittest.TestCase):
             may_daily.chmod(0o600)
 
             with (
-                mock.patch("speed_of_cinnamon.app_logging.os.unlink", wraps=os.unlink) as mocked_unlink,
-                mock.patch("speed_of_cinnamon.app_logging.os.fsync", side_effect=record_fsync),
+                mock.patch(
+                    "speed_of_cinnamon.app_logging.os.unlink", wraps=os.unlink
+                ) as mocked_unlink,
+                mock.patch(
+                    "speed_of_cinnamon.app_logging.os.fsync", side_effect=record_fsync
+                ),
             ):
                 app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
@@ -3086,7 +3999,9 @@ class AppLoggingTest(unittest.TestCase):
         self.assertIsInstance(unlink_calls[0][1].get("dir_fd"), int)
         self.assertTrue(any(stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
-    def test_maintain_logs_monthly_merge_does_not_duplicate_after_source_cleanup_failure(self) -> None:
+    def test_maintain_logs_monthly_merge_does_not_duplicate_after_source_cleanup_failure(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             first = log_dir / "speed-of-cinnamon-2026-05-30.log"
@@ -3112,7 +4027,9 @@ class AppLoggingTest(unittest.TestCase):
                     raise PermissionError("cleanup denied")
                 real_unlink(name, *args, **kwargs)
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.unlink", side_effect=unlink_once):
+            with mock.patch(
+                "speed_of_cinnamon.app_logging.os.unlink", side_effect=unlink_once
+            ):
                 app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
             archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
@@ -3124,7 +4041,9 @@ class AppLoggingTest(unittest.TestCase):
         self.assertEqual(content.count("first"), 1)
         self.assertEqual(content.count("second"), 1)
 
-    def test_maintain_logs_monthly_merge_does_not_duplicate_after_interrupted_source_cleanup(self) -> None:
+    def test_maintain_logs_monthly_merge_does_not_duplicate_after_interrupted_source_cleanup(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             first = log_dir / "speed-of-cinnamon-2026-05-30.log"
@@ -3170,7 +4089,9 @@ class AppLoggingTest(unittest.TestCase):
             real_unlink = os.unlink
             real_rename = app_logging._rename_without_replacing
 
-            def fail_source_unlink(name: object, *args: object, **kwargs: object) -> None:
+            def fail_source_unlink(
+                name: object, *args: object, **kwargs: object
+            ) -> None:
                 if (
                     isinstance(name, str)
                     and name.startswith(f"{source.name}.")
@@ -3180,14 +4101,22 @@ class AppLoggingTest(unittest.TestCase):
                     raise PermissionError("source unlink failed")
                 real_unlink(name, *args, **kwargs)
 
-            def fail_source_quarantine(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def fail_source_quarantine(
+                src: object, dst: object, *args: object, **kwargs: object
+            ) -> None:
                 if src == source.name and str(dst).endswith(".merged"):
                     raise OSError("source quarantine move failed")
                 real_rename(src, dst, *args, **kwargs)
 
             with (
-                mock.patch.object(app_logging.os, "unlink", side_effect=fail_source_unlink),
-                mock.patch.object(app_logging, "_rename_without_replacing", side_effect=fail_source_quarantine),
+                mock.patch.object(
+                    app_logging.os, "unlink", side_effect=fail_source_unlink
+                ),
+                mock.patch.object(
+                    app_logging,
+                    "_rename_without_replacing",
+                    side_effect=fail_source_quarantine,
+                ),
             ):
                 with self.assertRaisesRegex(PermissionError, "source unlink failed"):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
@@ -3200,7 +4129,9 @@ class AppLoggingTest(unittest.TestCase):
             with gzip.open(archive, "rt", encoding="utf-8") as handle:
                 self.assertEqual(handle.read().count("same"), 1)
 
-    def test_maintain_logs_monthly_merge_rejects_source_swap_before_cleanup(self) -> None:
+    def test_maintain_logs_monthly_merge_rejects_source_swap_before_cleanup(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             may_daily = log_dir / "speed-of-cinnamon-2026-05-30.log"
@@ -3208,20 +4139,29 @@ class AppLoggingTest(unittest.TestCase):
             may_daily.chmod(0o600)
             real_rename = app_logging._rename_without_replacing
 
-            def rename_and_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def rename_and_swap(
+                src: object, dst: object, *args: object, **kwargs: object
+            ) -> None:
                 real_rename(src, dst, *args, **kwargs)
                 may_daily.unlink()
                 may_daily.write_text("attacker\n", encoding="utf-8")
 
-            with mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=rename_and_swap):
-                with self.assertRaisesRegex(RuntimeError, "monthly log source changed before deletion"):
+            with mock.patch(
+                "speed_of_cinnamon.app_logging._rename_without_replacing",
+                side_effect=rename_and_swap,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "monthly log source changed before deletion"
+                ):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
             self.assertTrue((log_dir / "speed-of-cinnamon-2026-05.log.gz").exists())
             self.assertTrue(may_daily.exists())
             self.assertEqual(may_daily.read_text(encoding="utf-8"), "attacker\n")
 
-    def test_maintain_logs_monthly_merge_rejects_source_swap_after_initial_check(self) -> None:
+    def test_maintain_logs_monthly_merge_rejects_source_swap_after_initial_check(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             source = log_dir / "speed-of-cinnamon-2026-05-30.log"
@@ -3232,7 +4172,9 @@ class AppLoggingTest(unittest.TestCase):
             real_assert = app_logging._assert_same_log_file_identity
             source_checks = 0
 
-            def assert_with_swap(path: Path, expected_stat: os.stat_result, *, field_name: str) -> None:
+            def assert_with_swap(
+                path: Path, expected_stat: os.stat_result, *, field_name: str
+            ) -> None:
                 nonlocal source_checks
                 source_checks += 1
                 if source_checks == 2:
@@ -3240,16 +4182,26 @@ class AppLoggingTest(unittest.TestCase):
                     replacement.rename(source)
                 real_assert(path, expected_stat, field_name=field_name)
 
-            with mock.patch.object(app_logging, "_assert_same_log_file_identity", side_effect=assert_with_swap):
-                with self.assertRaisesRegex(RuntimeError, "monthly log source changed before cleanup"):
+            with mock.patch.object(
+                app_logging,
+                "_assert_same_log_file_identity",
+                side_effect=assert_with_swap,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "monthly log source changed before cleanup"
+                ):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
             self.assertEqual(source_checks, 2)
             merged_sources = list(log_dir.glob("*.merged"))
             self.assertEqual(len(merged_sources), 1)
-            self.assertEqual(merged_sources[0].read_text(encoding="utf-8"), "must survive\n")
+            self.assertEqual(
+                merged_sources[0].read_text(encoding="utf-8"), "must survive\n"
+            )
 
-    def test_maintain_logs_monthly_merge_preserves_source_replacement_after_cleanup_check(self) -> None:
+    def test_maintain_logs_monthly_merge_preserves_source_replacement_after_cleanup_check(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             source = log_dir / "speed-of-cinnamon-2026-05-30.log"
@@ -3259,21 +4211,31 @@ class AppLoggingTest(unittest.TestCase):
             replacement.write_text("must survive\n", encoding="utf-8")
             real_rename = app_logging._rename_without_replacing
 
-            def rename_then_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def rename_then_swap(
+                src: object, dst: object, *args: object, **kwargs: object
+            ) -> None:
                 if src == source.name and str(dst).endswith(".cleanup"):
                     source.unlink()
                     replacement.replace(source)
                 real_rename(src, dst, *args, **kwargs)
 
-            with mock.patch.object(app_logging, "_rename_without_replacing", side_effect=rename_then_swap):
-                with self.assertRaisesRegex(RuntimeError, "monthly log source changed before cleanup"):
+            with mock.patch.object(
+                app_logging, "_rename_without_replacing", side_effect=rename_then_swap
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "monthly log source changed before cleanup"
+                ):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
             merged_sources = list(log_dir.glob("*.merged"))
             self.assertEqual(len(merged_sources), 1)
-            self.assertEqual(merged_sources[0].read_text(encoding="utf-8"), "must survive\n")
+            self.assertEqual(
+                merged_sources[0].read_text(encoding="utf-8"), "must survive\n"
+            )
 
-    def test_maintain_logs_merge_retain_existing_archive_on_replace_failure(self) -> None:
+    def test_maintain_logs_merge_retain_existing_archive_on_replace_failure(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
@@ -3292,14 +4254,21 @@ class AppLoggingTest(unittest.TestCase):
 
             real_rename = app_logging._rename_without_replacing
 
-            def fail_activation_rename(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def fail_activation_rename(
+                src: object, dst: object, *args: object, **kwargs: object
+            ) -> None:
                 if str(src).endswith(".tmp"):
                     raise PermissionError("replace failed")
                 real_rename(src, dst, *args, **kwargs)
 
             with (
-                mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=fail_activation_rename),
-                mock.patch("speed_of_cinnamon.app_logging.os.fsync", side_effect=record_fsync),
+                mock.patch(
+                    "speed_of_cinnamon.app_logging._rename_without_replacing",
+                    side_effect=fail_activation_rename,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.app_logging.os.fsync", side_effect=record_fsync
+                ),
             ):
                 with self.assertRaises(PermissionError, msg="replace failure"):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
@@ -3310,7 +4279,9 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(old_daily.exists())
             self.assertTrue(any(stat_module.S_ISDIR(mode) for mode in fsync_modes))
 
-    def test_maintain_logs_preserves_archive_replacement_after_target_check(self) -> None:
+    def test_maintain_logs_preserves_archive_replacement_after_target_check(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
@@ -3324,21 +4295,29 @@ class AppLoggingTest(unittest.TestCase):
             replacement.write_text("must survive\n", encoding="utf-8")
             real_rename = app_logging._rename_without_replacing
 
-            def rename_then_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def rename_then_swap(
+                src: object, dst: object, *args: object, **kwargs: object
+            ) -> None:
                 if src == old_archive.name and str(dst).endswith(".cleanup"):
                     old_archive.unlink()
                     replacement.replace(old_archive)
                 real_rename(src, dst, *args, **kwargs)
 
-            with mock.patch.object(app_logging, "_rename_without_replacing", side_effect=rename_then_swap):
-                with self.assertRaisesRegex(RuntimeError, "monthly log archive changed before deletion"):
+            with mock.patch.object(
+                app_logging, "_rename_without_replacing", side_effect=rename_then_swap
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "monthly log archive changed before deletion"
+                ):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
             self.assertEqual(old_archive.read_text(encoding="utf-8"), "must survive\n")
             self.assertTrue(old_daily.exists())
             self.assertEqual(list(log_dir.glob("*.backup")), [])
 
-    def test_maintain_logs_restores_archive_after_activation_fsync_failure(self) -> None:
+    def test_maintain_logs_restores_archive_after_activation_fsync_failure(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
@@ -3359,7 +4338,9 @@ class AppLoggingTest(unittest.TestCase):
                         raise OSError("activation fsync failed")
                 real_fsync(fd)
 
-            with mock.patch.object(app_logging.os, "fsync", side_effect=fail_activation_fsync):
+            with mock.patch.object(
+                app_logging.os, "fsync", side_effect=fail_activation_fsync
+            ):
                 with self.assertRaisesRegex(OSError, "activation fsync failed"):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
@@ -3370,7 +4351,9 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(old_daily.exists())
             self.assertFalse(list(log_dir.glob("*.backup")))
 
-    def test_maintain_logs_does_not_restore_replaced_backup_during_rollback(self) -> None:
+    def test_maintain_logs_does_not_restore_replaced_backup_during_rollback(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
@@ -3398,7 +4381,9 @@ class AppLoggingTest(unittest.TestCase):
                         raise OSError("backup fsync failed")
                 real_fsync(fd)
 
-            with mock.patch.object(app_logging.os, "fsync", side_effect=fail_backup_fsync):
+            with mock.patch.object(
+                app_logging.os, "fsync", side_effect=fail_backup_fsync
+            ):
                 with self.assertRaisesRegex(OSError, "backup fsync failed"):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
@@ -3422,7 +4407,11 @@ class AppLoggingTest(unittest.TestCase):
             replacement.write_text("must survive\n", encoding="utf-8")
             real_fsync = app_logging.os.fsync
             real_stat = app_logging.os.stat
-            state = {"directory_syncs": 0, "activation_failed": False, "rollback_stat_calls": 0}
+            state = {
+                "directory_syncs": 0,
+                "activation_failed": False,
+                "rollback_stat_calls": 0,
+            }
 
             def fail_activation_fsync(fd: int) -> None:
                 if stat_module.S_ISDIR(os.fstat(fd).st_mode):
@@ -3432,9 +4421,15 @@ class AppLoggingTest(unittest.TestCase):
                         raise OSError("activation fsync failed")
                 real_fsync(fd)
 
-            def stat_with_swap(name: object, *args: object, **kwargs: object) -> os.stat_result:
+            def stat_with_swap(
+                name: object, *args: object, **kwargs: object
+            ) -> os.stat_result:
                 result = real_stat(name, *args, **kwargs)
-                if state["activation_failed"] and name == old_archive.name and kwargs.get("dir_fd") is not None:
+                if (
+                    state["activation_failed"]
+                    and name == old_archive.name
+                    and kwargs.get("dir_fd") is not None
+                ):
                     state["rollback_stat_calls"] += 1
                     if state["rollback_stat_calls"] == 1:
                         old_archive.unlink()
@@ -3442,10 +4437,14 @@ class AppLoggingTest(unittest.TestCase):
                 return result
 
             with (
-                mock.patch.object(app_logging.os, "fsync", side_effect=fail_activation_fsync),
+                mock.patch.object(
+                    app_logging.os, "fsync", side_effect=fail_activation_fsync
+                ),
                 mock.patch.object(app_logging.os, "stat", side_effect=stat_with_swap),
             ):
-                with self.assertRaisesRegex(OSError, "activation fsync failed") as caught:
+                with self.assertRaisesRegex(
+                    OSError, "activation fsync failed"
+                ) as caught:
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
             self.assertNotIn(
@@ -3456,7 +4455,9 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(state["rollback_stat_calls"], 2)
             self.assertEqual(old_archive.read_text(encoding="utf-8"), "must survive\n")
 
-    def test_maintain_logs_restores_archive_when_backup_unlink_is_interrupted(self) -> None:
+    def test_maintain_logs_restores_archive_when_backup_unlink_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
@@ -3469,15 +4470,23 @@ class AppLoggingTest(unittest.TestCase):
             real_unlink = os.unlink
             interrupted = False
 
-            def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
+            def unlink_then_interrupt(
+                name: object, *args: object, **kwargs: object
+            ) -> None:
                 nonlocal interrupted
-                if isinstance(name, str) and name.endswith(".cleanup") and not interrupted:
+                if (
+                    isinstance(name, str)
+                    and name.endswith(".cleanup")
+                    and not interrupted
+                ):
                     interrupted = True
                     real_unlink(name, *args, **kwargs)
                     raise KeyboardInterrupt
                 real_unlink(name, *args, **kwargs)
 
-            with mock.patch.object(app_logging.os, "unlink", side_effect=unlink_then_interrupt):
+            with mock.patch.object(
+                app_logging.os, "unlink", side_effect=unlink_then_interrupt
+            ):
                 with self.assertRaises(KeyboardInterrupt):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
@@ -3513,8 +4522,14 @@ class AppLoggingTest(unittest.TestCase):
                     swapped = True
                 return real_assert(path, field_name=field_name)
 
-            with mock.patch.object(app_logging, "_assert_regular_unlinked_file", side_effect=assert_with_swap):
-                with self.assertRaisesRegex(RuntimeError, "monthly log archive backup changed before deletion"):
+            with mock.patch.object(
+                app_logging,
+                "_assert_regular_unlinked_file",
+                side_effect=assert_with_swap,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "monthly log archive backup changed before deletion"
+                ):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
             self.assertTrue(swapped)
@@ -3522,7 +4537,9 @@ class AppLoggingTest(unittest.TestCase):
             self.assertEqual(len(backups), 1)
             self.assertEqual(backups[0].read_text(encoding="utf-8"), "must survive\n")
 
-    def test_maintain_logs_monthly_merge_does_not_overwrite_existing_backup_candidate(self) -> None:
+    def test_maintain_logs_monthly_merge_does_not_overwrite_existing_backup_candidate(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             old_archive = log_dir / "speed-of-cinnamon-2026-05.log.gz"
@@ -3532,22 +4549,37 @@ class AppLoggingTest(unittest.TestCase):
             with gzip.open(old_archive, "wt", encoding="utf-8") as handle:
                 handle.write("legacy\n")
             old_archive.chmod(0o600)
-            racing_candidate = log_dir / ".speed-of-cinnamon-2026-05.log.gz.fixed.backup"
+            racing_candidate = (
+                log_dir / ".speed-of-cinnamon-2026-05.log.gz.fixed.backup"
+            )
             racing_candidate.write_text("racing backup\n", encoding="utf-8")
 
             with mock.patch.object(
                 app_logging.secrets,
                 "token_hex",
-                side_effect=["temp", "fixed", "free", "target-cleanup", "source-cleanup", "cleanup"],
+                side_effect=[
+                    "temp",
+                    "fixed",
+                    "free",
+                    "target-cleanup",
+                    "source-cleanup",
+                    "cleanup",
+                ],
             ):
                 app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
-            self.assertEqual(racing_candidate.read_text(encoding="utf-8"), "racing backup\n")
-            self.assertFalse((log_dir / ".speed-of-cinnamon-2026-05.log.gz.free.backup").exists())
+            self.assertEqual(
+                racing_candidate.read_text(encoding="utf-8"), "racing backup\n"
+            )
+            self.assertFalse(
+                (log_dir / ".speed-of-cinnamon-2026-05.log.gz.free.backup").exists()
+            )
             self.assertTrue(old_archive.exists())
             self.assertFalse(old_daily.exists())
 
-    def test_maintain_logs_rolls_back_monthly_archive_after_activation_fsync_failure(self) -> None:
+    def test_maintain_logs_rolls_back_monthly_archive_after_activation_fsync_failure(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             first = log_dir / "speed-of-cinnamon-2026-05-30.log"
@@ -3566,7 +4598,10 @@ class AppLoggingTest(unittest.TestCase):
                     raise OSError("archive activation fsync failed")
                 real_fsync(fd)
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.fsync", side_effect=fail_first_directory_fsync):
+            with mock.patch(
+                "speed_of_cinnamon.app_logging.os.fsync",
+                side_effect=fail_first_directory_fsync,
+            ):
                 with self.assertRaisesRegex(OSError, "archive activation fsync failed"):
                     app_logging.maintain_logs(log_dir, today=date(2026, 6, 1))
 
@@ -3609,7 +4644,10 @@ class AppLoggingTest(unittest.TestCase):
             source.write_text("content\n", encoding="utf-8")
             source.chmod(0o600)
 
-            with mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=PermissionError("replace failed")):
+            with mock.patch(
+                "speed_of_cinnamon.app_logging._rename_without_replacing",
+                side_effect=PermissionError("replace failed"),
+            ):
                 with self.assertRaises(PermissionError, msg="replace failure"):
                     app_logging._gzip_file(source, target)
 
@@ -3618,7 +4656,9 @@ class AppLoggingTest(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertEqual(len(list(log_dir.glob("*.tmp"))), 1)
 
-    def test_gzip_file_rolls_back_existing_target_after_activation_fsync_failure(self) -> None:
+    def test_gzip_file_rolls_back_existing_target_after_activation_fsync_failure(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             source = log_dir / "source.log"
@@ -3639,7 +4679,10 @@ class AppLoggingTest(unittest.TestCase):
                         raise OSError("target activation fsync failed")
                 real_fsync(fd)
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.fsync", side_effect=fail_activation_sync):
+            with mock.patch(
+                "speed_of_cinnamon.app_logging.os.fsync",
+                side_effect=fail_activation_sync,
+            ):
                 with self.assertRaisesRegex(OSError, "target activation fsync failed"):
                     app_logging._gzip_file(source, target)
 
@@ -3670,7 +4713,9 @@ class AppLoggingTest(unittest.TestCase):
                         raise OSError("post-backup sync failed")
                 real_fsync(fd)
 
-            with mock.patch.object(app_logging.os, "fsync", side_effect=fail_post_backup_sync):
+            with mock.patch.object(
+                app_logging.os, "fsync", side_effect=fail_post_backup_sync
+            ):
                 with self.assertRaisesRegex(OSError, "post-backup sync failed"):
                     app_logging._gzip_file(source, target)
 
@@ -3692,15 +4737,23 @@ class AppLoggingTest(unittest.TestCase):
             real_unlink = os.unlink
             interrupted = False
 
-            def unlink_then_interrupt(name: object, *args: object, **kwargs: object) -> None:
+            def unlink_then_interrupt(
+                name: object, *args: object, **kwargs: object
+            ) -> None:
                 nonlocal interrupted
-                if isinstance(name, str) and name.endswith(".cleanup") and not interrupted:
+                if (
+                    isinstance(name, str)
+                    and name.endswith(".cleanup")
+                    and not interrupted
+                ):
                     interrupted = True
                     real_unlink(name, *args, **kwargs)
                     raise KeyboardInterrupt
                 real_unlink(name, *args, **kwargs)
 
-            with mock.patch.object(app_logging.os, "unlink", side_effect=unlink_then_interrupt):
+            with mock.patch.object(
+                app_logging.os, "unlink", side_effect=unlink_then_interrupt
+            ):
                 with self.assertRaises(KeyboardInterrupt):
                     app_logging._gzip_file(source, target)
 
@@ -3724,14 +4777,20 @@ class AppLoggingTest(unittest.TestCase):
             replacement.write_text("must survive\n", encoding="utf-8")
             real_rename = app_logging._rename_without_replacing
 
-            def rename_then_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def rename_then_swap(
+                src: object, dst: object, *args: object, **kwargs: object
+            ) -> None:
                 if src == target.name and str(dst).endswith(".cleanup"):
                     target.unlink()
                     replacement.replace(target)
                 real_rename(src, dst, *args, **kwargs)
 
-            with mock.patch.object(app_logging, "_rename_without_replacing", side_effect=rename_then_swap):
-                with self.assertRaisesRegex(RuntimeError, "log target changed before deletion"):
+            with mock.patch.object(
+                app_logging, "_rename_without_replacing", side_effect=rename_then_swap
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log target changed before deletion"
+                ):
                     app_logging._gzip_file(source, target)
 
             self.assertEqual(target.read_text(encoding="utf-8"), "must survive\n")
@@ -3748,7 +4807,9 @@ class AppLoggingTest(unittest.TestCase):
             target.chmod(0o600)
             real_link = os.link
 
-            def link_then_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def link_then_swap(
+                src: object, dst: object, *args: object, **kwargs: object
+            ) -> None:
                 real_link(src, dst, *args, **kwargs)
                 if src == target.name:
                     target.unlink()
@@ -3756,8 +4817,12 @@ class AppLoggingTest(unittest.TestCase):
                         handle.write("replacement content\n")
                     target.chmod(0o600)
 
-            with mock.patch("speed_of_cinnamon.app_logging.os.link", side_effect=link_then_swap):
-                with self.assertRaisesRegex(RuntimeError, "log target changed during backup activation"):
+            with mock.patch(
+                "speed_of_cinnamon.app_logging.os.link", side_effect=link_then_swap
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log target changed during backup activation"
+                ):
                     app_logging._gzip_file(source, target)
 
             self.assertTrue(source.exists())
@@ -3779,7 +4844,9 @@ class AppLoggingTest(unittest.TestCase):
             backup_stat_calls = 0
             replacement_backup: Path | None = None
 
-            def stat_then_swap(name: object, *args: object, **kwargs: object) -> os.stat_result:
+            def stat_then_swap(
+                name: object, *args: object, **kwargs: object
+            ) -> os.stat_result:
                 nonlocal backup_stat_calls, replacement_backup
                 result = real_stat(name, *args, **kwargs)
                 if isinstance(name, str) and name.endswith(".backup"):
@@ -3795,14 +4862,18 @@ class AppLoggingTest(unittest.TestCase):
                 return result
 
             with mock.patch.object(app_logging.os, "stat", side_effect=stat_then_swap):
-                with self.assertRaisesRegex(RuntimeError, "log target backup changed before cleanup"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log target backup changed before cleanup"
+                ):
                     app_logging._gzip_file(source, target)
 
             self.assertEqual(backup_stat_calls, 3)
             self.assertIsNotNone(replacement_backup)
             self.assertEqual(replacement_backup.read_bytes(), b"replacement backup")
 
-    def test_gzip_file_preserves_target_backup_changed_after_cleanup_check(self) -> None:
+    def test_gzip_file_preserves_target_backup_changed_after_cleanup_check(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             source = log_dir / "source.log"
@@ -3833,8 +4904,12 @@ class AppLoggingTest(unittest.TestCase):
                         replacement.replace(backup_path)
                 return result
 
-            with mock.patch.object(app_logging.os, "stat", side_effect=stat_then_swap_after_cleanup_check):
-                with self.assertRaisesRegex(RuntimeError, "log target backup changed before cleanup"):
+            with mock.patch.object(
+                app_logging.os, "stat", side_effect=stat_then_swap_after_cleanup_check
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log target backup changed before cleanup"
+                ):
                     app_logging._gzip_file(source, target)
 
             self.assertEqual(source.read_text(encoding="utf-8"), "new content\n")
@@ -3857,13 +4932,17 @@ class AppLoggingTest(unittest.TestCase):
             racing = log_dir / "racing.log.gz"
             real_rename = app_logging._rename_without_replacing
 
-            def rename_then_race(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def rename_then_race(
+                src: object, dst: object, *args: object, **kwargs: object
+            ) -> None:
                 if str(src).endswith(".tmp") and dst == target.name:
                     racing.write_text("racing target\n", encoding="utf-8")
                     racing.replace(target)
                 real_rename(src, dst, *args, **kwargs)
 
-            with mock.patch.object(app_logging, "_rename_without_replacing", side_effect=rename_then_race):
+            with mock.patch.object(
+                app_logging, "_rename_without_replacing", side_effect=rename_then_race
+            ):
                 with self.assertRaises(OSError):
                     app_logging._gzip_file(source, target)
 
@@ -3884,12 +4963,17 @@ class AppLoggingTest(unittest.TestCase):
 
             real_rename = app_logging._rename_without_replacing
 
-            def fail_activation_rename(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def fail_activation_rename(
+                src: object, dst: object, *args: object, **kwargs: object
+            ) -> None:
                 if str(src).endswith(".tmp"):
                     raise PermissionError("replace failed")
                 real_rename(src, dst, *args, **kwargs)
 
-            with mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=fail_activation_rename):
+            with mock.patch(
+                "speed_of_cinnamon.app_logging._rename_without_replacing",
+                side_effect=fail_activation_rename,
+            ):
                 with self.assertRaisesRegex(PermissionError, "replace failed"):
                     app_logging._gzip_file(source, target)
 
@@ -3910,12 +4994,20 @@ class AppLoggingTest(unittest.TestCase):
             target.chmod(0o600)
             real_unlink = app_logging.os.unlink
 
-            def fail_backup_unlink(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and ".backup." in name and name.endswith(".cleanup"):
+            def fail_backup_unlink(
+                name: object, *args: object, **kwargs: object
+            ) -> None:
+                if (
+                    isinstance(name, str)
+                    and ".backup." in name
+                    and name.endswith(".cleanup")
+                ):
                     raise PermissionError("backup cleanup failed")
                 real_unlink(name, *args, **kwargs)
 
-            with mock.patch.object(app_logging.os, "unlink", side_effect=fail_backup_unlink):
+            with mock.patch.object(
+                app_logging.os, "unlink", side_effect=fail_backup_unlink
+            ):
                 with self.assertRaisesRegex(PermissionError, "backup cleanup failed"):
                     app_logging._gzip_file(source, target)
 
@@ -3938,7 +5030,11 @@ class AppLoggingTest(unittest.TestCase):
             replacement.write_text("must survive\n", encoding="utf-8")
             real_fsync = app_logging.os.fsync
             real_stat = app_logging.os.stat
-            state = {"directory_syncs": 0, "activation_failed": False, "rollback_stat_calls": 0}
+            state = {
+                "directory_syncs": 0,
+                "activation_failed": False,
+                "rollback_stat_calls": 0,
+            }
 
             def fail_activation_fsync(fd: int) -> None:
                 if stat_module.S_ISDIR(os.fstat(fd).st_mode):
@@ -3948,9 +5044,15 @@ class AppLoggingTest(unittest.TestCase):
                         raise OSError("target activation fsync failed")
                 real_fsync(fd)
 
-            def stat_with_swap(name: object, *args: object, **kwargs: object) -> os.stat_result:
+            def stat_with_swap(
+                name: object, *args: object, **kwargs: object
+            ) -> os.stat_result:
                 result = real_stat(name, *args, **kwargs)
-                if state["activation_failed"] and name == target.name and kwargs.get("dir_fd") is not None:
+                if (
+                    state["activation_failed"]
+                    and name == target.name
+                    and kwargs.get("dir_fd") is not None
+                ):
                     state["rollback_stat_calls"] += 1
                     if state["rollback_stat_calls"] == 1:
                         target.unlink()
@@ -3958,17 +5060,26 @@ class AppLoggingTest(unittest.TestCase):
                 return result
 
             with (
-                mock.patch.object(app_logging.os, "fsync", side_effect=fail_activation_fsync),
+                mock.patch.object(
+                    app_logging.os, "fsync", side_effect=fail_activation_fsync
+                ),
                 mock.patch.object(app_logging.os, "stat", side_effect=stat_with_swap),
             ):
-                with self.assertRaisesRegex(OSError, "target activation fsync failed") as caught:
+                with self.assertRaisesRegex(
+                    OSError, "target activation fsync failed"
+                ) as caught:
                     app_logging._gzip_file(source, target)
 
-            self.assertNotIn("log target changed during activation rollback", "\n".join(caught.exception.__notes__))
+            self.assertNotIn(
+                "log target changed during activation rollback",
+                "\n".join(caught.exception.__notes__),
+            )
             self.assertEqual(state["rollback_stat_calls"], 2)
             self.assertEqual(target.read_text(encoding="utf-8"), "must survive\n")
 
-    def test_gzip_file_keeps_new_target_when_backup_unlink_outcome_is_unknown(self) -> None:
+    def test_gzip_file_keeps_new_target_when_backup_unlink_outcome_is_unknown(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             source = log_dir / "source.log"
@@ -3981,13 +5092,21 @@ class AppLoggingTest(unittest.TestCase):
             real_unlink = app_logging.os.unlink
 
             def unlink_then_fail(name: object, *args: object, **kwargs: object) -> None:
-                if isinstance(name, str) and ".backup." in name and name.endswith(".cleanup"):
+                if (
+                    isinstance(name, str)
+                    and ".backup." in name
+                    and name.endswith(".cleanup")
+                ):
                     real_unlink(name, *args, **kwargs)
                     raise OSError("backup unlink outcome unknown")
                 real_unlink(name, *args, **kwargs)
 
-            with mock.patch.object(app_logging.os, "unlink", side_effect=unlink_then_fail):
-                with self.assertRaisesRegex(OSError, "backup unlink outcome unknown") as caught:
+            with mock.patch.object(
+                app_logging.os, "unlink", side_effect=unlink_then_fail
+            ):
+                with self.assertRaisesRegex(
+                    OSError, "backup unlink outcome unknown"
+                ) as caught:
                     app_logging._gzip_file(source, target)
 
             self.assertTrue(caught.exception.__notes__)
@@ -4005,10 +5124,18 @@ class AppLoggingTest(unittest.TestCase):
             source.chmod(0o600)
 
             with (
-                mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=PermissionError("replace failed")),
-                mock.patch("speed_of_cinnamon.app_logging.os.unlink", side_effect=PermissionError("cleanup denied")),
+                mock.patch(
+                    "speed_of_cinnamon.app_logging._rename_without_replacing",
+                    side_effect=PermissionError("replace failed"),
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.app_logging.os.unlink",
+                    side_effect=PermissionError("cleanup denied"),
+                ),
             ):
-                with self.assertRaisesRegex(PermissionError, "replace failed") as caught:
+                with self.assertRaisesRegex(
+                    PermissionError, "replace failed"
+                ) as caught:
                     app_logging._gzip_file(source, target)
 
             self.assertTrue(source.exists())
@@ -4016,14 +5143,18 @@ class AppLoggingTest(unittest.TestCase):
             self.assertTrue(list(log_dir.glob("*.tmp")))
             self.assertIn("log cleanup failed", "\n".join(caught.exception.__notes__))
 
-    def test_gzip_file_removes_temp_archive_when_source_open_is_interrupted(self) -> None:
+    def test_gzip_file_removes_temp_archive_when_source_open_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             source = log_dir / "source.log"
             target = log_dir / "target.log.gz"
             source.write_text("content\n", encoding="utf-8")
             source.chmod(0o600)
-            with mock.patch.object(app_logging, "_open_log_source_file", side_effect=KeyboardInterrupt):
+            with mock.patch.object(
+                app_logging, "_open_log_source_file", side_effect=KeyboardInterrupt
+            ):
                 with self.assertRaises(KeyboardInterrupt):
                     app_logging._gzip_file(source, target)
 
@@ -4038,7 +5169,9 @@ class AppLoggingTest(unittest.TestCase):
             source.chmod(0o600)
 
             with mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 16):
-                with self.assertRaisesRegex(RuntimeError, "log source content is too large"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log source content is too large"
+                ):
                     app_logging._gzip_file(source, target)
 
             self.assertTrue(source.exists())
@@ -4054,13 +5187,20 @@ class AppLoggingTest(unittest.TestCase):
             source.chmod(0o600)
             real_rename = app_logging._rename_without_replacing
 
-            def rename_and_swap(src: object, dst: object, *args: object, **kwargs: object) -> None:
+            def rename_and_swap(
+                src: object, dst: object, *args: object, **kwargs: object
+            ) -> None:
                 real_rename(src, dst, *args, **kwargs)
                 source.unlink()
                 source.write_text("attacker\n", encoding="utf-8")
 
-            with mock.patch("speed_of_cinnamon.app_logging._rename_without_replacing", side_effect=rename_and_swap):
-                with self.assertRaisesRegex(RuntimeError, "log source file changed before deletion"):
+            with mock.patch(
+                "speed_of_cinnamon.app_logging._rename_without_replacing",
+                side_effect=rename_and_swap,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log source file changed before deletion"
+                ):
                     app_logging._gzip_file(source, target)
 
             self.assertTrue(target.exists())
@@ -4077,8 +5217,12 @@ class AppLoggingTest(unittest.TestCase):
             source.chmod(0o600)
 
             with (
-                mock.patch("speed_of_cinnamon.app_logging.os.fsync", wraps=os.fsync) as mocked_fsync,
-                mock.patch("speed_of_cinnamon.app_logging.os.unlink", wraps=os.unlink) as mocked_unlink,
+                mock.patch(
+                    "speed_of_cinnamon.app_logging.os.fsync", wraps=os.fsync
+                ) as mocked_fsync,
+                mock.patch(
+                    "speed_of_cinnamon.app_logging.os.unlink", wraps=os.unlink
+                ) as mocked_unlink,
             ):
                 app_logging._gzip_file(source, target)
 
@@ -4088,7 +5232,9 @@ class AppLoggingTest(unittest.TestCase):
             unlink_calls = [
                 (args, kwargs)
                 for args, kwargs in mocked_unlink.call_args_list
-                if args and args[0].startswith(f"{source.name}.") and args[0].endswith(".cleanup")
+                if args
+                and args[0].startswith(f"{source.name}.")
+                and args[0].endswith(".cleanup")
             ]
             self.assertEqual(len(unlink_calls), 1)
             self.assertIsInstance(unlink_calls[0][1].get("dir_fd"), int)
@@ -4139,7 +5285,9 @@ class AppLoggingTest(unittest.TestCase):
                 mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 16),
                 gzip.open(target, "wb") as output,
             ):
-                with self.assertRaisesRegex(RuntimeError, "log source content is too large"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log source content is too large"
+                ):
                     app_logging._copy_log_content(path, output)
 
     def test_maintain_logs_deletes_oldest_files_over_total_limit(self) -> None:
@@ -4156,7 +5304,9 @@ class AppLoggingTest(unittest.TestCase):
             active.chmod(0o600)
 
             with mock.patch("speed_of_cinnamon.app_logging.MAX_TOTAL_LOG_BYTES", 55):
-                with mock.patch("speed_of_cinnamon.app_logging.os.unlink", wraps=os.unlink) as mocked_unlink:
+                with mock.patch(
+                    "speed_of_cinnamon.app_logging.os.unlink", wraps=os.unlink
+                ) as mocked_unlink:
                     app_logging.maintain_logs(log_dir, today=date.today())
 
             self.assertFalse(oldest.exists())
@@ -4164,7 +5314,9 @@ class AppLoggingTest(unittest.TestCase):
             unlink_calls = [
                 (args, kwargs)
                 for args, kwargs in mocked_unlink.call_args_list
-                if args and args[0].startswith(f"{oldest.name}.") and args[0].endswith(".cleanup")
+                if args
+                and args[0].startswith(f"{oldest.name}.")
+                and args[0].endswith(".cleanup")
             ]
             self.assertEqual(len(unlink_calls), 1)
             self.assertIsInstance(unlink_calls[0][1].get("dir_fd"), int)
@@ -4196,7 +5348,9 @@ class AppLoggingTest(unittest.TestCase):
                     side_effect=assert_with_swap,
                 ),
             ):
-                with self.assertRaisesRegex(RuntimeError, "log file changed before deletion"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log file changed before deletion"
+                ):
                     app_logging._enforce_total_size_limit(log_dir)
 
             self.assertTrue(oldest.exists())
@@ -4211,8 +5365,14 @@ class AppLoggingTest(unittest.TestCase):
             matching.write_text("log\n", encoding="utf-8")
             unrelated.write_text("ignore\n", encoding="utf-8")
 
-            with mock.patch.object(app_logging.Path, "glob", side_effect=AssertionError("glob must not run")):
-                paths = app_logging._bounded_log_paths(log_dir, "speed-of-cinnamon-*.log")
+            with mock.patch.object(
+                app_logging.Path,
+                "glob",
+                side_effect=AssertionError("glob must not run"),
+            ):
+                paths = app_logging._bounded_log_paths(
+                    log_dir, "speed-of-cinnamon-*.log"
+                )
 
             self.assertEqual(paths, (matching,))
 
@@ -4220,10 +5380,14 @@ class AppLoggingTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             log_dir = Path(tmp)
             for index in range(2):
-                (log_dir / f"speed-of-cinnamon-2026-06-0{index + 1}.log").write_text("log\n", encoding="utf-8")
+                (log_dir / f"speed-of-cinnamon-2026-06-0{index + 1}.log").write_text(
+                    "log\n", encoding="utf-8"
+                )
 
             with mock.patch.object(app_logging, "MAX_LOG_MAINTENANCE_SCAN_ENTRIES", 1):
-                with self.assertRaisesRegex(RuntimeError, "log directory exceeds scan budget"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log directory exceeds scan budget"
+                ):
                     app_logging._bounded_log_paths(log_dir, "speed-of-cinnamon-*.log")
 
 

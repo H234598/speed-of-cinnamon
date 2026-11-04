@@ -33,8 +33,10 @@ class VerifyRpmStaticTest(unittest.TestCase):
         self.assertIn("readonly MAX_RPM_LISTING_BYTES=$((16 * 1024 * 1024))", source)
         self.assertIn("payload = handle.read(MAX_RPM_LISTING_BYTES + 1)", source)
         self.assertIn('read_bounded_utf8(file_list, "RPM file listing")', source)
-        self.assertIn('read_bounded_utf8(Path(sys.argv[2]), "RPM file metadata")', source)
-        self.assertNotIn("file_list.read_text(encoding=\"utf-8\")", source)
+        self.assertIn(
+            'read_bounded_utf8(Path(sys.argv[2]), "RPM file metadata")', source
+        )
+        self.assertNotIn('file_list.read_text(encoding="utf-8")', source)
 
     def test_archive_tools_are_time_bounded(self) -> None:
         source = VERIFY_RPM.read_text(encoding="utf-8")
@@ -42,12 +44,15 @@ class VerifyRpmStaticTest(unittest.TestCase):
         self.assertIn("readonly RPM_VERIFY_TIMEOUT_SECONDS=120", source)
         self.assertIn("timeout; do", source)
         self.assertIn("run_rpm_bounded()", source)
-        self.assertIn('timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" rpm "$@"', source)
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" rpm "$@"',
+            source,
+        )
         self.assertIn("run_rpm2cpio_bounded", source)
         self.assertIn("run_cpio_bounded", source)
         self.assertIn("set -o pipefail", source)
-        self.assertIn("find \"${tmp_dir}\" -type l -print -quit", source)
-        self.assertIn("find \"${tmp_dir}\" -type f -links +1 -print -quit", source)
+        self.assertIn('find "${tmp_dir}" -type l -print -quit', source)
+        self.assertIn('find "${tmp_dir}" -type f -links +1 -print -quit', source)
         self.assertIn("-print -quit)", source)
         self.assertIn("python3 -m compileall", source)
 

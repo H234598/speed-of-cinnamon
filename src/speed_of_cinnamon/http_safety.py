@@ -13,23 +13,31 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from multiprocessing.connection import Connection
+    from multiprocessing.process import BaseProcess
 
 MAX_LOOPBACK_HOSTNAME_CHARS = 255
 
 MAX_PINNED_CONNECTION_TIMEOUT_SECONDS = 180.0
 
+
 def has_unsafe_url_characters(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         return True
     return any(
-        char.isspace() or ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F
+        char.isspace()
+        or ord(char) < 0x20
+        or ord(char) == 0x7F
+        or 0x80 <= ord(char) <= 0x9F
         for char in value
     )
+
 
 def is_loopback_hostname(hostname: str | None) -> bool:
     if hostname is None or isinstance(hostname, bool) or not isinstance(hostname, str):
         return False
-    if len(hostname) > MAX_LOOPBACK_HOSTNAME_CHARS or has_unsafe_url_characters(hostname):
+    if len(hostname) > MAX_LOOPBACK_HOSTNAME_CHARS or has_unsafe_url_characters(
+        hostname
+    ):
         return False
     normalized = hostname.lower()
     bracketed = normalized.startswith("[") or normalized.endswith("]")
@@ -50,6 +58,7 @@ def is_loopback_hostname(hostname: str | None) -> bool:
     if bracketed and not isinstance(address, ipaddress.IPv6Address):
         return False
     return address.is_loopback
+
 
 def _connect_to_pinned_addresses(
     connection: http.client.HTTPConnection,
@@ -108,8 +117,11 @@ def _connect_to_pinned_addresses(
         raise last_error
     raise OSError("no pinned addresses available")
 
+
 class _PinnedHTTPConnection(http.client.HTTPConnection):
-    def __init__(self, host: str, *, pinned_addresses: tuple[str, ...], **kwargs: object) -> None:
+    def __init__(
+        self, host: str, *, pinned_addresses: tuple[str, ...], **kwargs: object
+    ) -> None:
         self._pinned_addresses = pinned_addresses
         super().__init__(host, **kwargs)
 
@@ -129,8 +141,11 @@ class _PinnedHTTPConnection(http.client.HTTPConnection):
             prepare_socket=prepare_socket,
         )
 
+
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
-    def __init__(self, host: str, *, pinned_addresses: tuple[str, ...], **kwargs: object) -> None:
+    def __init__(
+        self, host: str, *, pinned_addresses: tuple[str, ...], **kwargs: object
+    ) -> None:
         self._pinned_addresses = pinned_addresses
         super().__init__(host, **kwargs)
 
@@ -148,6 +163,7 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             prepare_socket=prepare_socket,
         )
 
+
 DNS_RESOLUTION_TIMEOUT_SECONDS = 5.0
 MAX_DNS_RESOLUTION_TIMEOUT_SECONDS = DNS_RESOLUTION_TIMEOUT_SECONDS
 _DNS_RESOLUTION_MAX_IN_FLIGHT = 4
@@ -160,10 +176,7 @@ def _dns_resolution_context():
     if _DNS_RESOLUTION_CONTEXT is None:
         import multiprocessing
 
-        try:
-            _DNS_RESOLUTION_CONTEXT = multiprocessing.get_context("fork")
-        except ValueError:
-            _DNS_RESOLUTION_CONTEXT = multiprocessing.get_context()
+        _DNS_RESOLUTION_CONTEXT = multiprocessing.get_context("spawn")
     return _DNS_RESOLUTION_CONTEXT
 
 
@@ -171,7 +184,9 @@ class UnsafeUrlError(ValueError):
     pass
 
 
-def _resolve_dns_in_process(hostname: str, port: int, result_connection: Connection) -> None:
+def _resolve_dns_in_process(
+    hostname: str, port: int, result_connection: Connection
+) -> None:
     try:
         result = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
     except BaseException as exc:
@@ -188,8 +203,30 @@ def _resolve_dns_in_process(hostname: str, port: int, result_connection: Connect
         result_connection.close()
 
 
-def _getaddrinfo_with_timeout(hostname: str, port: int, *, timeout_seconds: float) -> list[tuple[object, ...]]:
-    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+def _stop_dns_worker(worker: BaseProcess) -> None:
+    if not worker.is_alive():
+        return
+    try:
+        worker.terminate()
+    finally:
+        try:
+            worker.join(0.5)
+        finally:
+            if worker.is_alive():
+                try:
+                    worker.kill()
+                finally:
+                    worker.join(0.5)
+    if worker.is_alive():
+        raise TimeoutError("DNS resolver process could not be stopped")
+
+
+def _getaddrinfo_with_timeout(
+    hostname: str, port: int, *, timeout_seconds: float
+) -> list[tuple[object, ...]]:
+    if isinstance(timeout_seconds, bool) or not isinstance(
+        timeout_seconds, (int, float)
+    ):
         raise TimeoutError("DNS resolution deadline expired")
     try:
         finite_timeout = math.isfinite(timeout_seconds)
@@ -201,26 +238,22 @@ def _getaddrinfo_with_timeout(hostname: str, port: int, *, timeout_seconds: floa
         raise TimeoutError("DNS resolution timeout exceeds safe limit")
     if not _DNS_RESOLUTION_SLOTS.acquire(timeout=timeout_seconds):
         raise TimeoutError("DNS resolver is busy")
-    context = _dns_resolution_context()
-    result_connection, child_connection = context.Pipe(duplex=False)
-    worker = context.Process(
-        target=_resolve_dns_in_process,
-        args=(hostname, port, child_connection),
-        name="speed-of-cinnamon-dns",
-    )
-    worker.daemon = True
+    result_connection = child_connection = worker = None
+    release_slot = True
     try:
+        context = _dns_resolution_context()
+        result_connection, child_connection = context.Pipe(duplex=False)
+        worker = context.Process(
+            target=_resolve_dns_in_process,
+            args=(hostname, port, child_connection),
+            name="speed-of-cinnamon-dns",
+        )
+        worker.daemon = True
         worker.start()
         child_connection.close()
+        child_connection = None
         worker.join(timeout_seconds)
         if worker.is_alive():
-            worker.terminate()
-            worker.join(0.5)
-            if worker.is_alive():
-                worker.kill()
-                worker.join(0.5)
-            if worker.is_alive():
-                raise TimeoutError("DNS resolver process could not be stopped")
             raise TimeoutError("DNS resolution deadline expired")
         if not result_connection.poll(0.1):
             raise OSError("DNS resolver exited without result")
@@ -232,13 +265,29 @@ def _getaddrinfo_with_timeout(hostname: str, port: int, *, timeout_seconds: floa
             raise RuntimeError(message)
         return value
     finally:
-        child_connection.close()
-        result_connection.close()
-        _DNS_RESOLUTION_SLOTS.release()
-
-
-
-
+        try:
+            if worker is not None:
+                # A failed start may still have published a child process.
+                # Keep its slot and handle unless exit can be confirmed.
+                release_slot = False
+                try:
+                    if worker.pid is not None:
+                        _stop_dns_worker(worker)
+                finally:
+                    if worker.pid is None or not worker.is_alive():
+                        release_slot = True
+                        worker.close()
+        finally:
+            try:
+                if child_connection is not None:
+                    child_connection.close()
+            finally:
+                try:
+                    if result_connection is not None:
+                        result_connection.close()
+                finally:
+                    if release_slot:
+                        _DNS_RESOLUTION_SLOTS.release()
 
 
 def resolve_url_host(
@@ -258,7 +307,9 @@ def resolve_url_host(
         raise UnsafeUrlError(f"{field_name} hostname could not be resolved")
     if port is None:
         port = 443 if parsed.scheme == "https" else 80
-    resolution_timeout = DNS_RESOLUTION_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    resolution_timeout = (
+        DNS_RESOLUTION_TIMEOUT_SECONDS if timeout_seconds is None else timeout_seconds
+    )
     try:
         finite_timeout = math.isfinite(resolution_timeout)
     except OverflowError:
@@ -272,7 +323,9 @@ def resolve_url_host(
     ):
         raise UnsafeUrlError(f"{field_name} hostname resolution timed out")
     try:
-        resolved = _getaddrinfo_with_timeout(hostname, port, timeout_seconds=resolution_timeout)
+        resolved = _getaddrinfo_with_timeout(
+            hostname, port, timeout_seconds=resolution_timeout
+        )
     except TimeoutError as exc:
         raise UnsafeUrlError(f"{field_name} hostname resolution timed out") from exc
     except OSError as exc:
@@ -298,12 +351,6 @@ def resolve_url_host(
     if not addresses:
         raise UnsafeUrlError(f"{field_name} hostname could not be resolved")
     return tuple(addresses)
-
-
-
-
-
-
 
 
 class PinnedHTTPHandler(urllib.request.HTTPHandler):

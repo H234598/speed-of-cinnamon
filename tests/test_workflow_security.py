@@ -56,7 +56,10 @@ def run_blocks(text: str) -> list[str]:
         block_lines: list[str] = []
         while index < len(lines):
             next_line = lines[index]
-            if next_line.strip() and len(next_line) - len(next_line.lstrip(" ")) <= run_indent:
+            if (
+                next_line.strip()
+                and len(next_line) - len(next_line.lstrip(" ")) <= run_indent
+            ):
                 break
             block_lines.append(next_line)
             index += 1
@@ -71,7 +74,9 @@ class WorkflowSecurityTest(unittest.TestCase):
     def test_workflows_do_not_use_pull_request_target(self) -> None:
         for path in WORKFLOW_FILES:
             with self.subTest(workflow=path.name):
-                self.assertNotRegex(workflow_text(path), r"(?m)^\s*pull_request_target\s*:")
+                self.assertNotRegex(
+                    workflow_text(path), r"(?m)^\s*pull_request_target\s*:"
+                )
 
     def test_workflows_declare_top_level_permissions(self) -> None:
         for path in WORKFLOW_FILES:
@@ -80,7 +85,9 @@ class WorkflowSecurityTest(unittest.TestCase):
 
     def test_external_actions_are_pinned_to_full_commit_sha(self) -> None:
         for path in WORKFLOW_FILES:
-            for line_number, line in enumerate(workflow_text(path).splitlines(), start=1):
+            for line_number, line in enumerate(
+                workflow_text(path).splitlines(), start=1
+            ):
                 if "uses:" not in line:
                     continue
                 value = strip_yaml_scalar(line.split("uses:", 1)[1])
@@ -93,18 +100,26 @@ class WorkflowSecurityTest(unittest.TestCase):
 
     def test_run_blocks_do_not_interpolate_untrusted_github_contexts(self) -> None:
         for path in WORKFLOW_FILES:
-            for block_index, block in enumerate(run_blocks(workflow_text(path)), start=1):
+            for block_index, block in enumerate(
+                run_blocks(workflow_text(path)), start=1
+            ):
                 for expression in EXPRESSION_RE.finditer(block):
                     expr = " ".join(expression.group("expr").split())
                     if not expr.startswith("github."):
                         continue
-                    with self.subTest(workflow=path.name, run_block=block_index, expression=expr):
+                    with self.subTest(
+                        workflow=path.name, run_block=block_index, expression=expr
+                    ):
                         self.assertIn(expr, ALLOWED_GITHUB_RUN_EXPRESSIONS)
 
     def test_workflow_pip_installs_pin_package_versions(self) -> None:
         for path in WORKFLOW_FILES:
-            for block_index, block in enumerate(run_blocks(workflow_text(path)), start=1):
-                for line_number, raw_line in enumerate(block.splitlines() or [block], start=1):
+            for block_index, block in enumerate(
+                run_blocks(workflow_text(path)), start=1
+            ):
+                for line_number, raw_line in enumerate(
+                    block.splitlines() or [block], start=1
+                ):
                     line = raw_line.strip()
                     if "python -m pip install" not in line:
                         continue
@@ -135,26 +150,35 @@ class WorkflowSecurityTest(unittest.TestCase):
                             continue
                         if part and not part.startswith("-"):
                             packages.append(part)
-                    with self.subTest(workflow=path.name, run_block=block_index, line=line_number):
+                    with self.subTest(
+                        workflow=path.name, run_block=block_index, line=line_number
+                    ):
                         if requirement_files:
                             self.assertIn("--require-hashes", install_args)
                             self.assertEqual(packages, [])
                             for requirement_file in requirement_files:
-                                self.assertTrue(requirement_file.startswith(".github/requirements/"))
+                                self.assertTrue(
+                                    requirement_file.startswith(".github/requirements/")
+                                )
                                 requirement_path = REPO_ROOT / requirement_file
-                                requirement_text = requirement_path.read_text(encoding="utf-8")
+                                requirement_text = requirement_path.read_text(
+                                    encoding="utf-8"
+                                )
                                 self.assertIn("--require-hashes", requirement_text)
                                 requirement_lines = [
                                     req_line.strip()
                                     for req_line in requirement_text.splitlines()
-                                    if req_line.strip() and not req_line.strip().startswith(("#", "--"))
+                                    if req_line.strip()
+                                    and not req_line.strip().startswith(("#", "--"))
                                 ]
                                 self.assertGreater(len(requirement_lines), 0)
                                 for requirement_line in requirement_lines:
                                     self.assertIn("==", requirement_line)
                                     self.assertIn("--hash=sha256:", requirement_line)
                         else:
-                            self.fail("direct pip package installs must use hash-locked requirement files")
+                            self.fail(
+                                "direct pip package installs must use hash-locked requirement files"
+                            )
 
 
 if __name__ == "__main__":

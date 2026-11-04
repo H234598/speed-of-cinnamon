@@ -21,7 +21,9 @@ class FasterWhisperWorkerTests(unittest.TestCase):
         fake_module = type("FakeFasterWhisper", (), {"WhisperModel": WhisperModel})
         with mock.patch.dict(sys.modules, {"faster_whisper": fake_module}):
             with self.assertRaises(faster_whisper_worker.WorkerFailure) as context:
-                faster_whisper_worker._transcribe(Path("audio.flac"), "de", Path("model"))
+                faster_whisper_worker._transcribe(
+                    Path("audio.flac"), "de", Path("model")
+                )
 
         self.assertEqual(context.exception.code, "load")
 
@@ -30,7 +32,9 @@ class FasterWhisperWorkerTests(unittest.TestCase):
             def __init__(self, *_args: object, **_kwargs: object) -> None:
                 pass
 
-            def transcribe(self, *_args: object, **_kwargs: object) -> tuple[object, None]:
+            def transcribe(
+                self, *_args: object, **_kwargs: object
+            ) -> tuple[object, None]:
                 def segments() -> object:
                     raise RuntimeError("secret inference details")
                     yield None
@@ -40,7 +44,9 @@ class FasterWhisperWorkerTests(unittest.TestCase):
         fake_module = type("FakeFasterWhisper", (), {"WhisperModel": WhisperModel})
         with mock.patch.dict(sys.modules, {"faster_whisper": fake_module}):
             with self.assertRaises(faster_whisper_worker.WorkerFailure) as context:
-                faster_whisper_worker._transcribe(Path("audio.flac"), "de", Path("model"))
+                faster_whisper_worker._transcribe(
+                    Path("audio.flac"), "de", Path("model")
+                )
 
         self.assertEqual(context.exception.code, "inference")
 
@@ -54,12 +60,16 @@ class FasterWhisperWorkerTests(unittest.TestCase):
             def __init__(self, *_args: object, **kwargs: object) -> None:
                 captured.update(kwargs)
 
-            def transcribe(self, *_args: object, **_kwargs: object) -> tuple[list[Segment], object]:
+            def transcribe(
+                self, *_args: object, **_kwargs: object
+            ) -> tuple[list[Segment], object]:
                 return [Segment()], object()
 
         fake_module = type("FakeFasterWhisper", (), {"WhisperModel": WhisperModel})
         with mock.patch.dict(sys.modules, {"faster_whisper": fake_module}):
-            result = faster_whisper_worker._transcribe(Path("audio.flac"), "de", Path("model"))
+            result = faster_whisper_worker._transcribe(
+                Path("audio.flac"), "de", Path("model")
+            )
 
         self.assertEqual(result, "local transcript")
         self.assertIs(captured.get("local_files_only"), True)
@@ -72,7 +82,9 @@ class FasterWhisperWorkerTests(unittest.TestCase):
         self.assertNotIn("cpu_threads", captured)
         self.assertNotIn("num_workers", captured)
 
-    def test_runtime_diagnostic_reports_capabilities_without_model_or_inference(self) -> None:
+    def test_runtime_diagnostic_reports_capabilities_without_model_or_inference(
+        self,
+    ) -> None:
         calls: list[str] = []
 
         class FasterWhisperModule:
@@ -127,7 +139,9 @@ class FasterWhisperWorkerTests(unittest.TestCase):
             },
         )
 
-    def test_runtime_diagnostic_reports_missing_imports_and_partial_capability(self) -> None:
+    def test_runtime_diagnostic_reports_missing_imports_and_partial_capability(
+        self,
+    ) -> None:
         cases = (
             (
                 {"ctranslate2": None, "faster_whisper": None},
@@ -148,7 +162,9 @@ class FasterWhisperWorkerTests(unittest.TestCase):
                         (),
                         {
                             "get_supported_compute_types": staticmethod(
-                                lambda _device: (_ for _ in ()).throw(RuntimeError("private"))
+                                lambda _device: (_ for _ in ()).throw(
+                                    RuntimeError("private")
+                                )
                             )
                         },
                     ),
@@ -184,13 +200,17 @@ class FasterWhisperWorkerTests(unittest.TestCase):
         ):
             with (
                 self.subTest(argv=argv),
-                mock.patch.object(faster_whisper_worker, "_diagnose_runtime_payload") as diagnose,
+                mock.patch.object(
+                    faster_whisper_worker, "_diagnose_runtime_payload"
+                ) as diagnose,
                 mock.patch("sys.stderr", io.StringIO()),
             ):
                 self.assertEqual(faster_whisper_worker.main(argv), 2)
             diagnose.assert_not_called()
 
-    def test_argument_validation_accepts_regular_audio_and_model_directory(self) -> None:
+    def test_argument_validation_accepts_regular_audio_and_model_directory(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             audio = root / "speech.flac"
@@ -207,7 +227,9 @@ class FasterWhisperWorkerTests(unittest.TestCase):
         self.assertEqual(result[1], "de")
         self.assertEqual(result[2], model)
 
-    def test_argument_validation_rejects_non_text_arguments_without_raising(self) -> None:
+    def test_argument_validation_rejects_non_text_arguments_without_raising(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             audio = root / "speech.flac"
@@ -215,7 +237,9 @@ class FasterWhisperWorkerTests(unittest.TestCase):
             model = root / "model"
             model.mkdir()
             for field, value in (("audio", None), ("language", 42), ("model", True)):
-                args = argparse.Namespace(audio=str(audio), language="de", model=str(model))
+                args = argparse.Namespace(
+                    audio=str(audio), language="de", model=str(model)
+                )
                 setattr(args, field, value)
                 self.assertIsNone(faster_whisper_worker._validate_arguments(args))
 
@@ -233,12 +257,16 @@ class FasterWhisperWorkerTests(unittest.TestCase):
 
             self.assertIsNone(
                 faster_whisper_worker._validate_arguments(
-                    argparse.Namespace(audio=str(linked_audio), language="de", model=str(real_model))
+                    argparse.Namespace(
+                        audio=str(linked_audio), language="de", model=str(real_model)
+                    )
                 )
             )
             self.assertIsNone(
                 faster_whisper_worker._validate_arguments(
-                    argparse.Namespace(audio=str(real_audio), language="de", model=str(linked_model))
+                    argparse.Namespace(
+                        audio=str(real_audio), language="de", model=str(linked_model)
+                    )
                 )
             )
 
@@ -273,7 +301,9 @@ class FasterWhisperWorkerTests(unittest.TestCase):
                 )
             )
 
-    def test_argument_validation_rejects_malformed_path_text_without_raising(self) -> None:
+    def test_argument_validation_rejects_malformed_path_text_without_raising(
+        self,
+    ) -> None:
         for value in ("bad\x00path", "\ud800"):
             result = faster_whisper_worker._validate_arguments(
                 argparse.Namespace(audio=value, language="de", model=value)
@@ -307,7 +337,14 @@ class FasterWhisperWorkerTests(unittest.TestCase):
                     with mock.patch("sys.stdout", handle):
                         self.assertEqual(
                             faster_whisper_worker.main(
-                                ["--audio", str(audio), "--language", "de", "--model", str(model)]
+                                [
+                                    "--audio",
+                                    str(audio),
+                                    "--language",
+                                    "de",
+                                    "--model",
+                                    str(model),
+                                ]
                             ),
                             1,
                         )
@@ -325,7 +362,9 @@ class FasterWhisperWorkerTests(unittest.TestCase):
             model.mkdir()
             output = io.StringIO()
             with (
-                mock.patch.object(faster_whisper_worker, "_transcribe", return_value="hello ä"),
+                mock.patch.object(
+                    faster_whisper_worker, "_transcribe", return_value="hello ä"
+                ),
                 mock.patch("sys.stdout", output),
             ):
                 result = faster_whisper_worker.main(

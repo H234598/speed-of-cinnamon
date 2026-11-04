@@ -14,7 +14,9 @@ except ImportError:
 
 def main() -> int:
     if len(sys.argv) < 2:
-        raise SystemExit("usage: python -m tests.run_isolated MODULE_OR_SCRIPT [ARGS ...]")
+        raise SystemExit(
+            "usage: python -m tests.run_isolated MODULE_OR_SCRIPT [ARGS ...]"
+        )
     isolate_user_state()
     ensure_source_path()
     target = sys.argv[1]

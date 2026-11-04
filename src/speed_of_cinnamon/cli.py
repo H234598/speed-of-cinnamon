@@ -28,7 +28,14 @@ from typing import NoReturn
 
 from . import __version__, artifact_crypto, remote_http
 from . import doctor
-from .backup import BackupError, BackupInput, create_backup, restore_backup, restore_dry_run, verify_backup
+from .backup import (
+    BackupError,
+    BackupInput,
+    create_backup,
+    restore_backup,
+    restore_dry_run,
+    verify_backup,
+)
 from .alarms import (
     _locked_alarm_store,
     _save_alarm_store_unlocked,
@@ -212,7 +219,9 @@ from .profanity_filter import (
 )
 
 
-def _note_cleanup_failure(primary: BaseException, _cleanup_error: BaseException) -> None:
+def _note_cleanup_failure(
+    primary: BaseException, _cleanup_error: BaseException
+) -> None:
     try:
         primary.add_note("diagnostics artifact cleanup failed")
     except Exception:
@@ -230,9 +239,7 @@ TRANSIENT_TRANSCRIPT_OWNER_SUFFIX = ".owner"
 TRANSIENT_TRANSCRIPT_WRITE_ERROR = "failed to write transcript file"
 TRANSIENT_TRANSCRIPT_CLEANUP_ERROR = "failed to clean up transcript file"
 TRANSIENT_TRANSCRIPT_PROCESSING_ERROR = "transcribe failed"
-_PUBLIC_PAYLOAD_STATUSES = VALID_STATE_STATUSES | frozenset(
-    {"skipped", "warning"}
-)
+_PUBLIC_PAYLOAD_STATUSES = VALID_STATE_STATUSES | frozenset({"skipped", "warning"})
 _DOCTOR_REPORT_FIELDS = (
     "ok",
     "checks",
@@ -250,9 +257,7 @@ _DOCTOR_CTRANSLATE2_PROBE_STATUSES = frozenset(
     {"ok", "partial", "unavailable", "timeout", "failed"}
 )
 _DOCTOR_AUDIO_PROBE_STATUSES = frozenset({"ok", "failed", "unavailable"})
-_DOCTOR_PIPEWIRE_SOURCE_CLASSES = frozenset(
-    {"unknown", "alsa", "bluetooth", "other"}
-)
+_DOCTOR_PIPEWIRE_SOURCE_CLASSES = frozenset({"unknown", "alsa", "bluetooth", "other"})
 _DOCTOR_RESOLVED_BACKENDS = frozenset(
     {"command", "faster-whisper", "whisper-cpp", "whisper", "openai-compatible"}
 )
@@ -353,7 +358,9 @@ class _ClassifiedPublicError(RuntimeError):
                 error_code=remote_error_code,
             )
         except ValueError:
-            raise RuntimeError("classified public error diagnostics are invalid") from None
+            raise RuntimeError(
+                "classified public error diagnostics are invalid"
+            ) from None
         super().__init__(message)
         self.failure_stage = failure_stage
         self.failure_code = failure_code
@@ -436,7 +443,9 @@ def _fresh_classified_public_error(
     return fresh_error
 
 
-def _postprocess_public_failure(error: BaseException | None = None) -> _ClassifiedPublicError:
+def _postprocess_public_failure(
+    error: BaseException | None = None,
+) -> _ClassifiedPublicError:
     reason: str | None = None
     status: int | None = None
     remote_error_code: str | None = None
@@ -486,6 +495,8 @@ def _is_transcript_insert_recovery_error(value: object) -> bool:
         LEGACY_TRANSIENT_TRANSCRIPT_INSERT_ERROR,
         TRANSIENT_TRANSCRIPT_INSERT_ERROR,
     }
+
+
 EMPTY_TRANSCRIPT_MARKERS = frozenset(
     {
         "leere aufnahme",
@@ -612,7 +623,11 @@ def _finalization_lock_path(state_path: Path) -> Path:
 
 def _read_finalization_lock_pid_state(lock_path: Path) -> object:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
         return _FINALIZATION_LOCK_PID_UNKNOWN
     try:
         nonblock_flag = _required_nonblocking_flag()
@@ -622,8 +637,12 @@ def _read_finalization_lock_pid_state(lock_path: Path) -> object:
     fd: int | None = None
     try:
         assert_no_symlink_ancestors(lock_path, field_name="finalization lock")
-        fd = os.open(str(lock_path), os.O_RDONLY | nofollow_flag | nonblock_flag | cloexec_flag)
-        assert_fd_is_regular_private_file(fd, field_name="finalization lock", require_private_mode=True)
+        fd = os.open(
+            str(lock_path), os.O_RDONLY | nofollow_flag | nonblock_flag | cloexec_flag
+        )
+        assert_fd_is_regular_private_file(
+            fd, field_name="finalization lock", require_private_mode=True
+        )
         handle = os.fdopen(fd, "rb")
         fd = None
         read_error: BaseException | None = None
@@ -717,7 +736,11 @@ def _finalization_lock_process_start_time_for_pid(pid: int) -> float | None:
         clock_ticks = os.sysconf("SC_CLK_TCK")
     except (OSError, UnicodeError, ValueError, IndexError, StopIteration, TypeError):
         return None
-    if start_time_ticks <= 0 or not isinstance(clock_ticks, int) or isinstance(clock_ticks, bool):
+    if (
+        start_time_ticks <= 0
+        or not isinstance(clock_ticks, int)
+        or isinstance(clock_ticks, bool)
+    ):
         return None
     if clock_ticks <= 0:
         return None
@@ -898,7 +921,9 @@ def _read_bounded_fd(fd: int, max_bytes: int, *, field_name: str) -> bytes:
     payload = bytearray()
     while len(payload) <= max_bytes:
         try:
-            chunk = os.pread(fd, min(64 * 1024, max_bytes + 1 - len(payload)), len(payload))
+            chunk = os.pread(
+                fd, min(64 * 1024, max_bytes + 1 - len(payload)), len(payload)
+            )
         except InterruptedError:
             continue
         if not chunk:
@@ -960,7 +985,9 @@ def _same_finalization_lock_snapshot(
     return first_snapshot == second_snapshot
 
 
-def _same_finalization_lock_identity(current: os.stat_result, expected: os.stat_result) -> bool:
+def _same_finalization_lock_identity(
+    current: os.stat_result, expected: os.stat_result
+) -> bool:
     return _same_finalization_lock_snapshot(current, expected)
 
 
@@ -981,7 +1008,9 @@ def _remember_finalization_lock_owner(
 
 
 def _forget_finalization_lock_owner(lock_path: Path) -> None:
-    _FINALIZATION_LOCK_OWNER_SNAPSHOTS.pop(_finalization_lock_snapshot_key(lock_path), None)
+    _FINALIZATION_LOCK_OWNER_SNAPSHOTS.pop(
+        _finalization_lock_snapshot_key(lock_path), None
+    )
 
 
 def _finalization_lock_is_owned_by_current_process(
@@ -1015,7 +1044,10 @@ def _finalization_lock_is_owned_by_current_process(
 
 def _finalization_lock_owner_and_group_stably_absent(pid: int) -> bool:
     for attempt in range(2):
-        if _process_is_running(pid) or process_group_has_live_processes(pid) is not False:
+        if (
+            _process_is_running(pid)
+            or process_group_has_live_processes(pid) is not False
+        ):
             return False
         if attempt == 0:
             time.sleep(RECORDER_PROCESS_RECONCILIATION_DELAY_SECONDS)
@@ -1032,7 +1064,11 @@ def _unlink_finalization_lock_at(
     operation_error: BaseException | None = None
     try:
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+        if (
+            isinstance(nofollow_flag, bool)
+            or not isinstance(nofollow_flag, int)
+            or nofollow_flag <= 0
+        ):
             return False
         try:
             nonblock_flag = _required_nonblocking_flag()
@@ -1041,7 +1077,10 @@ def _unlink_finalization_lock_at(
         try:
             source_fd = os.open(
                 lock_path.name,
-                os.O_RDONLY | nofollow_flag | nonblock_flag | getattr(os, "O_CLOEXEC", 0),
+                os.O_RDONLY
+                | nofollow_flag
+                | nonblock_flag
+                | getattr(os, "O_CLOEXEC", 0),
                 dir_fd=parent_fd,
             )
             source_stat = os.fstat(source_fd)
@@ -1052,19 +1091,29 @@ def _unlink_finalization_lock_at(
             not stat_module.S_ISREG(source_stat.st_mode)
             or source_stat.st_nlink != 1
             or not _same_finalization_lock_snapshot(source_stat, current)
-            or (expected_stat is not None and not _same_finalization_lock_snapshot(source_stat, expected_stat))
+            or (
+                expected_stat is not None
+                and not _same_finalization_lock_snapshot(source_stat, expected_stat)
+            )
         ):
             return False
         for _ in range(100):
             cleanup_name = f"{lock_path.name}.{secrets.token_hex(8)}.cleanup"
             try:
                 preclaim_stat = os.fstat(source_fd)
-                path_stat = os.stat(lock_path.name, dir_fd=parent_fd, follow_symlinks=False)
+                path_stat = os.stat(
+                    lock_path.name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if (
                     not stat_module.S_ISREG(preclaim_stat.st_mode)
                     or preclaim_stat.st_nlink != 1
                     or not _same_finalization_lock_snapshot(preclaim_stat, path_stat)
-                    or (expected_stat is not None and not _same_finalization_lock_snapshot(preclaim_stat, expected_stat))
+                    or (
+                        expected_stat is not None
+                        and not _same_finalization_lock_snapshot(
+                            preclaim_stat, expected_stat
+                        )
+                    )
                 ):
                     return False
                 _rename_without_replacing(
@@ -1083,7 +1132,9 @@ def _unlink_finalization_lock_at(
             claimed: os.stat_result | None = None
             try:
                 claimed = os.fstat(source_fd)
-                claimed_path = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_path = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if (
                     not stat_module.S_ISREG(claimed.st_mode)
                     or claimed.st_nlink != 1
@@ -1093,10 +1144,12 @@ def _unlink_finalization_lock_at(
                 claim_verified = True
 
                 final_claim = os.fstat(source_fd)
-                final_path = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
-                if not _same_finalization_lock_snapshot(final_claim, claimed) or not _same_finalization_lock_snapshot(
-                    final_path, final_claim
-                ):
+                final_path = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if not _same_finalization_lock_snapshot(
+                    final_claim, claimed
+                ) or not _same_finalization_lock_snapshot(final_path, final_claim):
                     raise RuntimeError("finalization lock changed before cleanup")
                 # ponytail: Python has no unlink-by-fd primitive. The private same-UID
                 # namespace remains the trust boundary; remove it with a separate-UID broker.
@@ -1107,8 +1160,12 @@ def _unlink_finalization_lock_at(
                 if not unlinked and claim_verified and claimed is not None:
                     try:
                         restore_stat = os.fstat(source_fd)
-                        restore_path = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
-                        if _same_finalization_lock_snapshot(restore_stat, claimed) and _same_finalization_lock_snapshot(
+                        restore_path = os.stat(
+                            cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                        )
+                        if _same_finalization_lock_snapshot(
+                            restore_stat, claimed
+                        ) and _same_finalization_lock_snapshot(
                             restore_path, restore_stat
                         ):
                             _rename_without_replacing(
@@ -1120,7 +1177,10 @@ def _unlink_finalization_lock_at(
                             _fsync_fd(parent_fd)
                     except BaseException:
                         exc.add_note("finalization lock cleanup restore failed")
-                if isinstance(exc, RuntimeError) and str(exc) == "finalization lock changed before cleanup":
+                if (
+                    isinstance(exc, RuntimeError)
+                    and str(exc) == "finalization lock changed before cleanup"
+                ):
                     return False
                 raise
             return True
@@ -1150,7 +1210,11 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
     except RuntimeError:
         return None
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
         return None
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     try:
@@ -1190,7 +1254,10 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 if owner_state is None:
                     return None
                 corrupt_owner_pid = owner_state is _FINALIZATION_LOCK_PID_CORRUPT
-                if owner_state in {_FINALIZATION_LOCK_PID_EMPTY, _FINALIZATION_LOCK_PID_CORRUPT}:
+                if owner_state in {
+                    _FINALIZATION_LOCK_PID_EMPTY,
+                    _FINALIZATION_LOCK_PID_CORRUPT,
+                }:
                     owner_pid = None
                 else:
                     owner_pid = owner_state
@@ -1238,13 +1305,20 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 if corrupt_owner_pid or corrupt_metadata:
                     if (
                         not has_liveness_anchor
-                        or now - existing.st_mtime <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS
+                        or now - existing.st_mtime
+                        <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS
                     ):
                         return None
-                if isinstance(scope_unit_state, str) and _recorder_scope_unit_is_stably_gone(
-                    scope_unit_state,
-                    expected_scope=scope_state if isinstance(scope_state, str) else None,
-                ) is not True:
+                if (
+                    isinstance(scope_unit_state, str)
+                    and _recorder_scope_unit_is_stably_gone(
+                        scope_unit_state,
+                        expected_scope=(
+                            scope_state if isinstance(scope_state, str) else None
+                        ),
+                    )
+                    is not True
+                ):
                     return None
                 try:
                     current = lock_path.lstat()
@@ -1255,7 +1329,9 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 if not _same_finalization_lock_snapshot(existing, current):
                     return None
                 try:
-                    if not _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=current):
+                    if not _unlink_finalization_lock_at(
+                        parent_fd, lock_path, expected_stat=current
+                    ):
                         return None
                 except OSError:
                     return None
@@ -1268,7 +1344,9 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                         pass
                     if created_stat is not None:
                         try:
-                            _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
+                            _unlink_finalization_lock_at(
+                                parent_fd, lock_path, expected_stat=created_stat
+                            )
                         except BaseException:
                             pass
                 return None
@@ -1280,7 +1358,9 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                         pass
                     if created_stat is not None:
                         try:
-                            _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
+                            _unlink_finalization_lock_at(
+                                parent_fd, lock_path, expected_stat=created_stat
+                            )
                         except BaseException:
                             pass
                 raise
@@ -1290,9 +1370,17 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
             try:
                 identity = _finalization_lock_identity_for_pid(os.getpid())
                 if identity is None:
-                    _write_all(fd, f"{os.getpid()}\n".encode("ascii"), field_name="finalization lock")
+                    _write_all(
+                        fd,
+                        f"{os.getpid()}\n".encode("ascii"),
+                        field_name="finalization lock",
+                    )
                 else:
-                    _write_all(fd, f"{os.getpid()}\n{identity}\n".encode("ascii"), field_name="finalization lock")
+                    _write_all(
+                        fd,
+                        f"{os.getpid()}\n{identity}\n".encode("ascii"),
+                        field_name="finalization lock",
+                    )
                 _fsync_fd(fd)
                 written_stat = os.fstat(fd)
             except OSError:
@@ -1301,7 +1389,9 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 except BaseException:
                     pass
                 try:
-                    _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
+                    _unlink_finalization_lock_at(
+                        parent_fd, lock_path, expected_stat=created_stat
+                    )
                 except BaseException:
                     pass
                 return None
@@ -1311,7 +1401,9 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 except BaseException:
                     pass
                 try:
-                    _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
+                    _unlink_finalization_lock_at(
+                        parent_fd, lock_path, expected_stat=created_stat
+                    )
                 except BaseException:
                     pass
                 raise
@@ -1319,13 +1411,17 @@ def _acquire_finalization_lock(state_path: Path) -> Path | None:
                 os.close(fd)
             except OSError:
                 try:
-                    _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
+                    _unlink_finalization_lock_at(
+                        parent_fd, lock_path, expected_stat=created_stat
+                    )
                 except BaseException:
                     pass
                 return None
             except BaseException:
                 try:
-                    _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=created_stat)
+                    _unlink_finalization_lock_at(
+                        parent_fd, lock_path, expected_stat=created_stat
+                    )
                 except BaseException:
                     pass
                 raise
@@ -1389,7 +1485,10 @@ def _release_finalization_lock(lock_path: Path | None) -> None:
         try:
             current = os.stat(lock_path.name, dir_fd=parent_fd, follow_symlinks=False)
             owner_pid = _read_finalization_lock_pid(lock_path)
-            if owner_pid in {_FINALIZATION_LOCK_PID_EMPTY, _FINALIZATION_LOCK_PID_CORRUPT}:
+            if owner_pid in {
+                _FINALIZATION_LOCK_PID_EMPTY,
+                _FINALIZATION_LOCK_PID_CORRUPT,
+            }:
                 owner_pid = None
             owner_identity = _read_finalization_lock_identity(lock_path)
             if not _finalization_lock_is_owned_by_current_process(
@@ -1399,7 +1498,9 @@ def _release_finalization_lock(lock_path: Path | None) -> None:
                 owner_identity,
             ):
                 return
-            if _unlink_finalization_lock_at(parent_fd, lock_path, expected_stat=current):
+            if _unlink_finalization_lock_at(
+                parent_fd, lock_path, expected_stat=current
+            ):
                 _forget_finalization_lock_owner(lock_path)
         except BaseException:
             pass
@@ -1418,7 +1519,12 @@ def _retain_finalization_lock_for_process(
     recorder_scope: str | None = None,
     recorder_scope_unit: str | None = None,
 ) -> bool:
-    if lock_path is None or isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
+    if (
+        lock_path is None
+        or isinstance(pid, bool)
+        or not isinstance(pid, int)
+        or pid <= 0
+    ):
         return False
     if (
         not isinstance(process_identity, str)
@@ -1514,7 +1620,9 @@ def _retain_finalization_lock_for_process(
             != _PROCESS_IDENTITY_SAME
         ):
             return False
-        if recorder_scope is not None and not _recorder_scope_is_current(pid, recorder_scope):
+        if recorder_scope is not None and not _recorder_scope_is_current(
+            pid, recorder_scope
+        ):
             return False
         payload = f"{pid}\n{process_identity or ''}\n"
         if recorder_scope_unit is not None:
@@ -1528,10 +1636,9 @@ def _retain_finalization_lock_for_process(
             dir_fd=parent_fd,
             follow_symlinks=False,
         )
-        if (
-            not _same_finalization_lock_snapshot(opened_stat, prewrite_stat)
-            or not _same_finalization_lock_snapshot(prewrite_stat, prewrite_path_stat)
-        ):
+        if not _same_finalization_lock_snapshot(
+            opened_stat, prewrite_stat
+        ) or not _same_finalization_lock_snapshot(prewrite_stat, prewrite_path_stat):
             return False
         os.ftruncate(lock_fd, 0)
         os.lseek(lock_fd, 0, os.SEEK_SET)
@@ -1614,8 +1721,12 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
                 raise RuntimeError("environment base must be a mapping")
             if _contains_escaped_null(key) or _contains_http_header_control_chars(key):
                 raise RuntimeError("environment key contains invalid control character")
-            if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
-                raise RuntimeError("environment value contains invalid control character")
+            if _contains_escaped_null(value) or _contains_http_header_control_chars(
+                value
+            ):
+                raise RuntimeError(
+                    "environment value contains invalid control character"
+                )
             try:
                 key.encode("utf-8")
             except UnicodeEncodeError as exc:
@@ -1661,7 +1772,9 @@ def _contains_http_header_control_chars(value: str) -> bool:
 
 
 def _coerce_log_level_from_environment() -> str:
-    level = _coerce_environment_value("SPEED_OF_CINNAMON_LOG_LEVEL") or DEFAULT_LOG_LEVEL
+    level = (
+        _coerce_environment_value("SPEED_OF_CINNAMON_LOG_LEVEL") or DEFAULT_LOG_LEVEL
+    )
     if not isinstance(level, str) or isinstance(level, bool):
         return DEFAULT_LOG_LEVEL
     if _contains_http_header_control_chars(level):
@@ -1697,8 +1810,12 @@ def _command_path(command: str) -> str:
     command_name = command.strip()
     if not command_name:
         raise RuntimeError("command is empty")
-    if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
-        raise RuntimeError("command must be a bare command name without path separators")
+    if os.path.sep in command_name or (
+        os.path.altsep and os.path.altsep in command_name
+    ):
+        raise RuntimeError(
+            "command must be a bare command name without path separators"
+        )
     path = _which(command_name)
     if not path:
         raise RuntimeError(f"{command_name} command is not available")
@@ -1744,7 +1861,9 @@ def _validate_text_model_url(url: str, *, field_name: str) -> str:
     except UnicodeEncodeError as exc:
         raise RuntimeError(f"{field_name} contains invalid UTF-8") from exc
     if len(url) > MAX_URL_CHARS:
-        raise RuntimeError(f"{field_name} is too large (max {MAX_URL_CHARS} characters)")
+        raise RuntimeError(
+            f"{field_name} is too large (max {MAX_URL_CHARS} characters)"
+        )
     try:
         raw_encoded = url.encode("utf-8")
     except UnicodeEncodeError as exc:
@@ -1766,12 +1885,18 @@ def _validate_ollama_http_url(url: str, *, field_name: str) -> str:
     if not parsed.hostname:
         raise RuntimeError(f"{field_name} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
-        raise RuntimeError(f"{field_name} must use https:// unless host is local loopback")
+        raise RuntimeError(
+            f"{field_name} must use https:// unless host is local loopback"
+        )
     try:
         parsed.port
     except ValueError as exc:
         raise RuntimeError(f"{field_name} has invalid port") from exc
-    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
+    if (
+        "@" in parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise RuntimeError(f"{field_name} must not contain userinfo")
     if parsed.query or parsed.fragment:
         raise RuntimeError(f"{field_name} must not contain query or fragment")
@@ -1789,12 +1914,18 @@ def _validate_openai_compatible_http_url(url: str, field_name: str) -> str:
     if not parsed.hostname:
         raise RuntimeError(f"{field_name} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
-        raise RuntimeError(f"{field_name} must use https:// unless host is local loopback")
+        raise RuntimeError(
+            f"{field_name} must use https:// unless host is local loopback"
+        )
     try:
         parsed.port
     except ValueError as exc:
         raise RuntimeError(f"{field_name} has invalid port") from exc
-    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
+    if (
+        "@" in parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise RuntimeError(f"{field_name} must not contain userinfo")
     if parsed.query or parsed.fragment:
         raise RuntimeError(f"{field_name} must not contain query or fragment")
@@ -1814,7 +1945,12 @@ def _is_local_ollama_url(url: str) -> bool:
         return False
     if parsed.scheme != "http" or not parsed.hostname:
         return False
-    if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+    if (
+        parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
         return False
     return is_loopback_hostname(parsed.hostname)
 
@@ -1843,14 +1979,22 @@ def _is_remote_post_process_backend(backend: str) -> bool:
     return normalized in {"ollama", "openai-compatible", "openai"}
 
 
-def _openai_compatible_transcribe_kwargs(args: argparse.Namespace, backend: str) -> dict[str, object]:
+def _openai_compatible_transcribe_kwargs(
+    args: argparse.Namespace, backend: str
+) -> dict[str, object]:
     if backend != "openai-compatible":
         return {}
     return {
-        "openai_compatible_model": getattr(args, "openai_compatible_model", DEFAULT_OPENAI_COMPATIBLE_MODEL),
-        "openai_compatible_url": getattr(args, "openai_compatible_url", DEFAULT_OPENAI_COMPATIBLE_URL),
+        "openai_compatible_model": getattr(
+            args, "openai_compatible_model", DEFAULT_OPENAI_COMPATIBLE_MODEL
+        ),
+        "openai_compatible_url": getattr(
+            args, "openai_compatible_url", DEFAULT_OPENAI_COMPATIBLE_URL
+        ),
         "openai_compatible_api_key": _openai_compatible_api_key_from_args(args),
-        "openai_compatible_flex_processing": getattr(args, "openai_compatible_flex_processing", True),
+        "openai_compatible_flex_processing": getattr(
+            args, "openai_compatible_flex_processing", True
+        ),
         "openai_compatible_service_tier_fallback": True,
     }
 
@@ -1866,16 +2010,17 @@ def _openai_compatible_api_key_from_args(args: argparse.Namespace) -> str:
     )
     if use_stdin:
         if raw:
-            raise RuntimeError("openai-compatible API key must be provided by either stdin or environment, not both")
+            raise RuntimeError(
+                "openai-compatible API key must be provided by either stdin or environment, not both"
+            )
         raw = sys.stdin.read(MAX_OPENAI_COMPATIBLE_API_KEY_CHARS + 1).strip()
         if len(raw) > MAX_OPENAI_COMPATIBLE_API_KEY_CHARS:
             raise RuntimeError(
                 f"openai-compatible API key is too large (max {MAX_OPENAI_COMPATIBLE_API_KEY_CHARS} characters)"
             )
     elif not raw:
-        raw = (
-            os.environ.get("OPENAI_COMPATIBLE_API_KEY", "")
-            or os.environ.get("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", "")
+        raw = os.environ.get("OPENAI_COMPATIBLE_API_KEY", "") or os.environ.get(
+            "SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY", ""
         )
     key = _assert_clean_text(
         raw,
@@ -1911,7 +2056,9 @@ _REMOTE_ERROR_MESSAGES = {
 }
 _REMOTE_ERROR_CODES = frozenset(_REMOTE_ERROR_MESSAGES)
 _REMOTE_PUBLIC_SUCCESS_KEYS = frozenset({"nonce", "result", "schema_version", "status"})
-_REMOTE_PUBLIC_ERROR_REQUIRED_KEYS = frozenset({"error_code", "nonce", "schema_version", "status"})
+_REMOTE_PUBLIC_ERROR_REQUIRED_KEYS = frozenset(
+    {"error_code", "nonce", "schema_version", "status"}
+)
 _REMOTE_PUBLIC_ERROR_KEYS = _REMOTE_PUBLIC_ERROR_REQUIRED_KEYS | frozenset(
     {"failure_reason", "provider_status"}
 )
@@ -1983,7 +2130,10 @@ def _validate_remote_response(
         ):
             raise ValueError
         if status == "error":
-            if type(response["error_code"]) is not str or response["error_code"] not in _REMOTE_ERROR_CODES:
+            if (
+                type(response["error_code"]) is not str
+                or response["error_code"] not in _REMOTE_ERROR_CODES
+            ):
                 raise ValueError
             if "failure_reason" in response and response["failure_reason"] is None:
                 raise ValueError
@@ -2005,7 +2155,10 @@ def _validate_remote_response(
             if result["listing_state"] not in {"listed", "missing-model-list"}:
                 raise ValueError
             models = result["models"]
-            if type(models) is not list or len(models) > remote_http.MAX_MODEL_LIST_ENTRIES:
+            if (
+                type(models) is not list
+                or len(models) > remote_http.MAX_MODEL_LIST_ENTRIES
+            ):
                 raise ValueError
             if result["listing_state"] == "missing-model-list" and models:
                 raise ValueError
@@ -2023,7 +2176,9 @@ def _validate_remote_response(
                 raise ValueError
         return response
     except Exception:
-        raise RuntimeError(_REMOTE_ERROR_MESSAGES["remote-worker-protocol-invalid"]) from None
+        raise RuntimeError(
+            _REMOTE_ERROR_MESSAGES["remote-worker-protocol-invalid"]
+        ) from None
 
 
 def _run_remote_operation(
@@ -2045,7 +2200,9 @@ def _run_remote_operation(
     try:
         response = runner(request)
     except Exception:
-        raise RuntimeError(_REMOTE_ERROR_MESSAGES["remote-worker-protocol-invalid"]) from None
+        raise RuntimeError(
+            _REMOTE_ERROR_MESSAGES["remote-worker-protocol-invalid"]
+        ) from None
     return _validate_remote_response(response, request)
 
 
@@ -2167,16 +2324,48 @@ def _validate_pipeline_text_args(
     *,
     language: str,
 ) -> str:
-    language = _assert_clean_text(language, field_name="language", max_chars=MAX_LANGUAGE_CODE_CHARS)
-    _assert_clean_text(args.personal_context, field_name="personal context", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
-    _assert_clean_text(args.vocabulary, field_name="vocabulary", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
-    _assert_clean_text(args.transcriber_command, field_name="transcriber command", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
-    _assert_clean_text(args.post_process_command, field_name="post-process command", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
-    _assert_clean_text(args.whisper_model, field_name="whisper model", max_chars=MAX_PATH_CHARS)
-    _assert_clean_text(args.post_process_prompt, field_name="post-process prompt", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
-    _assert_clean_text(args.ollama_model, field_name="ollama model", max_chars=MAX_PATH_CHARS)
-    _assert_clean_text(args.openai_compatible_model, field_name="openai-compatible model", max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS)
-    _assert_clean_text(getattr(args, "openai_compatible_text_model", ""), field_name="openai-compatible text model", max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS)
+    language = _assert_clean_text(
+        language, field_name="language", max_chars=MAX_LANGUAGE_CODE_CHARS
+    )
+    _assert_clean_text(
+        args.personal_context,
+        field_name="personal context",
+        max_chars=MAX_TRANSCRIBER_TEXT_CHARS,
+    )
+    _assert_clean_text(
+        args.vocabulary, field_name="vocabulary", max_chars=MAX_TRANSCRIBER_TEXT_CHARS
+    )
+    _assert_clean_text(
+        args.transcriber_command,
+        field_name="transcriber command",
+        max_chars=MAX_TRANSCRIBER_TEXT_CHARS,
+    )
+    _assert_clean_text(
+        args.post_process_command,
+        field_name="post-process command",
+        max_chars=MAX_TRANSCRIBER_TEXT_CHARS,
+    )
+    _assert_clean_text(
+        args.whisper_model, field_name="whisper model", max_chars=MAX_PATH_CHARS
+    )
+    _assert_clean_text(
+        args.post_process_prompt,
+        field_name="post-process prompt",
+        max_chars=MAX_TRANSCRIBER_TEXT_CHARS,
+    )
+    _assert_clean_text(
+        args.ollama_model, field_name="ollama model", max_chars=MAX_PATH_CHARS
+    )
+    _assert_clean_text(
+        args.openai_compatible_model,
+        field_name="openai-compatible model",
+        max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+    )
+    _assert_clean_text(
+        getattr(args, "openai_compatible_text_model", ""),
+        field_name="openai-compatible text model",
+        max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
+    )
     _assert_clean_text(
         getattr(args, "openai_compatible_api_key", ""),
         field_name="openai-compatible API key",
@@ -2190,11 +2379,20 @@ def _validate_pipeline_text_args(
         getattr(args, "openai_compatible_api_key_stdin", False),
         field_name="openai-compatible_api_key_stdin",
     )
-    if getattr(args, "openai_compatible_api_key_stdin", False) or getattr(args, "openai_compatible_api_key", ""):
+    if getattr(args, "openai_compatible_api_key_stdin", False) or getattr(
+        args, "openai_compatible_api_key", ""
+    ):
         _openai_compatible_api_key_from_args(args)
-    _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity")
-    _validate_ollama_http_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
-    _validate_openai_compatible_http_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
+    _coerce_bool(
+        getattr(args, "soften_profanity", False), field_name="soften_profanity"
+    )
+    _validate_ollama_http_url(
+        args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url"
+    )
+    _validate_openai_compatible_http_url(
+        args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL,
+        field_name="openai-compatible url",
+    )
     return language
 
 
@@ -2208,16 +2406,28 @@ def read_file_tail(path: Path, max_chars: int) -> str:
     if max_chars <= 0:
         raise ValueError("max_chars must be positive")
     if max_chars > MAX_TRANSCRIPT_HISTORY_TEXT_CHARS:
-        raise ValueError(f"max_chars must be at most {MAX_TRANSCRIPT_HISTORY_TEXT_CHARS}")
+        raise ValueError(
+            f"max_chars must be at most {MAX_TRANSCRIPT_HISTORY_TEXT_CHARS}"
+        )
     path_text = str(path)
     if _contains_escaped_null(path_text):
         raise ValueError(f"file path contains invalid null byte: {path}")
     lowered_path = path_text.lower()
     control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
     if (
-        any(sequence in lowered_path for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v"))
-        or any(f"\\x{codepoint:02x}" in lowered_path or f"\\u00{codepoint:02x}" in lowered_path for codepoint in control_codepoints)
-        or any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in path_text)
+        any(
+            sequence in lowered_path
+            for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")
+        )
+        or any(
+            f"\\x{codepoint:02x}" in lowered_path
+            or f"\\u00{codepoint:02x}" in lowered_path
+            for codepoint in control_codepoints
+        )
+        or any(
+            ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F
+            for char in path_text
+        )
     ):
         raise ValueError(f"file path contains invalid control character: {path}")
     max_bytes = max_chars * 4
@@ -2226,7 +2436,11 @@ def read_file_tail(path: Path, max_chars: int) -> str:
     except RuntimeError as exc:
         raise OSError(str(exc)) from exc
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
         raise OSError("secure file open is not supported on this platform")
     nonblock_flag = _required_nonblocking_flag()
     fd: int | None = None
@@ -2332,8 +2546,14 @@ def read_file_tail(path: Path, max_chars: int) -> str:
     return text
 
 
-def _read_binary_output(file: io.BufferedRandom, max_bytes: int, *, field_name: str) -> str:
-    if not hasattr(file, "seek") or not hasattr(file, "tell") or not hasattr(file, "read"):
+def _read_binary_output(
+    file: io.BufferedRandom, max_bytes: int, *, field_name: str
+) -> str:
+    if (
+        not hasattr(file, "seek")
+        or not hasattr(file, "tell")
+        or not hasattr(file, "read")
+    ):
         raise RuntimeError(f"{field_name} must be a binary file handle")
     if not isinstance(max_bytes, int) or isinstance(max_bytes, bool):
         raise RuntimeError("max_bytes must be an integer")
@@ -2396,7 +2616,10 @@ def _known_cli_secret_values(args: argparse.Namespace | None = None) -> tuple[st
     if args is not None:
         values.extend(
             getattr(args, attribute, "")
-            for attribute in ("openai_compatible_api_key", "_resolved_openai_compatible_api_key")
+            for attribute in (
+                "openai_compatible_api_key",
+                "_resolved_openai_compatible_api_key",
+            )
         )
     return tuple(
         sorted(
@@ -2414,7 +2637,9 @@ def _redact_known_cli_secrets(text: str, secret_values: tuple[str, ...] = ()) ->
     return text
 
 
-def _redact_error_for_user(error: object, *, secret_values: tuple[str, ...] = ()) -> str:
+def _redact_error_for_user(
+    error: object, *, secret_values: tuple[str, ...] = ()
+) -> str:
     if isinstance(error, bool) or not isinstance(error, str):
         return "[invalid]"
     return _redact_known_cli_secrets(
@@ -2446,7 +2671,9 @@ def _sanitize_transient_exception(
 ) -> BaseException:
     """Build safe native exception outside active exception handling."""
     if isinstance(error, KeyboardInterrupt):
-        sanitized: BaseException = KeyboardInterrupt(TRANSIENT_TRANSCRIPT_INTERRUPT_ERROR)
+        sanitized: BaseException = KeyboardInterrupt(
+            TRANSIENT_TRANSCRIPT_INTERRUPT_ERROR
+        )
     elif isinstance(error, SystemExit) and not system_exit_as_runtime:
         sanitized = SystemExit(1)
     else:
@@ -2493,8 +2720,14 @@ _TRANSCRIPT_DIAGNOSTIC_NAMES = frozenset(
 
 def _transcript_failure_diagnostics(error: BaseException) -> dict[str, object]:
     def public_class(value: BaseException) -> str:
-        return next((name for kind, name in _TRANSCRIPT_DIAGNOSTIC_CLASSES
-                     if type(value) is kind), "UnknownError")
+        return next(
+            (
+                name
+                for kind, name in _TRANSCRIPT_DIAGNOSTIC_CLASSES
+                if type(value) is kind
+            ),
+            "UnknownError",
+        )
 
     causes: list[str] = []
     seen = {id(error)}
@@ -2503,22 +2736,35 @@ def _transcript_failure_diagnostics(error: BaseException) -> dict[str, object]:
         seen.add(id(cause))
         causes.append(public_class(cause))
         cause = BaseException.__cause__.__get__(cause)
-    return {"diagnostic_error_class": public_class(error),
-            "diagnostic_cause_classes": causes}
+    return {
+        "diagnostic_error_class": public_class(error),
+        "diagnostic_cause_classes": causes,
+    }
 
 
 def _public_transcript_failure_fields(error: BaseException) -> dict[str, object]:
     phase = getattr(error, "error_phase", None)
-    if type(phase) is not str or phase not in {"transcript_prepare", "transcript_store"}:
+    if type(phase) is not str or phase not in {
+        "transcript_prepare",
+        "transcript_store",
+    }:
         return {}
     fields: dict[str, object] = {"error_phase": phase}
     name = getattr(error, "diagnostic_error_class", None)
     causes = getattr(error, "diagnostic_cause_classes", None)
-    if (type(name) is str and name in _TRANSCRIPT_DIAGNOSTIC_NAMES
-            and type(causes) is list and len(causes) <= 2
-            and all(type(cause) is str and cause in _TRANSCRIPT_DIAGNOSTIC_NAMES
-                    for cause in causes)):
-        fields.update(diagnostic_error_class=name, diagnostic_cause_classes=list(causes))
+    if (
+        type(name) is str
+        and name in _TRANSCRIPT_DIAGNOSTIC_NAMES
+        and type(causes) is list
+        and len(causes) <= 2
+        and all(
+            type(cause) is str and cause in _TRANSCRIPT_DIAGNOSTIC_NAMES
+            for cause in causes
+        )
+    ):
+        fields.update(
+            diagnostic_error_class=name, diagnostic_cause_classes=list(causes)
+        )
     return fields
 
 
@@ -2527,7 +2773,8 @@ def _raise_backend_sanitized_exception(
 ) -> NoReturn:
     diagnostics = (
         _transcript_failure_diagnostics(error)
-        if type(error_phase) is str and error_phase in {"transcript_prepare", "transcript_store"}
+        if type(error_phase) is str
+        and error_phase in {"transcript_prepare", "transcript_store"}
         else {}
     )
     try:
@@ -2616,9 +2863,15 @@ def _recording_level_diagnostic(
     if isinstance(recorder, str) and not isinstance(recorder, bool):
         recorder_name = recorder.strip().lower()
         if recorder_name in {"auto", "pw-record", "parecord", "arecord"}:
-            source_kind = "configured input source" if isinstance(input_device, str) and input_device.strip() else "system default input source"
+            source_kind = (
+                "configured input source"
+                if isinstance(input_device, str) and input_device.strip()
+                else "system default input source"
+            )
             context = f" Recorder: {recorder_name}; using {source_kind}."
-    return f" Measured input signal: peak {peak:.1%}, RMS {rms:.1%}.{diagnostic}{context}"
+    return (
+        f" Measured input signal: peak {peak:.1%}, RMS {rms:.1%}.{diagnostic}{context}"
+    )
 
 
 def _classified_transcription_failure(
@@ -2826,21 +3079,31 @@ def _public_transcription_failure_message(
     )
 
 
-def _redact_error_payload(value: object, *, secret_values: tuple[str, ...] = ()) -> object:
+def _redact_error_payload(
+    value: object, *, secret_values: tuple[str, ...] = ()
+) -> object:
     if isinstance(value, str):
         return _redact_known_cli_secrets(value, secret_values)
     if isinstance(value, dict):
         clean: dict[object, object] = {}
         for key, child in value.items():
-            if isinstance(key, str) and key in {"detail", "error", "error_message", "message"} and child is not None:
+            if (
+                isinstance(key, str)
+                and key in {"detail", "error", "error_message", "message"}
+                and child is not None
+            ):
                 clean[key] = _redact_error_for_user(child, secret_values=secret_values)
             else:
                 clean[key] = _redact_error_payload(child, secret_values=secret_values)
         return clean
     if isinstance(value, list):
-        return [_redact_error_payload(item, secret_values=secret_values) for item in value]
+        return [
+            _redact_error_payload(item, secret_values=secret_values) for item in value
+        ]
     if isinstance(value, tuple):
-        return tuple(_redact_error_payload(item, secret_values=secret_values) for item in value)
+        return tuple(
+            _redact_error_payload(item, secret_values=secret_values) for item in value
+        )
     return value
 
 
@@ -2873,11 +3136,14 @@ class _ProfanityOutputLimitExceeded(Exception):
     pass
 
 
-_PROFANITY_REPLACEMENT_CACHE: tuple[
-    Path,
-    str,
-    tuple[tuple[str, str], ...],
-] | None = None
+_PROFANITY_REPLACEMENT_CACHE: (
+    tuple[
+        Path,
+        str,
+        tuple[tuple[str, str], ...],
+    ]
+    | None
+) = None
 
 
 def soften_profanity_text(text: str) -> str:
@@ -2914,7 +3180,9 @@ def soften_profanity_text(text: str) -> str:
     return output
 
 
-def prepare_output_text(text: str, append_space: bool, sanitize: bool, soften_profanity: bool = False) -> str:
+def prepare_output_text(
+    text: str, append_space: bool, sanitize: bool, soften_profanity: bool = False
+) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("text must be text")
     if not isinstance(append_space, bool):
@@ -2928,7 +3196,9 @@ def prepare_output_text(text: str, append_space: bool, sanitize: bool, soften_pr
     return append_space_if_needed(output, append_space)
 
 
-def _ensure_private_text_file(path: Path, *, field_name: str = "blacklist file") -> None:
+def _ensure_private_text_file(
+    path: Path, *, field_name: str = "blacklist file"
+) -> None:
     assert_no_symlink_ancestors(path, field_name=field_name)
     _prepare_private_file(path, field_name=field_name, exclusive=False)
 
@@ -2960,7 +3230,9 @@ def _profanity_replacement_pairs_from_file() -> tuple[tuple[str, str], ...]:
     return pairs
 
 
-def _profanity_replacements(text: str = "") -> tuple[tuple[re.Pattern[str], str, str], ...]:
+def _profanity_replacements(
+    text: str = "",
+) -> tuple[tuple[re.Pattern[str], str, str], ...]:
     if isinstance(text, bool) or not isinstance(text, str):
         raise ValueError("text must be text")
     return _compile_profanity_replacements_with_hints(
@@ -3070,7 +3342,12 @@ def _apply_security_post_processing(text: str) -> tuple[str, dict[str, object]]:
 
 
 def _empty_security_post_processing() -> dict[str, object]:
-    return {"blacklist_added": [], "blacklist_opened": False, "redacted_words": 0, "blacklist_hits": 0}
+    return {
+        "blacklist_added": [],
+        "blacklist_opened": False,
+        "redacted_words": 0,
+        "blacklist_hits": 0,
+    }
 
 
 def _empty_transcript_marker(text: str) -> str:
@@ -3082,7 +3359,9 @@ def _is_empty_transcript_text(text: str) -> bool:
     return marker == "" or marker in EMPTY_TRANSCRIPT_MARKERS
 
 
-def _merge_security_post_processing(left: dict[str, object], right: dict[str, object]) -> dict[str, object]:
+def _merge_security_post_processing(
+    left: dict[str, object], right: dict[str, object]
+) -> dict[str, object]:
     left_added = left.get("blacklist_added", [])
     right_added = right.get("blacklist_added", [])
     left_redacted = left.get("redacted_words", 0)
@@ -3090,13 +3369,26 @@ def _merge_security_post_processing(left: dict[str, object], right: dict[str, ob
     return {
         "blacklist_added": [
             item
-            for item in [*(left_added if isinstance(left_added, list) else []), *(right_added if isinstance(right_added, list) else [])]
+            for item in [
+                *(left_added if isinstance(left_added, list) else []),
+                *(right_added if isinstance(right_added, list) else []),
+            ]
             if isinstance(item, str)
         ],
-        "blacklist_opened": bool(left.get("blacklist_opened")) or bool(right.get("blacklist_opened")),
-        "redacted_words": int(left_redacted if isinstance(left_redacted, int) and not isinstance(left_redacted, bool) else 0)
-        + int(right_redacted if isinstance(right_redacted, int) and not isinstance(right_redacted, bool) else 0),
-        "blacklist_hits": int(left.get("blacklist_hits") or 0) + int(right.get("blacklist_hits") or 0),
+        "blacklist_opened": bool(left.get("blacklist_opened"))
+        or bool(right.get("blacklist_opened")),
+        "redacted_words": int(
+            left_redacted
+            if isinstance(left_redacted, int) and not isinstance(left_redacted, bool)
+            else 0
+        )
+        + int(
+            right_redacted
+            if isinstance(right_redacted, int) and not isinstance(right_redacted, bool)
+            else 0
+        ),
+        "blacklist_hits": int(left.get("blacklist_hits") or 0)
+        + int(right.get("blacklist_hits") or 0),
     }
 
 
@@ -3133,7 +3425,9 @@ def _process_transcript(
     args: argparse.Namespace,
     language: str,
 ) -> tuple[str, dict[str, object]]:
-    post_process_backend = _effective_post_process_backend(args.post_process_backend, args.post_process_command)
+    post_process_backend = _effective_post_process_backend(
+        args.post_process_backend, args.post_process_command
+    )
     openai_compatible_api_key = (
         _openai_compatible_api_key_from_args(args)
         if post_process_backend in {"openai-compatible", "openai", "local-openai"}
@@ -3158,7 +3452,9 @@ def _process_transcript(
             remote_http.POSTPROCESS_OPENAI_COMPATIBLE_OPERATION,
             {
                 "api_key": openai_compatible_api_key,
-                "flex_processing": getattr(args, "openai_compatible_flex_processing", True),
+                "flex_processing": getattr(
+                    args, "openai_compatible_flex_processing", True
+                ),
                 "language": language,
                 "model": _openai_compatible_post_process_model(args),
                 "personal_context": args.personal_context,
@@ -3186,10 +3482,14 @@ def _process_transcript(
             getattr(args, "openai_compatible_flex_processing", True),
             openai_compatible_service_tier_fallback=True,
         )
-    if text.strip() and _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity"):
+    if text.strip() and _coerce_bool(
+        getattr(args, "soften_profanity", False), field_name="soften_profanity"
+    ):
         text = soften_profanity_text(text)
     text, final_security_post_processing = _apply_security_mask_only(text)
-    return text, _merge_security_post_processing(security_post_processing, final_security_post_processing)
+    return text, _merge_security_post_processing(
+        security_post_processing, final_security_post_processing
+    )
 
 
 def build_store(args: argparse.Namespace) -> StateStore:
@@ -3222,7 +3522,11 @@ def read_log_excerpt(path: Path | None, max_chars: int = 2000) -> str:
 
 def transcript_preview(text: str, max_chars: int = 80) -> str:
     text = _sanitize_transcript_display_text(text)
-    if text and len(text) <= max_chars and all(text.find(ch) < 0 for ch in " \t\n\r\f\v"):
+    if (
+        text
+        and len(text) <= max_chars
+        and all(text.find(ch) < 0 for ch in " \t\n\r\f\v")
+    ):
         return text
     clean = " ".join(text.split())
     if len(clean) <= max_chars:
@@ -3233,13 +3537,17 @@ def transcript_preview(text: str, max_chars: int = 80) -> str:
 def _sanitize_transcript_display_text(text: str) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("transcript display text must be text")
-    return TRANSCRIPT_DISPLAY_CONTROL_RE.sub(lambda match: f"\\u{ord(match.group(0)):04x}", text)
+    return TRANSCRIPT_DISPLAY_CONTROL_RE.sub(
+        lambda match: f"\\u{ord(match.group(0)):04x}", text
+    )
 
 
 def _sanitize_transcript_metadata_text(text: str) -> str:
     if isinstance(text, bool) or not isinstance(text, str):
         raise RuntimeError("transcript metadata text must be text")
-    return TRANSCRIPT_METADATA_CONTROL_RE.sub(lambda match: f"\\u{ord(match.group(0)):04x}", text)
+    return TRANSCRIPT_METADATA_CONTROL_RE.sub(
+        lambda match: f"\\u{ord(match.group(0)):04x}", text
+    )
 
 
 def _transcript_display_name(path: Path) -> str:
@@ -3255,7 +3563,9 @@ def _transcript_modified_at(mtime: float) -> str:
         return "unknown"
 
 
-def _redact_history_previews(transcripts: list[dict[str, object]]) -> list[dict[str, object]]:
+def _redact_history_previews(
+    transcripts: list[dict[str, object]],
+) -> list[dict[str, object]]:
     redacted: list[dict[str, object]] = []
     for entry in transcripts:
         redacted_entry: dict[str, object] = {
@@ -3268,7 +3578,9 @@ def _redact_history_previews(transcripts: list[dict[str, object]]) -> list[dict[
 
 
 def _transcript_history_candidates(directory: Path):
-    for path, file_stat in _safe_directory_entries(directory, field_name="transcript directory"):
+    for path, file_stat in _safe_directory_entries(
+        directory, field_name="transcript directory"
+    ):
         if not _is_transcript_artifact(path):
             continue
         if not stat_module.S_ISREG(file_stat.st_mode):
@@ -3429,7 +3741,9 @@ def _safe_stale_transient_transcript_files(
         raise RuntimeError("transient transcript max age must be an integer")
     cutoff = time.time() - max(max_age_seconds, 0)
     files: list[Path] = []
-    for path, file_stat in _safe_directory_entries(transcript_dir(), field_name="transcript directory"):
+    for path, file_stat in _safe_directory_entries(
+        transcript_dir(), field_name="transcript directory"
+    ):
         if not _is_transient_transcript_artifact(path):
             continue
         if not stat_module.S_ISREG(file_stat.st_mode):
@@ -3473,7 +3787,9 @@ def prune_stale_transient_transcripts(dry_run: bool = False) -> dict[str, object
                 continue
         elif dry_run:
             owner_presence = _safe_leaf_presence(owner_path)
-            current_owner_stat = _recording_artifact_stat(owner_path) if owner_presence else None
+            current_owner_stat = (
+                _recording_artifact_stat(owner_path) if owner_presence else None
+            )
             if (
                 owner_presence is None
                 or not owner_presence
@@ -3485,7 +3801,9 @@ def prune_stale_transient_transcripts(dry_run: bool = False) -> dict[str, object
                 continue
         else:
             try:
-                owner_removed = _remove_transient_transcript_owner(path, expected_stat=expected_owner_stat)
+                owner_removed = _remove_transient_transcript_owner(
+                    path, expected_stat=expected_owner_stat
+                )
             except RuntimeError:
                 owner_removed = False
             if not owner_removed:
@@ -3517,7 +3835,9 @@ def _cleanup_failed_paths(*cleanup_results: dict[str, object]) -> list[str]:
             raise RuntimeError("cleanup result failed_paths must be a list")
         for path in paths:
             if not isinstance(path, str) or not path:
-                raise RuntimeError("cleanup result failed_paths entries must be non-empty strings")
+                raise RuntimeError(
+                    "cleanup result failed_paths entries must be non-empty strings"
+                )
             failed_paths.append(path)
     return failed_paths
 
@@ -3588,14 +3908,16 @@ def _read_stored_transcript_text(
     expected_stat: os.stat_result | None = None,
 ) -> str:
     if max_bytes is not None and (
-        isinstance(max_bytes, bool)
-        or not isinstance(max_bytes, int)
-        or max_bytes < 1
+        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 1
     ):
         raise RuntimeError("transcript read size limit must be positive")
-    read_limit = MAX_STORED_TRANSCRIPT_BYTES if max_bytes is None else min(
-        max_bytes,
-        MAX_STORED_TRANSCRIPT_BYTES,
+    read_limit = (
+        MAX_STORED_TRANSCRIPT_BYTES
+        if max_bytes is None
+        else min(
+            max_bytes,
+            MAX_STORED_TRANSCRIPT_BYTES,
+        )
     )
     if is_encrypted_path(path):
         payload = read_decrypted_bytes_from_file(
@@ -3645,7 +3967,13 @@ def _stored_transcript_encryption_mode(
         mode = normalize_artifact_encryption(
             envelope.get("mode", "") if isinstance(envelope, dict) else ""
         )
-    except (UnicodeDecodeError, ValueError, RecursionError, MemoryError, ArtifactCryptoError):
+    except (
+        UnicodeDecodeError,
+        ValueError,
+        RecursionError,
+        MemoryError,
+        ArtifactCryptoError,
+    ):
         raise RuntimeError("encrypted transcript metadata is invalid") from None
     if mode == ARTIFACT_ENCRYPTION_OFF:
         raise RuntimeError("encrypted transcript metadata is invalid")
@@ -3653,7 +3981,9 @@ def _stored_transcript_encryption_mode(
 
 
 def _artifact_encryption_mode(args: argparse.Namespace) -> str:
-    return normalize_artifact_encryption(getattr(args, "artifact_encryption", ARTIFACT_ENCRYPTION_OFF))
+    return normalize_artifact_encryption(
+        getattr(args, "artifact_encryption", ARTIFACT_ENCRYPTION_OFF)
+    )
 
 
 def _confirm_plaintext_transcript_output(args: argparse.Namespace) -> bool:
@@ -3663,14 +3993,18 @@ def _confirm_plaintext_transcript_output(args: argparse.Namespace) -> bool:
     )
 
 
-def _transcript_payload_text(text: str, transcript_encryption: str, args: argparse.Namespace) -> str:
+def _transcript_payload_text(
+    text: str, transcript_encryption: str, args: argparse.Namespace
+) -> str:
     if _confirm_plaintext_transcript_output(args):
         return text
     return ""
 
 
 def _transcript_work_path(storage_path: Path, encryption_mode: str) -> Path:
-    return storage_path.with_name(f".{storage_path.stem}.{secrets.token_hex(8)}.tmp.txt")
+    return storage_path.with_name(
+        f".{storage_path.stem}.{secrets.token_hex(8)}.tmp.txt"
+    )
 
 
 def _prepare_transient_transcript_path(
@@ -3699,9 +4033,13 @@ def _prepare_transient_transcript_path_impl(
     try:
         path.relative_to(transcript_dir())
     except ValueError as exc:
-        raise RuntimeError(f"refusing to prepare transient transcript outside transcript directory: {path}") from exc
+        raise RuntimeError(
+            f"refusing to prepare transient transcript outside transcript directory: {path}"
+        ) from exc
     if not path.name.startswith(".") or not path.name.endswith(".tmp.txt"):
-        raise RuntimeError(f"refusing to prepare unexpected transient transcript path: {path}")
+        raise RuntimeError(
+            f"refusing to prepare unexpected transient transcript path: {path}"
+        )
     assert_no_symlink_ancestors(path, field_name="transient transcript file")
 
     def cleanup_created_path(
@@ -3713,7 +4051,9 @@ def _prepare_transient_transcript_path_impl(
             return
         try:
             if expected_owner_stat is None:
-                _remove_transient_transcript_path(path, storage_path, expected_stat=expected_stat)
+                _remove_transient_transcript_path(
+                    path, storage_path, expected_stat=expected_stat
+                )
             else:
                 _remove_transient_transcript_path(
                     path,
@@ -3725,9 +4065,11 @@ def _prepare_transient_transcript_path_impl(
             interrupt_error = (
                 primary_error
                 if isinstance(primary_error, KeyboardInterrupt)
-                else cleanup_error
-                if isinstance(cleanup_error, KeyboardInterrupt)
-                else None
+                else (
+                    cleanup_error
+                    if isinstance(cleanup_error, KeyboardInterrupt)
+                    else None
+                )
             )
             if interrupt_error is not None:
                 _raise_sanitized_transient_exception(interrupt_error)
@@ -3739,8 +4081,14 @@ def _prepare_transient_transcript_path_impl(
             _raise_sanitized_transient_exception(primary_error)
 
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-        raise OSError("secure transient transcript file open is not supported on this platform")
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
+        raise OSError(
+            "secure transient transcript file open is not supported on this platform"
+        )
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     fd: int | None = None
     file_stat: os.stat_result | None = None
@@ -3805,9 +4153,13 @@ def _prepare_transient_transcript_path_impl(
             fd = os.open(path, os.O_RDONLY | nofollow_flag | cloexec_flag)
             file_stat = os.fstat(fd)
         if not stat_module.S_ISREG(file_stat.st_mode):
-            raise RuntimeError(f"transient transcript file must be a regular file: {path}")
+            raise RuntimeError(
+                f"transient transcript file must be a regular file: {path}"
+            )
         if getattr(file_stat, "st_nlink", 1) != 1:
-            raise RuntimeError(f"transient transcript file must not be hardlinked: {path}")
+            raise RuntimeError(
+                f"transient transcript file must not be hardlinked: {path}"
+            )
         owner_stat = _write_transient_transcript_owner(path)
         return fd, owner_stat
     except OSError as exc:
@@ -3843,7 +4195,9 @@ def _same_leaf_identity(current: os.stat_result, expected: os.stat_result) -> bo
     )
 
 
-def _same_leaf_claim_identity(current: os.stat_result, expected: os.stat_result) -> bool:
+def _same_leaf_claim_identity(
+    current: os.stat_result, expected: os.stat_result
+) -> bool:
     return (
         current.st_dev == expected.st_dev
         and current.st_ino == expected.st_ino
@@ -3862,7 +4216,9 @@ def _unlink_regular_leaf_with_parent_fsync(
     already_claimed: bool = False,
     wipe_bytes: int | None = None,
 ) -> bool:
-    parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+    parent_fd = ensure_directory_without_following_symlinks(
+        path.parent, field_name=f"{field_name} directory"
+    )
     try:
         try:
             current = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
@@ -3872,7 +4228,9 @@ def _unlink_regular_leaf_with_parent_fsync(
             raise RuntimeError(f"{field_name} must be a regular file: {path}")
         if getattr(current, "st_nlink", 1) != 1:
             raise RuntimeError(f"{field_name} must not be hardlinked: {path}")
-        if expected_stat is not None and not _same_leaf_identity(current, expected_stat):
+        if expected_stat is not None and not _same_leaf_identity(
+            current, expected_stat
+        ):
             raise RuntimeError(f"{field_name} changed before deletion: {path}")
         if already_claimed:
             wiped_stat = secure_wipe_regular_file_at(
@@ -3888,7 +4246,9 @@ def _unlink_regular_leaf_with_parent_fsync(
                 follow_symlinks=False,
             )
             if not _same_leaf_identity(final_named_stat, wiped_stat):
-                raise RuntimeError(f"{field_name} changed after secure deletion: {path}")
+                raise RuntimeError(
+                    f"{field_name} changed after secure deletion: {path}"
+                )
             os.unlink(path.name, dir_fd=parent_fd)
             _fsync_fd(parent_fd)
             return True
@@ -3905,7 +4265,10 @@ def _unlink_regular_leaf_with_parent_fsync(
                 continue
             try:
                 claimed = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
-                if not stat_module.S_ISREG(claimed.st_mode) or getattr(claimed, "st_nlink", 1) != 1:
+                if (
+                    not stat_module.S_ISREG(claimed.st_mode)
+                    or getattr(claimed, "st_nlink", 1) != 1
+                ):
                     raise RuntimeError(f"{field_name} changed before deletion: {path}")
                 if not _same_leaf_claim_identity(claimed, current):
                     raise RuntimeError(f"{field_name} changed before deletion: {path}")
@@ -3956,12 +4319,20 @@ def _copy_recording_artifact_to_backup(
     expected_stat: os.stat_result,
 ) -> None:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-        raise RuntimeError("secure recording cleanup backup copy is not supported on this platform")
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
+        raise RuntimeError(
+            "secure recording cleanup backup copy is not supported on this platform"
+        )
     try:
         nonblock_flag = _required_nonblocking_flag()
     except OSError:
-        raise RuntimeError("secure nonblocking file open is not supported on this platform") from None
+        raise RuntimeError(
+            "secure nonblocking file open is not supported on this platform"
+        ) from None
     parent_fd = ensure_directory_without_following_symlinks(
         source.parent,
         field_name="recording cleanup backup directory",
@@ -3975,7 +4346,9 @@ def _copy_recording_artifact_to_backup(
             os.O_RDONLY | nonblock_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
             dir_fd=parent_fd,
         )
-        assert_fd_is_regular_private_file(source_fd, field_name="recording cleanup source")
+        assert_fd_is_regular_private_file(
+            source_fd, field_name="recording cleanup source"
+        )
         source_open_stat = os.fstat(source_fd)
         if not _same_leaf_identity(source_open_stat, expected_stat):
             raise RuntimeError("recording cleanup source changed before backup copy")
@@ -4004,7 +4377,9 @@ def _copy_recording_artifact_to_backup(
             field_name="recording cleanup backup",
             require_private_mode=True,
         )
-        current_source_stat = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
+        current_source_stat = os.stat(
+            source.name, dir_fd=parent_fd, follow_symlinks=False
+        )
         if not _same_leaf_identity(current_source_stat, expected_stat):
             raise RuntimeError("recording cleanup source changed during backup copy")
         _fsync_fd(parent_fd)
@@ -4023,7 +4398,9 @@ def _copy_recording_artifact_to_backup(
         if cleanup_errors:
             if primary_error is not None:
                 for cleanup_error in cleanup_errors:
-                    primary_error.add_note("recording cleanup backup copy cleanup failed")
+                    primary_error.add_note(
+                        "recording cleanup backup copy cleanup failed"
+                    )
             else:
                 raise cleanup_errors[0]
 
@@ -4057,22 +4434,30 @@ def _remove_transient_transcript_path(
         except FileNotFoundError:
             path_presence = _safe_leaf_presence(path)
             if path_presence is None or path_presence:
-                raise RuntimeError(f"failed to inspect deleted transient transcript file: {path}") from None
+                raise RuntimeError(
+                    f"failed to inspect deleted transient transcript file: {path}"
+                ) from None
         owner_path = _transient_transcript_owner_path(path)
         if expected_owner_stat is None:
             owner_presence = _safe_leaf_presence(owner_path)
             if owner_presence is None or owner_presence:
-                raise RuntimeError(f"failed to delete transient transcript owner: {owner_path}")
+                raise RuntimeError(
+                    f"failed to delete transient transcript owner: {owner_path}"
+                )
         else:
             _remove_transient_transcript_owner(path, expected_stat=expected_owner_stat)
         owner_presence = _safe_leaf_presence(owner_path)
         if owner_presence is None or owner_presence:
-            raise RuntimeError(f"failed to delete transient transcript owner: {owner_path}")
+            raise RuntimeError(
+                f"failed to delete transient transcript owner: {owner_path}"
+            )
         return True
     except FileNotFoundError:
         return False
     except RuntimeError as exc:
-        raise RuntimeError(f"failed to delete transient transcript file: {path}") from exc
+        raise RuntimeError(
+            f"failed to delete transient transcript file: {path}"
+        ) from exc
     finally:
         if expected_fd is not None:
             try:
@@ -4091,9 +4476,7 @@ def _transcription_cleanup_exception(
     interrupt_error = (
         transcription_error
         if isinstance(transcription_error, KeyboardInterrupt)
-        else cleanup_error
-        if isinstance(cleanup_error, KeyboardInterrupt)
-        else None
+        else cleanup_error if isinstance(cleanup_error, KeyboardInterrupt) else None
     )
     if interrupt_error is not None:
         return _sanitize_transient_exception(interrupt_error)
@@ -4133,18 +4516,23 @@ def _raise_recording_cleanup_failure(
     raise RuntimeError(error_text)
 
 
-def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) -> tuple[Path, str]:
+def _write_stored_transcript(
+    path: Path, text: str, args: argparse.Namespace
+) -> tuple[Path, str]:
     mode = _artifact_encryption_mode(args)
     try:
         payload = text.encode("utf-8")
     except UnicodeEncodeError as exc:
-        raise RuntimeError("failed to write transcript file: transcript text is not valid UTF-8") from exc
+        raise RuntimeError(
+            "failed to write transcript file: transcript text is not valid UTF-8"
+        ) from exc
     if len(payload) > MAX_STORED_TRANSCRIPT_BYTES:
         raise RuntimeError("transcript file is too large")
     if mode == ARTIFACT_ENCRYPTION_OFF:
         encrypted_sibling = _transcript_sibling_path(path)
         encrypted_sibling_present = bool(
-            encrypted_sibling is not None and _path_exists_or_is_symlink(encrypted_sibling)
+            encrypted_sibling is not None
+            and _path_exists_or_is_symlink(encrypted_sibling)
         )
         if encrypted_sibling_present and _path_exists_or_is_symlink(path):
             raise RuntimeError(
@@ -4157,15 +4545,21 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
         )
         _write_text_atomic(path, text)
         plaintext_stat = _recording_artifact_stat(path)
-        if encrypted_sibling is not None and _path_exists_or_is_symlink(encrypted_sibling):
+        if encrypted_sibling is not None and _path_exists_or_is_symlink(
+            encrypted_sibling
+        ):
             try:
                 if not encrypted_sibling_present:
-                    raise RuntimeError(f"encrypted transcript sibling appeared during plaintext storage: {encrypted_sibling}")
+                    raise RuntimeError(
+                        f"encrypted transcript sibling appeared during plaintext storage: {encrypted_sibling}"
+                    )
                 if encrypted_sibling_stat is None or not _remove_transcript_file(
                     encrypted_sibling,
                     expected_stat=encrypted_sibling_stat,
                 ):
-                    raise RuntimeError(f"encrypted transcript sibling is missing: {encrypted_sibling}")
+                    raise RuntimeError(
+                        f"encrypted transcript sibling is missing: {encrypted_sibling}"
+                    )
             except RuntimeError as exc:
                 try:
                     _rollback_plaintext_transcript_after_sibling_cleanup_failure(
@@ -4174,7 +4568,9 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
                     )
                 except BaseException as rollback_exc:
                     if isinstance(rollback_exc, Exception):
-                        raise RuntimeError(f"{exc}; plaintext transcript rollback failed") from exc
+                        raise RuntimeError(
+                            f"{exc}; plaintext transcript rollback failed"
+                        ) from exc
                     exc.add_note("plaintext transcript rollback failed")
                     raise exc.with_traceback(exc.__traceback__) from None
                 raise RuntimeError(
@@ -4199,9 +4595,13 @@ def _write_stored_transcript(path: Path, text: str, args: argparse.Namespace) ->
     try:
         if plaintext_present:
             if plaintext_stat is None:
-                raise RuntimeError(f"plaintext transcript file is not a safe regular file: {path}")
+                raise RuntimeError(
+                    f"plaintext transcript file is not a safe regular file: {path}"
+                )
         elif _path_exists_or_is_symlink(path):
-            raise RuntimeError(f"plaintext transcript file appeared during encryption: {path}")
+            raise RuntimeError(
+                f"plaintext transcript file appeared during encryption: {path}"
+            )
         _remove_plaintext_transcript_sibling_after_encryption(
             path,
             encrypted_path,
@@ -4229,16 +4629,22 @@ def _remove_plaintext_transcript_sibling_after_encryption(
 ) -> None:
     if encrypted_path == storage_path or not is_encrypted_path(encrypted_path):
         return
-    plaintext_path = encrypted_path.with_name(encrypted_path.name[:-len(".socenc")])
+    plaintext_path = encrypted_path.with_name(encrypted_path.name[: -len(".socenc")])
     if plaintext_path != storage_path:
-        raise RuntimeError(f"unexpected encrypted transcript sibling path: {encrypted_path}")
+        raise RuntimeError(
+            f"unexpected encrypted transcript sibling path: {encrypted_path}"
+        )
     plaintext_presence = _safe_leaf_presence(plaintext_path)
     if plaintext_presence is None:
-        raise RuntimeError(f"failed to inspect plaintext transcript artifact: {plaintext_path}")
+        raise RuntimeError(
+            f"failed to inspect plaintext transcript artifact: {plaintext_path}"
+        )
     if not plaintext_presence:
         return
     if not _remove_transcript_file(plaintext_path, expected_stat=expected_stat):
-        raise RuntimeError(f"failed to remove plaintext transcript artifact after encryption: {plaintext_path}")
+        raise RuntimeError(
+            f"failed to remove plaintext transcript artifact after encryption: {plaintext_path}"
+        )
 
 
 def _rollback_plaintext_transcript_after_sibling_cleanup_failure(
@@ -4256,7 +4662,9 @@ def _rollback_plaintext_transcript_after_sibling_cleanup_failure(
     if not _remove_transcript_file(path, expected_stat=expected_stat):
         path_presence = _safe_leaf_presence(path)
         if path_presence is None or path_presence:
-            raise RuntimeError(f"failed to roll back plaintext transcript artifact: {path}")
+            raise RuntimeError(
+                f"failed to roll back plaintext transcript artifact: {path}"
+            )
 
 
 def _remove_plaintext_export_sibling_after_encryption(
@@ -4268,20 +4676,28 @@ def _remove_plaintext_export_sibling_after_encryption(
 ) -> None:
     if encrypted_path == storage_path or not is_encrypted_path(encrypted_path):
         return
-    plaintext_path = encrypted_path.with_name(encrypted_path.name[:-len(".socenc")])
+    plaintext_path = encrypted_path.with_name(encrypted_path.name[: -len(".socenc")])
     if plaintext_path != storage_path:
-        raise RuntimeError(f"unexpected encrypted transcript export sibling path: {encrypted_path}")
+        raise RuntimeError(
+            f"unexpected encrypted transcript export sibling path: {encrypted_path}"
+        )
     plaintext_presence = _safe_leaf_presence(plaintext_path)
     if not expected_present:
         if plaintext_presence is None or plaintext_presence:
-            raise RuntimeError(f"transcript export appeared during encryption: {plaintext_path}")
+            raise RuntimeError(
+                f"transcript export appeared during encryption: {plaintext_path}"
+            )
         return
     if plaintext_presence is None:
-        raise RuntimeError(f"failed to inspect plaintext transcript export: {plaintext_path}")
+        raise RuntimeError(
+            f"failed to inspect plaintext transcript export: {plaintext_path}"
+        )
     if not plaintext_presence:
         return
     if expected_stat is None:
-        raise RuntimeError(f"transcript export is not a safe regular file: {plaintext_path}")
+        raise RuntimeError(
+            f"transcript export is not a safe regular file: {plaintext_path}"
+        )
     try:
         assert_no_symlink_ancestors(plaintext_path, field_name="transcript export")
         if not _unlink_regular_leaf_with_parent_fsync(
@@ -4291,19 +4707,23 @@ def _remove_plaintext_export_sibling_after_encryption(
         ):
             return
     except RuntimeError as exc:
-        raise RuntimeError(f"failed to remove plaintext transcript export after encryption: {plaintext_path}") from exc
+        raise RuntimeError(
+            f"failed to remove plaintext transcript export after encryption: {plaintext_path}"
+        ) from exc
 
 
 def _plaintext_recording_sibling_for_encrypted_path(path: Path) -> Path | None:
     if not is_encrypted_path(path) or not path.name.lower().endswith(".socenc"):
         return None
-    plaintext_path = path.with_name(path.name[:-len(".socenc")])
+    plaintext_path = path.with_name(path.name[: -len(".socenc")])
     if plaintext_path.suffix.lower() not in {".flac", ".wav"}:
         return None
     return plaintext_path
 
 
-def _plaintext_recording_cleanup_candidates(original_path: Path, encrypted_path: Path) -> list[Path]:
+def _plaintext_recording_cleanup_candidates(
+    original_path: Path, encrypted_path: Path
+) -> list[Path]:
     candidates: list[Path] = []
     if encrypted_path != original_path:
         candidates.append(original_path)
@@ -4327,22 +4747,38 @@ def _remove_plaintext_recording_sibling_after_encryption(
     *,
     expected_stats: dict[Path, os.stat_result | None] | None = None,
 ) -> None:
-    for candidate in _plaintext_recording_cleanup_candidates(original_path, encrypted_path):
-        expected_stat = expected_stats.get(candidate) if expected_stats is not None else None
+    for candidate in _plaintext_recording_cleanup_candidates(
+        original_path, encrypted_path
+    ):
+        expected_stat = (
+            expected_stats.get(candidate) if expected_stats is not None else None
+        )
         candidate_presence = _safe_leaf_presence(candidate)
-        if expected_stats is not None and candidate in expected_stats and expected_stat is None:
+        if (
+            expected_stats is not None
+            and candidate in expected_stats
+            and expected_stat is None
+        ):
             if candidate_presence is None or candidate_presence:
-                raise RuntimeError(f"plaintext recording artifact changed before cleanup: {candidate}")
+                raise RuntimeError(
+                    f"plaintext recording artifact changed before cleanup: {candidate}"
+                )
             continue
         if candidate_presence is None:
-            raise RuntimeError(f"failed to inspect plaintext recording artifact: {candidate}")
+            raise RuntimeError(
+                f"failed to inspect plaintext recording artifact: {candidate}"
+            )
         if not candidate_presence:
             continue
         suffix = candidate.suffix.lower()
         if suffix not in {".flac", ".wav"}:
-            raise RuntimeError(f"refusing to remove unexpected plaintext recording artifact: {candidate}")
+            raise RuntimeError(
+                f"refusing to remove unexpected plaintext recording artifact: {candidate}"
+            )
         if not remove_file(str(candidate), suffix=suffix, expected_stat=expected_stat):
-            raise RuntimeError(f"failed to remove plaintext recording artifact after encryption: {candidate}")
+            raise RuntimeError(
+                f"failed to remove plaintext recording artifact after encryption: {candidate}"
+            )
 
 
 def _rollback_encrypted_artifact_after_plaintext_cleanup_failure(
@@ -4360,37 +4796,51 @@ def _rollback_encrypted_artifact_after_plaintext_cleanup_failure(
         return
     try:
         if expected_stat is None:
-            raise RuntimeError(f"{field_name} identity is unavailable: {encrypted_path}")
+            raise RuntimeError(
+                f"{field_name} identity is unavailable: {encrypted_path}"
+            )
         _unlink_regular_leaf_with_parent_fsync(
             encrypted_path,
             field_name=field_name,
             expected_stat=expected_stat,
         )
     except RuntimeError as exc:
-        raise RuntimeError(f"failed to roll back encrypted artifact after plaintext cleanup failure: {encrypted_path}") from exc
+        raise RuntimeError(
+            f"failed to roll back encrypted artifact after plaintext cleanup failure: {encrypted_path}"
+        ) from exc
 
 
-def _raise_encrypted_artifact_rollback_failure(primary_error: RuntimeError, rollback_error: BaseException) -> None:
+def _raise_encrypted_artifact_rollback_failure(
+    primary_error: RuntimeError, rollback_error: BaseException
+) -> None:
     if isinstance(rollback_error, Exception):
-        raise RuntimeError(f"{primary_error}; encrypted artifact rollback failed") from primary_error
+        raise RuntimeError(
+            f"{primary_error}; encrypted artifact rollback failed"
+        ) from primary_error
     primary_error.add_note(f"encrypted artifact rollback failed: {rollback_error}")
     raise primary_error.with_traceback(primary_error.__traceback__)
 
 
-def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tuple[Path, str]:
+def _encrypt_kept_recording_artifact(
+    path: Path, args: argparse.Namespace
+) -> tuple[Path, str]:
     mode = _artifact_encryption_mode(args)
     if mode == ARTIFACT_ENCRYPTION_OFF:
         if is_encrypted_path(path):
             plaintext_path = _plaintext_recording_sibling_for_encrypted_path(path)
             if plaintext_path is None:
-                raise RuntimeError(f"encrypted recording artifact has no safe plaintext sibling: {path}")
+                raise RuntimeError(
+                    f"encrypted recording artifact has no safe plaintext sibling: {path}"
+                )
             if _path_exists_or_is_symlink(plaintext_path):
                 raise RuntimeError(
                     f"refusing to overwrite existing plaintext recording artifact during downgrade: {plaintext_path}"
                 )
             source_stat = _recording_artifact_stat(path)
             if source_stat is None:
-                raise RuntimeError(f"encrypted recording artifact is not a safe regular file: {path}")
+                raise RuntimeError(
+                    f"encrypted recording artifact is not a safe regular file: {path}"
+                )
             try:
                 payload = read_decrypted_bytes_from_file(
                     path,
@@ -4407,30 +4857,40 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
                 )
                 plaintext_stat = _recording_artifact_stat(plaintext_path)
                 if plaintext_stat is None:
-                    raise RuntimeError(f"plaintext recording artifact is not a safe regular file: {plaintext_path}")
+                    raise RuntimeError(
+                        f"plaintext recording artifact is not a safe regular file: {plaintext_path}"
+                    )
             except ArtifactCryptoError as exc:
                 raise RuntimeError(str(exc)) from exc
             if not remove_file(str(path), suffix=".socenc", expected_stat=source_stat):
                 try:
                     plaintext_presence = _safe_leaf_presence(plaintext_path)
                     if plaintext_presence is None:
-                        raise RuntimeError(f"failed to inspect plaintext recording artifact: {plaintext_path}")
+                        raise RuntimeError(
+                            f"failed to inspect plaintext recording artifact: {plaintext_path}"
+                        )
                     if plaintext_presence and not remove_file(
                         str(plaintext_path),
                         suffix=plaintext_path.suffix.lower(),
                         expected_stat=plaintext_stat,
                     ):
-                        raise RuntimeError(f"failed to roll back plaintext recording artifact: {plaintext_path}")
+                        raise RuntimeError(
+                            f"failed to roll back plaintext recording artifact: {plaintext_path}"
+                        )
                 except RuntimeError as cleanup_exc:
                     raise RuntimeError(
                         f"failed to remove encrypted recording artifact after plaintext storage: {path}"
                     ) from cleanup_exc
-                raise RuntimeError(f"failed to remove encrypted recording artifact after plaintext storage: {path}")
+                raise RuntimeError(
+                    f"failed to remove encrypted recording artifact after plaintext storage: {path}"
+                )
             return plaintext_path, ARTIFACT_ENCRYPTION_OFF
         encrypted_sibling = encrypted_path_for(path)
         encrypted_sibling_present = _path_exists_or_is_symlink(encrypted_sibling)
         encrypted_sibling_stat = (
-            _recording_artifact_stat(encrypted_sibling) if encrypted_sibling_present else None
+            _recording_artifact_stat(encrypted_sibling)
+            if encrypted_sibling_present
+            else None
         )
         if encrypted_sibling_present:
             if encrypted_sibling_stat is None or not remove_file(
@@ -4449,19 +4909,25 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
         encrypted_target_existed = _path_exists_or_is_symlink(encrypted_target_path)
         plaintext_cleanup_expected_stats = {
             candidate: _recording_artifact_stat(candidate)
-            for candidate in _plaintext_recording_cleanup_candidates(path, encrypted_target_path)
+            for candidate in _plaintext_recording_cleanup_candidates(
+                path, encrypted_target_path
+            )
         }
-        payload = read_decrypted_bytes_from_file(
-            path,
-            kind="recording",
-            field_name="recording audio file",
-            require_encrypted=True,
-        ) if is_encrypted_path(path) else read_decrypted_bytes_from_file(
-            path,
-            kind="recording",
-            field_name="recording audio file",
-            max_bytes=None,
-            require_encrypted=False,
+        payload = (
+            read_decrypted_bytes_from_file(
+                path,
+                kind="recording",
+                field_name="recording audio file",
+                require_encrypted=True,
+            )
+            if is_encrypted_path(path)
+            else read_decrypted_bytes_from_file(
+                path,
+                kind="recording",
+                field_name="recording audio file",
+                max_bytes=None,
+                require_encrypted=False,
+            )
         )
         encrypted_path, effective_mode = write_encrypted_bytes_atomically(
             path,
@@ -4493,12 +4959,26 @@ def _encrypt_kept_recording_artifact(path: Path, args: argparse.Namespace) -> tu
     return encrypted_path, effective_mode
 
 
-_TRANSCRIPT_READ_EXCEPTIONS = (OSError, RuntimeError, ValueError, UnicodeDecodeError, ArtifactCryptoError)
+_TRANSCRIPT_READ_EXCEPTIONS = (
+    OSError,
+    RuntimeError,
+    ValueError,
+    UnicodeDecodeError,
+    ArtifactCryptoError,
+)
 
 
-def _transcript_read_failure(path: Path, exc: BaseException, *, reveal_metadata: bool = True) -> RuntimeError:
-    name = _transcript_display_name(path) if reveal_metadata else HISTORY_METADATA_REDACTED_TEXT
-    return RuntimeError(f"failed to read transcript {name}: {_redact_error_for_user(str(exc))}")
+def _transcript_read_failure(
+    path: Path, exc: BaseException, *, reveal_metadata: bool = True
+) -> RuntimeError:
+    name = (
+        _transcript_display_name(path)
+        if reveal_metadata
+        else HISTORY_METADATA_REDACTED_TEXT
+    )
+    return RuntimeError(
+        f"failed to read transcript {name}: {_redact_error_for_user(str(exc))}"
+    )
 
 
 def _collect_transcript_history(
@@ -4556,7 +5036,9 @@ def _collect_transcript_history(
     return entries, unreadable_count
 
 
-def _partition_transcript_cleanup_files(paths: list[Path]) -> tuple[list[Path], list[Path]]:
+def _partition_transcript_cleanup_files(
+    paths: list[Path],
+) -> tuple[list[Path], list[Path]]:
     readable_transcripts: list[Path] = []
     empty_transcripts: list[Path] = []
     for group in _group_transcript_artifacts(paths).values():
@@ -4568,7 +5050,11 @@ def _partition_transcript_cleanup_files(paths: list[Path]) -> tuple[list[Path], 
                     group_has_content = True
             except _TRANSCRIPT_READ_EXCEPTIONS:
                 group_has_unreadable = True
-        target = readable_transcripts if group_has_content or group_has_unreadable else empty_transcripts
+        target = (
+            readable_transcripts
+            if group_has_content or group_has_unreadable
+            else empty_transcripts
+        )
         target.extend(group)
     return readable_transcripts, empty_transcripts
 
@@ -4625,7 +5111,9 @@ def build_transcripts_document(
                 read_kwargs["expected_stat"] = expected_stat
             text = _read_stored_transcript_text(path, **read_kwargs).strip()
         except _TRANSCRIPT_READ_EXCEPTIONS as exc:
-            raise _transcript_read_failure(path, exc, reveal_metadata=reveal_metadata) from exc
+            raise _transcript_read_failure(
+                path, exc, reveal_metadata=reveal_metadata
+            ) from exc
         if not text:
             continue
         scanned_chars += len(text)
@@ -4654,7 +5142,9 @@ def build_transcripts_document(
                         ]
                     )
                     break
-                raise RuntimeError("transcript export is too large; reduce transcript retention or export fewer files")
+                raise RuntimeError(
+                    "transcript export is too large; reduce transcript retention or export fewer files"
+                )
         lines.extend(entry)
         count += 1
         if count >= limit:
@@ -4669,7 +5159,9 @@ def _transcript_export_path(plaintext: bool) -> Path:
 
 
 def _ensure_transcript_export_dir(path: Path) -> None:
-    fd = ensure_directory_without_following_symlinks(path.parent, field_name="transcript export directory")
+    fd = ensure_directory_without_following_symlinks(
+        path.parent, field_name="transcript export directory"
+    )
     try:
         os.fchmod(fd, 0o700)
     finally:
@@ -4690,11 +5182,15 @@ def write_transcripts_export(
     confirm_plaintext = _coerce_bool(confirm_plaintext, field_name="confirm_plaintext")
     if plaintext:
         if not confirm_plaintext:
-            raise RuntimeError("plaintext transcript export requires --confirm-plaintext")
+            raise RuntimeError(
+                "plaintext transcript export requires --confirm-plaintext"
+            )
     else:
         mode = normalize_artifact_encryption(encryption_mode)
         if mode == ARTIFACT_ENCRYPTION_OFF:
-            raise RuntimeError("encrypted transcript export requires keyring or passphrase; use --plaintext --confirm-plaintext for plaintext export")
+            raise RuntimeError(
+                "encrypted transcript export requires keyring or passphrase; use --plaintext --confirm-plaintext for plaintext export"
+            )
     content, count, _truncated = build_transcripts_document(
         limit,
         max_chars=MAX_TRANSCRIPTS_EXPORT_CHARS,
@@ -4707,8 +5203,12 @@ def write_transcripts_export(
         _write_text_atomic(output_path, content)
         return output_path, count, ARTIFACT_ENCRYPTION_OFF
     plaintext_present = _path_exists_or_is_symlink(output_path)
-    plaintext_stat = _recording_artifact_stat(output_path) if plaintext_present else None
-    encrypted_target_existed = _path_exists_or_is_symlink(encrypted_path_for(output_path))
+    plaintext_stat = (
+        _recording_artifact_stat(output_path) if plaintext_present else None
+    )
+    encrypted_target_existed = _path_exists_or_is_symlink(
+        encrypted_path_for(output_path)
+    )
     encrypted_path, used_mode = write_encrypted_bytes_atomically(
         output_path,
         content.encode("utf-8"),
@@ -4744,7 +5244,9 @@ def normalized_path(path_value: str | None) -> Path | None:
     return _coerce_path(path_value, field_name="path", resolve=True)
 
 
-def _normalized_state_artifact_path(path_value: str | None, *, state_path: Path | None = None) -> Path | None:
+def _normalized_state_artifact_path(
+    path_value: str | None, *, state_path: Path | None = None
+) -> Path | None:
     if not path_value:
         return None
     path = Path(path_value).expanduser()
@@ -4756,7 +5258,11 @@ def _normalized_state_artifact_path(path_value: str | None, *, state_path: Path 
     except (OSError, RuntimeError):
         return None
     normalized = normalized.resolve(strict=False)
-    if was_relative and state_path is not None and not normalized.is_relative_to(base_dir.resolve(strict=False)):
+    if (
+        was_relative
+        and state_path is not None
+        and not normalized.is_relative_to(base_dir.resolve(strict=False))
+    ):
         return None
     return normalized
 
@@ -4779,7 +5285,11 @@ def _normalized_state_recording_artifact_path(
     except (OSError, RuntimeError):
         return None
     path = path.resolve(strict=False)
-    if was_relative and state_path is not None and not path.is_relative_to(base_dir.resolve(strict=False)):
+    if (
+        was_relative
+        and state_path is not None
+        and not path.is_relative_to(base_dir.resolve(strict=False))
+    ):
         return None
     try:
         return validate_recording_path(
@@ -4810,16 +5320,22 @@ def _protected_unverified_state_recording_artifact_path(
         path = Path(path_value).expanduser()
         base_dir = state_path.parent if state_path is not None else Path.cwd()
         was_relative = not path.is_absolute()
-        normalized = Path(os.path.abspath(os.fspath(path if not was_relative else base_dir / path)))
+        normalized = Path(
+            os.path.abspath(os.fspath(path if not was_relative else base_dir / path))
+        )
         allowed_suffixes = (suffix,) if isinstance(suffix, str) else suffix
-        if not normalized.name.lower().endswith(tuple(item.lower() for item in allowed_suffixes)):
+        if not normalized.name.lower().endswith(
+            tuple(item.lower() for item in allowed_suffixes)
+        ):
             return None
         if was_relative and state_path is not None:
             normalized_base = Path(os.path.abspath(os.fspath(base_dir)))
             if not normalized.is_relative_to(normalized_base):
                 return None
         if require_recordings_dir:
-            normalized_recordings_dir = Path(os.path.abspath(os.fspath(recordings_dir())))
+            normalized_recordings_dir = Path(
+                os.path.abspath(os.fspath(recordings_dir()))
+            )
             if not normalized.is_relative_to(normalized_recordings_dir):
                 return None
         return normalized
@@ -4836,7 +5352,9 @@ def _assert_json_payload_size(payload: dict[str, object], *, max_bytes: int) -> 
         raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
 
 
-def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int) -> None:
+def _write_json_atomic(
+    path: Path, payload: dict[str, object], *, max_bytes: int
+) -> None:
     try:
         content = json.dumps(payload, indent=2, sort_keys=True, allow_nan=False) + "\n"
     except (MemoryError, RecursionError) as exc:
@@ -4844,7 +5362,9 @@ def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int
     if len(content.encode("utf-8")) > max_bytes:
         raise RuntimeError(f"output JSON is too large (max {max_bytes} bytes)")
     try:
-        write_text_atomically_without_following_symlinks(path, content, field_name="JSON output path")
+        write_text_atomically_without_following_symlinks(
+            path, content, field_name="JSON output path"
+        )
     except (OSError, RuntimeError, MemoryError) as exc:
         raise RuntimeError(f"failed to write JSON output: {path}") from exc
 
@@ -4852,8 +5372,14 @@ def _write_json_atomic(path: Path, payload: dict[str, object], *, max_bytes: int
 def _harden_diagnostics_artifacts() -> None:
     """Make legacy diagnostics reports private without following symlinks."""
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-        raise RuntimeError("secure diagnostics artifact open is not supported on this platform")
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
+        raise RuntimeError(
+            "secure diagnostics artifact open is not supported on this platform"
+        )
     directory_fd = open_directory_without_following_symlinks(
         diagnostics_dir(),
         field_name="diagnostics directory",
@@ -4865,10 +5391,16 @@ def _harden_diagnostics_artifacts() -> None:
                 scanned_entries = 0
                 for directory_entry in directory_entries:
                     if scanned_entries >= MAX_DIRECTORY_SCAN_ENTRIES:
-                        raise RuntimeError("diagnostics directory contains too many entries")
+                        raise RuntimeError(
+                            "diagnostics directory contains too many entries"
+                        )
                     scanned_entries += 1
                     name = directory_entry.name
-                    if not isinstance(name, str) or not name.startswith("diagnostics-") or not name.endswith(".json"):
+                    if (
+                        not isinstance(name, str)
+                        or not name.startswith("diagnostics-")
+                        or not name.endswith(".json")
+                    ):
                         continue
                     try:
                         artifact_fd = os.open(
@@ -4879,9 +5411,13 @@ def _harden_diagnostics_artifacts() -> None:
                     except FileNotFoundError:
                         continue
                     except OSError as exc:
-                        raise RuntimeError(f"diagnostics artifact could not be opened safely: {name}") from exc
+                        raise RuntimeError(
+                            f"diagnostics artifact could not be opened safely: {name}"
+                        ) from exc
                     try:
-                        assert_fd_is_regular_private_file(artifact_fd, field_name="diagnostics artifact")
+                        assert_fd_is_regular_private_file(
+                            artifact_fd, field_name="diagnostics artifact"
+                        )
                         os.fchmod(artifact_fd, 0o600)
                         assert_fd_is_regular_private_file(
                             artifact_fd,
@@ -4889,7 +5425,9 @@ def _harden_diagnostics_artifacts() -> None:
                             require_private_mode=True,
                         )
                     except OSError as exc:
-                        raise RuntimeError(f"diagnostics artifact could not be made private: {name}") from exc
+                        raise RuntimeError(
+                            f"diagnostics artifact could not be made private: {name}"
+                        ) from exc
                     finally:
                         try:
                             os.close(artifact_fd)
@@ -4914,7 +5452,9 @@ def _harden_diagnostics_artifacts() -> None:
 
 def _write_text_atomic(path: Path, text: str) -> None:
     try:
-        write_text_atomically_without_following_symlinks(path, text, field_name="text output path")
+        write_text_atomically_without_following_symlinks(
+            path, text, field_name="text output path"
+        )
     except (OSError, RuntimeError) as exc:
         raise RuntimeError(f"failed to write transcript file: {path}") from exc
 
@@ -4945,12 +5485,24 @@ def _prepare_private_file(
         raise RuntimeError(f"{field_name} must be a path")
     assert_safe_path_components(path, field_name=field_name)
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-        raise RuntimeError(f"secure {field_name} open is not supported on this platform")
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
+        raise RuntimeError(
+            f"secure {field_name} open is not supported on this platform"
+        )
     try:
-        parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+        parent_fd = ensure_directory_without_following_symlinks(
+            path.parent, field_name=f"{field_name} directory"
+        )
     except OSError as exc:
-        raise _PrivateFilePrepareError(f"failed to prepare {field_name}: {path}", created=False, errno_value=exc.errno) from exc
+        raise _PrivateFilePrepareError(
+            f"failed to prepare {field_name}: {path}",
+            created=False,
+            errno_value=exc.errno,
+        ) from exc
     try:
         flags = os.O_WRONLY | os.O_CREAT | nofollow_flag
         if exclusive:
@@ -4959,7 +5511,11 @@ def _prepare_private_file(
             flags |= os.O_APPEND
         fd = os.open(path.name, flags, 0o600, dir_fd=parent_fd)
     except OSError as exc:
-        raise _PrivateFilePrepareError(f"failed to prepare {field_name}: {path}", created=False, errno_value=exc.errno) from exc
+        raise _PrivateFilePrepareError(
+            f"failed to prepare {field_name}: {path}",
+            created=False,
+            errno_value=exc.errno,
+        ) from exc
     finally:
         try:
             os.close(parent_fd)
@@ -5050,8 +5606,14 @@ def _allocate_recording_artifacts() -> tuple[Path, Path]:
     candidates_checked = 0
     while candidates_checked < MAX_RECORDING_ARTIFACT_CANDIDATES:
         base_stem = timestamp()
-        for collision_index in range(MAX_RECORDING_ARTIFACT_CANDIDATES - candidates_checked):
-            stem = base_stem if collision_index == 0 else f"{base_stem}-{collision_index:02d}"
+        for collision_index in range(
+            MAX_RECORDING_ARTIFACT_CANDIDATES - candidates_checked
+        ):
+            stem = (
+                base_stem
+                if collision_index == 0
+                else f"{base_stem}-{collision_index:02d}"
+            )
             audio_path = validate_recording_path(
                 root / f"{stem}.wav",
                 suffix=".wav",
@@ -5065,7 +5627,10 @@ def _allocate_recording_artifacts() -> tuple[Path, Path]:
                 recordings_root=root,
             )
             candidates_checked += 1
-            if _recording_artifact_stat(audio_path) is not None or _recording_artifact_stat(log_path) is not None:
+            if (
+                _recording_artifact_stat(audio_path) is not None
+                or _recording_artifact_stat(log_path) is not None
+            ):
                 continue
             try:
                 _prepare_private_file(audio_path, field_name="recording audio file")
@@ -5077,11 +5642,16 @@ def _allocate_recording_artifacts() -> tuple[Path, Path]:
                         recordings_root=root,
                         expected_stat=exc.created_stat,
                     ):
-                        raise RuntimeError(f"failed to clean partial recording audio file: {audio_path}") from None
+                        raise RuntimeError(
+                            f"failed to clean partial recording audio file: {audio_path}"
+                        ) from None
                     if _recording_artifact_stat(audio_path) is not None:
                         continue
                     break
-                if exc.errno == errno.EEXIST and _recording_artifact_stat(audio_path) is not None:
+                if (
+                    exc.errno == errno.EEXIST
+                    and _recording_artifact_stat(audio_path) is not None
+                ):
                     continue
                 raise
             else:
@@ -5089,7 +5659,9 @@ def _allocate_recording_artifacts() -> tuple[Path, Path]:
     raise RuntimeError("failed to allocate collision-free recording artifacts")
 
 
-def _remove_transcript_file(path: Path, *, expected_stat: os.stat_result | None = None) -> bool:
+def _remove_transcript_file(
+    path: Path, *, expected_stat: os.stat_result | None = None
+) -> bool:
     if not isinstance(path, Path) or not _is_transcript_artifact(path):
         raise RuntimeError("transcript path must be a .txt or .txt.socenc path")
     try:
@@ -5097,7 +5669,9 @@ def _remove_transcript_file(path: Path, *, expected_stat: os.stat_result | None 
         assert_no_symlink_ancestors(path, field_name="transcript file")
         path.resolve(strict=False).relative_to(transcript_dir().resolve(strict=False))
     except (OSError, RuntimeError, ValueError):
-        raise RuntimeError(f"refusing to delete transcript outside transcript directory: {path}") from None
+        raise RuntimeError(
+            f"refusing to delete transcript outside transcript directory: {path}"
+        ) from None
     try:
         file_stat = path.lstat()
     except FileNotFoundError:
@@ -5128,7 +5702,9 @@ def _require_json_path(
     max_chars: int = MAX_PATH_CHARS,
 ) -> Path:
     if path_value:
-        path = _coerce_path(path_value, field_name=field_name, resolve=False, max_chars=max_chars)
+        path = _coerce_path(
+            path_value, field_name=field_name, resolve=False, max_chars=max_chars
+        )
         if not path.is_absolute():
             path = Path.cwd() / path
     elif default is not None:
@@ -5146,14 +5722,20 @@ def _require_json_path(
 def _settings_json_path_limit(path_value: str) -> int:
     if not path_value:
         return MAX_SETTINGS_EXPORT_PATH_CHARS
-    return MAX_SETTINGS_EXPORT_PATH_CHARS if Path(path_value).expanduser().is_absolute() else MAX_PATH_CHARS
+    return (
+        MAX_SETTINGS_EXPORT_PATH_CHARS
+        if Path(path_value).expanduser().is_absolute()
+        else MAX_PATH_CHARS
+    )
 
 
 def _parse_cli_settings_json(raw: str) -> dict[str, object]:
     if isinstance(raw, bool) or not isinstance(raw, str):
         raise RuntimeError("settings JSON must be text")
     if len(raw) > MAX_SETTINGS_JSON_CHARS:
-        raise RuntimeError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
+        raise RuntimeError(
+            f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)"
+        )
     try:
         return parse_settings_json(raw)
     except json.JSONDecodeError as exc:
@@ -5161,16 +5743,22 @@ def _parse_cli_settings_json(raw: str) -> dict[str, object]:
 
 
 def _settings_json_from_args(args: argparse.Namespace) -> dict[str, object]:
-    if _coerce_bool(getattr(args, "settings_json_stdin", False), field_name="settings_json_stdin"):
+    if _coerce_bool(
+        getattr(args, "settings_json_stdin", False), field_name="settings_json_stdin"
+    ):
         if str(getattr(args, "settings_json", "{}") or "{}") != "{}":
-            raise RuntimeError("settings JSON must be provided by either --settings-json or stdin, not both")
+            raise RuntimeError(
+                "settings JSON must be provided by either --settings-json or stdin, not both"
+            )
         raw = sys.stdin.read(MAX_SETTINGS_JSON_CHARS + 1)
         return _parse_cli_settings_json(raw or "{}")
     settings = _parse_cli_settings_json(getattr(args, "settings_json", "{}"))
     from .settings_export import NON_EXPORTABLE_PRIVATE_SETTINGS
 
     if any(key in settings for key in NON_EXPORTABLE_PRIVATE_SETTINGS):
-        raise RuntimeError("private settings must be provided via --settings-json-stdin, not --settings-json")
+        raise RuntimeError(
+            "private settings must be provided via --settings-json-stdin, not --settings-json"
+        )
     return settings
 
 
@@ -5226,7 +5814,9 @@ def _normalize_input_sources(sources: object) -> list[dict[str, object]]:
     if not isinstance(sources, list):
         raise RuntimeError("input sources must be a list")
 
-    def normalize_source_text(value: object, *, field_name: str, max_chars: int = MAX_INPUT_SOURCE_FIELD_CHARS) -> str:
+    def normalize_source_text(
+        value: object, *, field_name: str, max_chars: int = MAX_INPUT_SOURCE_FIELD_CHARS
+    ) -> str:
         if not isinstance(value, str) or isinstance(value, bool):
             raise RuntimeError(f"{field_name} must be text")
         if _contains_escaped_null(value):
@@ -5258,7 +5848,9 @@ def _normalize_input_sources(sources: object) -> list[dict[str, object]]:
         )
 
         description = source.description if hasattr(source, "description") else None
-        description = normalize_source_text(description, field_name="input source description")
+        description = normalize_source_text(
+            description, field_name="input source description"
+        )
 
         driver = source.driver if hasattr(source, "driver") else None
         driver = normalize_source_text(driver, field_name="input source driver")
@@ -5333,7 +5925,9 @@ def _normalize_text_models_payload(payload: object) -> dict[str, object]:
     if _contains_escaped_null(message):
         raise RuntimeError("text models payload message contains invalid null byte")
     if _contains_http_header_control_chars(message):
-        raise RuntimeError("text models payload message contains invalid control character")
+        raise RuntimeError(
+            "text models payload message contains invalid control character"
+        )
     models = _normalize_model_payloads(payload.get("models"))
     return {
         "available": available,
@@ -5391,7 +5985,11 @@ def active_artifact_paths(
         sibling_path = _transcript_sibling_path(path)
         if sibling_path is not None:
             paths.add(sibling_path)
-    if state_path is not None and state.status == "finalizing" and include_finalizing_inflight:
+    if (
+        state_path is not None
+        and state.status == "finalizing"
+        and include_finalizing_inflight
+    ):
         paths.update(_finalizing_inflight_artifact_paths(state_path, state))
     return paths
 
@@ -5403,8 +6001,15 @@ def _enforce_recording_artifact_cap(
     state_path: Path | None = None,
 ) -> dict[str, object]:
     if state is None:
-        return {"planned_paths": [], "deleted_paths": [], "failed_paths": [], "skipped_active_paths": []}
-    active_paths = set(active_artifact_paths(state, state_path=state_path)) | (active_paths or set())
+        return {
+            "planned_paths": [],
+            "deleted_paths": [],
+            "failed_paths": [],
+            "skipped_active_paths": [],
+        }
+    active_paths = set(active_artifact_paths(state, state_path=state_path)) | (
+        active_paths or set()
+    )
     artifact_stats: dict[Path, os.stat_result] = {}
     try:
         artifact_files = recording_artifact_files(expected_stats=artifact_stats)
@@ -5438,8 +6043,12 @@ def _safe_recording_artifact_path(
             suffixes = (suffix,) if isinstance(suffix, str) else suffix
             if ".socenc" not in suffixes:
                 return None
-            return validate_recording_path(path, suffix=".socenc", require_recordings_dir=require_recordings_dir)
-        return validate_recording_path(path, suffix=suffix, require_recordings_dir=require_recordings_dir)
+            return validate_recording_path(
+                path, suffix=".socenc", require_recordings_dir=require_recordings_dir
+            )
+        return validate_recording_path(
+            path, suffix=suffix, require_recordings_dir=require_recordings_dir
+        )
     except (RecorderError, ValueError, OSError, TypeError):
         return None
 
@@ -5455,7 +6064,11 @@ def _recording_process_identity_for_pid(pid: int) -> str | None:
 
 
 def _recorder_scope_for_process(process: object) -> str | None:
-    value = vars(process).get("_soc_recorder_scope") if hasattr(process, "__dict__") else None
+    value = (
+        vars(process).get("_soc_recorder_scope")
+        if hasattr(process, "__dict__")
+        else None
+    )
     if isinstance(value, str) and value:
         return value
     return None
@@ -5475,7 +6088,10 @@ def _recorder_start_cleanup_is_incomplete(error: BaseException) -> bool:
             ownership = None
         if ownership is not None and ownership.cleanup_incomplete:
             return True
-        if any("recorder process cleanup was incomplete" in note for note in getattr(current, "__notes__", ())):
+        if any(
+            "recorder process cleanup was incomplete" in note
+            for note in getattr(current, "__notes__", ())
+        ):
             return True
         pending.append(getattr(current, "__cause__", None))
         pending.append(getattr(current, "__context__", None))
@@ -5491,7 +6107,11 @@ def _retain_incomplete_recorder_startup_lock(
     retained = False
     try:
         ownership = recorder_startup_ownership(error)
-        if ownership is not None and ownership.cleanup_incomplete and ownership.pid is not None:
+        if (
+            ownership is not None
+            and ownership.cleanup_incomplete
+            and ownership.pid is not None
+        ):
             retention_kwargs: dict[str, str | None] = {
                 "recorder_scope": ownership.recorder_scope,
             }
@@ -5592,7 +6212,9 @@ def _recording_process_verified_alive(state: RecordingState) -> bool:
     pid = state.pid
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return False
-    expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)
+    expected_identity = _recording_process_identity_for_lifecycle(
+        state.process_identity
+    )
     if expected_identity is None:
         raise RuntimeError(_RECORDING_PROCESS_IDENTITY_INVALID_ERROR)
     try:
@@ -5612,7 +6234,9 @@ def _recording_process_verified_alive(state: RecordingState) -> bool:
             "recording process identity could not be verified; refusing to signal pid"
         ) from None
     if current_identity is None:
-        raise RuntimeError("recording process identity could not be verified; refusing to signal pid")
+        raise RuntimeError(
+            "recording process identity could not be verified; refusing to signal pid"
+        )
     return (
         _recording_process_identity_relation(
             pid,
@@ -5626,7 +6250,9 @@ def _recording_process_verified_alive(state: RecordingState) -> bool:
 def _recording_process_verified_active(state: RecordingState) -> bool:
     if not _recording_process_verified_alive(state):
         if not state.recorder_scope:
-            expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)
+            expected_identity = _recording_process_identity_for_lifecycle(
+                state.process_identity
+            )
             if expected_identity is None:
                 raise RuntimeError(_RECORDING_PROCESS_IDENTITY_INVALID_ERROR)
             stable_absence, absence_error = _recording_process_stable_absence(
@@ -5637,9 +6263,7 @@ def _recording_process_verified_active(state: RecordingState) -> bool:
                 raise RuntimeError(absence_error)
             if stable_absence:
                 return False
-            raise RuntimeError(
-                _RECORDING_PROCESS_GROUP_ACTIVE_ERROR
-            )
+            raise RuntimeError(_RECORDING_PROCESS_GROUP_ACTIVE_ERROR)
         scope_gone = _recorder_scope_is_stably_gone(state.recorder_scope)
         if scope_gone is None:
             raise RuntimeError(
@@ -5712,7 +6336,11 @@ def _recorder_process_liveness_snapshot(
         )
     try:
         if process.poll() is None:
-            return False, "recording process could not be stopped safely", expected_recorder_scope
+            return (
+                False,
+                "recording process could not be stopped safely",
+                expected_recorder_scope,
+            )
         if expected_recorder_scope is not None:
             scope_gone = _recorder_scope_is_stably_gone(expected_recorder_scope)
             if scope_gone is True:
@@ -5744,8 +6372,16 @@ def _recorder_process_liveness_snapshot(
             expected_recorder_scope,
         )
     if group_live is False:
-        return True, "recording process has exited; stop confirmation was unavailable", expected_recorder_scope
-    return False, "recording process could not be stopped safely", expected_recorder_scope
+        return (
+            True,
+            "recording process has exited; stop confirmation was unavailable",
+            expected_recorder_scope,
+        )
+    return (
+        False,
+        "recording process could not be stopped safely",
+        expected_recorder_scope,
+    )
 
 
 def _recorder_process_is_gone(process: subprocess.Popen[bytes]) -> bool:
@@ -5832,11 +6468,14 @@ def _recording_process_stable_absence(
         != _PROCESS_IDENTITY_SAME
     ):
         return False, _RECORDING_PROCESS_IDENTITY_INVALID_ERROR
-    current_identity, group_live, identity_status = (
-        _recording_process_absence_probe(pid)
+    current_identity, group_live, identity_status = _recording_process_absence_probe(
+        pid
     )
     if identity_status == _RECORDING_PROCESS_IDENTITY_UNKNOWN:
-        return False, "recording process identity could not be verified; recording state preserved"
+        return (
+            False,
+            "recording process identity could not be verified; recording state preserved",
+        )
     if identity_status == _RECORDING_PROCESS_IDENTITY_PRESENT:
         identity_relation = _recording_process_identity_relation(
             pid,
@@ -5844,19 +6483,31 @@ def _recording_process_stable_absence(
             current_identity,
         )
         if identity_relation == _PROCESS_IDENTITY_REUSED:
-            return False, "recording process identity does not match; recording state preserved"
+            return (
+                False,
+                "recording process identity does not match; recording state preserved",
+            )
         if (
             not allow_matching_identity
             or not expected_identity
             or identity_relation != _PROCESS_IDENTITY_SAME
         ):
-            return False, "recording process liveness could not be verified; recording state preserved"
+            return (
+                False,
+                "recording process liveness could not be verified; recording state preserved",
+            )
         if group_live is None:
-            return False, "recording process liveness could not be verified; recording state preserved"
+            return (
+                False,
+                "recording process liveness could not be verified; recording state preserved",
+            )
         if group_live is True:
             return False, None
     if group_live is None:
-        return False, "recording process liveness could not be verified; recording state preserved"
+        return (
+            False,
+            "recording process liveness could not be verified; recording state preserved",
+        )
     if group_live is True:
         return False, None
 
@@ -5865,7 +6516,10 @@ def _recording_process_stable_absence(
         _recording_process_absence_probe(pid)
     )
     if second_identity_status == _RECORDING_PROCESS_IDENTITY_UNKNOWN:
-        return False, "recording process identity could not be verified; recording state preserved"
+        return (
+            False,
+            "recording process identity could not be verified; recording state preserved",
+        )
     if second_identity_status == _RECORDING_PROCESS_IDENTITY_PRESENT:
         identity_relation = _recording_process_identity_relation(
             pid,
@@ -5873,15 +6527,24 @@ def _recording_process_stable_absence(
             second_identity,
         )
         if identity_relation == _PROCESS_IDENTITY_REUSED:
-            return False, "recording process identity does not match; recording state preserved"
+            return (
+                False,
+                "recording process identity does not match; recording state preserved",
+            )
         if (
             not allow_matching_identity
             or not expected_identity
             or identity_relation != _PROCESS_IDENTITY_SAME
         ):
-            return False, "recording process liveness could not be verified; recording state preserved"
+            return (
+                False,
+                "recording process liveness could not be verified; recording state preserved",
+            )
     if second_group_live is not False:
-        return False, "recording process liveness could not be verified; recording state preserved"
+        return (
+            False,
+            "recording process liveness could not be verified; recording state preserved",
+        )
     return True, None
 
 
@@ -5890,7 +6553,9 @@ def _reconcile_recording_process(state: RecordingState) -> str | None:
     pid = state.pid
     if isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:
         return "recording process liveness could not be verified; recording state preserved"
-    expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)
+    expected_identity = _recording_process_identity_for_lifecycle(
+        state.process_identity
+    )
     if expected_identity is None:
         return _RECORDING_PROCESS_IDENTITY_INVALID_ERROR
     if state.recorder_scope:
@@ -5916,7 +6581,9 @@ def _reconcile_recording_process(state: RecordingState) -> str | None:
             current_identity,
         )
         if identity_relation == _PROCESS_IDENTITY_REUSED:
-            return "recording process identity does not match; recording state preserved"
+            return (
+                "recording process identity does not match; recording state preserved"
+            )
         if identity_relation != _PROCESS_IDENTITY_SAME:
             return "recording process identity could not be verified; recording state preserved"
         stop_kwargs: dict[str, object] = {
@@ -5974,7 +6641,9 @@ def _raise_if_state_unreadable(state: RecordingState) -> None:
         raise RuntimeError(state.error)
 
 
-def _recording_level_payload(state: RecordingState, *, state_path: Path | None = None) -> dict[str, object] | None:
+def _recording_level_payload(
+    state: RecordingState, *, state_path: Path | None = None
+) -> dict[str, object] | None:
     audio_path = _normalized_state_recording_artifact_path(
         state.audio_path,
         suffix=(".wav", ".flac", ".socenc"),
@@ -6012,7 +6681,14 @@ def _recording_level_payload(state: RecordingState, *, state_path: Path | None =
     try:
         return asdict(read_recording_level(audio_path))
     except RecorderError as exc:
-        return {"ok": False, "percent": 0, "peak": 0.0, "rms": 0.0, "samples": 0, "detail": _redact_error_for_user(str(exc))}
+        return {
+            "ok": False,
+            "percent": 0,
+            "peak": 0.0,
+            "rms": 0.0,
+            "samples": 0,
+            "detail": _redact_error_for_user(str(exc)),
+        }
 
 
 def _recording_sibling_path(path: Path | None) -> Path | None:
@@ -6048,7 +6724,9 @@ def _remove_recording_artifact(
             return remove_file(candidate_value, suffix=suffix)
         if candidate not in expected_stats or expected_stats[candidate] is None:
             return False
-        return remove_file(candidate_value, suffix=suffix, expected_stat=expected_stats[candidate])
+        return remove_file(
+            candidate_value, suffix=suffix, expected_stat=expected_stats[candidate]
+        )
 
     primary_exists = _safe_leaf_presence(path)
     if primary_exists is None:
@@ -6072,7 +6750,11 @@ def _remove_recording_artifact(
     if primary_exists and not remove_candidate(path, path_value, primary_suffix):
         return False
     if sibling_exists:
-        sibling_suffix = ".socenc" if is_encrypted_path(sibling_path) else sibling_path.suffix.lower()
+        sibling_suffix = (
+            ".socenc"
+            if is_encrypted_path(sibling_path)
+            else sibling_path.suffix.lower()
+        )
         if not remove_candidate(sibling_path, str(sibling_path), sibling_suffix):
             return False
     return primary_exists or sibling_exists
@@ -6087,7 +6769,9 @@ def _recording_artifact_missing_but_safe(
     if not path_value:
         return False
     try:
-        path_value = _assert_clean_text(path_value, field_name="path", max_chars=MAX_PATH_CHARS)
+        path_value = _assert_clean_text(
+            path_value, field_name="path", max_chars=MAX_PATH_CHARS
+        )
         path = _normalized_state_recording_artifact_path(
             path_value,
             suffix=suffix,
@@ -6132,7 +6816,7 @@ def _transcript_sibling_path(path: Path | None) -> Path | None:
     if not isinstance(path, Path) or not _is_transcript_artifact(path):
         return None
     if is_encrypted_path(path):
-        return path.with_name(path.name[:-len(".socenc")])
+        return path.with_name(path.name[: -len(".socenc")])
     return encrypted_path_for(path)
 
 
@@ -6164,7 +6848,9 @@ def _stabilize_recording_artifact_path(
 ) -> Path:
     if not isinstance(artifact_path, Path):
         raise RuntimeError("recording artifact path is invalid")
-    if replace_existing_path is not None and not isinstance(replace_existing_path, Path):
+    if replace_existing_path is not None and not isinstance(
+        replace_existing_path, Path
+    ):
         raise RuntimeError("replacement recording artifact path is invalid")
     if artifact_path.suffix.lower() not in {".wav", ".flac"}:
         raise RuntimeError("recording artifact path has invalid suffix")
@@ -6230,11 +6916,17 @@ def _stabilize_recording_artifact_path(
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not same_artifact_identity(claimed_stat, expected_stat):
-                    raise RuntimeError(f"{field_name} changed before cleanup: {stable_path}")
+                    raise RuntimeError(
+                        f"{field_name} changed before cleanup: {stable_path}"
+                    )
                 if getattr(claimed_stat, "st_nlink", 1) == 1:
-                    secure_wipe_regular_file_at(parent_fd, cleanup_name, claimed_stat, field_name=field_name)
+                    secure_wipe_regular_file_at(
+                        parent_fd, cleanup_name, claimed_stat, field_name=field_name
+                    )
                 os.unlink(cleanup_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
             except BaseException as exc:
@@ -6250,14 +6942,22 @@ def _stabilize_recording_artifact_path(
                     exc.add_note("stable recording artifact cleanup restore failed")
                 raise
             return True
-        raise RuntimeError(f"{field_name} cleanup path could not be claimed: {stable_path}")
+        raise RuntimeError(
+            f"{field_name} cleanup path could not be claimed: {stable_path}"
+        )
 
     def assert_backup_identity() -> None:
         if target_stat is None:
-            raise RuntimeError(f"stable recording artifact backup identity is unavailable: {stable_path}")
-        current_backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+            raise RuntimeError(
+                f"stable recording artifact backup identity is unavailable: {stable_path}"
+            )
+        current_backup_stat = os.stat(
+            backup_name, dir_fd=parent_fd, follow_symlinks=False
+        )
         if not same_artifact_identity(current_backup_stat, target_stat):
-            raise RuntimeError(f"stable recording artifact backup changed during rollback: {stable_path}")
+            raise RuntimeError(
+                f"stable recording artifact backup changed during rollback: {stable_path}"
+            )
 
     def remove_backup_safely() -> None:
         nonlocal backup_name
@@ -6276,15 +6976,23 @@ def _stabilize_recording_artifact_path(
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
-                if target_stat is None or not same_artifact_identity(claimed_stat, target_stat):
-                    raise RuntimeError(f"stable recording artifact backup changed before cleanup: {stable_path}")
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if target_stat is None or not same_artifact_identity(
+                    claimed_stat, target_stat
+                ):
+                    raise RuntimeError(
+                        f"stable recording artifact backup changed before cleanup: {stable_path}"
+                    )
                 if not unlink_artifact_leaf_safely(
                     cleanup_name,
                     claimed_stat,
                     field_name="stable recording artifact backup",
                 ):
-                    raise RuntimeError(f"stable recording artifact backup disappeared during cleanup: {stable_path}")
+                    raise RuntimeError(
+                        f"stable recording artifact backup disappeared during cleanup: {stable_path}"
+                    )
                 _fsync_fd(parent_fd)
             except BaseException as exc:
                 try:
@@ -6300,17 +7008,23 @@ def _stabilize_recording_artifact_path(
                 raise
             backup_name = ""
             return
-        raise RuntimeError(f"stable recording artifact backup cleanup path could not be claimed: {stable_path}")
+        raise RuntimeError(
+            f"stable recording artifact backup cleanup path could not be claimed: {stable_path}"
+        )
 
     def rollback() -> None:
         nonlocal backup_name, target_removed
         if not transaction_active or parent_fd is None or source_stat is None:
             return
         try:
-            current_target_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+            current_target_stat = os.stat(
+                stable_path.name, dir_fd=parent_fd, follow_symlinks=False
+            )
         except FileNotFoundError:
             current_target_stat = None
-        activated = current_target_stat is not None and same_artifact_identity(current_target_stat, source_stat)
+        activated = current_target_stat is not None and same_artifact_identity(
+            current_target_stat, source_stat
+        )
         if activated:
             if target_stat is None:
                 _rename_without_replacing(
@@ -6338,14 +7052,25 @@ def _stabilize_recording_artifact_path(
                 current_target_stat,
                 field_name="stable recording artifact rollback",
             ):
-                raise RuntimeError(f"stable recording artifact disappeared during rollback: {stable_path}")
+                raise RuntimeError(
+                    f"stable recording artifact disappeared during rollback: {stable_path}"
+                )
             _fsync_fd(parent_fd)
         elif target_removed and current_target_stat is not None:
-            raise RuntimeError(f"stable recording artifact changed during rollback: {stable_path}")
-        elif not target_removed and target_stat is not None and (
-            current_target_stat is None or not same_artifact_identity(current_target_stat, target_stat)
+            raise RuntimeError(
+                f"stable recording artifact changed during rollback: {stable_path}"
+            )
+        elif (
+            not target_removed
+            and target_stat is not None
+            and (
+                current_target_stat is None
+                or not same_artifact_identity(current_target_stat, target_stat)
+            )
         ):
-            raise RuntimeError(f"stable recording artifact changed during rollback: {stable_path}")
+            raise RuntimeError(
+                f"stable recording artifact changed during rollback: {stable_path}"
+            )
         if not backup_name:
             return
         if target_removed or activated:
@@ -6364,16 +7089,22 @@ def _stabilize_recording_artifact_path(
                     target_removed = False
                     _fsync_fd(parent_fd)
                     return
-            raise RuntimeError(f"stable recording artifact exists during rollback: {stable_path}")
+            raise RuntimeError(
+                f"stable recording artifact exists during rollback: {stable_path}"
+            )
         backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
         if target_stat is None or not same_artifact_identity(backup_stat, target_stat):
-            raise RuntimeError(f"stable recording artifact backup changed during rollback: {stable_path}")
+            raise RuntimeError(
+                f"stable recording artifact backup changed during rollback: {stable_path}"
+            )
         if not unlink_artifact_leaf_safely(
             backup_name,
             backup_stat,
             field_name="stable recording artifact backup",
         ):
-            raise RuntimeError(f"stable recording artifact backup disappeared during rollback: {stable_path}")
+            raise RuntimeError(
+                f"stable recording artifact backup disappeared during rollback: {stable_path}"
+            )
         backup_name = ""
         _fsync_fd(parent_fd)
 
@@ -6383,20 +7114,35 @@ def _stabilize_recording_artifact_path(
             stable_path.parent,
             field_name="recording artifact directory",
         )
-        source_stat = os.stat(artifact_path.name, dir_fd=parent_fd, follow_symlinks=False)
-        if not stat_module.S_ISREG(source_stat.st_mode) or getattr(source_stat, "st_nlink", 1) != 1:
-            raise RuntimeError(f"recording artifact path is not a safe regular file: {artifact_path}")
+        source_stat = os.stat(
+            artifact_path.name, dir_fd=parent_fd, follow_symlinks=False
+        )
+        if (
+            not stat_module.S_ISREG(source_stat.st_mode)
+            or getattr(source_stat, "st_nlink", 1) != 1
+        ):
+            raise RuntimeError(
+                f"recording artifact path is not a safe regular file: {artifact_path}"
+            )
         try:
-            target_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+            target_stat = os.stat(
+                stable_path.name, dir_fd=parent_fd, follow_symlinks=False
+            )
         except FileNotFoundError:
             target_stat = None
         if target_stat is not None:
             if not stat_module.S_ISREG(target_stat.st_mode):
-                raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
+                raise RuntimeError(
+                    f"stable recording artifact is not a safe regular file: {stable_path}"
+                )
             if replace_existing_path != stable_path:
                 if getattr(target_stat, "st_nlink", 1) != 1:
-                    raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
-                raise RuntimeError(f"stable recording artifact already exists: {stable_path}")
+                    raise RuntimeError(
+                        f"stable recording artifact is not a safe regular file: {stable_path}"
+                    )
+                raise RuntimeError(
+                    f"stable recording artifact already exists: {stable_path}"
+                )
             stale_backup_removed = False
             try:
                 candidate_names: list[str] = []
@@ -6408,15 +7154,20 @@ def _stabilize_recording_artifact_path(
                             )
                         candidate_names.append(candidate_entry.name)
             except OSError as exc:
-                raise RuntimeError(f"failed to scan stable recording artifact backups: {stable_path}") from exc
+                raise RuntimeError(
+                    f"failed to scan stable recording artifact backups: {stable_path}"
+                ) from exc
             backup_prefix = f".{stable_path.name}."
             for candidate_name in candidate_names:
                 if not isinstance(candidate_name, str) or not (
-                    candidate_name.startswith(backup_prefix) and candidate_name.endswith(".bak")
+                    candidate_name.startswith(backup_prefix)
+                    and candidate_name.endswith(".bak")
                 ):
                     continue
                 try:
-                    candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                    candidate_stat = os.stat(
+                        candidate_name, dir_fd=parent_fd, follow_symlinks=False
+                    )
                 except FileNotFoundError:
                     continue
                 if not stat_module.S_ISREG(candidate_stat.st_mode):
@@ -6428,13 +7179,19 @@ def _stabilize_recording_artifact_path(
                     candidate_stat,
                     field_name="stale stable recording artifact backup",
                 ):
-                    raise RuntimeError(f"stable recording artifact backup disappeared during cleanup: {stable_path}")
+                    raise RuntimeError(
+                        f"stable recording artifact backup disappeared during cleanup: {stable_path}"
+                    )
                 stale_backup_removed = True
             if stale_backup_removed:
                 _fsync_fd(parent_fd)
-                target_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+                target_stat = os.stat(
+                    stable_path.name, dir_fd=parent_fd, follow_symlinks=False
+                )
             if getattr(target_stat, "st_nlink", 1) != 1:
-                raise RuntimeError(f"stable recording artifact is not a safe regular file: {stable_path}")
+                raise RuntimeError(
+                    f"stable recording artifact is not a safe regular file: {stable_path}"
+                )
             for _ in range(100):
                 candidate_name = f".{stable_path.name}.{secrets.token_hex(8)}.bak"
                 try:
@@ -6448,20 +7205,28 @@ def _stabilize_recording_artifact_path(
                 except FileExistsError:
                     continue
                 try:
-                    backup_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
-                    current_target_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+                    backup_stat = os.stat(
+                        candidate_name, dir_fd=parent_fd, follow_symlinks=False
+                    )
+                    current_target_stat = os.stat(
+                        stable_path.name, dir_fd=parent_fd, follow_symlinks=False
+                    )
                     if (
                         not stat_module.S_ISREG(backup_stat.st_mode)
                         or getattr(backup_stat, "st_nlink", 1) != 2
                         or not same_artifact_identity(backup_stat, target_stat)
                         or not same_artifact_identity(current_target_stat, target_stat)
                     ):
-                        raise RuntimeError("stable recording artifact changed during backup activation")
+                        raise RuntimeError(
+                            "stable recording artifact changed during backup activation"
+                        )
                     backup_name = candidate_name
                     break
                 except BaseException as backup_error:
                     try:
-                        candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                        candidate_stat = os.stat(
+                            candidate_name, dir_fd=parent_fd, follow_symlinks=False
+                        )
                         if same_artifact_identity(candidate_stat, target_stat):
                             if unlink_artifact_leaf_safely(
                                 candidate_name,
@@ -6472,20 +7237,28 @@ def _stabilize_recording_artifact_path(
                     except FileNotFoundError:
                         pass
                     except BaseException:
-                        backup_error.add_note("recording artifact backup cleanup failed")
+                        backup_error.add_note(
+                            "recording artifact backup cleanup failed"
+                        )
                     raise
             if not backup_name:
                 raise RuntimeError("failed to create stable recording artifact backup")
             transaction_active = True
-            current_target_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+            current_target_stat = os.stat(
+                stable_path.name, dir_fd=parent_fd, follow_symlinks=False
+            )
             if not same_artifact_identity(current_target_stat, target_stat):
-                raise RuntimeError(f"stable recording artifact changed before replacement: {stable_path}")
+                raise RuntimeError(
+                    f"stable recording artifact changed before replacement: {stable_path}"
+                )
             if not unlink_artifact_leaf_safely(
                 stable_path.name,
                 current_target_stat,
                 field_name="stable recording artifact",
             ):
-                raise RuntimeError(f"stable recording artifact disappeared before replacement: {stable_path}")
+                raise RuntimeError(
+                    f"stable recording artifact disappeared before replacement: {stable_path}"
+                )
             target_removed = True
             _fsync_fd(parent_fd)
         transaction_active = True
@@ -6495,9 +7268,13 @@ def _stabilize_recording_artifact_path(
             directory_fd=parent_fd,
             field_name="stable recording artifact",
         )
-        activated_stat = os.stat(stable_path.name, dir_fd=parent_fd, follow_symlinks=False)
+        activated_stat = os.stat(
+            stable_path.name, dir_fd=parent_fd, follow_symlinks=False
+        )
         if not same_artifact_identity(activated_stat, source_stat):
-            raise RuntimeError(f"stable recording artifact changed during activation: {stable_path}")
+            raise RuntimeError(
+                f"stable recording artifact changed during activation: {stable_path}"
+            )
         _fsync_fd(parent_fd)
         if backup_name:
             remove_backup_safely()
@@ -6508,7 +7285,9 @@ def _stabilize_recording_artifact_path(
             rollback()
         except BaseException:
             exc.add_note("recording artifact rollback failed")
-        raise RuntimeError(f"failed to stabilize recording artifact path: {exc}") from exc
+        raise RuntimeError(
+            f"failed to stabilize recording artifact path: {exc}"
+        ) from exc
     except BaseException as exc:
         try:
             rollback()
@@ -6540,6 +7319,10 @@ def _safe_regular_leaf_probe(
     return True, file_stat
 
 
+RECORDER_ARTIFACT_SETTLE_ATTEMPTS = 5
+RECORDER_ARTIFACT_SETTLE_DELAY_SECONDS = 0.005
+
+
 def _recording_artifact_stat(path: Path) -> os.stat_result | None:
     try:
         file_stat = path.lstat()
@@ -6549,6 +7332,25 @@ def _recording_artifact_stat(path: Path) -> os.stat_result | None:
         return None
     if getattr(file_stat, "st_nlink", 1) != 1:
         return None
+    return file_stat
+
+
+def _wait_for_saved_recording_artifact_stat(
+    path: Path | None,
+    *,
+    initial_stat: os.stat_result | None = None,
+    check_initial: bool = True,
+) -> os.stat_result | None:
+    if path is None:
+        return None
+    file_stat = _recording_artifact_stat(path) if check_initial else initial_stat
+    if file_stat is not None and file_stat.st_size > 0:
+        return file_stat
+    for _ in range(max(0, RECORDER_ARTIFACT_SETTLE_ATTEMPTS - 1)):
+        time.sleep(RECORDER_ARTIFACT_SETTLE_DELAY_SECONDS)
+        file_stat = _recording_artifact_stat(path)
+        if file_stat is not None and file_stat.st_size > 0:
+            return file_stat
     return file_stat
 
 
@@ -6566,7 +7368,9 @@ def _safe_directory_entries(
     missing_ok: bool = False,
 ) -> list[tuple[Path, os.stat_result]]:
     try:
-        directory_fd = open_directory_without_following_symlinks(directory, field_name=field_name)
+        directory_fd = open_directory_without_following_symlinks(
+            directory, field_name=field_name
+        )
     except FileNotFoundError as exc:
         if missing_ok:
             return []
@@ -6581,14 +7385,22 @@ def _safe_directory_entries(
                     if len(entries) >= MAX_DIRECTORY_SCAN_ENTRIES:
                         raise DirectoryScanError(directory, field_name=field_name)
                     name = directory_entry.name
-                    if not isinstance(name, str) or name in {"", ".", ".."} or "/" in name:
+                    if (
+                        not isinstance(name, str)
+                        or name in {"", ".", ".."}
+                        or "/" in name
+                    ):
                         continue
                     try:
-                        file_stat = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)
+                        file_stat = os.stat(
+                            name, dir_fd=directory_fd, follow_symlinks=False
+                        )
                     except FileNotFoundError:
                         continue
                     except OSError as exc:
-                        raise DirectoryScanError(directory, field_name=field_name) from exc
+                        raise DirectoryScanError(
+                            directory, field_name=field_name
+                        ) from exc
                     entries.append((directory / name, file_stat))
         except FileNotFoundError as exc:
             if missing_ok:
@@ -6615,8 +7427,7 @@ def _same_state_v3_cleanup_claims_present(
             return None
         root = Path(os.path.abspath(os.fspath(recordings_dir())))
         normalized_allowed = frozenset(
-            Path(os.path.abspath(os.fspath(path)))
-            for path in allowed_paths
+            Path(os.path.abspath(os.fspath(path))) for path in allowed_paths
         )
         if any(not path.is_relative_to(root) for path in normalized_allowed):
             return None
@@ -6629,9 +7440,7 @@ def _same_state_v3_cleanup_claims_present(
         directory_flag = getattr(os, "O_DIRECTORY", None)
         nonblock = getattr(os, "O_NONBLOCK", None)
         if any(
-            isinstance(flag, bool)
-            or not isinstance(flag, int)
-            or flag <= 0
+            isinstance(flag, bool) or not isinstance(flag, int) or flag <= 0
             for flag in (nofollow, cloexec, directory_flag, nonblock)
         ):
             return None
@@ -6688,9 +7497,7 @@ def _same_state_v3_cleanup_claims_present(
                                 continue
                             if (
                                 name.startswith(state_prefix)
-                                and
-                                _bound_cleanup_v3_tombstone_parts(name)
-                                is not None
+                                and _bound_cleanup_v3_tombstone_parts(name) is not None
                                 and stat_module.S_ISREG(child_stat.st_mode)
                                 and child_stat.st_uid == effective_uid
                                 and child_stat.st_dev == root_stat.st_dev
@@ -6838,7 +7645,10 @@ def _is_finalization_lock_active(state_path: Path) -> bool:
         return False
     except OSError:
         return True
-    if not stat_module.S_ISREG(lock_stat.st_mode) or getattr(lock_stat, "st_nlink", 1) != 1:
+    if (
+        not stat_module.S_ISREG(lock_stat.st_mode)
+        or getattr(lock_stat, "st_nlink", 1) != 1
+    ):
         return True
     owner_pid = _read_finalization_lock_pid(lock_path)
     if owner_pid is None:
@@ -6896,10 +7706,14 @@ def _is_finalization_lock_active(state_path: Path) -> bool:
             or lock_age <= MAX_FINALIZATION_PIDLESS_LOCK_AGE_SECONDS
         ):
             return True
-    if isinstance(scope_unit_state, str) and _recorder_scope_unit_is_stably_gone(
-        scope_unit_state,
-        expected_scope=scope_state if isinstance(scope_state, str) else None,
-    ) is not True:
+    if (
+        isinstance(scope_unit_state, str)
+        and _recorder_scope_unit_is_stably_gone(
+            scope_unit_state,
+            expected_scope=scope_state if isinstance(scope_state, str) else None,
+        )
+        is not True
+    ):
         return True
     try:
         current = lock_path.lstat()
@@ -6958,14 +7772,22 @@ def _transcript_path_for_audio(audio_path: Path) -> Path:
                 legacy_transcript,
                 encrypted_path_for(legacy_transcript),
             )
-            if any(_path_exists_or_is_symlink(candidate) for candidate in collision_candidates):
+            if any(
+                _path_exists_or_is_symlink(candidate)
+                for candidate in collision_candidates
+            ):
                 return transcript_root / f"{audio_path.stem}.flac.txt"
         return legacy_transcript
 
     digest = hashlib.sha256(str(canonical_audio_path).encode("utf-8")).hexdigest()[:16]
     suffix = f"-{digest}.txt"
     max_stem_bytes = max(1, 255 - len(suffix.encode("utf-8")))
-    stem = audio_path.stem.encode("utf-8")[:max_stem_bytes].decode("utf-8", errors="ignore") or "transcript"
+    stem = (
+        audio_path.stem.encode("utf-8")[:max_stem_bytes].decode(
+            "utf-8", errors="ignore"
+        )
+        or "transcript"
+    )
     return transcript_root / f"{stem}{suffix}"
 
 
@@ -7002,9 +7824,15 @@ def _finalizing_inflight_artifact_paths(
             raw_audio_path = Path(raw_audio_value).expanduser()
             if not raw_audio_path.is_absolute():
                 raw_audio_path = state_path.parent / raw_audio_path
-            assert_safe_path_components(raw_audio_path, field_name="state recording artifact path")
-            assert_no_symlink_ancestors(raw_audio_path.parent, field_name="state recording artifact directory")
-            raw_audio_path.parent.resolve(strict=False).relative_to(recordings_dir().resolve(strict=False))
+            assert_safe_path_components(
+                raw_audio_path, field_name="state recording artifact path"
+            )
+            assert_no_symlink_ancestors(
+                raw_audio_path.parent, field_name="state recording artifact directory"
+            )
+            raw_audio_path.parent.resolve(strict=False).relative_to(
+                recordings_dir().resolve(strict=False)
+            )
             if not (
                 raw_audio_path.suffix.lower() in {".wav", ".flac"}
                 or _is_encrypted_recording_artifact(raw_audio_path)
@@ -7013,7 +7841,10 @@ def _finalizing_inflight_artifact_paths(
             audio_path = raw_audio_path
         except (OSError, RuntimeError, TypeError, ValueError):
             return set()
-    if not _is_finalization_lock_active(state_path) and _recording_artifact_stat(audio_path) is not None:
+    if (
+        not _is_finalization_lock_active(state_path)
+        and _recording_artifact_stat(audio_path) is not None
+    ):
         return set()
     if _is_encrypted_recording_artifact(audio_path):
         audio_path = _plaintext_recording_sibling_for_encrypted_path(audio_path)
@@ -7030,14 +7861,14 @@ def _finalizing_inflight_artifact_paths(
             in_flight_paths.add(recovery_audio_path)
             in_flight_paths.add(encrypted_path_for(recovery_audio_path))
     if include_recording_inflight:
-        in_flight_paths.update(
-            _inflight_recording_artifact_paths(audio_path)
-        )
+        in_flight_paths.update(_inflight_recording_artifact_paths(audio_path))
     return in_flight_paths
 
 
 def _is_encrypted_recording_artifact(path: Path) -> bool:
-    return isinstance(path, Path) and path.name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES)
+    return isinstance(path, Path) and path.name.lower().endswith(
+        ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES
+    )
 
 
 def _is_recording_audio_artifact(path: Path) -> bool:
@@ -7082,8 +7913,13 @@ def sorted_files(
         except FileNotFoundError:
             continue
         except OSError as exc:
-            raise DirectoryScanError(path.parent, field_name="recording artifacts") from exc
-        if not stat_module.S_ISREG(file_stat.st_mode) or getattr(file_stat, "st_nlink", 1) != 1:
+            raise DirectoryScanError(
+                path.parent, field_name="recording artifacts"
+            ) from exc
+        if (
+            not stat_module.S_ISREG(file_stat.st_mode)
+            or getattr(file_stat, "st_nlink", 1) != 1
+        ):
             continue
         if expected_stats is not None:
             expected_stats[path] = file_stat
@@ -7221,7 +8057,9 @@ def prune_files_by_mtime(
 def recording_groups() -> list[dict[str, object]]:
     groups: dict[str, dict[str, object]] = {}
     directory = recordings_dir()
-    for path, file_stat in _safe_directory_entries(directory, field_name="recordings directory"):
+    for path, file_stat in _safe_directory_entries(
+        directory, field_name="recordings directory"
+    ):
         if not _is_recording_artifact(path):
             continue
         if not stat_module.S_ISREG(file_stat.st_mode):
@@ -7240,7 +8078,11 @@ def recording_groups() -> list[dict[str, object]]:
         group_stats = group["file_stats"]
         if isinstance(group_stats, dict):
             group_stats[path] = file_stat
-    return sorted(groups.values(), key=lambda group: (float(group["mtime"]), str(group["stem"])), reverse=True)
+    return sorted(
+        groups.values(),
+        key=lambda group: (float(group["mtime"]), str(group["stem"])),
+        reverse=True,
+    )
 
 
 def recording_artifact_files(
@@ -7258,10 +8100,14 @@ def recording_artifact_files(
     ]
 
 
-def _add_recording_artifact_counts(paths: list[str], recording_result: dict[str, object], prefix: str) -> None:
+def _add_recording_artifact_counts(
+    paths: list[str], recording_result: dict[str, object], prefix: str
+) -> None:
     recording_key = f"{prefix}_recordings"
     log_key = f"{prefix}_logs"
-    recording_count = _coerce_int(recording_result[recording_key], field_name=recording_key)
+    recording_count = _coerce_int(
+        recording_result[recording_key], field_name=recording_key
+    )
     log_count = _coerce_int(recording_result[log_key], field_name=log_key)
     for path_text in paths:
         path = Path(path_text)
@@ -7315,12 +8161,17 @@ def prune_recording_groups(
             grouped_artifacts.extend(path for path in files if isinstance(path, Path))
             if isinstance(file_stats, dict):
                 for path in files:
-                    if isinstance(path, Path) and isinstance(file_stats.get(path), os.stat_result):
+                    if isinstance(path, Path) and isinstance(
+                        file_stats.get(path), os.stat_result
+                    ):
                         grouped_artifact_stats[path] = file_stats[path]
         if not isinstance(files, list):
             continue
         group_paths = [path for path in files if isinstance(path, Path)]
-        if any(path.resolve(strict=False) in normalized_active_paths for path in group_paths):
+        if any(
+            path.resolve(strict=False) in normalized_active_paths
+            for path in group_paths
+        ):
             skipped_group_paths.extend(group_paths)
             skipped_active_paths.extend(str(path) for path in group_paths)
             continue
@@ -7382,7 +8233,9 @@ def prune_recording_groups(
     planned_paths.extend(cap_planned)
     deleted_paths.extend(cap_deleted)
     failed_paths.extend(cap_failed)
-    skipped_active_paths.extend(path for path in cap_skipped if path not in skipped_active_paths)
+    skipped_active_paths.extend(
+        path for path in cap_skipped if path not in skipped_active_paths
+    )
     _add_recording_artifact_counts(cap_planned, result, "planned")
     _add_recording_artifact_counts(cap_deleted, result, "deleted")
     return result
@@ -7442,11 +8295,13 @@ def _command_start_locked(
             "status": "finalizing",
             "message": "finalization in progress; wait for completion",
         }
-    identity_marker_present = current.process_identity is not None and current.process_identity != ""
-    if current.status == "error" and (current.pid is not None or identity_marker_present):
-        marker_error = (
-            "previous recorder process state is unresolved; run cancel before starting a new recording"
-        )
+    identity_marker_present = (
+        current.process_identity is not None and current.process_identity != ""
+    )
+    if current.status == "error" and (
+        current.pid is not None or identity_marker_present
+    ):
+        marker_error = "previous recorder process state is unresolved; run cancel before starting a new recording"
         if (
             isinstance(current.pid, bool)
             or not isinstance(current.pid, int)
@@ -7484,10 +8339,7 @@ def _command_start_locked(
             ),
             "transcript_present": bool(current.transcript),
         }
-    if (
-        _is_transcript_insert_recovery_error(current.error)
-        and bool(current.transcript)
-    ):
+    if _is_transcript_insert_recovery_error(current.error) and bool(current.transcript):
         return {
             "status": "error",
             "message": (
@@ -7513,7 +8365,9 @@ def _command_start_locked(
             process_identity="",
             stopped_at=current.stopped_at or now_iso(),
         )
-    if current.status == "error" and (current.audio_path or current.log_path or current.transcript_path):
+    if current.status == "error" and (
+        current.audio_path or current.log_path or current.transcript_path
+    ):
         return {
             "status": "error",
             "message": "previous recording cleanup is unresolved; run cancel before starting a new recording",
@@ -7578,7 +8432,11 @@ def _command_start_locked(
                     "error": process_error,
                 }
             store.update(status="recording", error=process_error, inserted=False)
-            return {"status": "recording", "message": process_error, "error": process_error}
+            return {
+                "status": "recording",
+                "message": process_error,
+                "error": process_error,
+            }
         current_audio_path = _normalized_state_recording_artifact_path(
             current.audio_path,
             suffix=(".wav", ".flac", ".socenc"),
@@ -7598,7 +8456,11 @@ def _command_start_locked(
                 "status": "error",
                 "message": "recording state references an invalid artifact path",
             }
-        current_audio_stat = _recording_artifact_stat(current_audio_path) if current_audio_path else None
+        current_audio_stat = (
+            _wait_for_saved_recording_artifact_stat(current_audio_path)
+            if current_audio_path
+            else None
+        )
         if current_audio_stat is not None and current_audio_stat.st_size > 0:
             recorded = store.update(
                 status="recorded",
@@ -7627,7 +8489,9 @@ def _command_start_locked(
             "message": "recording exited before audio was saved",
         }
 
-    max_seconds = _coerce_int(args.max_seconds, field_name="max-seconds", max_value=MAX_RECORDING_SECONDS)
+    max_seconds = _coerce_int(
+        args.max_seconds, field_name="max-seconds", max_value=MAX_RECORDING_SECONDS
+    )
     normalized_input_device = normalize_input_device(args.input_device)
     audio_path, log_path = _allocate_recording_artifacts()
 
@@ -7658,7 +8522,9 @@ def _command_start_locked(
         artifacts_safe_to_remove = process is None
         if process is not None:
             if expected_process_identity is None:
-                primary_error.add_note("recorder process identity could not be verified; process cleanup skipped")
+                primary_error.add_note(
+                    "recorder process identity could not be verified; process cleanup skipped"
+                )
             else:
                 try:
                     stop_kwargs: dict[str, object] = {
@@ -7683,13 +8549,19 @@ def _command_start_locked(
                         except BaseException:
                             process_gone = False
                             artifacts_safe_to_remove = False
-                            primary_error.add_note("recorder process could not be stopped safely")
+                            primary_error.add_note(
+                                "recorder process could not be stopped safely"
+                            )
                         else:
                             artifacts_safe_to_remove = process_gone
                             if not process_gone:
-                                primary_error.add_note("recorder process could not be stopped safely")
+                                primary_error.add_note(
+                                    "recorder process could not be stopped safely"
+                                )
                             else:
-                                primary_error.add_note("recorder process stop was not confirmed")
+                                primary_error.add_note(
+                                    "recorder process stop was not confirmed"
+                                )
             if not artifacts_safe_to_remove:
                 try:
                     retained = _retain_finalization_lock_for_process(
@@ -7702,7 +8574,9 @@ def _command_start_locked(
                     retained = False
                     primary_error.add_note("recorder lifecycle lock retention failed")
                 if not retained:
-                    primary_error.add_note("recorder lifecycle lock could not be retained")
+                    primary_error.add_note(
+                        "recorder lifecycle lock could not be retained"
+                    )
                     if lock_release_state is not None:
                         lock_release_state["release"] = False
         if artifacts_safe_to_remove:
@@ -7712,15 +8586,23 @@ def _command_start_locked(
             except BaseException:
                 primary_error.add_note("recorder artifact cleanup failed")
         else:
-            primary_error.add_note("recorder artifacts preserved because process stop was not confirmed")
+            primary_error.add_note(
+                "recorder artifacts preserved because process stop was not confirmed"
+            )
 
     def reset_recording_artifacts() -> None:
         nonlocal audio_path, log_path
         if not cleanup_started_artifacts():
-            raise RuntimeError("failed to clean recording artifacts after recorder startup failure")
+            raise RuntimeError(
+                "failed to clean recording artifacts after recorder startup failure"
+            )
         audio_path, log_path = _allocate_recording_artifacts()
 
-    recorder_preferences = ["pw-record", "parecord", "arecord"] if args.recorder == "auto" else [args.recorder]
+    recorder_preferences = (
+        ["pw-record", "parecord", "arecord"]
+        if args.recorder == "auto"
+        else [args.recorder]
+    )
     startup_errors: list[str] = []
     command: RecorderCommand | None = None
     proc: subprocess.Popen[bytes] | None = None
@@ -7731,7 +8613,9 @@ def _command_start_locked(
         candidate_scope_for_attempt: str | None = None
         start_backend_control_error = False
         try:
-            candidate = choose_recorder(recorder_preference, audio_path, max_seconds, normalized_input_device)
+            candidate = choose_recorder(
+                recorder_preference, audio_path, max_seconds, normalized_input_device
+            )
             try:
                 candidate_proc = start_recorder(candidate, log_path)
             except (KeyboardInterrupt, SystemExit):
@@ -7755,7 +8639,9 @@ def _command_start_locked(
             startup_errors.append(f"{recorder_preference}: {exc}")
             if args.recorder != "auto":
                 if not cleanup_started_artifacts():
-                    raise RuntimeError("failed to clean recording artifacts after recorder startup failure") from exc
+                    raise RuntimeError(
+                        "failed to clean recording artifacts after recorder startup failure"
+                    ) from exc
                 raise
             reset_recording_artifacts()
             continue
@@ -7786,7 +8672,9 @@ def _command_start_locked(
                 )
             raise
         try:
-            candidate_process_identity = _recording_process_identity_for_pid(candidate_proc.pid)
+            candidate_process_identity = _recording_process_identity_for_pid(
+                candidate_proc.pid
+            )
         except BaseException as exc:
             cleanup_unpersisted_startup(
                 exc,
@@ -7801,12 +8689,11 @@ def _command_start_locked(
             and caller_scope_for_attempt is not None
             and candidate_scope_for_attempt == caller_scope_for_attempt
         )
-        if (
-            candidate_scope_for_attempt is not None
-            and scope_is_caller_scope
-        ) or (
+        if (candidate_scope_for_attempt is not None and scope_is_caller_scope) or (
             os.environ.get(SOC_PRIORITY_SCOPE_MARKER) == "1"
-            and (candidate_scope_for_attempt is None or caller_scope_for_attempt is None)
+            and (
+                candidate_scope_for_attempt is None or caller_scope_for_attempt is None
+            )
         ):
             scope_error = RuntimeError(
                 "recording ownership scope is not dedicated; recorder state was not persisted"
@@ -7848,10 +8735,14 @@ def _command_start_locked(
         if candidate_running:
             if candidate_scope_for_attempt:
                 try:
-                    persisted_identity = _recording_process_identity_for_pid(candidate_proc.pid)
+                    persisted_identity = _recording_process_identity_for_pid(
+                        candidate_proc.pid
+                    )
                     persisted_scope = _recorder_scope_for_pid(candidate_proc.pid)
                     persisted_caller_scope = _recorder_scope_for_pid(os.getpid())
-                    persisted_scope_unit = _recorder_scope_unit_for_process(candidate_proc)
+                    persisted_scope_unit = _recorder_scope_unit_for_process(
+                        candidate_proc
+                    )
                     scope_revalidated = (
                         _recording_process_identity_relation(
                             candidate_proc.pid,
@@ -7861,8 +8752,12 @@ def _command_start_locked(
                         == _PROCESS_IDENTITY_SAME
                         and persisted_scope == candidate_scope_for_attempt
                         and persisted_scope is not None
-                        and _recorder_scope_matches_unit(persisted_scope, persisted_scope_unit)
-                        and _recorder_scope_is_current(candidate_proc.pid, persisted_scope)
+                        and _recorder_scope_matches_unit(
+                            persisted_scope, persisted_scope_unit
+                        )
+                        and _recorder_scope_is_current(
+                            candidate_proc.pid, persisted_scope
+                        )
                         and not (
                             persisted_caller_scope is not None
                             and persisted_caller_scope == persisted_scope
@@ -7924,7 +8819,9 @@ def _command_start_locked(
                 if lock_release_state is not None:
                     lock_release_state["release"] = False
             if isinstance(cleanup_error, Exception):
-                raise RuntimeError(f"{startup_errors[-1]}; recorder process cleanup failed") from cleanup_error
+                raise RuntimeError(
+                    f"{startup_errors[-1]}; recorder process cleanup failed"
+                ) from cleanup_error
             cleanup_error.add_note("recorder process cleanup failed")
             raise
         if not stopped:
@@ -7936,9 +8833,7 @@ def _command_start_locked(
                 lock_release_state=lock_release_state,
             )
             if not liveness_snapshot[0]:
-                error = RuntimeError(
-                    f"{startup_errors[-1]}; {liveness_snapshot[1]}"
-                )
+                error = RuntimeError(f"{startup_errors[-1]}; {liveness_snapshot[1]}")
                 if not _retain_finalization_lock_for_process(
                     finalization_lock_path,
                     candidate_proc.pid,
@@ -7951,16 +8846,26 @@ def _command_start_locked(
                 raise error
         if args.recorder != "auto":
             if not cleanup_started_artifacts():
-                raise RuntimeError("failed to clean recording artifacts after recorder exited") from None
+                raise RuntimeError(
+                    "failed to clean recording artifacts after recorder exited"
+                ) from None
             raise RuntimeError(startup_errors[-1])
         reset_recording_artifacts()
     if command is None or proc is None:
         if not cleanup_started_artifacts():
-            raise RuntimeError("failed to clean recording artifacts after recorder startup failures")
-        detail = "; ".join(startup_errors) if startup_errors else "no supported recorder found"
+            raise RuntimeError(
+                "failed to clean recording artifacts after recorder startup failures"
+            )
+        detail = (
+            "; ".join(startup_errors)
+            if startup_errors
+            else "no supported recorder found"
+        )
         raise RuntimeError(f"no recorder backend started successfully: {detail}")
 
-    process_identity = candidate_process_identity or _recording_process_identity_for_pid(proc.pid)
+    process_identity = (
+        candidate_process_identity or _recording_process_identity_for_pid(proc.pid)
+    )
     if process_identity is None:
         identity_error = RuntimeError(
             "recording process identity could not be verified; recorder artifacts were preserved"
@@ -8003,7 +8908,9 @@ def _command_start_locked(
                 cleanup_error.add_note("recorder lifecycle lock could not be retained")
                 if lock_release_state is not None:
                     lock_release_state["release"] = False
-            raise RuntimeError(f"{state_error}; recorder process cleanup failed") from cleanup_error
+            raise RuntimeError(
+                f"{state_error}; recorder process cleanup failed"
+            ) from cleanup_error
         if not stopped:
             liveness_snapshot = _recorder_process_liveness_snapshot_for_failure(
                 proc,
@@ -8013,9 +8920,7 @@ def _command_start_locked(
                 lock_release_state=lock_release_state,
             )
             if not liveness_snapshot[0]:
-                error = RuntimeError(
-                    f"{state_error}; {liveness_snapshot[1]}"
-                )
+                error = RuntimeError(f"{state_error}; {liveness_snapshot[1]}")
                 if not _retain_finalization_lock_for_process(
                     finalization_lock_path,
                     proc.pid,
@@ -8027,7 +8932,9 @@ def _command_start_locked(
                         lock_release_state["release"] = False
                 raise error from state_error
         if not cleanup_started_artifacts():
-            raise RuntimeError(f"{state_error}; recorder artifacts could not be cleaned") from state_error
+            raise RuntimeError(
+                f"{state_error}; recorder artifacts could not be cleaned"
+            ) from state_error
         raise
     except BaseException as state_error:
         cleanup_unpersisted_startup(
@@ -8052,7 +8959,11 @@ def _command_start_locked(
         "input_device": normalized_input_device,
         "language": language,
         "recording_artifact_cap": _public_cleanup_result(artifact_cleanup),
-        **({"cleanup_failed_path_count": len(cleanup_failed_paths)} if cleanup_failed_paths else {}),
+        **(
+            {"cleanup_failed_path_count": len(cleanup_failed_paths)}
+            if cleanup_failed_paths
+            else {}
+        ),
     }
 
 
@@ -8093,7 +9004,9 @@ def command_start(args: argparse.Namespace) -> dict[str, object]:
             _release_finalization_lock(lock_path)
 
 
-def _finalize_non_recording_state_with_lock(args: argparse.Namespace, store: StateStore) -> dict[str, object]:
+def _finalize_non_recording_state_with_lock(
+    args: argparse.Namespace, store: StateStore
+) -> dict[str, object]:
     lock_path = _acquire_finalization_lock(store.path)
     if lock_path is None:
         return {"status": "finalizing", "message": "finalization already in progress"}
@@ -8101,10 +9014,14 @@ def _finalize_non_recording_state_with_lock(args: argparse.Namespace, store: Sta
         state = store.read()
         _raise_if_state_unreadable(state)
         if state.status in {"recorded", "processing"}:
-            return finalize_recording(args, store, state, finalization_lock_path=lock_path)
+            return finalize_recording(
+                args, store, state, finalization_lock_path=lock_path
+            )
         if state.status == "finalizing":
             if state.audio_path or state.transcript_path:
-                return finalize_recording(args, store, state, finalization_lock_path=lock_path)
+                return finalize_recording(
+                    args, store, state, finalization_lock_path=lock_path
+                )
             return {"status": "finalizing", "message": "finalization in progress"}
         return {"status": state.status, "message": "not recording"}
     finally:
@@ -8118,9 +9035,7 @@ def _cleanup_backup_prefix(path: Path) -> str:
 
 def _cleanup_backup_state_namespace(state_path: Path) -> str:
     canonical_state_path = state_path.resolve(strict=False)
-    return hashlib.sha256(
-        str(canonical_state_path).encode("utf-8")
-    ).hexdigest()[:32]
+    return hashlib.sha256(str(canonical_state_path).encode("utf-8")).hexdigest()[:32]
 
 
 def _cleanup_backup_v2_prefix(
@@ -8132,9 +9047,7 @@ def _cleanup_backup_v2_prefix(
     effective_namespace = state_namespace
     if effective_namespace is None:
         effective_namespace = _cleanup_backup_state_namespace(state_path)
-    owner_digest = hashlib.sha256(
-        str(path).encode("utf-8")
-    ).hexdigest()[:32]
+    owner_digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:32]
     return f".cleanup.v2.{effective_namespace}.{owner_digest}."
 
 
@@ -8147,18 +9060,14 @@ def _cleanup_backup_v3_prefix(
     effective_namespace = state_namespace
     if effective_namespace is None:
         effective_namespace = _cleanup_backup_state_namespace(state_path)
-    owner_digest = hashlib.sha256(
-        str(path).encode("utf-8")
-    ).hexdigest()[:32]
+    owner_digest = hashlib.sha256(str(path).encode("utf-8")).hexdigest()[:32]
     return f".cleanup.v3.{effective_namespace}.{owner_digest}."
 
 
 def _cleanup_backup_journal_entry_belongs_to_state(
     entry: str,
     state_path: Path,
-    legacy_owner_paths: (
-        tuple[Path, ...] | set[Path] | frozenset[Path]
-    ) = frozenset(),
+    legacy_owner_paths: tuple[Path, ...] | set[Path] | frozenset[Path] = frozenset(),
     *,
     legacy_owner_prefixes: frozenset[str] | None = None,
     state_namespace: str | None = None,
@@ -8327,9 +9236,7 @@ def _cleanup_backup_journal_entry_from_identity(
     if not _is_cleanup_backup_journal_basename(name):
         raise RuntimeError("cleanup backup name cannot be journaled")
     if len(identity) != 7 or any(
-        isinstance(value, bool)
-        or not isinstance(value, int)
-        or value < 0
+        isinstance(value, bool) or not isinstance(value, int) or value < 0
         for value in identity
     ):
         raise RuntimeError("cleanup backup identity cannot be journaled")
@@ -8514,21 +9421,14 @@ def _cleanup_claim_commit_trailer(
     ):
         raise RuntimeError("cleanup claim commit is invalid")
     binding = hashlib.sha256(
-        b"SOC-CLEANUP-V3-WIPING-BINDING\x00"
-        + claim_name.encode("ascii")
+        b"SOC-CLEANUP-V3-WIPING-BINDING\x00" + claim_name.encode("ascii")
     ).hexdigest()
     return (
         _CLEANUP_CLAIM_COMMIT_MAGIC
         + binding.encode("ascii")
-        + f"{original_size:0{_CLEANUP_CLAIM_COMMIT_SIZE_HEX_BYTES}x}".encode(
-            "ascii"
-        )
+        + f"{original_size:0{_CLEANUP_CLAIM_COMMIT_SIZE_HEX_BYTES}x}".encode("ascii")
         + content_digest.encode("ascii")
-        + (
-            b"C" + _CLEANUP_CLAIM_AUTHORIZATION_SUFFIX
-            if authorized
-            else b"P"
-        )
+        + (b"C" + _CLEANUP_CLAIM_AUTHORIZATION_SUFFIX if authorized else b"P")
     )
 
 
@@ -8548,9 +9448,7 @@ def _cleanup_claim_fd_digest(file_fd: int, size: int) -> str:
     interrupts = 0
     read_calls = 0
     max_read_calls = (
-        size // _CLEANUP_CLAIM_HASH_CHUNK_BYTES
-        + _MAX_CLEANUP_CLAIM_HASH_INTERRUPTS
-        + 2
+        size // _CLEANUP_CLAIM_HASH_CHUNK_BYTES + _MAX_CLEANUP_CLAIM_HASH_INTERRUPTS + 2
     )
     while offset < size:
         if read_calls >= max_read_calls:
@@ -8642,10 +9540,7 @@ def _cleanup_claim_content_snapshot(
         )
         file_fd = os.open(
             path.name,
-            os.O_RDONLY
-            | os.O_NONBLOCK
-            | nofollow_flag
-            | cloexec_flag,
+            os.O_RDONLY | os.O_NONBLOCK | nofollow_flag | cloexec_flag,
             dir_fd=parent_fd,
         )
         opened_stat = os.fstat(file_fd)
@@ -8769,15 +9664,11 @@ def _commit_cleanup_claim(
             _fsync_fd(file_fd)
             opened_stat = os.fstat(file_fd)
             if (
-                (
-                    opened_stat.st_dev,
-                    opened_stat.st_ino,
-                    opened_stat.st_mode,
-                    getattr(opened_stat, "st_nlink", 1),
-                )
-                != identity[:4]
-                or opened_stat.st_size != original_size
-            ):
+                opened_stat.st_dev,
+                opened_stat.st_ino,
+                opened_stat.st_mode,
+                getattr(opened_stat, "st_nlink", 1),
+            ) != identity[:4] or opened_stat.st_size != original_size:
                 raise RuntimeError("cleanup claim commit failed")
         elif opened_stat.st_size in {
             original_size + len(trailer),
@@ -8805,34 +9696,34 @@ def _commit_cleanup_claim(
                 existing_size,
                 original_size,
             )
-            if not (
-                secrets.compare_digest(existing_trailer, prepared_trailer)
-                or secrets.compare_digest(
-                    existing_trailer,
-                    authorized_trailer,
+            if (
+                not (
+                    secrets.compare_digest(existing_trailer, prepared_trailer)
+                    or secrets.compare_digest(
+                        existing_trailer,
+                        authorized_trailer,
+                    )
+                    or secrets.compare_digest(
+                        existing_trailer,
+                        intermediate_trailer,
+                    )
                 )
-                or secrets.compare_digest(
-                    existing_trailer,
-                    intermediate_trailer,
+                or not secrets.compare_digest(
+                    _cleanup_claim_fd_digest(file_fd, original_size),
+                    content_digest,
                 )
-            ) or not secrets.compare_digest(
-                _cleanup_claim_fd_digest(file_fd, original_size),
-                content_digest,
-            ) or os.pread(file_fd, 1, opened_stat.st_size) != b"":
+                or os.pread(file_fd, 1, opened_stat.st_size) != b""
+            ):
                 raise RuntimeError("cleanup claim commit failed")
             os.ftruncate(file_fd, original_size)
             _fsync_fd(file_fd)
             opened_stat = os.fstat(file_fd)
             if (
-                (
-                    opened_stat.st_dev,
-                    opened_stat.st_ino,
-                    opened_stat.st_mode,
-                    getattr(opened_stat, "st_nlink", 1),
-                )
-                != identity[:4]
-                or opened_stat.st_size != original_size
-            ):
+                opened_stat.st_dev,
+                opened_stat.st_ino,
+                opened_stat.st_mode,
+                getattr(opened_stat, "st_nlink", 1),
+            ) != identity[:4] or opened_stat.st_size != original_size:
                 raise RuntimeError("cleanup claim commit failed")
         else:
             raise RuntimeError("cleanup claim commit failed")
@@ -8968,19 +9859,14 @@ def _prepare_cleanup_claim_wipe_authorization(
         )
         opened_stat = os.fstat(file_fd)
         if (
-            (
-                opened_stat.st_dev,
-                opened_stat.st_ino,
-                opened_stat.st_mode,
-                getattr(opened_stat, "st_nlink", 1),
-            )
-            != identity[:4]
-            or opened_stat.st_size
-            not in {
-                original_size + len(prepared_trailer),
-                original_size + len(authorized_trailer),
-            }
-        ):
+            opened_stat.st_dev,
+            opened_stat.st_ino,
+            opened_stat.st_mode,
+            getattr(opened_stat, "st_nlink", 1),
+        ) != identity[:4] or opened_stat.st_size not in {
+            original_size + len(prepared_trailer),
+            original_size + len(authorized_trailer),
+        }:
             raise RuntimeError("cleanup claim authorization failed")
         actual_trailer = _cleanup_claim_read_exact(
             file_fd,
@@ -8993,13 +9879,18 @@ def _prepare_cleanup_claim_wipe_authorization(
             intermediate_trailer,
         )
         authorized = secrets.compare_digest(actual_trailer, authorized_trailer)
-        if not (prepared or intermediate or authorized) or os.pread(
-            file_fd,
-            1,
-            opened_stat.st_size,
-        ) != b"" or not secrets.compare_digest(
-            _cleanup_claim_fd_digest(file_fd, original_size),
-            content_digest,
+        if (
+            not (prepared or intermediate or authorized)
+            or os.pread(
+                file_fd,
+                1,
+                opened_stat.st_size,
+            )
+            != b""
+            or not secrets.compare_digest(
+                _cleanup_claim_fd_digest(file_fd, original_size),
+                content_digest,
+            )
         ):
             raise RuntimeError("cleanup claim authorization failed")
         if prepared:
@@ -9097,10 +9988,9 @@ def _prepare_cleanup_claim_wipe_authorization(
             follow_symlinks=False,
         )
         verified_stat = os.fstat(file_fd)
-        if (
-            not _same_leaf_identity(named_stat, authorized_stat)
-            or not _same_leaf_identity(verified_stat, authorized_stat)
-        ):
+        if not _same_leaf_identity(
+            named_stat, authorized_stat
+        ) or not _same_leaf_identity(verified_stat, authorized_stat):
             raise RuntimeError("cleanup claim authorization failed")
         result = verified_stat
     except (KeyboardInterrupt, SystemExit) as exc:
@@ -9196,16 +10086,13 @@ def _legacy_cleanup_claim_authorization_snapshot(
             for trailer_size in (prepared_size, authorized_size):
                 candidate_original_size = opened_stat.st_size - trailer_size
                 if candidate_original_size >= 0:
-                    candidates.append(
-                        (candidate_original_size, b"legacy")
-                    )
-        elif (
-            opened_stat.st_size == identity[4]
-            and _cleanup_backup_journal_claim_matches(
-                opened_stat,
-                identity,
-                fields=5,
-            )
+                    candidates.append((candidate_original_size, b"legacy"))
+        elif opened_stat.st_size == identity[
+            4
+        ] and _cleanup_backup_journal_claim_matches(
+            opened_stat,
+            identity,
+            fields=5,
         ):
             candidate_original_size = opened_stat.st_size - prepared_size
             if candidate_original_size >= 0:
@@ -9255,9 +10142,8 @@ def _legacy_cleanup_claim_authorization_snapshot(
             follow_symlinks=False,
         )
         verified_stat = os.fstat(file_fd)
-        if (
-            not _same_leaf_identity(named_stat, opened_stat)
-            or not _same_leaf_identity(verified_stat, opened_stat)
+        if not _same_leaf_identity(named_stat, opened_stat) or not _same_leaf_identity(
+            verified_stat, opened_stat
         ):
             raise RuntimeError("legacy cleanup authorization failed")
         result = matches[0], verified_stat
@@ -9459,20 +10345,18 @@ def _retire_zero_cleanup_tombstone(
         os.unlink(path.name, dir_fd=parent_fd)
         unlinked_stat = os.fstat(file_fd)
         if (
-            (
-                unlinked_stat.st_dev,
-                unlinked_stat.st_ino,
-                unlinked_stat.st_mode,
-                unlinked_stat.st_size,
-            )
-            != (
-                synced_stat.st_dev,
-                synced_stat.st_ino,
-                synced_stat.st_mode,
-                synced_stat.st_size,
-            )
-            or getattr(unlinked_stat, "st_nlink", 0) != 0
-        ):
+            unlinked_stat.st_dev,
+            unlinked_stat.st_ino,
+            unlinked_stat.st_mode,
+            unlinked_stat.st_size,
+        ) != (
+            synced_stat.st_dev,
+            synced_stat.st_ino,
+            synced_stat.st_mode,
+            synced_stat.st_size,
+        ) or getattr(
+            unlinked_stat, "st_nlink", 0
+        ) != 0:
             raise RuntimeError("cleanup tombstone retirement failed")
         _fsync_fd(parent_fd)
         retired = True
@@ -9552,9 +10436,7 @@ def _cleanup_backup_restore_journal_pairs(
         )
         backup_name, _ = _parse_cleanup_backup_journal_entry(entry)
         expected_prefix = (
-            v2_prefix_cache.get(owner_path)
-            if v2_prefix_cache is not None
-            else None
+            v2_prefix_cache.get(owner_path) if v2_prefix_cache is not None else None
         )
         if expected_prefix is None:
             expected_prefix = _cleanup_backup_v2_prefix(
@@ -9584,7 +10466,11 @@ def finalize_recording(
     *,
     finalization_lock_path: Path | None = None,
 ) -> dict[str, object]:
-    lock_path = finalization_lock_path if finalization_lock_path is not None else _acquire_finalization_lock(store.path)
+    lock_path = (
+        finalization_lock_path
+        if finalization_lock_path is not None
+        else _acquire_finalization_lock(store.path)
+    )
     if lock_path is None:
         return {"status": "finalizing", "message": "finalization already in progress"}
 
@@ -9599,7 +10485,9 @@ def finalize_recording(
     silent_transcript_state_cleared = False
     inserted = False
     written_text_stat: os.stat_result | None = None
-    cleanup_rollback_backups: list[tuple[Path, Path, os.stat_result, os.stat_result]] = []
+    cleanup_rollback_backups: list[
+        tuple[Path, Path, os.stat_result, os.stat_result]
+    ] = []
     cleanup_source_stats: dict[Path, os.stat_result] = {}
     cleanup_backup_restore_failed = False
     cleanup_backup_journal_persisted = False
@@ -9634,7 +10522,9 @@ def finalize_recording(
         finalize_public_error = error
         finalize_error_message = str(error)
 
-    def _finalize_store_update(*update_args: object, **update_values: object) -> RecordingState:
+    def _finalize_store_update(
+        *update_args: object, **update_values: object
+    ) -> RecordingState:
         nonlocal finalize_error_message, finalize_public_error
         try:
             return raw_store_update(*update_args, **update_values)
@@ -9646,9 +10536,7 @@ def finalize_recording(
     def current_cleanup_state_namespace() -> str:
         nonlocal cleanup_state_namespace
         if cleanup_state_namespace is None:
-            cleanup_state_namespace = (
-                _cleanup_backup_state_namespace(store.path)
-            )
+            cleanup_state_namespace = _cleanup_backup_state_namespace(store.path)
         return cleanup_state_namespace
 
     def _persist_cleanup_backup_journal() -> None:
@@ -9692,9 +10580,7 @@ def finalize_recording(
             pending_cleanup_restore_owner_paths=tuple(
                 str(owner_path) for owner_path, _ in pairs
             ),
-            pending_cleanup_backup_entries=tuple(
-                entry for _, entry in pairs
-            ),
+            pending_cleanup_backup_entries=tuple(entry for _, entry in pairs),
             cleanup_backup_journal_overflow=False,
             cleanup_backup_journal_restore=bool(pairs),
         )
@@ -9706,14 +10592,10 @@ def finalize_recording(
         entry: str,
     ) -> None:
         remaining_pairs = [
-            pair
-            for pair in cleanup_backup_restore_pairs
-            if pair != (owner_path, entry)
+            pair for pair in cleanup_backup_restore_pairs if pair != (owner_path, entry)
         ]
         if len(remaining_pairs) == len(cleanup_backup_restore_pairs):
-            raise RuntimeError(
-                "cleanup backup restore journal pair is missing"
-            )
+            raise RuntimeError("cleanup backup restore journal pair is missing")
         _persist_cleanup_backup_restore_pairs(remaining_pairs)
 
     def _backup_cleanup_file(path_text: str | None, *, suffix: str) -> Path | None:
@@ -9730,10 +10612,7 @@ def finalize_recording(
                 state_namespace=current_cleanup_state_namespace(),
             )
             cleanup_v2_prefix_cache[source] = v2_prefix
-        backup = source.with_name(
-            f"{v2_prefix}"
-            f"{secrets.token_hex(16)}.bak"
-        )
+        backup = source.with_name(f"{v2_prefix}" f"{secrets.token_hex(16)}.bak")
         try:
             source_stat = _recording_artifact_stat(source)
             if source_stat is None:
@@ -9743,13 +10622,21 @@ def finalize_recording(
                     state_path=store.path,
                 ):
                     return None
-                raise RuntimeError(f"recording cleanup source is not a safe regular file: {source}")
-            _copy_recording_artifact_to_backup(source, backup, expected_stat=source_stat)
+                raise RuntimeError(
+                    f"recording cleanup source is not a safe regular file: {source}"
+                )
+            _copy_recording_artifact_to_backup(
+                source, backup, expected_stat=source_stat
+            )
             backup_stat = _recording_artifact_stat(backup)
             if backup_stat is None:
-                raise RuntimeError(f"cleanup backup is not a safe regular file: {backup}")
+                raise RuntimeError(
+                    f"cleanup backup is not a safe regular file: {backup}"
+                )
         except BaseException as exc:
-            if isinstance(exc, FileNotFoundError) and _recording_artifact_missing_but_safe(
+            if isinstance(
+                exc, FileNotFoundError
+            ) and _recording_artifact_missing_but_safe(
                 path_text,
                 suffix=suffix,
                 state_path=store.path,
@@ -9782,7 +10669,12 @@ def finalize_recording(
         nonlocal cleanup_backup_restore_failed
         try:
             restore_pairs: list[tuple[Path, str]] = []
-            for original_path, backup_path, expected_original_stat, expected_backup_stat in cleanup_rollback_backups:
+            for (
+                original_path,
+                backup_path,
+                expected_original_stat,
+                expected_backup_stat,
+            ) in cleanup_rollback_backups:
                 parent_fd = ensure_directory_without_following_symlinks(
                     original_path.parent,
                     field_name="recording cleanup rollback directory",
@@ -9806,12 +10698,22 @@ def finalize_recording(
                         current_original_stat = None
                     if current_backup_stat is None:
                         if current_original_stat is None:
-                            raise RuntimeError(f"recording cleanup backup is missing: {backup_path}")
-                        if not _same_leaf_identity(current_original_stat, expected_original_stat):
-                            raise RuntimeError(f"recording cleanup original changed before rollback: {original_path}")
+                            raise RuntimeError(
+                                f"recording cleanup backup is missing: {backup_path}"
+                            )
+                        if not _same_leaf_identity(
+                            current_original_stat, expected_original_stat
+                        ):
+                            raise RuntimeError(
+                                f"recording cleanup original changed before rollback: {original_path}"
+                            )
                         continue
-                    if not _same_leaf_identity(current_backup_stat, expected_backup_stat):
-                        raise RuntimeError(f"recording cleanup backup changed before rollback: {backup_path}")
+                    if not _same_leaf_identity(
+                        current_backup_stat, expected_backup_stat
+                    ):
+                        raise RuntimeError(
+                            f"recording cleanup backup changed before rollback: {backup_path}"
+                        )
                     if current_original_stat is None:
                         restore_pairs.append(
                             (
@@ -9823,14 +10725,20 @@ def finalize_recording(
                             )
                         )
                     else:
-                        if not _same_leaf_identity(current_original_stat, expected_original_stat):
-                            raise RuntimeError(f"recording cleanup original changed before rollback: {original_path}")
+                        if not _same_leaf_identity(
+                            current_original_stat, expected_original_stat
+                        ):
+                            raise RuntimeError(
+                                f"recording cleanup original changed before rollback: {original_path}"
+                            )
                         if not _unlink_regular_leaf_with_parent_fsync(
                             backup_path,
                             field_name="recording cleanup backup",
                             expected_stat=expected_backup_stat,
                         ):
-                            raise RuntimeError(f"recording cleanup backup disappeared during rollback: {backup_path}")
+                            raise RuntimeError(
+                                f"recording cleanup backup disappeared during rollback: {backup_path}"
+                            )
                 finally:
                     try:
                         os.close(parent_fd)
@@ -9872,17 +10780,26 @@ def finalize_recording(
         nonlocal cleanup_backup_restore_failed
         if cleanup_backup_restore_failed:
             raise RuntimeError("recording cleanup backup state is unsafe")
-        for _, backup_path, _expected_original_stat, expected_backup_stat in cleanup_rollback_backups:
+        for (
+            _,
+            backup_path,
+            _expected_original_stat,
+            expected_backup_stat,
+        ) in cleanup_rollback_backups:
             try:
                 current_backup_stat = backup_path.lstat()
             except FileNotFoundError:
                 continue
             except OSError as exc:
                 cleanup_backup_restore_failed = True
-                raise RuntimeError(f"failed to inspect recording cleanup backup: {backup_path}") from exc
+                raise RuntimeError(
+                    f"failed to inspect recording cleanup backup: {backup_path}"
+                ) from exc
             if not _same_leaf_identity(current_backup_stat, expected_backup_stat):
                 cleanup_backup_restore_failed = True
-                raise RuntimeError(f"recording cleanup backup changed before discard: {backup_path}")
+                raise RuntimeError(
+                    f"recording cleanup backup changed before discard: {backup_path}"
+                )
             try:
                 removed = _unlink_regular_leaf_with_parent_fsync(
                     backup_path,
@@ -9894,7 +10811,9 @@ def finalize_recording(
                 raise
             if not removed:
                 cleanup_backup_restore_failed = True
-                raise RuntimeError(f"recording cleanup backup disappeared during discard: {backup_path}")
+                raise RuntimeError(
+                    f"recording cleanup backup disappeared during discard: {backup_path}"
+                )
         _clear_cleanup_backup_journal()
         cleanup_rollback_backups.clear()
         cleanup_source_stats.clear()
@@ -9913,7 +10832,9 @@ def finalize_recording(
         suffix: str,
         expected_stat: os.stat_result | None,
     ) -> bool:
-        if expected_stat is not None and remove_file(str(path), suffix=suffix, expected_stat=expected_stat):
+        if expected_stat is not None and remove_file(
+            str(path), suffix=suffix, expected_stat=expected_stat
+        ):
             return True
         return _recording_artifact_missing_but_safe(
             str(path),
@@ -9934,7 +10855,9 @@ def finalize_recording(
             raise RuntimeError(f"failed to inspect recording cleanup source: {path}")
         if presence:
             if source_stat is None:
-                raise RuntimeError(f"recording cleanup source is not a safe regular file: {path}")
+                raise RuntimeError(
+                    f"recording cleanup source is not a safe regular file: {path}"
+                )
         legacy_prefix = _cleanup_backup_prefix(path)
         v2_prefix = cleanup_v2_prefix_cache.get(path)
         if v2_prefix is None:
@@ -9947,10 +10870,8 @@ def finalize_recording(
         restore_entry_name = ""
         restore_identity: tuple[int, int, int, int, int, int, int] | None = None
         if restore_entry is not None:
-            restore_entry_name, restore_identity = (
-                _parse_cleanup_backup_journal_entry(
-                    restore_entry
-                )
+            restore_entry_name, restore_identity = _parse_cleanup_backup_journal_entry(
+                restore_entry
             )
             if not restore_entry_name.startswith(v2_prefix):
                 raise RuntimeError(
@@ -9958,9 +10879,13 @@ def finalize_recording(
                 )
             cleanup_backup_journal_persisted = True
         try:
-            entries = _safe_directory_entries(path.parent, field_name="recording cleanup directory")
+            entries = _safe_directory_entries(
+                path.parent, field_name="recording cleanup directory"
+            )
         except DirectoryScanError as exc:
-            raise RuntimeError(f"failed to scan recording cleanup directory: {path.parent}") from exc
+            raise RuntimeError(
+                f"failed to scan recording cleanup directory: {path.parent}"
+            ) from exc
         candidates = [
             (candidate, file_stat)
             for candidate, file_stat in entries
@@ -9994,14 +10919,18 @@ def finalize_recording(
                         f"recording cleanup restore state is ambiguous: {path}"
                     )
                 source_stat = _recording_artifact_stat(path)
-                if source_stat is None or (
-                    source_stat.st_dev,
-                    source_stat.st_ino,
-                    source_stat.st_mode,
-                    getattr(source_stat, "st_nlink", 1),
-                    source_stat.st_size,
-                    source_stat.st_mtime_ns,
-                ) != restore_identity[:6]:
+                if (
+                    source_stat is None
+                    or (
+                        source_stat.st_dev,
+                        source_stat.st_ino,
+                        source_stat.st_mode,
+                        getattr(source_stat, "st_nlink", 1),
+                        source_stat.st_size,
+                        source_stat.st_mtime_ns,
+                    )
+                    != restore_identity[:6]
+                ):
                     raise RuntimeError(
                         f"recording cleanup restored source changed: {path}"
                     )
@@ -10045,16 +10974,16 @@ def finalize_recording(
                         field_name="recording cleanup backup",
                         expected_stat=expected_backup_stat,
                     ):
-                        raise RuntimeError(f"recording cleanup backup disappeared: {backup}")
+                        raise RuntimeError(
+                            f"recording cleanup backup disappeared: {backup}"
+                        )
                 return
             backup, expected_backup_stat = backups[0]
             restore_entry = _cleanup_backup_journal_entry(
                 backup,
                 expected_backup_stat,
             )
-            _persist_cleanup_backup_restore_pairs(
-                [(path, restore_entry)]
-            )
+            _persist_cleanup_backup_restore_pairs([(path, restore_entry)])
         parent_fd = ensure_directory_without_following_symlinks(
             path.parent,
             field_name="recording cleanup restore directory",
@@ -10116,7 +11045,9 @@ def finalize_recording(
                     )
                     _fsync_fd(parent_fd)
                 except BaseException:
-                    activation_error.add_note("recording cleanup restore rollback failed")
+                    activation_error.add_note(
+                        "recording cleanup restore rollback failed"
+                    )
                 raise activation_error
             _fsync_fd(parent_fd)
         finally:
@@ -10125,18 +11056,14 @@ def finalize_recording(
             except BaseException:
                 pass
         if restore_entry is None:
-            raise RuntimeError(
-                "cleanup backup restore journal entry is unavailable"
-            )
+            raise RuntimeError("cleanup backup restore journal entry is unavailable")
         _complete_cleanup_backup_restore_pair(path, restore_entry)
 
     deferred_final_error: BaseException | None = None
     try:
         state = store.read()
         _raise_if_state_unreadable(state)
-        cleanup_backup_restore_pending = bool(
-            state.cleanup_backup_journal_restore
-        )
+        cleanup_backup_restore_pending = bool(state.cleanup_backup_journal_restore)
         restore_pairs = _cleanup_backup_restore_journal_pairs(
             state,
             state_path=store.path,
@@ -10255,9 +11182,7 @@ def finalize_recording(
                         typing_delay_ms,
                     )
                     if not isinstance(insert_result, bool):
-                        raise RuntimeError(
-                            "insert_text returned a non-boolean result"
-                        )
+                        raise RuntimeError("insert_text returned a non-boolean result")
                     inserted = insert_result
                 except OutputNotInsertedError as exc:
                     preserve_written_text_on_error = True
@@ -10327,11 +11252,15 @@ def finalize_recording(
         persisted_audio_path = state.audio_path
         persisted_log_path = state.log_path
         if state.status in {"done", "idle"} or (
-            state.status == "error"
-            and not cleanup_backup_restore_pending
+            state.status == "error" and not cleanup_backup_restore_pending
         ):
-            return {"status": state.status, "message": state.error or f"recording already {state.status}"}
-        if state.status in {"recorded", "processing", "finalizing"} and (state.pid is not None or state.process_identity):
+            return {
+                "status": state.status,
+                "message": state.error or f"recording already {state.status}",
+            }
+        if state.status in {"recorded", "processing", "finalizing"} and (
+            state.pid is not None or state.process_identity
+        ):
             finalize_error_message = TRANSIENT_RECORDING_PROCESS_ERROR
             if state.pid is None:
                 error_text = (
@@ -10399,6 +11328,28 @@ def finalize_recording(
             )
             raise RuntimeError("recording audio path is invalid")
         audio_presence, original_audio_stat = _safe_regular_leaf_probe(audio_path)
+        if (
+            state.status != "finalizing"
+            and not is_encrypted_path(audio_path)
+            and (
+                audio_presence is False
+                or (
+                    original_audio_stat is not None and original_audio_stat.st_size <= 0
+                )
+            )
+        ):
+            settled_audio_stat = _wait_for_saved_recording_artifact_stat(
+                audio_path,
+                initial_stat=original_audio_stat,
+                check_initial=False,
+            )
+            if settled_audio_stat is not None:
+                audio_presence = True
+                original_audio_stat = settled_audio_stat
+            else:
+                audio_presence, original_audio_stat = _safe_regular_leaf_probe(
+                    audio_path
+                )
         if audio_presence is None:
             finalize_error_message = TRANSIENT_AUDIO_PATH_ERROR
             raise RuntimeError(f"failed to inspect recording audio path: {audio_path}")
@@ -10413,7 +11364,11 @@ def finalize_recording(
             )
             raise RuntimeError("recording audio path is not a safe regular file")
 
-        if state.status == "finalizing" and original_audio_stat is None and audio_path.suffix.lower() == ".wav":
+        if (
+            state.status == "finalizing"
+            and original_audio_stat is None
+            and audio_path.suffix.lower() == ".wav"
+        ):
             recovered_audio_path = audio_path.with_suffix(".flac")
             recovered_audio_stat = _recording_artifact_stat(recovered_audio_path)
             if recovered_audio_stat is not None:
@@ -10429,11 +11384,19 @@ def finalize_recording(
             getattr(args, "keep_recording_artifacts", False),
             field_name="keep_recording_artifacts",
         )
-        if _coerce_bool(getattr(args, "settings_json_stdin", False), field_name="settings_json_stdin"):
+        if _coerce_bool(
+            getattr(args, "settings_json_stdin", False),
+            field_name="settings_json_stdin",
+        ):
             preserve_recording_artifacts_after_cleanup_failure = True
             automatic_backup_settings = _settings_json_from_args(args)
-            automatic_audio_backup_requested = _auto_backup_configuration(automatic_backup_settings) is not None
-        _coerce_bool(getattr(args, "skip_silent_auto_relisten", False), field_name="skip_silent_auto_relisten")
+            automatic_audio_backup_requested = (
+                _auto_backup_configuration(automatic_backup_settings) is not None
+            )
+        _coerce_bool(
+            getattr(args, "skip_silent_auto_relisten", False),
+            field_name="skip_silent_auto_relisten",
+        )
         artifact_encryption = _artifact_encryption_mode(args)
         if state.status != "finalizing":
             state = _finalize_store_update(
@@ -10442,18 +11405,10 @@ def finalize_recording(
                 process_identity="",
                 stopped_at=state.stopped_at or now_iso(),
                 error="",
-                inserted=(
-                    state.inserted
-                    if cleanup_backup_restore_pending
-                    else False
-                ),
+                inserted=(state.inserted if cleanup_backup_restore_pending else False),
             )
             state_marked_finalizing = True
-            inserted = (
-                state.inserted
-                if cleanup_backup_restore_pending
-                else False
-            )
+            inserted = state.inserted if cleanup_backup_restore_pending else False
         else:
             if state.pid is not None or state.process_identity:
                 state = _finalize_store_update(pid=None, process_identity="")
@@ -10472,22 +11427,36 @@ def finalize_recording(
             if encrypted_recovery_path is not None:
                 persisted_audio_path = str(encrypted_recovery_path)
                 preserved_encrypted_audio_path = encrypted_recovery_path
-                plaintext_recovery_path = _plaintext_recording_sibling_for_encrypted_path(
-                    encrypted_recovery_path
+                plaintext_recovery_path = (
+                    _plaintext_recording_sibling_for_encrypted_path(
+                        encrypted_recovery_path
+                    )
                 )
                 if plaintext_recovery_path is None:
-                    raise RuntimeError(f"encrypted recording artifact has no safe plaintext sibling: {encrypted_recovery_path}")
+                    raise RuntimeError(
+                        f"encrypted recording artifact has no safe plaintext sibling: {encrypted_recovery_path}"
+                    )
                 plaintext_presence = _safe_leaf_presence(plaintext_recovery_path)
                 if plaintext_presence is None:
-                    raise RuntimeError(f"failed to inspect plaintext recording recovery path: {plaintext_recovery_path}")
+                    raise RuntimeError(
+                        f"failed to inspect plaintext recording recovery path: {plaintext_recovery_path}"
+                    )
                 if plaintext_presence:
-                    recovered_plaintext_stat = _recording_artifact_stat(plaintext_recovery_path)
+                    recovered_plaintext_stat = _recording_artifact_stat(
+                        plaintext_recovery_path
+                    )
                     if recovered_plaintext_stat is None:
-                        raise RuntimeError(f"plaintext recording recovery path is not a safe regular file: {plaintext_recovery_path}")
+                        raise RuntimeError(
+                            f"plaintext recording recovery path is not a safe regular file: {plaintext_recovery_path}"
+                        )
                 else:
-                    encrypted_source_stat = _recording_artifact_stat(encrypted_recovery_path)
+                    encrypted_source_stat = _recording_artifact_stat(
+                        encrypted_recovery_path
+                    )
                     if encrypted_source_stat is None:
-                        raise RuntimeError(f"encrypted recording artifact is not a safe regular file: {encrypted_recovery_path}")
+                        raise RuntimeError(
+                            f"encrypted recording artifact is not a safe regular file: {encrypted_recovery_path}"
+                        )
                     try:
                         recovered_payload = read_decrypted_bytes_from_file(
                             encrypted_recovery_path,
@@ -10507,10 +11476,16 @@ def finalize_recording(
                         )
                     except ArtifactCryptoError:
                         raise RuntimeError("recording recovery failed") from None
-                    recovered_plaintext_stat = _recording_artifact_stat(plaintext_recovery_path)
+                    recovered_plaintext_stat = _recording_artifact_stat(
+                        plaintext_recovery_path
+                    )
                     if recovered_plaintext_stat is None:
-                        raise RuntimeError(f"recovered plaintext recording artifact is not a safe regular file: {plaintext_recovery_path}")
-                    current_encrypted_stat = _recording_artifact_stat(encrypted_recovery_path)
+                        raise RuntimeError(
+                            f"recovered plaintext recording artifact is not a safe regular file: {plaintext_recovery_path}"
+                        )
+                    current_encrypted_stat = _recording_artifact_stat(
+                        encrypted_recovery_path
+                    )
                     if current_encrypted_stat is None or not _same_leaf_identity(
                         current_encrypted_stat,
                         encrypted_source_stat,
@@ -10520,12 +11495,16 @@ def finalize_recording(
                             suffix=plaintext_recovery_path.suffix.lower(),
                             expected_stat=recovered_plaintext_stat,
                         )
-                        raise RuntimeError(f"encrypted recording artifact changed during recovery: {encrypted_recovery_path}")
+                        raise RuntimeError(
+                            f"encrypted recording artifact changed during recovery: {encrypted_recovery_path}"
+                        )
                 audio_path = plaintext_recovery_path
                 original_audio_stat = recovered_plaintext_stat
                 persisted_audio_path = str(encrypted_recovery_path)
                 if str(state.audio_path or "") != str(encrypted_recovery_path):
-                    state = _finalize_store_update(audio_path=str(encrypted_recovery_path))
+                    state = _finalize_store_update(
+                        audio_path=str(encrypted_recovery_path)
+                    )
         audio_deleted = False
         log_deleted = False
         done_audio_path = str(audio_path)
@@ -10555,8 +11534,13 @@ def finalize_recording(
                 done_log_path = ""
             elif done_audio_path:
                 plaintext_done_audio_path = Path(done_audio_path)
-                encrypted_audio_path, recording_encryption = _encrypt_kept_recording_artifact(plaintext_done_audio_path, args)
-                if recording_encryption != ARTIFACT_ENCRYPTION_OFF and is_encrypted_path(encrypted_audio_path):
+                encrypted_audio_path, recording_encryption = (
+                    _encrypt_kept_recording_artifact(plaintext_done_audio_path, args)
+                )
+                if (
+                    recording_encryption != ARTIFACT_ENCRYPTION_OFF
+                    and is_encrypted_path(encrypted_audio_path)
+                ):
                     preserved_encrypted_audio_path = encrypted_audio_path
                 if encrypted_audio_path != plaintext_done_audio_path:
                     done_audio_path = str(encrypted_audio_path)
@@ -10567,14 +11551,20 @@ def finalize_recording(
             silent_transcript_state_cleared = True
             state.transcript_path = ""
             state.transcript = ""
-            artifact_cleanup = _enforce_recording_artifact_cap(state, state_path=store.path)
-            cleanup_failures: list[tuple[str, str, str]] = []
+            artifact_cleanup = _enforce_recording_artifact_cap(
+                state, state_path=store.path
+            )
             if automatic_audio_backup_requested:
                 preserve_written_text_on_error = True
                 finalize_error_message = "automatic audio backup failed"
-                automatic_backup_result = _run_inline_auto_backup(args, automatic_backup_settings)
+                automatic_backup_result = _run_inline_auto_backup(
+                    args, automatic_backup_settings
+                )
+            cleanup_failures: list[tuple[str, str, str]] = []
             if not keep_recording_artifacts:
-                audio_backup = _backup_cleanup_file(str(audio_path), suffix=audio_suffix)
+                audio_backup = _backup_cleanup_file(
+                    str(audio_path), suffix=audio_suffix
+                )
                 log_backup = _backup_cleanup_file(cleanup_log_path, suffix=".log")
                 encrypted_audio_backup = (
                     _backup_cleanup_file(
@@ -10589,14 +11579,18 @@ def finalize_recording(
                     str(audio_path), suffix=audio_suffix
                 )
                 log_deleted = (
-                    log_backup is None or _remove_backed_up_cleanup_file(cleanup_log_path, suffix=".log")
+                    log_backup is None
+                    or _remove_backed_up_cleanup_file(cleanup_log_path, suffix=".log")
                     if cleanup_log_path
                     else False
                 )
                 if preserved_encrypted_audio_path is not None:
-                    encrypted_audio_deleted = encrypted_audio_backup is None or _remove_backed_up_cleanup_file(
-                        str(preserved_encrypted_audio_path),
-                        suffix=".socenc",
+                    encrypted_audio_deleted = (
+                        encrypted_audio_backup is None
+                        or _remove_backed_up_cleanup_file(
+                            str(preserved_encrypted_audio_path),
+                            suffix=".socenc",
+                        )
                     )
                     if not encrypted_audio_deleted:
                         cleanup_failures.append(
@@ -10607,15 +11601,23 @@ def finalize_recording(
                             )
                         )
                 if not audio_deleted:
-                    cleanup_failures.append(("audio_path", str(audio_path), "recording audio artifact"))
+                    cleanup_failures.append(
+                        ("audio_path", str(audio_path), "recording audio artifact")
+                    )
                 if cleanup_log_path and not log_deleted:
-                    cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
+                    cleanup_failures.append(
+                        ("log_path", cleanup_log_path, "recorder log artifact")
+                    )
             elif artifact_encryption != ARTIFACT_ENCRYPTION_OFF and cleanup_log_path:
                 log_backup = _backup_cleanup_file(cleanup_log_path, suffix=".log")
                 _persist_cleanup_backup_journal()
-                log_deleted = log_backup is None or _remove_backed_up_cleanup_file(cleanup_log_path, suffix=".log")
+                log_deleted = log_backup is None or _remove_backed_up_cleanup_file(
+                    cleanup_log_path, suffix=".log"
+                )
                 if not log_deleted:
-                    cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
+                    cleanup_failures.append(
+                        ("log_path", cleanup_log_path, "recorder log artifact")
+                    )
             if cleanup_failures:
                 audio_deleted = False
                 log_deleted = False
@@ -10643,7 +11645,8 @@ def finalize_recording(
                     "transcript_encryption": ARTIFACT_ENCRYPTION_OFF,
                     "transcript_encrypted": False,
                     "recording_encryption": recording_encryption,
-                    "recording_encrypted": recording_encryption != ARTIFACT_ENCRYPTION_OFF,
+                    "recording_encrypted": recording_encryption
+                    != ARTIFACT_ENCRYPTION_OFF,
                     "inserted": False,
                     "recording_artifact_cap": _public_cleanup_result(artifact_cleanup),
                     "language": language,
@@ -10653,7 +11656,11 @@ def finalize_recording(
                     "silence_detected": True,
                     "silence_duration_seconds": silence.silence_seconds,
                     "speech_duration_seconds": silence.speech_seconds,
-                    **({"automatic_backup": automatic_backup_result} if automatic_backup_result is not None else {}),
+                    **(
+                        {"automatic_backup": automatic_backup_result}
+                        if automatic_backup_result is not None
+                        else {}
+                    ),
                 }
             done = _finalize_store_update(
                 status="done",
@@ -10685,16 +11692,22 @@ def finalize_recording(
                 "silence_detected": True,
                 "silence_duration_seconds": silence.silence_seconds,
                 "speech_duration_seconds": silence.speech_seconds,
-                **({"automatic_backup": automatic_backup_result} if automatic_backup_result is not None else {}),
+                **(
+                    {"automatic_backup": automatic_backup_result}
+                    if automatic_backup_result is not None
+                    else {}
+                ),
             }
 
         text_path = _transcript_path_for_audio(audio_path)
         transcriber_text_path = _transcript_work_path(text_path, artifact_encryption)
         finalize_error_message = TRANSIENT_TRANSCRIPT_WRITE_ERROR
         try:
-            transient_text_fd, transient_owner_stat = _prepare_transient_transcript_path(
-                transcriber_text_path,
-                text_path,
+            transient_text_fd, transient_owner_stat = (
+                _prepare_transient_transcript_path(
+                    transcriber_text_path,
+                    text_path,
+                )
             )
         except BaseException as exc:
             _raise_backend_sanitized_exception(
@@ -10738,18 +11751,26 @@ def finalize_recording(
                 ),
                 expected_owner_stat=transient_owner_stat,
             )
-            if trimmed_audio_path is not None and trimmed_audio_path != audio_path and not keep_recording_artifacts:
+            if (
+                trimmed_audio_path is not None
+                and trimmed_audio_path != audio_path
+                and not keep_recording_artifacts
+            ):
                 if not _remove_recording_artifact_if_present(
                     trimmed_audio_path,
                     suffix=trimmed_audio_path.suffix.lower(),
                     expected_stat=trimmed_audio_stat,
                 ):
-                    raise RuntimeError(f"failed to delete transient trimmed recording artifact: {trimmed_audio_path}")
+                    raise RuntimeError(
+                        f"failed to delete transient trimmed recording artifact: {trimmed_audio_path}"
+                    )
         except BaseException as cleanup_exc:
             cleanup_error = cleanup_exc
         if cleanup_error is not None:
             finalize_error_message = TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
-            raise _transcription_cleanup_exception(transcription_error, cleanup_error, stable_public_error=True) from None
+            raise _transcription_cleanup_exception(
+                transcription_error, cleanup_error, stable_public_error=True
+            ) from None
         if transcription_error is not None:
             if isinstance(transcription_error, TranscriptionCleanupError):
                 finalize_error_message = TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
@@ -10823,15 +11844,23 @@ def finalize_recording(
         )
         text_to_insert = ""
         if stripped_text:
-            text_to_insert = prepare_output_text(text, append_space, sanitize_special_chars)
-        typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
+            text_to_insert = prepare_output_text(
+                text, append_space, sanitize_special_chars
+            )
+        typing_delay_ms = _coerce_int(
+            args.typing_delay_ms,
+            field_name="typing-delay-ms",
+            max_value=MAX_TYPING_DELAY_MS,
+        )
         if text_to_insert and not inserted:
             # Paste has no transaction boundary. Persist intent first so a crash after
             # the external side effect cannot cause a duplicate paste on resume.
             _finalize_store_update(inserted=True)
             inserted = True
             try:
-                insert_result = insert_text(text_to_insert, args.insert_method, typing_delay_ms)
+                insert_result = insert_text(
+                    text_to_insert, args.insert_method, typing_delay_ms
+                )
                 if not isinstance(insert_result, bool):
                     raise RuntimeError("insert_text returned a non-boolean result")
                 inserted = insert_result
@@ -10896,21 +11925,31 @@ def finalize_recording(
                         converted_audio_path,
                         replace_existing_path=audio_path,
                     )
-                    stabilized_audio_stat = _recording_artifact_stat(stabilized_audio_path)
+                    stabilized_audio_stat = _recording_artifact_stat(
+                        stabilized_audio_path
+                    )
                     done_audio_path = str(stabilized_audio_path)
                     if done_audio_path != str(audio_path):
                         remove_original_after_state_update = True
             else:
                 done_audio_path = str(audio_path)
-        if cleanup_log_path is None and not keep_recording_artifacts and log_path is not None:
+        if (
+            cleanup_log_path is None
+            and not keep_recording_artifacts
+            and log_path is not None
+        ):
             cleanup_log_path = str(log_path)
 
         recording_encryption = ARTIFACT_ENCRYPTION_OFF
         plaintext_done_audio_path: Path | None = None
         if keep_recording_artifacts and done_audio_path:
             plaintext_done_audio_path = Path(done_audio_path)
-            encrypted_audio_path, recording_encryption = _encrypt_kept_recording_artifact(plaintext_done_audio_path, args)
-            if recording_encryption != ARTIFACT_ENCRYPTION_OFF and is_encrypted_path(encrypted_audio_path):
+            encrypted_audio_path, recording_encryption = (
+                _encrypt_kept_recording_artifact(plaintext_done_audio_path, args)
+            )
+            if recording_encryption != ARTIFACT_ENCRYPTION_OFF and is_encrypted_path(
+                encrypted_audio_path
+            ):
                 preserved_encrypted_audio_path = encrypted_audio_path
             if encrypted_audio_path != plaintext_done_audio_path:
                 done_audio_path = str(encrypted_audio_path)
@@ -10925,7 +11964,9 @@ def finalize_recording(
         if automatic_audio_backup_requested:
             preserve_written_text_on_error = True
             finalize_error_message = "automatic audio backup failed"
-            automatic_backup_result = _run_inline_auto_backup(args, automatic_backup_settings)
+            automatic_backup_result = _run_inline_auto_backup(
+                args, automatic_backup_settings
+            )
 
         cleanup_failures: list[tuple[str, str, str]] = []
         audio_backup = (
@@ -10952,20 +11993,33 @@ def finalize_recording(
                 str(cleanup_audio_path), suffix=audio_suffix
             )
             if not audio_deleted:
-                cleanup_failures.append(("audio_path", str(cleanup_audio_path), "recording audio artifact"))
+                cleanup_failures.append(
+                    ("audio_path", str(cleanup_audio_path), "recording audio artifact")
+                )
         if cleanup_encrypted_audio_path is not None:
-            encrypted_audio_deleted = encrypted_audio_backup is None or _remove_backed_up_cleanup_file(
-                str(cleanup_encrypted_audio_path),
-                suffix=".socenc",
+            encrypted_audio_deleted = (
+                encrypted_audio_backup is None
+                or _remove_backed_up_cleanup_file(
+                    str(cleanup_encrypted_audio_path),
+                    suffix=".socenc",
+                )
             )
             if not encrypted_audio_deleted:
                 cleanup_failures.append(
-                    ("audio_path", str(cleanup_encrypted_audio_path), "encrypted recording artifact")
+                    (
+                        "audio_path",
+                        str(cleanup_encrypted_audio_path),
+                        "encrypted recording artifact",
+                    )
                 )
         if cleanup_log_path:
-            log_deleted = log_backup is None or _remove_backed_up_cleanup_file(cleanup_log_path, suffix=".log")
+            log_deleted = log_backup is None or _remove_backed_up_cleanup_file(
+                cleanup_log_path, suffix=".log"
+            )
             if not log_deleted:
-                cleanup_failures.append(("log_path", cleanup_log_path, "recorder log artifact"))
+                cleanup_failures.append(
+                    ("log_path", cleanup_log_path, "recorder log artifact")
+                )
         if cleanup_failures:
             audio_deleted = False
             log_deleted = False
@@ -10980,7 +12034,9 @@ def finalize_recording(
             audio_path=done_audio_path,
             log_path=done_log_path,
             transcript=text if transcript_encryption == ARTIFACT_ENCRYPTION_OFF else "",
-            transcript_path=str(stored_text_path) if stored_text_path is not None else "",
+            transcript_path=(
+                str(stored_text_path) if stored_text_path is not None else ""
+            ),
             inserted=inserted,
             error="",
         )
@@ -10991,14 +12047,18 @@ def finalize_recording(
             artifact_cleanup_active_paths.add(trimmed_audio_path)
         if audio_path is not None:
             artifact_cleanup_active_paths.add(audio_path)
-        artifact_cleanup = _enforce_recording_artifact_cap(state, artifact_cleanup_active_paths, state_path=store.path)
+        artifact_cleanup = _enforce_recording_artifact_cap(
+            state, artifact_cleanup_active_paths, state_path=store.path
+        )
         keep_transcripts = _coerce_int(
             getattr(args, "keep_transcripts", DEFAULT_KEEP_TRANSCRIPTS),
             field_name="keep-transcripts",
             max_value=MAX_KEEP_TRANSCRIPTS,
         )
         transcript_stats: dict[Path, os.stat_result] = {}
-        transcript_files = _safe_transcript_artifact_files(expected_stats=transcript_stats)
+        transcript_files = _safe_transcript_artifact_files(
+            expected_stats=transcript_stats
+        )
         transcript_cleanup = prune_transcript_files_by_mtime(
             transcript_files,
             keep_transcripts,
@@ -11012,9 +12072,15 @@ def finalize_recording(
             transcript_cleanup,
             transient_transcript_cleanup,
         )
-        message = "recording finished without transcript" if not stripped_text else "transcription completed"
+        message = (
+            "recording finished without transcript"
+            if not stripped_text
+            else "transcription completed"
+        )
         if cleanup_failed_paths:
-            _persist_cleanup_failure_state(store, cleanup_failed_paths, artifact_state=done_candidate)
+            _persist_cleanup_failure_state(
+                store, cleanup_failed_paths, artifact_state=done_candidate
+            )
             status = "error"
             message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
             done = done_candidate
@@ -11034,22 +12100,40 @@ def finalize_recording(
             preserve_written_text_on_error = True
             post_done_cleanup_failures: list[tuple[str, str, str]] = []
             if remove_original_after_state_update and original_audio_stat is not None:
-                if not remove_file(str(audio_path), suffix=audio_suffix, expected_stat=original_audio_stat):
+                if not remove_file(
+                    str(audio_path),
+                    suffix=audio_suffix,
+                    expected_stat=original_audio_stat,
+                ):
                     preserve_recording_artifacts_after_cleanup_failure = True
                     preserved_audio_path = stabilized_audio_path or audio_path
                     post_done_cleanup_failures.append(
-                        ("audio_path", str(preserved_audio_path), "original recording artifact")
+                        (
+                            "audio_path",
+                            str(preserved_audio_path),
+                            "original recording artifact",
+                        )
                     )
-            _raise_recording_cleanup_failure(store, post_done_cleanup_failures, inserted=inserted)
+            _raise_recording_cleanup_failure(
+                store, post_done_cleanup_failures, inserted=inserted
+            )
             state = done
             status = done.status
             _discard_cleanup_backups()
         return {
             "status": status,
             "message": message,
-            **({"error": message, "cleanup_failed_path_count": len(cleanup_failed_paths)} if cleanup_failed_paths else {}),
+            **(
+                {
+                    "error": message,
+                    "cleanup_failed_path_count": len(cleanup_failed_paths),
+                }
+                if cleanup_failed_paths
+                else {}
+            ),
             "transcript": _transcript_payload_text(text, transcript_encryption, args),
-            "transcript_output_redacted": bool(text) and not _confirm_plaintext_transcript_output(args),
+            "transcript_output_redacted": bool(text)
+            and not _confirm_plaintext_transcript_output(args),
             "transcript_path_present": stored_text_path is not None,
             "artifact_encryption": artifact_encryption,
             "transcript_encryption": transcript_encryption,
@@ -11060,12 +12144,18 @@ def finalize_recording(
             "security": _public_security_post_processing(security_post_processing),
             "recording_artifact_cap": _public_cleanup_result(artifact_cleanup),
             "transcript_file_cap": _public_cleanup_result(transcript_cleanup),
-            "transient_transcript_cleanup": _public_cleanup_result(transient_transcript_cleanup),
+            "transient_transcript_cleanup": _public_cleanup_result(
+                transient_transcript_cleanup
+            ),
             "language": language,
             "recording_artifacts_kept": keep_recording_artifacts,
             "audio_deleted": audio_deleted,
             "log_deleted": log_deleted,
-            **({"automatic_backup": automatic_backup_result} if automatic_backup_result is not None else {}),
+            **(
+                {"automatic_backup": automatic_backup_result}
+                if automatic_backup_result is not None
+                else {}
+            ),
         }
     except BaseException as exc:
         error_text = finalize_error_message
@@ -11100,11 +12190,15 @@ def finalize_recording(
                         expected_stat=trimmed_audio_stat,
                     )
                 except BaseException:
-                    error_cleanup_failures.append("transient trimmed recording artifact")
+                    error_cleanup_failures.append(
+                        "transient trimmed recording artifact"
+                    )
                     exc.add_note("transient trimmed recording cleanup failed")
                 else:
                     if not trimmed_audio_deleted:
-                        error_cleanup_failures.append("transient trimmed recording artifact")
+                        error_cleanup_failures.append(
+                            "transient trimmed recording artifact"
+                        )
             stabilized_audio_deleted = False
             if (
                 stabilized_audio_path is not None
@@ -11135,7 +12229,9 @@ def finalize_recording(
                         expected_stat=original_audio_stat,
                     )
                 except BaseException:
-                    error_cleanup_failures.append("decrypted recording recovery artifact")
+                    error_cleanup_failures.append(
+                        "decrypted recording recovery artifact"
+                    )
                     exc.add_note("decrypted recording recovery cleanup failed")
                 else:
                     if not decrypted_audio_deleted:
@@ -11170,7 +12266,9 @@ def finalize_recording(
                 error_update["transcript_path"] = ""
             preserved_recovery_anchor = False
             if preserved_encrypted_audio_path is not None:
-                preserved_presence, _ = _safe_regular_leaf_probe(preserved_encrypted_audio_path)
+                preserved_presence, _ = _safe_regular_leaf_probe(
+                    preserved_encrypted_audio_path
+                )
                 if preserved_presence is not False:
                     error_update["audio_path"] = str(preserved_encrypted_audio_path)
                     preserved_recovery_anchor = True
@@ -11192,14 +12290,20 @@ def finalize_recording(
                 error_update["transcript_path"] = ""
             elif written_text_path is not None and preserve_written_text_on_error:
                 error_update["transcript"] = (
-                    stored_transcript_text if transcript_encryption == ARTIFACT_ENCRYPTION_OFF else ""
+                    stored_transcript_text
+                    if transcript_encryption == ARTIFACT_ENCRYPTION_OFF
+                    else ""
                 )
                 error_update["transcript_path"] = str(written_text_path)
             elif written_text_path is not None and not preserve_written_text_on_error:
                 try:
                     if written_text_stat is None:
-                        raise RuntimeError(f"transcript file identity is unavailable: {written_text_path}")
-                    _remove_transcript_file(written_text_path, expected_stat=written_text_stat)
+                        raise RuntimeError(
+                            f"transcript file identity is unavailable: {written_text_path}"
+                        )
+                    _remove_transcript_file(
+                        written_text_path, expected_stat=written_text_stat
+                    )
                     transcript_presence, _ = _safe_regular_leaf_probe(written_text_path)
                     if transcript_presence is not False:
                         raise RuntimeError("transcript cleanup could not be verified")
@@ -11207,7 +12311,9 @@ def finalize_recording(
                     error_update["error"] = TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
                     transcript_presence, _ = _safe_regular_leaf_probe(written_text_path)
                     error_update["transcript_path"] = (
-                        str(written_text_path) if transcript_presence is not False else ""
+                        str(written_text_path)
+                        if transcript_presence is not False
+                        else ""
                     )
                     exc.add_note("transcript cleanup failed")
                 else:
@@ -11227,12 +12333,18 @@ def finalize_recording(
             if (
                 not retryable_pre_output_processing_failure
                 and not preserve_recording_artifacts_after_cleanup_failure
-                and (not keep_recording_artifacts or cleanup_plaintext_recording_artifacts)
+                and (
+                    not keep_recording_artifacts
+                    or cleanup_plaintext_recording_artifacts
+                )
             ):
                 if (
                     audio_suffix
                     and not audio_deleted
-                    and (not cleanup_plaintext_recording_artifacts or audio_suffix in {".wav", ".flac"})
+                    and (
+                        not cleanup_plaintext_recording_artifacts
+                        or audio_suffix in {".wav", ".flac"}
+                    )
                 ):
                     audio_cleanup_presence, audio_cleanup_stat = (
                         _safe_regular_leaf_probe(audio_path)
@@ -11248,7 +12360,10 @@ def finalize_recording(
                             audio_cleanup_stat,
                         )
                     )
-                if not keep_recording_artifacts and preserved_encrypted_audio_path is not None:
+                if (
+                    not keep_recording_artifacts
+                    and preserved_encrypted_audio_path is not None
+                ):
                     encrypted_cleanup_presence, encrypted_cleanup_stat = (
                         _safe_regular_leaf_probe(preserved_encrypted_audio_path)
                     )
@@ -11287,7 +12402,10 @@ def finalize_recording(
             if cleanup_targets_by_field:
                 try:
                     cleanup_clear_update: dict[str, object] = {}
-                    for cleanup_field, field_targets in cleanup_targets_by_field.items():
+                    for (
+                        cleanup_field,
+                        field_targets,
+                    ) in cleanup_targets_by_field.items():
                         field_deleted = True
                         for (
                             cleanup_path,
@@ -11306,7 +12424,9 @@ def finalize_recording(
                                 expected_stat=cleanup_stat,
                             )
                             try:
-                                post_cleanup_presence, _ = _safe_regular_leaf_probe(Path(cleanup_path))
+                                post_cleanup_presence, _ = _safe_regular_leaf_probe(
+                                    Path(cleanup_path)
+                                )
                             except BaseException:
                                 post_cleanup_presence = None
                             if post_cleanup_presence is not False:
@@ -11317,14 +12437,17 @@ def finalize_recording(
                     if cleanup_clear_update:
                         _finalize_store_update(**cleanup_clear_update)
                 except BaseException as update_exc:
-                    _raise_error_state_update_failure(update_exc, final_error_text, "error cleanup state")
+                    _raise_error_state_update_failure(
+                        update_exc, final_error_text, "error cleanup state"
+                    )
             try:
                 _discard_cleanup_backups()
             except BaseException:
                 exc.add_note("cleanup backup discard failed")
         final_error = (
             error_update.get("error", error_text)
-            if state_marked_finalizing and isinstance(error_update.get("error", error_text), str)
+            if state_marked_finalizing
+            and isinstance(error_update.get("error", error_text), str)
             else error_text
         )
         classified_final_error = (
@@ -11337,10 +12460,13 @@ def finalize_recording(
                 KeyboardInterrupt()
             )
         else:
-            deferred_final_error = classified_final_error or _sanitize_transient_exception(
-                exc,
-                message=final_error,
-                system_exit_as_runtime=True,
+            deferred_final_error = (
+                classified_final_error
+                or _sanitize_transient_exception(
+                    exc,
+                    message=final_error,
+                    system_exit_as_runtime=True,
+                )
             )
     finally:
         _release_finalization_lock(lock_path)
@@ -11358,7 +12484,9 @@ def remove_file(
     if not path_value:
         return False
     try:
-        path_value = _assert_clean_text(path_value, field_name="path", max_chars=MAX_PATH_CHARS)
+        path_value = _assert_clean_text(
+            path_value, field_name="path", max_chars=MAX_PATH_CHARS
+        )
     except RuntimeError:
         return False
     if suffix:
@@ -11399,7 +12527,10 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
         if state.status == "finalizing":
             return _finalize_non_recording_state_with_lock(args, store)
         if _is_finalization_lock_active(store.path):
-            return {"status": "finalizing", "message": "recording lifecycle in progress; wait for completion"}
+            return {
+                "status": "finalizing",
+                "message": "recording lifecycle in progress; wait for completion",
+            }
         return {"status": state.status, "message": "not recording"}
 
     lock_path = _acquire_finalization_lock(store.path)
@@ -11419,7 +12550,9 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
                     )
                 return {"status": "finalizing", "message": "finalization in progress"}
             if state.status in {"recorded", "processing"}:
-                return finalize_recording(args, store, state, finalization_lock_path=lock_path)
+                return finalize_recording(
+                    args, store, state, finalization_lock_path=lock_path
+                )
             return {"status": state.status, "message": "not recording"}
         if state.pid is None:
             error_text = "recording process pid is missing; recording state preserved"
@@ -11434,7 +12567,11 @@ def command_stop(args: argparse.Namespace) -> dict[str, object]:
                     "error": process_error,
                 }
             store.update(status="recording", error=process_error, inserted=False)
-            return {"status": "recording", "message": process_error, "error": process_error}
+            return {
+                "status": "recording",
+                "message": process_error,
+                "error": process_error,
+            }
         state = store.update(
             status="recorded",
             pid=None,
@@ -11460,9 +12597,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     def current_cleanup_state_namespace() -> str:
         nonlocal cleanup_state_namespace
         if cleanup_state_namespace is None:
-            cleanup_state_namespace = (
-                _cleanup_backup_state_namespace(store.path)
-            )
+            cleanup_state_namespace = _cleanup_backup_state_namespace(store.path)
         return cleanup_state_namespace
 
     def current_legacy_cleanup_prefix(path: Path) -> str:
@@ -11500,8 +12635,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         nonlocal persisted_legacy_owner_prefixes
         if persisted_legacy_owner_prefixes is None:
             persisted_legacy_owner_prefixes = frozenset(
-                current_legacy_cleanup_prefix(path)
-                for path in owner_paths
+                current_legacy_cleanup_prefix(path) for path in owner_paths
             )
         return persisted_legacy_owner_prefixes
 
@@ -11511,16 +12645,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     ) -> tuple[Path, str] | None:
         prefix = current_v3_cleanup_prefix(path)
         for _ in range(100):
-            nonce = secrets.token_hex(
-                _CLEANUP_CLAIM_NONCE_HEX_CHARS // 2
-            )
+            nonce = secrets.token_hex(_CLEANUP_CLAIM_NONCE_HEX_CHARS // 2)
             if (
                 type(nonce) is not str
                 or len(nonce) != _CLEANUP_CLAIM_NONCE_HEX_CHARS
-                or any(
-                    character not in "0123456789abcdef"
-                    for character in nonce
-                )
+                or any(character not in "0123456789abcdef" for character in nonce)
             ):
                 return None
             candidate = path.with_name(
@@ -11593,17 +12722,20 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
 
     def recovery_cleanup_transaction_groups(
         transaction_state: RecordingState,
-    ) -> tuple[
+    ) -> (
         tuple[
-            Path,
-            str,
-            str,
-            str,
-            str,
-            tuple[int, int, int, int, int, int, int],
-        ],
-        ...,
-    ] | None:
+            tuple[
+                Path,
+                str,
+                str,
+                str,
+                str,
+                tuple[int, int, int, int, int, int, int],
+            ],
+            ...,
+        ]
+        | None
+    ):
         owner_values = transaction_state.pending_cleanup_owner_paths
         entry_values = transaction_state.pending_cleanup_backup_entries
         if not owner_values and not entry_values:
@@ -11638,9 +12770,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             ] = []
             seen_names: set[str] = set()
             for owner_path, entry in zip(owners, entry_values, strict=True):
-                backup_name, identity = (
-                    _parse_cleanup_backup_journal_entry(entry)
-                )
+                backup_name, identity = _parse_cleanup_backup_journal_entry(entry)
                 parts = _bound_cleanup_v3_basename_parts(
                     backup_name,
                     phases=frozenset(
@@ -11652,10 +12782,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     backup_name in seen_names
                     or parts is None
                     or backup_name
-                    != (
-                        f"{prefix}{parts[2]}.{parts[3]}."
-                        f"{parts[4]}.bak"
-                    )
+                    != (f"{prefix}{parts[2]}.{parts[3]}." f"{parts[4]}.bak")
                 ):
                     return None
                 seen_names.add(backup_name)
@@ -11697,13 +12824,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             matched_owners: set[Path] = set()
             seen_names: set[str] = set()
             for entry in transaction_state.pending_cleanup_backup_entries:
-                backup_name, _identity = (
-                    _parse_cleanup_backup_journal_entry(entry)
-                )
-                if (
-                    backup_name in seen_names
-                    or backup_name.startswith(".cleanup.v3.")
-                ):
+                backup_name, _identity = _parse_cleanup_backup_journal_entry(entry)
+                if backup_name in seen_names or backup_name.startswith(".cleanup.v3."):
                     return False
                 matching_owners = {
                     owner_path
@@ -11736,8 +12858,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         if not _is_cleanup_backup_journal_basename(source_name):
             raise RuntimeError("cleanup migration source is invalid")
         return hashlib.sha256(
-            b"SOC-CLEANUP-V3-MIGRATION-NONCE\x00"
-            + source_name.encode("ascii")
+            b"SOC-CLEANUP-V3-MIGRATION-NONCE\x00" + source_name.encode("ascii")
         ).hexdigest()[:_CLEANUP_CLAIM_NONCE_HEX_CHARS]
 
     def transaction_journal_path(
@@ -11755,12 +12876,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         projected_entries: list[str] = []
         try:
             for entry in entries:
-                journal_name, identity = (
-                    _parse_cleanup_backup_journal_entry(entry)
-                )
-                physical_name = _cleanup_claim_physical_basename(
-                    journal_name
-                )
+                journal_name, identity = _parse_cleanup_backup_journal_entry(entry)
+                physical_name = _cleanup_claim_physical_basename(journal_name)
                 if physical_name is None:
                     return None
                 bound_parts = _bound_cleanup_v3_basename_parts(
@@ -12023,9 +13140,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
     ) -> RecordingState | None:
         entries = transaction_state.pending_cleanup_backup_entries
         tokenless_parts = tuple(
-            _tokenless_cleanup_v3_basename_parts(
-                entry.split("|", 1)[0]
-            )
+            _tokenless_cleanup_v3_basename_parts(entry.split("|", 1)[0])
             for entry in entries
         )
         if not any(parts is not None for parts in tokenless_parts):
@@ -12076,16 +13191,12 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             ):
                 if parts is None:
                     return None
-                backup_name, identity = (
-                    _parse_cleanup_backup_journal_entry(entry)
-                )
+                backup_name, identity = _parse_cleanup_backup_journal_entry(entry)
                 state_namespace, owner_namespace, phase, digest = parts
                 if backup_name != (
                     f".cleanup.v3.{state_namespace}.{owner_namespace}."
                     f"{parts[2]}.{digest}.bak"
-                ) or not backup_name.startswith(
-                    current_v3_cleanup_prefix(owner_path)
-                ):
+                ) or not backup_name.startswith(current_v3_cleanup_prefix(owner_path)):
                     return None
                 source_path = owner_path.with_name(backup_name)
                 claim_path = transaction_claim_path(
@@ -12098,19 +13209,12 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 claim_presence = _safe_leaf_presence(claim_path)
                 if None in {owner_presence, source_presence, claim_presence}:
                     return None
-                if (
-                    phase == "wiping"
-                    and not owner_presence
-                    and not claim_presence
-                ):
+                if phase == "wiping" and not owner_presence and not claim_presence:
                     if not source_presence:
                         retired.append((owner_path, None, identity))
                         continue
                     regular, zero_stat = _safe_regular_leaf_probe(source_path)
-                    if (
-                        regular is not True
-                        or zero_stat is None
-                    ):
+                    if regular is not True or zero_stat is None:
                         return None
                     if zero_stat.st_size == 0:
                         if (
@@ -12184,9 +13288,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             prospective_state = replace(
                 transaction_state,
                 status="finalizing",
-                pending_cleanup_owner_paths=tuple(
-                    str(item[0]) for item in prepared
-                ),
+                pending_cleanup_owner_paths=tuple(str(item[0]) for item in prepared),
                 pending_cleanup_restore_owner_paths=(),
                 pending_cleanup_backup_entries=tuple(prospective_entries),
                 cleanup_backup_journal_overflow=False,
@@ -12253,19 +13355,15 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 status="finalizing",
                 audio_path=(
                     ""
-                    if transaction_state.audio_path
-                    in {str(path) for path in owners}
+                    if transaction_state.audio_path in {str(path) for path in owners}
                     else transaction_state.audio_path
                 ),
                 log_path=(
                     ""
-                    if transaction_state.log_path
-                    in {str(path) for path in owners}
+                    if transaction_state.log_path in {str(path) for path in owners}
                     else transaction_state.log_path
                 ),
-                pending_cleanup_owner_paths=tuple(
-                    str(item[0]) for item in prepared
-                ),
+                pending_cleanup_owner_paths=tuple(str(item[0]) for item in prepared),
                 pending_cleanup_restore_owner_paths=(),
                 pending_cleanup_backup_entries=tuple(migrated_entries),
                 cleanup_backup_journal_overflow=False,
@@ -12327,9 +13425,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 if not fsync_transaction_parent(owner_path):
                     return current_state, False, False
                 continue
-            if not claim_presence and (
-                phase != "intent" or not owner_presence
-            ):
+            if not claim_presence and (phase != "intent" or not owner_presence):
                 return current_state, False, False
             if not claim_presence:
                 if not transaction_state_would_fit(current_state):
@@ -12427,12 +13523,10 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             authorization_retry_entry: str | None = None
             fresh_armed = False
             if phase == "wiping":
-                owner_index = list(
-                    current_state.pending_cleanup_owner_paths
-                ).index(str(owner_path))
-                projected_entries = list(
-                    current_state.pending_cleanup_backup_entries
+                owner_index = list(current_state.pending_cleanup_owner_paths).index(
+                    str(owner_path)
                 )
+                projected_entries = list(current_state.pending_cleanup_backup_entries)
                 projected_identity = (
                     identity[0],
                     identity[1],
@@ -12457,18 +13551,14 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 if not StateStore.write_would_fit(
                     replace(
                         current_state,
-                        pending_cleanup_backup_entries=tuple(
-                            projected_entries
-                        ),
+                        pending_cleanup_backup_entries=tuple(projected_entries),
                     )
                 ):
                     return current_state, False, False
-                legacy_snapshot = (
-                    _legacy_cleanup_claim_authorization_snapshot(
-                        claim_path,
-                        identity,
-                        content_digest,
-                    )
+                legacy_snapshot = _legacy_cleanup_claim_authorization_snapshot(
+                    claim_path,
+                    identity,
+                    content_digest,
                 )
                 if legacy_snapshot is None:
                     return current_state, False, False
@@ -12500,9 +13590,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 )
                 phase = "armed"
                 fresh_armed = True
-                entry = current_state.pending_cleanup_backup_entries[
-                    owner_index
-                ]
+                entry = current_state.pending_cleanup_backup_entries[owner_index]
                 _name, identity = _parse_cleanup_backup_journal_entry(entry)
             if phase == "prepared":
                 prepared_trailer_size = len(
@@ -12553,19 +13641,21 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             original_size = identity[4] - trailer_size
             if original_size < 0:
                 return current_state, False, False
-            if fresh_armed and _prepare_cleanup_claim_wipe_authorization(
-                claim_path,
-                identity,
-                content_digest,
-                original_size,
-            ) is None:
+            if (
+                fresh_armed
+                and _prepare_cleanup_claim_wipe_authorization(
+                    claim_path,
+                    identity,
+                    content_digest,
+                    original_size,
+                )
+                is None
+            ):
                 if authorization_retry_entry is not None:
-                    entries = list(
-                        current_state.pending_cleanup_backup_entries
+                    entries = list(current_state.pending_cleanup_backup_entries)
+                    owner_index = list(current_state.pending_cleanup_owner_paths).index(
+                        str(owner_path)
                     )
-                    owner_index = list(
-                        current_state.pending_cleanup_owner_paths
-                    ).index(str(owner_path))
                     if entries[owner_index] == entry:
                         entries[owner_index] = authorization_retry_entry
                         try:
@@ -12659,9 +13749,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "status": "error",
                 "message": error_text,
                 "error": error_text,
-                "discarded_audio_path_present": bool(
-                    blocked_state.audio_path
-                ),
+                "discarded_audio_path_present": bool(blocked_state.audio_path),
                 "audio_deleted": False,
                 "log_deleted": False,
                 "inflight_artifacts_deleted": False,
@@ -12677,15 +13765,13 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         _raise_if_state_unreadable(state)
         if state.cleanup_backup_journal_overflow:
             return cleanup_overflow_payload(state)
-        preserve_transcript_after_insert_failure = (
-            state.status in {"error", "finalizing"}
-            and _is_transcript_insert_recovery_error(state.error)
-        )
+        preserve_transcript_after_insert_failure = state.status in {
+            "error",
+            "finalizing",
+        } and _is_transcript_insert_recovery_error(state.error)
         recovery_audio_was_bound = bool(state.audio_path)
         preserved_transcript_recovery_error = (
-            state.error
-            if preserve_transcript_after_insert_failure
-            else None
+            state.error if preserve_transcript_after_insert_failure else None
         )
         preserved_output_recovery_error = (
             state.error
@@ -12699,38 +13785,28 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             else None
         )
         preserved_transcript_path = state.transcript_path
-        if (
-            preserve_transcript_after_insert_failure
-            and not preserved_transcript_path
-        ):
-            recovery_audio_path = (
-                _normalized_state_recording_artifact_path(
-                    state.audio_path,
-                    suffix=(".wav", ".flac", ".socenc"),
-                    state_path=store.path,
-                )
+        if preserve_transcript_after_insert_failure and not preserved_transcript_path:
+            recovery_audio_path = _normalized_state_recording_artifact_path(
+                state.audio_path,
+                suffix=(".wav", ".flac", ".socenc"),
+                state_path=store.path,
             )
             if recovery_audio_path is not None:
                 transcript_audio_path = recovery_audio_path
-                if _is_encrypted_recording_artifact(
-                    transcript_audio_path
-                ):
+                if _is_encrypted_recording_artifact(transcript_audio_path):
                     transcript_audio_path = (
                         _plaintext_recording_sibling_for_encrypted_path(
                             transcript_audio_path
                         )
                     )
                 if transcript_audio_path is not None:
-                    candidate = _transcript_path_for_audio(
-                        transcript_audio_path
-                    )
+                    candidate = _transcript_path_for_audio(transcript_audio_path)
                     candidate_sibling = _transcript_sibling_path(candidate)
                     transcript_candidates = [candidate]
                     if candidate_sibling is not None:
                         transcript_candidates.append(candidate_sibling)
                     candidate_probes = [
-                        _safe_regular_leaf_probe(path)
-                        for path in transcript_candidates
+                        _safe_regular_leaf_probe(path) for path in transcript_candidates
                     ]
                     if all(
                         presence is False or file_stat is not None
@@ -12777,11 +13853,18 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     else {}
                 ),
             }
+
         if state.status == "recording":
             if state.pid is None:
-                error_text = "recording process pid is missing; recording state preserved"
+                error_text = (
+                    "recording process pid is missing; recording state preserved"
+                )
                 store.update(status="recording", error=error_text, inserted=False)
-                return {"status": "recording", "message": error_text, "error": error_text}
+                return {
+                    "status": "recording",
+                    "message": error_text,
+                    "error": error_text,
+                }
             process_error = _reconcile_recording_process(state)
             if process_error is not None:
                 if process_error == _RECORDING_PROCESS_GROUP_ACTIVE_ERROR:
@@ -12791,7 +13874,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         "error": process_error,
                     }
                 store.update(status="recording", error=process_error, inserted=False)
-                return {"status": "recording", "message": process_error, "error": process_error}
+                return {
+                    "status": "recording",
+                    "message": process_error,
+                    "error": process_error,
+                }
             state = store.update(
                 pid=None,
                 process_identity="",
@@ -12811,13 +13898,21 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     error=(preserved_transcript_recovery_error or process_error),
                     inserted=state.inserted,
                 )
-                return {"status": state.status, "message": process_error, "error": process_error}
+                return {
+                    "status": state.status,
+                    "message": process_error,
+                    "error": process_error,
+                }
             state = store.update(
                 pid=None,
                 process_identity="",
                 stopped_at=state.stopped_at or now_iso(),
             )
-        elif state.pid is None and state.process_identity is not None and state.process_identity != "":
+        elif (
+            state.pid is None
+            and state.process_identity is not None
+            and state.process_identity != ""
+        ):
             error_text = "recording process identity is incomplete or invalid; recording state preserved"
             store.update(
                 status=state.status,
@@ -12834,8 +13929,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 for path_value in state.pending_cleanup_owner_paths
             }
             recovery_audio_was_bound = recovery_audio_was_bound or any(
-                _is_recording_artifact(path)
-                for path in persisted_cleanup_owner_paths
+                _is_recording_artifact(path) for path in persisted_cleanup_owner_paths
             )
             pending_restore_pairs = list(
                 _cleanup_backup_restore_journal_pairs(
@@ -12887,33 +13981,27 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     backup_path = owner_path.with_name(backup_name)
                     owner_prefix = v2_cleanup_prefixes.get(owner_path)
                     if owner_prefix is None:
-                        owner_prefix = (
-                            _cleanup_backup_owner_prefix_from_name(backup_name)
+                        owner_prefix = _cleanup_backup_owner_prefix_from_name(
+                            backup_name
                         )
                         if owner_prefix is None:
                             raise RuntimeError(
                                 "cleanup restore owner prefix is invalid"
                             )
                         v2_cleanup_prefixes[owner_path] = owner_prefix
-                    entries = restore_directory_entries_by_parent.get(
-                        owner_path.parent
-                    )
+                    entries = restore_directory_entries_by_parent.get(owner_path.parent)
                     if entries is None:
                         entries = _safe_directory_entries(
                             owner_path.parent,
                             field_name="recording cleanup restore directory",
                         )
-                        restore_directory_entries_by_parent[
-                            owner_path.parent
-                        ] = entries
+                        restore_directory_entries_by_parent[owner_path.parent] = entries
                     if any(
                         candidate.name.startswith(owner_prefix)
                         and candidate.name != backup_name
                         for candidate, _file_stat in entries
                     ):
-                        raise RuntimeError(
-                            "cleanup restore delete state is ambiguous"
-                        )
+                        raise RuntimeError("cleanup restore delete state is ambiguous")
                     backup_presence = _safe_leaf_presence(backup_path)
                     owner_presence = _safe_leaf_presence(owner_path)
                     if backup_presence is None or owner_presence is None:
@@ -12921,26 +14009,18 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                             "cleanup restore artifact presence is unsafe"
                         )
                     if backup_presence and owner_presence:
-                        raise RuntimeError(
-                            "cleanup restore delete state is ambiguous"
-                        )
+                        raise RuntimeError("cleanup restore delete state is ambiguous")
                     if owner_presence:
                         return recovery_cleanup_failure(
                             state,
-                            recovery_reason=(
-                                "legacy-v2-post-rename-unverified"
-                            ),
+                            recovery_reason=("legacy-v2-post-rename-unverified"),
                         )
                     migration_nonce = migration_claim_nonce(backup_name)
                     matching_claims = tuple(
                         candidate
                         for candidate, _file_stat in entries
                         if (
-                            (
-                                parts := _bound_cleanup_v3_tombstone_parts(
-                                    candidate.name
-                                )
-                            )
+                            (parts := _bound_cleanup_v3_tombstone_parts(candidate.name))
                             is not None
                             and candidate.name.startswith(
                                 current_v3_cleanup_prefix(owner_path)
@@ -12949,14 +14029,10 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         )
                     )
                     if len(matching_claims) > 1:
-                        raise RuntimeError(
-                            "cleanup restore migration is ambiguous"
-                        )
+                        raise RuntimeError("cleanup restore migration is ambiguous")
                     if backup_presence:
                         if matching_claims:
-                            raise RuntimeError(
-                                "cleanup restore migration is ambiguous"
-                            )
+                            raise RuntimeError("cleanup restore migration is ambiguous")
                         backup_snapshot = _cleanup_claim_content_snapshot(
                             backup_path,
                             expected_identity,
@@ -12975,36 +14051,25 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         migration_source: Path | None = backup_path
                     elif matching_claims:
                         claim_path = matching_claims[0]
-                        claim_parts = _bound_cleanup_v3_tombstone_parts(
-                            claim_path.name
-                        )
+                        claim_parts = _bound_cleanup_v3_tombstone_parts(claim_path.name)
                         if claim_parts is None:
-                            raise RuntimeError(
-                                "cleanup restore migration is invalid"
-                            )
+                            raise RuntimeError("cleanup restore migration is invalid")
                         content_digest = claim_parts[2]
                         claim_snapshot = _cleanup_claim_content_snapshot(
                             claim_path,
                             expected_identity,
                             identity_fields=6,
                         )
-                        if (
-                            claim_snapshot is None
-                            or not secrets.compare_digest(
-                                claim_snapshot[0],
-                                content_digest,
-                            )
+                        if claim_snapshot is None or not secrets.compare_digest(
+                            claim_snapshot[0],
+                            content_digest,
                         ):
-                            raise RuntimeError(
-                                "cleanup restore migration changed"
-                            )
+                            raise RuntimeError("cleanup restore migration changed")
                         migration_stat = claim_snapshot[1]
                         migration_source = None
                     else:
                         if not fsync_transaction_parent(owner_path):
-                            raise RuntimeError(
-                                "cleanup restore parent sync failed"
-                            )
+                            raise RuntimeError("cleanup restore parent sync failed")
                         continue
                     prepared_migrations.append(
                         (
@@ -13029,8 +14094,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     ),
                     log_path=(
                         ""
-                        if state.log_path
-                        in {str(path) for path in paired_owner_paths}
+                        if state.log_path in {str(path) for path in paired_owner_paths}
                         else state.log_path
                     ),
                     transcript_path=preserved_transcript_path,
@@ -13068,9 +14132,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     cleanup_backup_journal_restore=False,
                     error=(preserved_transcript_recovery_error or ""),
                 )
-                if (
-                    prepared_migrations
-                    and not transaction_state_would_fit(prospective_state)
+                if prepared_migrations and not transaction_state_would_fit(
+                    prospective_state
                 ):
                     return recovery_cleanup_failure(state)
                 migrated_claims: list[tuple[Path, str]] = []
@@ -13096,9 +14159,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                             )
                             or not fsync_transaction_parent(claim_path)
                         ):
-                            raise RuntimeError(
-                                "cleanup restore migration changed"
-                            )
+                            raise RuntimeError("cleanup restore migration changed")
                         migrated_stat = claim_snapshot[1]
                     else:
                         migrated_stat = rename_transaction_phase(
@@ -13109,9 +14170,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                             source_identity_fields=7,
                         )
                         if migrated_stat is None:
-                            raise RuntimeError(
-                                "cleanup restore migration failed"
-                            )
+                            raise RuntimeError("cleanup restore migration failed")
                     migrated_claims.append(
                         (
                             owner_path,
@@ -13133,8 +14192,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     log_path=prospective_state.log_path,
                     transcript_path=preserved_transcript_path,
                     pending_cleanup_owner_paths=tuple(
-                        str(owner_path)
-                        for owner_path, _entry in migrated_claims
+                        str(owner_path) for owner_path, _entry in migrated_claims
                     ),
                     pending_cleanup_restore_owner_paths=(),
                     pending_cleanup_backup_entries=tuple(
@@ -13158,18 +14216,13 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         recovery_cleanup_artifacts_absent = True
         legacy_cleanup_journal_active = False
         transaction_result = None
-        if (
-            state.pending_cleanup_owner_paths
-            or state.pending_cleanup_backup_entries
-        ):
+        if state.pending_cleanup_owner_paths or state.pending_cleanup_backup_entries:
             try:
                 migrated_state = migrate_tokenless_v3_transaction(state)
                 if migrated_state is None:
                     return recovery_cleanup_failure(state)
                 state = migrated_state
-                transaction_result = process_recovery_cleanup_transaction(
-                    state
-                )
+                transaction_result = process_recovery_cleanup_transaction(state)
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception:
@@ -13202,9 +14255,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 for path_value in state.pending_cleanup_owner_paths
             }
         elif state.pending_cleanup_backup_entries:
-            legacy_cleanup_journal_active = legacy_cleanup_journal_is_valid(
-                state
-            )
+            legacy_cleanup_journal_active = legacy_cleanup_journal_is_valid(state)
             if not legacy_cleanup_journal_active:
                 return recovery_cleanup_failure(state)
         discarded_audio_path = _normalized_state_recording_artifact_path(
@@ -13217,15 +14268,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             suffix=".log",
             state_path=store.path,
         )
-        discarded_finalizing_paths = (
-            _finalizing_inflight_artifact_paths(
-                store.path,
-                state,
-                known_audio_path=discarded_audio_path,
-                include_recording_inflight=(
-                    discarded_audio_path is None
-                ),
-            )
+        discarded_finalizing_paths = _finalizing_inflight_artifact_paths(
+            store.path,
+            state,
+            known_audio_path=discarded_audio_path,
+            include_recording_inflight=(discarded_audio_path is None),
         )
         discarded_finalizing_transcript_paths = {
             path for path in discarded_finalizing_paths if _is_transcript_artifact(path)
@@ -13236,17 +14283,12 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             else discarded_finalizing_transcript_paths
         )
         discarded_inflight_paths = (
-            (
-                _inflight_recording_artifact_paths(discarded_audio_path)
-                if discarded_audio_path is not None
-                else set()
-            )
-            | {
-                path
-                for path in discarded_finalizing_paths
-                if _is_recording_artifact(path)
-            }
-        )
+            _inflight_recording_artifact_paths(discarded_audio_path)
+            if discarded_audio_path is not None
+            else set()
+        ) | {
+            path for path in discarded_finalizing_paths if _is_recording_artifact(path)
+        }
         reported_inflight_paths = (
             discarded_inflight_paths | resumed_recovery_inflight_paths
         )
@@ -13301,9 +14343,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         safe_cleanup_backups_by_owner: dict[
             Path,
             dict[Path, os.stat_result],
-        ] = {
-            owner_path: {} for owner_path in cleanup_journal_owner_paths
-        }
+        ] = {owner_path: {} for owner_path in cleanup_journal_owner_paths}
         unsafe_cleanup_backup_owner_paths: set[Path] = set()
         cleanup_owner_paths_by_parent_and_prefix: dict[
             Path,
@@ -13328,9 +14368,10 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             list[tuple[Path, os.stat_result]],
         ] = {}
         matched_cleanup_backup_candidate_paths: set[Path] = set()
-        for parent_path, owner_paths_by_prefix in (
-            cleanup_owner_paths_by_parent_and_prefix.items()
-        ):
+        for (
+            parent_path,
+            owner_paths_by_prefix,
+        ) in cleanup_owner_paths_by_parent_and_prefix.items():
             try:
                 entries = _safe_directory_entries(
                     parent_path,
@@ -13338,17 +14379,14 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 )
             except DirectoryScanError as exc:
                 raise RuntimeError(
-                    "failed to scan recording cleanup directory: "
-                    f"{parent_path}"
+                    "failed to scan recording cleanup directory: " f"{parent_path}"
                 ) from exc
             cleanup_directory_entries_by_parent[parent_path] = entries
             for candidate, file_stat in entries:
                 if not candidate.name.endswith(".bak"):
                     continue
-                candidate_owner_prefix = (
-                    _cleanup_backup_owner_prefix_from_name(
-                        candidate.name
-                    )
+                candidate_owner_prefix = _cleanup_backup_owner_prefix_from_name(
+                    candidate.name
                 )
                 matching_owner_paths = owner_paths_by_prefix.get(
                     candidate_owner_prefix,
@@ -13356,25 +14394,17 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 if not matching_owner_paths:
                     continue
                 matched_cleanup_backup_candidate_paths.add(candidate)
-                if not _is_cleanup_backup_journal_basename(
-                    candidate.name
-                ):
-                    unsafe_cleanup_backup_owner_paths.update(
-                        matching_owner_paths
-                    )
+                if not _is_cleanup_backup_journal_basename(candidate.name):
+                    unsafe_cleanup_backup_owner_paths.update(matching_owner_paths)
                     continue
                 if (
                     stat_module.S_ISREG(file_stat.st_mode)
                     and getattr(file_stat, "st_nlink", 1) == 1
                 ):
                     for owner_path in matching_owner_paths:
-                        safe_cleanup_backups_by_owner[owner_path][
-                            candidate
-                        ] = file_stat
+                        safe_cleanup_backups_by_owner[owner_path][candidate] = file_stat
                 else:
-                    unsafe_cleanup_backup_owner_paths.update(
-                        matching_owner_paths
-                    )
+                    unsafe_cleanup_backup_owner_paths.update(matching_owner_paths)
 
         deferred_cleanup_backup_candidate_paths: set[Path] = set()
         deferred_owner_prefixes_by_parent: dict[Path, set[str]] = {}
@@ -13396,8 +14426,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     )
                 except DirectoryScanError as exc:
                     raise RuntimeError(
-                        "failed to scan recording cleanup directory: "
-                        f"{parent_path}"
+                        "failed to scan recording cleanup directory: " f"{parent_path}"
                     ) from exc
                 cleanup_directory_entries_by_parent[parent_path] = entries
             for candidate, _file_stat in entries:
@@ -13459,8 +14488,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         discarded_cleanup_backup_candidates_present = bool(
             discarded_cleanup_backups
         ) or (
-            discarded_audio_cleanup_backup_unsafe
-            or discarded_log_cleanup_backup_unsafe
+            discarded_audio_cleanup_backup_unsafe or discarded_log_cleanup_backup_unsafe
         )
         cleanup_backup_owner_paths = (
             inflight_group_owner_paths | persisted_cleanup_owner_paths
@@ -13496,8 +14524,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 )
             except DirectoryScanError as exc:
                 raise RuntimeError(
-                    "failed to scan recording cleanup directory: "
-                    f"{recordings_root}"
+                    "failed to scan recording cleanup directory: " f"{recordings_root}"
                 ) from exc
         recordings_entries_by_name = {
             candidate.name: (candidate, file_stat)
@@ -13575,15 +14602,10 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     else None
                 ),
             ):
-                error_text = (
-                    "cleanup backup journal entry belongs to another state"
-                )
+                error_text = "cleanup backup journal entry belongs to another state"
                 store.update(
                     status="error",
-                    error=(
-                        preserved_output_recovery_error
-                        or error_text
-                    ),
+                    error=(preserved_output_recovery_error or error_text),
                     inserted=state.inserted,
                 )
                 return {
@@ -13591,8 +14613,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     "message": error_text,
                     "error": error_text,
                 }
-            backup_name, expected_identity = (
-                _parse_cleanup_backup_journal_entry(persisted_entry)
+            backup_name, expected_identity = _parse_cleanup_backup_journal_entry(
+                persisted_entry
             )
             current_entry = recordings_entries_by_name.get(backup_name)
             if current_entry is None:
@@ -13606,12 +14628,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             ):
                 cleanup_journal_identity_failed_names.add(backup_name)
         for owner_path in cleanup_journal_owner_paths:
-            for cleanup_backup, cleanup_backup_stat in (
-                safe_cleanup_backups_by_owner.get(owner_path, {}).items()
-            ):
-                if not _is_cleanup_backup_journal_basename(
-                    cleanup_backup.name
-                ):
+            for (
+                cleanup_backup,
+                cleanup_backup_stat,
+            ) in safe_cleanup_backups_by_owner.get(owner_path, {}).items():
+                if not _is_cleanup_backup_journal_basename(cleanup_backup.name):
                     continue
                 if cleanup_backup.name in cleanup_journal_entries_by_name:
                     continue
@@ -13621,71 +14642,57 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         cleanup_backup_stat,
                     )
                 )
-                cleanup_journal_paths_by_name[
-                    cleanup_backup.name
-                ] = cleanup_backup
+                cleanup_journal_paths_by_name[cleanup_backup.name] = cleanup_backup
                 if not cleanup_backup.name.startswith(".cleanup.v2."):
-                    candidate_owner_prefix = (
-                        _cleanup_backup_owner_prefix_from_name(
-                            cleanup_backup.name
-                        )
-                    )
-                    cleanup_journal_entry_owner_paths_by_name[
+                    candidate_owner_prefix = _cleanup_backup_owner_prefix_from_name(
                         cleanup_backup.name
-                    ] = set(
-                        cleanup_owner_paths_by_parent_and_prefix.get(
-                            owner_path.parent,
-                            {},
-                        ).get(candidate_owner_prefix, {owner_path})
+                    )
+                    cleanup_journal_entry_owner_paths_by_name[cleanup_backup.name] = (
+                        set(
+                            cleanup_owner_paths_by_parent_and_prefix.get(
+                                owner_path.parent,
+                                {},
+                            ).get(candidate_owner_prefix, {owner_path})
+                        )
                     )
         for owner_path in unsafe_cleanup_backup_owner_paths:
             prefix = current_legacy_cleanup_prefix(owner_path)
-            for candidate, file_stat in (
-                cleanup_directory_entries_by_parent.get(
-                    owner_path.parent,
-                    [],
-                )
+            for candidate, file_stat in cleanup_directory_entries_by_parent.get(
+                owner_path.parent,
+                [],
             ):
                 if (
                     not candidate.name.startswith(prefix)
-                    or not _is_cleanup_backup_journal_basename(
-                        candidate.name
-                    )
+                    or not _is_cleanup_backup_journal_basename(candidate.name)
                     or candidate.name in cleanup_journal_entries_by_name
                 ):
                     continue
                 cleanup_journal_entries_by_name[candidate.name] = (
                     _cleanup_backup_journal_entry(candidate, file_stat)
                 )
-                cleanup_journal_paths_by_name[
-                    candidate.name
-                ] = candidate
+                cleanup_journal_paths_by_name[candidate.name] = candidate
                 cleanup_journal_entry_owner_paths_by_name.setdefault(
                     candidate.name,
                     set(),
                 ).add(owner_path)
                 cleanup_journal_identity_failed_names.add(candidate.name)
-        sorted_cleanup_journal_names = tuple(
-            sorted(cleanup_journal_entries_by_name)
-        )
+        sorted_cleanup_journal_names = tuple(sorted(cleanup_journal_entries_by_name))
         pending_cleanup_backup_entries_before_delete = tuple(
             cleanup_journal_entries_by_name[name]
             for name in sorted_cleanup_journal_names
         )
-        pending_cleanup_owner_paths_before_delete = (
-            set(persisted_cleanup_owner_paths)
-            | {
-                owner_path
-                for entry_name, owner_paths in (
-                    cleanup_journal_entry_owner_paths_by_name.items()
-                )
-                if entry_name in cleanup_journal_entries_by_name
-                for owner_path in owner_paths
-            }
-        )
+        pending_cleanup_owner_paths_before_delete = set(
+            persisted_cleanup_owner_paths
+        ) | {
+            owner_path
+            for entry_name, owner_paths in (
+                cleanup_journal_entry_owner_paths_by_name.items()
+            )
+            if entry_name in cleanup_journal_entries_by_name
+            for owner_path in owner_paths
+        }
         cleanup_journal_owner_capacity_paths = (
-            pending_cleanup_owner_paths_before_delete
-            | direct_cleanup_retry_owner_paths
+            pending_cleanup_owner_paths_before_delete | direct_cleanup_retry_owner_paths
         )
         cleanup_backup_journal_overflow = (
             state.cleanup_backup_journal_overflow
@@ -13700,21 +14707,32 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             or len(pending_cleanup_backup_entries_before_delete)
             > MAX_PENDING_CLEANUP_BACKUP_ENTRIES
         )
-        def snapshot_recording_artifact_paths(path: Path | None) -> dict[Path, os.stat_result | None]:
+
+        def snapshot_recording_artifact_paths(
+            path: Path | None,
+        ) -> dict[Path, os.stat_result | None]:
             if path is None:
                 return {}
             candidates = [path]
             sibling_path = _recording_sibling_path(path)
             if sibling_path is not None:
                 candidates.append(sibling_path)
-            return {candidate: _recording_artifact_stat(candidate) for candidate in candidates}
+            return {
+                candidate: _recording_artifact_stat(candidate)
+                for candidate in candidates
+            }
 
-        discarded_audio_expected_stats = snapshot_recording_artifact_paths(discarded_audio_path)
+        discarded_audio_expected_stats = snapshot_recording_artifact_paths(
+            discarded_audio_path
+        )
         discarded_audio_present_before = False
         discarded_audio_present_before = any(
-            file_stat is not None for file_stat in discarded_audio_expected_stats.values()
+            file_stat is not None
+            for file_stat in discarded_audio_expected_stats.values()
         )
-        discarded_log_stat = _recording_artifact_stat(discarded_log_path) if discarded_log_path else None
+        discarded_log_stat = (
+            _recording_artifact_stat(discarded_log_path) if discarded_log_path else None
+        )
         discarded_log_present_before = discarded_log_stat is not None
         discarded_inflight_expected_stats = {
             group_path: snapshot_recording_artifact_paths(group_path)
@@ -13723,13 +14741,9 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
         recovery_cleanup_claims: tuple[tuple[Path, str], ...] = ()
         recovery_cleanup_authorized = True
         if preserve_transcript_after_insert_failure:
-            recovery_expected_stats = dict(
-                discarded_audio_expected_stats
-            )
+            recovery_expected_stats = dict(discarded_audio_expected_stats)
             if discarded_log_path is not None:
-                recovery_expected_stats[discarded_log_path] = (
-                    discarded_log_stat
-                )
+                recovery_expected_stats[discarded_log_path] = discarded_log_stat
             for group_stats in discarded_inflight_expected_stats.values():
                 recovery_expected_stats.update(group_stats)
             if (
@@ -13746,17 +14760,12 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             ):
                 recovery_cleanup_authorized = False
             else:
-                candidate_claims = cleanup_identity_claims(
-                    recovery_expected_stats
-                )
+                candidate_claims = cleanup_identity_claims(recovery_expected_stats)
                 if candidate_claims is None:
                     recovery_cleanup_authorized = False
                 else:
                     recovery_cleanup_claims = candidate_claims
-        if (
-            preserve_transcript_after_insert_failure
-            and not recovery_cleanup_authorized
-        ):
+        if preserve_transcript_after_insert_failure and not recovery_cleanup_authorized:
             return recovery_cleanup_failure(state)
 
         cleanup_transaction_owner_paths = tuple(
@@ -13804,9 +14813,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "status": "error",
                 "message": error_text,
                 "error": error_text,
-                "discarded_audio_path_present": bool(
-                    blocked_state.audio_path
-                ),
+                "discarded_audio_path_present": bool(blocked_state.audio_path),
                 "audio_deleted": False,
                 "log_deleted": False,
                 "inflight_artifact_count": len(reported_inflight_paths),
@@ -13889,14 +14896,9 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             max_seconds=state.max_seconds,
             error=(preserved_transcript_recovery_error or ""),
         )
-        if (
-            not StateStore.write_would_fit(cleanup_transaction_state)
-            or (
-                recovery_cleanup_claims
-                and not transaction_state_would_fit(
-                    cleanup_transaction_state
-                )
-            )
+        if not StateStore.write_would_fit(cleanup_transaction_state) or (
+            recovery_cleanup_claims
+            and not transaction_state_would_fit(cleanup_transaction_state)
         ):
             return cleanup_capacity_failure(state)
         try:
@@ -13907,9 +14909,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             return recovery_cleanup_failure(state)
         if recovery_cleanup_claims:
             try:
-                transaction_result = process_recovery_cleanup_transaction(
-                    store.read()
-                )
+                transaction_result = process_recovery_cleanup_transaction(store.read())
             except (KeyboardInterrupt, SystemExit):
                 raise
             except Exception:
@@ -13970,13 +14970,25 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             recovery_cleanup_artifacts_absent
             if recovery_cleanup_completed
             else (
-                remove_file(str(discarded_log_path), suffix=".log", expected_stat=discarded_log_stat)
+                remove_file(
+                    str(discarded_log_path),
+                    suffix=".log",
+                    expected_stat=discarded_log_stat,
+                )
                 if discarded_log_path and discarded_log_present_before
                 else not bool(state.log_path)
             )
         )
-        if not audio_deleted and discarded_audio_path and not discarded_audio_present_before:
-            if Path(str(discarded_audio_path)).name.lower().endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES):
+        if (
+            not audio_deleted
+            and discarded_audio_path
+            and not discarded_audio_present_before
+        ):
+            if (
+                Path(str(discarded_audio_path))
+                .name.lower()
+                .endswith(ENCRYPTED_RECORDING_ARTIFACT_SUFFIXES)
+            ):
                 audio_deleted = _recording_artifact_missing_but_safe(
                     str(discarded_audio_path),
                     suffix=".socenc",
@@ -13989,25 +15001,20 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     state_path=store.path,
                 )
         if not log_deleted and discarded_log_path and not discarded_log_present_before:
-            log_deleted = _recording_artifact_missing_but_safe(str(discarded_log_path), suffix=".log", state_path=store.path)
+            log_deleted = _recording_artifact_missing_but_safe(
+                str(discarded_log_path), suffix=".log", state_path=store.path
+            )
         known_cleanup_backups = {
             cleanup_backup: cleanup_backup_stat
-            for owner_backups in (
-                discarded_inflight_cleanup_backups_by_owner.values()
-            )
+            for owner_backups in (discarded_inflight_cleanup_backups_by_owner.values())
             for cleanup_backup, cleanup_backup_stat in owner_backups.items()
         } | discarded_cleanup_backups
         known_cleanup_backups = {
             cleanup_backup: cleanup_backup_stat
-            for cleanup_backup, cleanup_backup_stat in (
-                known_cleanup_backups.items()
-            )
-            if cleanup_backup.name
-            not in cleanup_journal_identity_failed_names
+            for cleanup_backup, cleanup_backup_stat in (known_cleanup_backups.items())
+            if cleanup_backup.name not in cleanup_journal_identity_failed_names
         }
-        for backup_name, cleanup_backup in (
-            cleanup_journal_paths_by_name.items()
-        ):
+        for backup_name, cleanup_backup in cleanup_journal_paths_by_name.items():
             if backup_name in cleanup_journal_identity_failed_names:
                 continue
             current_entry = recordings_entries_by_name.get(backup_name)
@@ -14091,9 +15098,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             )
         )
         cleanup_backup_journal_overflow = bool(
-            (
-                failed_owner_paths - persistable_cleanup_owner_paths
-            )
+            (failed_owner_paths - persistable_cleanup_owner_paths)
             and not pending_cleanup_backup_entries
         )
         cleanup_backups_deleted = (
@@ -14145,13 +15150,19 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
 
         transcript_path: Path | None = None
         transcript_sibling_path: Path | None = None
-        transcript_deleted = not state.transcript_path and not preserve_transcript_after_insert_failure
+        transcript_deleted = (
+            not state.transcript_path and not preserve_transcript_after_insert_failure
+        )
         if state.transcript_path and not preserve_transcript_after_insert_failure:
             transcript_present_before = False
             transcript_sibling_present_before = False
             try:
                 transcript_path = _normalized_state_artifact_path(
-                    _assert_clean_text(state.transcript_path, field_name="transcript path", max_chars=MAX_PATH_CHARS),
+                    _assert_clean_text(
+                        state.transcript_path,
+                        field_name="transcript path",
+                        max_chars=MAX_PATH_CHARS,
+                    ),
                     state_path=store.path,
                 )
                 transcript_presence, transcript_expected_stat = (
@@ -14160,7 +15171,9 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     else (False, None)
                 )
                 if transcript_presence is None:
-                    raise RuntimeError(f"transcript file presence could not be verified: {transcript_path}")
+                    raise RuntimeError(
+                        f"transcript file presence could not be verified: {transcript_path}"
+                    )
                 transcript_present_before = transcript_presence
                 transcript_sibling_path = _transcript_sibling_path(transcript_path)
                 transcript_sibling_presence, transcript_sibling_expected_stat = (
@@ -14175,7 +15188,9 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 transcript_sibling_present_before = transcript_sibling_presence
                 if transcript_present_before:
                     if transcript_expected_stat is None:
-                        raise RuntimeError(f"transcript file is not a safe regular file: {transcript_path}")
+                        raise RuntimeError(
+                            f"transcript file is not a safe regular file: {transcript_path}"
+                        )
                     transcript_deleted = _remove_transcript_file(
                         transcript_path,
                         expected_stat=transcript_expected_stat,
@@ -14183,21 +15198,36 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 else:
                     transcript_deleted = False
                 if not transcript_deleted and not transcript_present_before:
-                    transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
-                if transcript_sibling_path is not None and transcript_sibling_present_before:
+                    transcript_deleted = _transcript_artifact_missing_but_safe(
+                        transcript_path
+                    )
+                if (
+                    transcript_sibling_path is not None
+                    and transcript_sibling_present_before
+                ):
                     if transcript_present_before and not transcript_deleted:
-                        raise RuntimeError(f"transcript file could not be deleted: {transcript_path}")
+                        raise RuntimeError(
+                            f"transcript file could not be deleted: {transcript_path}"
+                        )
                     if not transcript_present_before and not transcript_deleted:
-                        raise RuntimeError(f"transcript file presence could not be verified: {transcript_path}")
+                        raise RuntimeError(
+                            f"transcript file presence could not be verified: {transcript_path}"
+                        )
                     if transcript_sibling_expected_stat is None:
-                        raise RuntimeError(f"transcript sibling is not a safe regular file: {transcript_sibling_path}")
+                        raise RuntimeError(
+                            f"transcript sibling is not a safe regular file: {transcript_sibling_path}"
+                        )
                     if not _remove_transcript_file(
                         transcript_sibling_path,
                         expected_stat=transcript_sibling_expected_stat,
                     ):
-                        raise RuntimeError(f"transcript sibling is missing: {transcript_sibling_path}")
+                        raise RuntimeError(
+                            f"transcript sibling is missing: {transcript_sibling_path}"
+                        )
                     if not transcript_present_before:
-                        transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
+                        transcript_deleted = _transcript_artifact_missing_but_safe(
+                            transcript_path
+                        )
             except RuntimeError:
                 transcript_deleted = False
             if (
@@ -14206,9 +15236,13 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 and not transcript_present_before
                 and not transcript_sibling_present_before
             ):
-                transcript_deleted = _transcript_artifact_missing_but_safe(transcript_path)
+                transcript_deleted = _transcript_artifact_missing_but_safe(
+                    transcript_path
+                )
                 if transcript_deleted:
-                    transcript_deleted = _transcript_sibling_missing_but_safe(transcript_path)
+                    transcript_deleted = _transcript_sibling_missing_but_safe(
+                        transcript_path
+                    )
         finalizing_transcript_cleanup_failed_path: Path | None = None
         for inflight_transcript_path in sorted(
             discarded_finalizing_transcript_cleanup_paths,
@@ -14219,7 +15253,9 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 continue
             expected_stat = _recording_artifact_stat(inflight_transcript_path)
             if expected_stat is None:
-                deleted = _transcript_artifact_missing_but_safe(inflight_transcript_path)
+                deleted = _transcript_artifact_missing_but_safe(
+                    inflight_transcript_path
+                )
             else:
                 try:
                     deleted = _remove_transcript_file(
@@ -14246,8 +15282,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 and not preserve_transcript_after_insert_failure
             )
             or (
-                discarded_finalizing_transcript_cleanup_paths
-                and not transcript_deleted
+                discarded_finalizing_transcript_cleanup_paths and not transcript_deleted
             )
         ):
             error_message = "failed to discard recording artifacts"
@@ -14267,15 +15302,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
             ):
                 cleanup_failure_reasons.append("journal")
             if (
-                (
-                    state.transcript_path
-                    and not transcript_deleted
-                    and not preserve_transcript_after_insert_failure
-                )
-                or (
-                    discarded_finalizing_transcript_cleanup_paths
-                    and not transcript_deleted
-                )
+                state.transcript_path
+                and not transcript_deleted
+                and not preserve_transcript_after_insert_failure
+            ) or (
+                discarded_finalizing_transcript_cleanup_paths and not transcript_deleted
             ):
                 cleanup_failure_reasons.append("transcript")
             if not cleanup_failure_reasons:
@@ -14288,18 +15319,14 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                     status="error",
                     audio_path=(
                         ""
-                        if (
-                            preserve_transcript_after_insert_failure
-                            and audio_deleted
-                        )
+                        if (preserve_transcript_after_insert_failure and audio_deleted)
                         else (
                             state.audio_path
                             if (
                                 not audio_deleted
                                 or not inflight_deleted
                                 or not cleanup_backups_deleted
-                                or finalizing_transcript_cleanup_failed_path
-                                is not None
+                                or finalizing_transcript_cleanup_failed_path is not None
                             )
                             else ""
                         )
@@ -14322,9 +15349,7 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                         else (
                             state.transcript_path
                             if state.transcript_path and not transcript_deleted
-                            else str(
-                                finalizing_transcript_cleanup_failed_path or ""
-                            )
+                            else str(finalizing_transcript_cleanup_failed_path or "")
                         )
                     ),
                     pending_cleanup_owner_paths=tuple(
@@ -14334,28 +15359,17 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                             key=lambda candidate: str(candidate),
                         )
                     ),
-                    pending_cleanup_restore_owner_paths=(
-                        ()
-                    ),
-                    pending_cleanup_backup_entries=(
-                        pending_cleanup_backup_entries
-                    ),
-                    cleanup_backup_journal_overflow=(
-                        cleanup_backup_journal_overflow
-                    ),
-                    cleanup_backup_journal_restore=bool(
-                        False
-                    ),
+                    pending_cleanup_restore_owner_paths=(()),
+                    pending_cleanup_backup_entries=(pending_cleanup_backup_entries),
+                    cleanup_backup_journal_overflow=(cleanup_backup_journal_overflow),
+                    cleanup_backup_journal_restore=bool(False),
                     inserted=state.inserted,
                     stopped_at=now_iso(),
                     language=state.language,
                     recorder=state.recorder,
                     input_device=state.input_device,
                     max_seconds=state.max_seconds,
-                    error=(
-                        preserved_transcript_recovery_error
-                        or error_message
-                    ),
+                    error=(preserved_transcript_recovery_error or error_message),
                 )
             )
             payload = {
@@ -14369,11 +15383,11 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                 "inflight_artifact_count": len(reported_inflight_paths),
                 "inflight_artifacts_deleted": inflight_deleted,
                 "cleanup_backups_deleted": cleanup_backups_deleted,
-            "transcript_deleted": bool(
-                transcript_deleted
-                and not preserve_transcript_after_insert_failure
-                and not state.transcript
-            ),
+                "transcript_deleted": bool(
+                    transcript_deleted
+                    and not preserve_transcript_after_insert_failure
+                    and not state.transcript
+                ),
             }
             return payload
         try:
@@ -14423,12 +15437,8 @@ def command_cancel(args: argparse.Namespace) -> dict[str, object]:
                             if preserve_transcript_after_insert_failure
                             else ""
                         ),
-                        pending_cleanup_restore_owner_paths=(
-                            ()
-                        ),
-                        pending_cleanup_backup_entries=(
-                            ()
-                        ),
+                        pending_cleanup_restore_owner_paths=(()),
+                        pending_cleanup_backup_entries=(()),
                         cleanup_backup_journal_restore=False,
                         inserted=state.inserted,
                         stopped_at=now_iso(),
@@ -14499,7 +15509,12 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
         payload["status"] = "error"
         return payload
     persisted_state_error = bool(state.error)
-    if state.status not in {"recording", "recorded", "processing", "finalizing"} and _is_finalization_lock_active(store.path):
+    if state.status not in {
+        "recording",
+        "recorded",
+        "processing",
+        "finalizing",
+    } and _is_finalization_lock_active(store.path):
         payload["status"] = "finalizing"
         payload["message"] = "recording lifecycle in progress; wait for completion"
         payload.pop("error", None)
@@ -14512,7 +15527,11 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
             payload["error"] = error_text
             payload["inserted"] = False
             return payload
-        if isinstance(state.pid, bool) or not isinstance(state.pid, int) or state.pid <= 0:
+        if (
+            isinstance(state.pid, bool)
+            or not isinstance(state.pid, int)
+            or state.pid <= 0
+        ):
             error_text = "recording process liveness could not be verified; recording state preserved"
             payload["status"] = "error"
             payload["message"] = error_text
@@ -14528,7 +15547,9 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
             payload["inserted"] = False
             return payload
         if not verified_alive:
-            expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)
+            expected_identity = _recording_process_identity_for_lifecycle(
+                state.process_identity
+            )
             if expected_identity is None:
                 payload["status"] = "error"
                 payload["message"] = _RECORDING_PROCESS_IDENTITY_INVALID_ERROR
@@ -14567,7 +15588,9 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
                     payload["inserted"] = False
                 else:
                     payload["status"] = "recording"
-                    payload["message"] = "recording process group is still active; run stop to transcribe"
+                    payload["message"] = (
+                        "recording process group is still active; run stop to transcribe"
+                    )
                     payload.pop("error", None)
             else:
                 current_audio_path = _normalized_state_recording_artifact_path(
@@ -14576,7 +15599,11 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
                     state_path=store.path,
                     require_recordings_dir=False,
                 )
-                current_audio_stat = _recording_artifact_stat(current_audio_path) if current_audio_path else None
+                current_audio_stat = (
+                    _wait_for_saved_recording_artifact_stat(current_audio_path)
+                    if current_audio_path
+                    else None
+                )
                 if current_audio_stat is None or current_audio_stat.st_size == 0:
                     persisted_state_error = False
                     payload["status"] = "error"
@@ -14585,7 +15612,9 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
                     payload["inserted"] = False
                 else:
                     payload["status"] = "recorded"
-                    payload["message"] = "recording process has exited; run stop to transcribe"
+                    payload["message"] = (
+                        "recording process has exited; run stop to transcribe"
+                    )
                     payload.pop("error", None)
                     payload["inserted"] = False
     if payload.get("status") in {"recording", "recorded"}:
@@ -14612,9 +15641,7 @@ def command_status(args: argparse.Namespace) -> dict[str, object]:
         # Status is read-only. Unchanged error state remains historical even
         # while recovery artifacts are intentionally retained for retry.
         payload["persisted_error"] = True
-        payload[_PERSISTED_STATUS_ERROR_PROVENANCE] = (
-            _PERSISTED_STATUS_ERROR_PROVENANCE
-        )
+        payload[_PERSISTED_STATUS_ERROR_PROVENANCE] = _PERSISTED_STATUS_ERROR_PROVENANCE
     return payload
 
 
@@ -14676,15 +15703,11 @@ def _doctor_audio_is_valid(audio: object) -> bool:
             ),
         )
         and all(
-            value is None or type(value) is str
-            for value in audio["packages"].values()
+            value is None or type(value) is str for value in audio["packages"].values()
         )
         and type(audio["pipewire_source_class"]) is str
         and type(audio["pipewire_source_detected"]) is bool
-        and (
-            audio["dmic_visible"] is None
-            or type(audio["dmic_visible"]) is bool
-        )
+        and (audio["dmic_visible"] is None or type(audio["dmic_visible"]) is bool)
         and type(audio["legacy_hda_warning"]) is bool
         and _doctor_exact_dict(
             audio["probes"],
@@ -14735,7 +15758,10 @@ def _validated_doctor_report(report: object) -> dict[str, object] | None:
             ):
                 return None
             check_names.append(check["name"])
-        if len(check_names) != len(frozenset(check_names)) or "python3" not in check_names:
+        if (
+            len(check_names) != len(frozenset(check_names))
+            or "python3" not in check_names
+        ):
             return None
         if not _doctor_exact_dict(
             desktop,
@@ -15027,11 +16053,7 @@ def _redact_doctor_payload(
             "sof_active": audio["sof_active"],
             "soundwire_active": audio["soundwire_active"],
             "packages": {
-                name: (
-                    None
-                    if packages[name] is None
-                    else safe_text(packages[name])
-                )
+                name: (None if packages[name] is None else safe_text(packages[name]))
                 for name in _DOCTOR_AUDIO_PACKAGE_NAMES
             },
             "pipewire_source_class": safe_text(
@@ -15072,7 +16094,10 @@ def _redact_doctor_payload(
         }
 
     def safe_ctranslate2(ctranslate2: object) -> dict[str, object]:
-        if type(ctranslate2) is not dict or type(ctranslate2["faster_whisper"]) is not dict:
+        if (
+            type(ctranslate2) is not dict
+            or type(ctranslate2["faster_whisper"]) is not dict
+        ):
             raise RuntimeError("doctor returned invalid report")
         faster_whisper = ctranslate2["faster_whisper"]
         supported_compute_types = ctranslate2["supported_compute_types"]
@@ -15092,9 +16117,7 @@ def _redact_doctor_payload(
             "supported_compute_types": supported_compute_types,
             "requested_compute_type": safe_text(
                 ctranslate2["requested_compute_type"],
-                fixed_values=frozenset(
-                    {doctor.FASTER_WHISPER_REQUESTED_COMPUTE_TYPE}
-                ),
+                fixed_values=frozenset({doctor.FASTER_WHISPER_REQUESTED_COMPUTE_TYPE}),
             ),
             "cpu_threads": ctranslate2["cpu_threads"],
             "num_workers": ctranslate2["num_workers"],
@@ -15229,7 +16252,9 @@ def command_setup(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
-    include_monitors = _coerce_bool(args.include_monitors, field_name="include_monitors")
+    include_monitors = _coerce_bool(
+        args.include_monitors, field_name="include_monitors"
+    )
     sources = _normalize_input_sources(list_input_sources(include_monitors))
     return {
         "status": "done",
@@ -15250,7 +16275,10 @@ def command_list_inputs(args: argparse.Namespace) -> dict[str, object]:
 
 def command_models(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    return {"status": "done", "models": _redact_model_payload_paths(list_models(verify=True))}
+    return {
+        "status": "done",
+        "models": _redact_model_payload_paths(list_models(verify=True)),
+    }
 
 
 def command_text_models(args: argparse.Namespace) -> dict[str, object]:
@@ -15265,16 +16293,23 @@ def command_text_models(args: argparse.Namespace) -> dict[str, object]:
     if backend not in {"ollama", "openai-compatible"}:
         raise RuntimeError("text models backend must be ollama or openai-compatible")
     if backend == "openai-compatible":
-        url = _validate_openai_compatible_http_url(args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL, field_name="openai-compatible url")
+        url = _validate_openai_compatible_http_url(
+            args.openai_compatible_url or DEFAULT_OPENAI_COMPATIBLE_URL,
+            field_name="openai-compatible url",
+        )
         api_key = _openai_compatible_api_key_from_args(args)
-        payload = _normalize_text_models_payload(list_openai_compatible_models(url, api_key=api_key))
+        payload = _normalize_text_models_payload(
+            list_openai_compatible_models(url, api_key=api_key)
+        )
         return {
             "status": "done",
             "backend": "openai-compatible",
             "url": url,
             **payload,
         }
-    url = _validate_ollama_http_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
+    url = _validate_ollama_http_url(
+        args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url"
+    )
     payload = _normalize_text_models_payload(list_ollama_models(url))
     if _is_local_ollama_url(url):
         try:
@@ -15284,7 +16319,11 @@ def command_text_models(args: argparse.Namespace) -> dict[str, object]:
             ollama_available = False
     else:
         ollama_available = False
-    if _is_local_ollama_url(url) and not ollama_available and payload["available"] is False:
+    if (
+        _is_local_ollama_url(url)
+        and not ollama_available
+        and payload["available"] is False
+    ):
         return {
             "status": "done",
             "backend": "ollama",
@@ -15312,17 +16351,24 @@ def command_install_text_model(args: argparse.Namespace) -> dict[str, object]:
     backend = raw_backend.strip().lower().replace("_", "-")
     if backend != "ollama":
         raise RuntimeError("text model installation currently supports only ollama")
-    model = _assert_clean_text(args.model, field_name="ollama model", max_chars=MAX_PATH_CHARS).strip()
+    model = _assert_clean_text(
+        args.model, field_name="ollama model", max_chars=MAX_PATH_CHARS
+    ).strip()
     if not model:
         raise RuntimeError("ollama model must not be empty")
     if model.startswith("-"):
         raise RuntimeError("ollama model must not start with '-'")
-    url = _validate_ollama_http_url(args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url")
+    url = _validate_ollama_http_url(
+        args.ollama_url or DEFAULT_OLLAMA_URL, field_name="ollama url"
+    )
     try:
         ollama = _command_path("ollama")
     except RuntimeError as exc:
         message = str(exc)
-        if message.startswith("command path is not trusted") or "command is not available" in message:
+        if (
+            message.startswith("command path is not trusted")
+            or "command is not available" in message
+        ):
             raise RuntimeError("ollama command is not available") from exc
         raise
     env = _filtered_environment()
@@ -15370,7 +16416,9 @@ def _benchmark_targets(model_names: list[str] | None, language: str) -> list[Mod
     if model_names:
         targets: list[ModelSpec] = []
         for name in model_names:
-            clean_name = _assert_clean_text(name, field_name="model name", max_chars=MAX_PATH_CHARS).strip()
+            clean_name = _assert_clean_text(
+                name, field_name="model name", max_chars=MAX_PATH_CHARS
+            ).strip()
             if not clean_name:
                 raise RuntimeError("model name must not be empty")
             try:
@@ -15378,10 +16426,16 @@ def _benchmark_targets(model_names: list[str] | None, language: str) -> list[Mod
             except ModelError as exc:
                 raise RuntimeError(str(exc)) from exc
         return targets
-    return [model for model in CATALOG if bool(model_status(model, verify=False).get("downloaded"))]
+    return [
+        model
+        for model in CATALOG
+        if bool(model_status(model, verify=False).get("downloaded"))
+    ]
 
 
-def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result, os.stat_result]:
+def _temporary_benchmark_transcript_path() -> (
+    tuple[Path, os.stat_result, os.stat_result]
+):
     fd: int | None = None
     path: Path | None = None
     file_stat: os.stat_result | None = None
@@ -15477,9 +16531,7 @@ def _temporary_benchmark_transcript_path() -> tuple[Path, os.stat_result, os.sta
             message=TRANSIENT_TRANSCRIPT_INTERRUPT_ERROR,
         )
     cleanup_failure = (
-        close_cleanup_error
-        if close_cleanup_error is not None
-        else cleanup_error
+        close_cleanup_error if close_cleanup_error is not None else cleanup_error
     )
     if cleanup_failure is not None:
         _raise_sanitized_transient_exception(
@@ -15535,8 +16587,10 @@ def _benchmark_transcript_writer_identity(
     unchanged = (
         _same_leaf_identity(current_stat, expected_stat)
         and current_stat.st_size == expected_stat.st_size
-        and getattr(current_stat, "st_mtime_ns", 0) == getattr(expected_stat, "st_mtime_ns", 0)
-        and getattr(current_stat, "st_ctime_ns", 0) == getattr(expected_stat, "st_ctime_ns", 0)
+        and getattr(current_stat, "st_mtime_ns", 0)
+        == getattr(expected_stat, "st_mtime_ns", 0)
+        and getattr(current_stat, "st_ctime_ns", 0)
+        == getattr(expected_stat, "st_ctime_ns", 0)
     )
     if unchanged:
         return current_stat, True
@@ -15570,7 +16624,9 @@ def _trusted_transcript_stat_for_cleanup(
     return output_stat
 
 
-def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[str, object]:
+def _benchmark_model(
+    audio_path: Path, language: str, model: ModelSpec
+) -> dict[str, object]:
     path: Path | None = None
     downloaded = False
     compatible = False
@@ -15609,13 +16665,16 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
         return result
 
     started = time.perf_counter()
+
     def finish_failure(error: str) -> dict[str, object]:
         result["seconds"] = round(time.perf_counter() - started, 3)
         result["error"] = error
         return result
 
     try:
-        text_path, text_path_stat, text_owner_stat = _temporary_benchmark_transcript_path()
+        text_path, text_path_stat, text_owner_stat = (
+            _temporary_benchmark_transcript_path()
+        )
     except BaseException as exc:
         if isinstance(exc, KeyboardInterrupt):
             _raise_sanitized_transient_exception(
@@ -15677,11 +16736,13 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
     finally:
         if cleanup_identity_safe and (transcribe_failed or deferred_error is not None):
             try:
-                cleanup_stat, cleanup_identity_safe = _benchmark_transcript_writer_identity(
-                    text_path,
-                    text_path_stat,
-                    text_owner_stat,
-                    text,
+                cleanup_stat, cleanup_identity_safe = (
+                    _benchmark_transcript_writer_identity(
+                        text_path,
+                        text_path_stat,
+                        text_owner_stat,
+                        text,
+                    )
                 )
             except BaseException as exc:
                 cleanup_identity_safe = False
@@ -15725,17 +16786,29 @@ def _benchmark_model(audio_path: Path, language: str, model: ModelSpec) -> dict[
 
 def command_benchmark_models(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    audio_path = _coerce_path(args.audio_path, field_name="audio file path", max_chars=MAX_AUDIO_PATH_CHARS)
+    audio_path = _coerce_path(
+        args.audio_path, field_name="audio file path", max_chars=MAX_AUDIO_PATH_CHARS
+    )
     audio_path = validate_audio_file(audio_path)
-    language = _assert_clean_text(args.language or DEFAULT_BENCHMARK_LANGUAGE, field_name="language", max_chars=64).strip()
+    language = _assert_clean_text(
+        args.language or DEFAULT_BENCHMARK_LANGUAGE, field_name="language", max_chars=64
+    ).strip()
     if not language:
         language = DEFAULT_BENCHMARK_LANGUAGE
     targets = _benchmark_targets(args.models, language)
     if not targets:
         targets = list(CATALOG)
     results = [_benchmark_model(audio_path, language, model) for model in targets]
-    successes = [result for result in results if result.get("ok") and isinstance(result.get("seconds"), (int, float))]
-    fastest = min(successes, key=lambda result: float(result["seconds"])) if successes else None
+    successes = [
+        result
+        for result in results
+        if result.get("ok") and isinstance(result.get("seconds"), (int, float))
+    ]
+    fastest = (
+        min(successes, key=lambda result: float(result["seconds"]))
+        if successes
+        else None
+    )
     message = (
         f"benchmarked {len(successes)} of {len(results)} model(s)"
         if successes
@@ -15754,18 +16827,32 @@ def command_benchmark_models(args: argparse.Namespace) -> dict[str, object]:
 
 def command_history(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
-    confirm_plaintext = _coerce_bool(getattr(args, "confirm_plaintext", False), field_name="confirm_plaintext")
-    transcripts, unreadable_count = _collect_transcript_history(limit, include_text=confirm_plaintext)
+    limit = _coerce_int(
+        args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT
+    )
+    confirm_plaintext = _coerce_bool(
+        getattr(args, "confirm_plaintext", False), field_name="confirm_plaintext"
+    )
+    transcripts, unreadable_count = _collect_transcript_history(
+        limit, include_text=confirm_plaintext
+    )
     if not confirm_plaintext:
         transcripts = _redact_history_previews(transcripts)
-    return {"status": "done", "transcripts": transcripts, "unreadable_count": unreadable_count}
+    return {
+        "status": "done",
+        "transcripts": transcripts,
+        "unreadable_count": unreadable_count,
+    }
 
 
 def command_transcripts_document(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
-    confirm_plaintext = _coerce_bool(getattr(args, "confirm_plaintext", False), field_name="confirm_plaintext")
+    limit = _coerce_int(
+        args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT
+    )
+    confirm_plaintext = _coerce_bool(
+        getattr(args, "confirm_plaintext", False), field_name="confirm_plaintext"
+    )
     if not confirm_plaintext:
         raise RuntimeError("plaintext transcript document requires --confirm-plaintext")
     max_chars = MAX_TRANSCRIPTS_DOCUMENT_CHARS
@@ -15782,18 +16869,26 @@ def command_transcripts_document(args: argparse.Namespace) -> dict[str, object]:
             "truncated": truncated or max_chars < MAX_TRANSCRIPTS_DOCUMENT_CHARS,
         }
         try:
-            _assert_json_payload_size(payload, max_bytes=MAX_TRANSCRIPTS_DOCUMENT_JSON_BYTES)
+            _assert_json_payload_size(
+                payload, max_bytes=MAX_TRANSCRIPTS_DOCUMENT_JSON_BYTES
+            )
             return payload
         except RuntimeError:
             max_chars = max(256, max_chars // 2)
-    raise RuntimeError("transcript document JSON is too large for applet display") from None
+    raise RuntimeError(
+        "transcript document JSON is too large for applet display"
+    ) from None
 
 
 def command_transcripts_export(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    limit = _coerce_int(args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT)
+    limit = _coerce_int(
+        args.limit, field_name="history limit", max_value=MAX_HISTORY_LIMIT
+    )
     plaintext = _coerce_bool(getattr(args, "plaintext", False), field_name="plaintext")
-    confirm_plaintext = _coerce_bool(getattr(args, "confirm_plaintext", False), field_name="confirm_plaintext")
+    confirm_plaintext = _coerce_bool(
+        getattr(args, "confirm_plaintext", False), field_name="confirm_plaintext"
+    )
     output_path, count, encryption = write_transcripts_export(
         limit,
         encryption_mode=args.artifact_encryption,
@@ -15872,8 +16967,14 @@ def command_backup_create(args: argparse.Namespace) -> dict[str, object]:
     transcripts = _coerce_bool(args.transcripts, field_name="transcripts")
     audio = _coerce_bool(args.audio, field_name="audio")
     settings_override = getattr(args, "_settings_override", None)
-    settings = settings_override if isinstance(settings_override, dict) else _settings_json_from_args(args)
-    settings_stage = tempfile.TemporaryDirectory(prefix="soc-backup-settings-") if config else None
+    settings = (
+        settings_override
+        if isinstance(settings_override, dict)
+        else _settings_json_from_args(args)
+    )
+    settings_stage = (
+        tempfile.TemporaryDirectory(prefix="soc-backup-settings-") if config else None
+    )
     try:
         staged_settings_path = (
             Path(settings_stage.name) / "settings-export.json"
@@ -15895,7 +16996,11 @@ def command_backup_create(args: argparse.Namespace) -> dict[str, object]:
                 target,
                 sources=sources,
                 source_roots=source_roots,
-                selection={"config": config, "transcripts": transcripts, "audio": audio},
+                selection={
+                    "config": config,
+                    "transcripts": transcripts,
+                    "audio": audio,
+                },
                 app_version=__version__,
                 encryption_mode=args.artifact_encryption,
             )
@@ -15905,7 +17010,10 @@ def command_backup_create(args: argparse.Namespace) -> dict[str, object]:
         if settings_stage is not None:
             settings_stage.cleanup()
     opened = False
-    if _coerce_bool(getattr(args, "open", False), field_name="open") and result.archive_path is not None:
+    if (
+        _coerce_bool(getattr(args, "open", False), field_name="open")
+        and result.archive_path is not None
+    ):
         opened = _open_path_with_desktop(result.archive_path.parent)
     warnings = list(result.warnings)
     return {
@@ -15913,16 +17021,22 @@ def command_backup_create(args: argparse.Namespace) -> dict[str, object]:
         "message": (
             "backup skipped; selected artifacts are unchanged"
             if result.skipped
-            else "backup created with cleanup warnings"
-            if warnings
-            else "backup created"
+            else (
+                "backup created with cleanup warnings" if warnings else "backup created"
+            )
         ),
         "opened": opened,
-        "archive_name": result.archive_path.name if result.archive_path is not None else "",
-        "archive_path": str(result.archive_path) if result.archive_path is not None else "",
+        "archive_name": (
+            result.archive_path.name if result.archive_path is not None else ""
+        ),
+        "archive_path": (
+            str(result.archive_path) if result.archive_path is not None else ""
+        ),
         "archive_present": result.archive_path is not None,
         "encrypted": result.manifest is not None and result.manifest.encryption_enabled,
-        "artifacts": len(result.manifest.artifacts) if result.manifest is not None else 0,
+        "artifacts": (
+            len(result.manifest.artifacts) if result.manifest is not None else 0
+        ),
         "warnings": warnings,
     }
 
@@ -15930,17 +17044,31 @@ def command_backup_create(args: argparse.Namespace) -> dict[str, object]:
 def _auto_backup_configuration(settings: dict[str, object]) -> dict[str, object] | None:
     if not isinstance(settings, dict):
         raise RuntimeError("automatic backup settings must be an object")
-    enabled = _coerce_bool(settings.get("auto-backup-enabled", False), field_name="auto-backup-enabled")
-    on_success = _coerce_bool(settings.get("auto-backup-on-success", True), field_name="auto-backup-on-success")
-    audio = _coerce_bool(settings.get("auto-backup-audio", False), field_name="auto-backup-audio")
+    enabled = _coerce_bool(
+        settings.get("auto-backup-enabled", False), field_name="auto-backup-enabled"
+    )
+    on_success = _coerce_bool(
+        settings.get("auto-backup-on-success", True),
+        field_name="auto-backup-on-success",
+    )
+    audio = _coerce_bool(
+        settings.get("auto-backup-audio", False), field_name="auto-backup-audio"
+    )
     if not enabled or not on_success or not audio:
         return None
     directory = settings.get("auto-backup-directory", "")
     if not isinstance(directory, str) or not directory.strip():
         raise RuntimeError("automatic audio backup requires a backup directory")
-    config = _coerce_bool(settings.get("auto-backup-config", True), field_name="auto-backup-config")
-    transcripts = _coerce_bool(settings.get("auto-backup-transcripts", True), field_name="auto-backup-transcripts")
-    encryption = normalize_artifact_encryption(settings.get("auto-backup-encryption", "keyring"))
+    config = _coerce_bool(
+        settings.get("auto-backup-config", True), field_name="auto-backup-config"
+    )
+    transcripts = _coerce_bool(
+        settings.get("auto-backup-transcripts", True),
+        field_name="auto-backup-transcripts",
+    )
+    encryption = normalize_artifact_encryption(
+        settings.get("auto-backup-encryption", "keyring")
+    )
     if not (config or transcripts or audio):
         raise RuntimeError("automatic backup requires at least one selected category")
     return {
@@ -15978,7 +17106,9 @@ def _run_inline_auto_backup(
 
 
 def command_backup_verify(args: argparse.Namespace) -> dict[str, object]:
-    archive_path = _coerce_path(args.archive_path, field_name="backup archive path", resolve=True)
+    archive_path = _coerce_path(
+        args.archive_path, field_name="backup archive path", resolve=True
+    )
     manifest = verify_backup(archive_path)
     return {
         "status": "done",
@@ -15993,12 +17123,20 @@ def command_backup_verify(args: argparse.Namespace) -> dict[str, object]:
 
 
 def command_backup_restore_dry_run(args: argparse.Namespace) -> dict[str, object]:
-    archive_path = _coerce_path(args.archive_path, field_name="backup archive path", resolve=True)
-    destination = _coerce_path(args.destination_directory, field_name="restore destination", resolve=True)
+    archive_path = _coerce_path(
+        args.archive_path, field_name="backup archive path", resolve=True
+    )
+    destination = _coerce_path(
+        args.destination_directory, field_name="restore destination", resolve=True
+    )
     plan = restore_dry_run(
         archive_path,
         destination,
-        source_roots=(default_settings_export_file().parent, transcript_dir(), recordings_dir()),
+        source_roots=(
+            default_settings_export_file().parent,
+            transcript_dir(),
+            recordings_dir(),
+        ),
     )
     return {
         "status": "done",
@@ -16014,12 +17152,20 @@ def command_backup_restore_dry_run(args: argparse.Namespace) -> dict[str, object
 
 
 def command_backup_restore(args: argparse.Namespace) -> dict[str, object]:
-    archive_path = _coerce_path(args.archive_path, field_name="backup archive path", resolve=True)
-    destination = _coerce_path(args.destination_directory, field_name="restore destination", resolve=True)
+    archive_path = _coerce_path(
+        args.archive_path, field_name="backup archive path", resolve=True
+    )
+    destination = _coerce_path(
+        args.destination_directory, field_name="restore destination", resolve=True
+    )
     plan = restore_backup(
         archive_path,
         destination,
-        source_roots=(default_settings_export_file().parent, transcript_dir(), recordings_dir()),
+        source_roots=(
+            default_settings_export_file().parent,
+            transcript_dir(),
+            recordings_dir(),
+        ),
     )
     return {
         "status": "done",
@@ -16058,8 +17204,16 @@ def _command_cleanup_locked(
     *,
     lifecycle_lock_active: bool,
 ) -> dict[str, object]:
-    keep_transcripts = _coerce_int(args.keep_transcripts, field_name="keep-transcripts", max_value=MAX_KEEP_TRANSCRIPTS)
-    keep_recordings = _coerce_int(args.keep_recordings, field_name="keep-recordings", max_value=MAX_KEEP_RECORDINGS)
+    keep_transcripts = _coerce_int(
+        args.keep_transcripts,
+        field_name="keep-transcripts",
+        max_value=MAX_KEEP_TRANSCRIPTS,
+    )
+    keep_recordings = _coerce_int(
+        args.keep_recordings,
+        field_name="keep-recordings",
+        max_value=MAX_KEEP_RECORDINGS,
+    )
     recording_max_age_days = _coerce_int(
         args.recording_max_age_days,
         field_name="recording-max-age-days",
@@ -16077,7 +17231,8 @@ def _command_cleanup_locked(
             require_recordings_dir=True,
         )
         include_finalizing_inflight = (
-            state_audio_path is None or _recording_artifact_stat(state_audio_path) is None
+            state_audio_path is None
+            or _recording_artifact_stat(state_audio_path) is None
         )
     active_paths = active_artifact_paths(
         state,
@@ -16098,7 +17253,9 @@ def _command_cleanup_locked(
             pass
     transcript_stats: dict[Path, os.stat_result] = {}
     try:
-        transcript_files = _safe_transcript_artifact_files(expected_stats=transcript_stats)
+        transcript_files = _safe_transcript_artifact_files(
+            expected_stats=transcript_stats
+        )
     except DirectoryScanError as exc:
         transcript_result = {
             "planned_paths": [],
@@ -16107,7 +17264,9 @@ def _command_cleanup_locked(
             "skipped_active_paths": [],
         }
     else:
-        transcript_files, empty_transcript_files = _partition_transcript_cleanup_files(transcript_files)
+        transcript_files, empty_transcript_files = _partition_transcript_cleanup_files(
+            transcript_files
+        )
         retention_result = prune_transcript_files_by_mtime(
             transcript_files,
             keep_transcripts,
@@ -16124,27 +17283,54 @@ def _command_cleanup_locked(
         )
         transcript_result = {
             key: [*empty_result[key], *retention_result[key]]
-            for key in ("planned_paths", "deleted_paths", "failed_paths", "skipped_active_paths")
+            for key in (
+                "planned_paths",
+                "deleted_paths",
+                "failed_paths",
+                "skipped_active_paths",
+            )
         }
     transient_transcript_result = prune_stale_transient_transcripts(dry_run)
-    recording_result = prune_recording_groups(keep_recordings, active_paths, dry_run, recording_max_age_days)
+    recording_result = prune_recording_groups(
+        keep_recordings, active_paths, dry_run, recording_max_age_days
+    )
     deleted_transcripts = len(transcript_result["deleted_paths"])
     deleted_transient_transcripts = len(transient_transcript_result["deleted_paths"])
     deleted_recordings = _coerce_int(recording_result["deleted_recordings"], field_name="deleted-recordings")  # type: ignore[arg-type]
     deleted_logs = _coerce_int(recording_result["deleted_logs"], field_name="deleted-logs")  # type: ignore[arg-type]
     would_delete_transcripts = len(transcript_result["planned_paths"])
-    would_delete_transient_transcripts = len(transient_transcript_result["planned_paths"])
+    would_delete_transient_transcripts = len(
+        transient_transcript_result["planned_paths"]
+    )
     would_delete_recordings = _coerce_int(recording_result["planned_recordings"], field_name="planned-recordings")  # type: ignore[arg-type]
     would_delete_logs = _coerce_int(recording_result["planned_logs"], field_name="planned-logs")  # type: ignore[arg-type]
     total = (
-        would_delete_transcripts + would_delete_transient_transcripts + would_delete_recordings + would_delete_logs
+        would_delete_transcripts
+        + would_delete_transient_transcripts
+        + would_delete_recordings
+        + would_delete_logs
         if dry_run
-        else deleted_transcripts + deleted_transient_transcripts + deleted_recordings + deleted_logs
+        else deleted_transcripts
+        + deleted_transient_transcripts
+        + deleted_recordings
+        + deleted_logs
     )
     verb = "would clean" if dry_run else "cleaned"
-    failed_paths = transcript_result["failed_paths"] + transient_transcript_result["failed_paths"] + recording_result["failed_paths"]
-    deleted_paths = transcript_result["deleted_paths"] + transient_transcript_result["deleted_paths"] + recording_result["deleted_paths"]
-    would_delete_paths = transcript_result["planned_paths"] + transient_transcript_result["planned_paths"] + recording_result["planned_paths"]
+    failed_paths = (
+        transcript_result["failed_paths"]
+        + transient_transcript_result["failed_paths"]
+        + recording_result["failed_paths"]
+    )
+    deleted_paths = (
+        transcript_result["deleted_paths"]
+        + transient_transcript_result["deleted_paths"]
+        + recording_result["deleted_paths"]
+    )
+    would_delete_paths = (
+        transcript_result["planned_paths"]
+        + transient_transcript_result["planned_paths"]
+        + recording_result["planned_paths"]
+    )
     skipped_active_paths = (
         transcript_result["skipped_active_paths"]
         + transient_transcript_result["skipped_active_paths"]
@@ -16254,7 +17440,11 @@ def command_alarms_add(args: argparse.Namespace) -> dict[str, object]:
         urgency=args.urgency,
         enabled=not disabled,
     )
-    return {"status": "done", "message": f"alarm added: {alarm['label']} at {alarm['time']}", "alarm": alarm}
+    return {
+        "status": "done",
+        "message": f"alarm added: {alarm['label']} at {alarm['time']}",
+        "alarm": alarm,
+    }
 
 
 def command_alarms_remove(args: argparse.Namespace) -> dict[str, object]:
@@ -16275,7 +17465,11 @@ def command_alarms_disable(args: argparse.Namespace) -> dict[str, object]:
 def command_alarms_check(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     mark = _coerce_bool(args.mark, field_name="mark")
-    catch_up_minutes = _coerce_int(args.catch_up_minutes, field_name="catch-up-minutes", max_value=MAX_ALARM_CATCH_UP_MINUTES)
+    catch_up_minutes = _coerce_int(
+        args.catch_up_minutes,
+        field_name="catch-up-minutes",
+        max_value=MAX_ALARM_CATCH_UP_MINUTES,
+    )
     return check_due_alarms(mark=mark, catch_up_minutes=catch_up_minutes)
 
 
@@ -16283,7 +17477,9 @@ def command_alarms_import(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
     raw = sys.stdin.read(MAX_SETTINGS_JSON_CHARS + 1)
     if len(raw) > MAX_SETTINGS_JSON_CHARS:
-        raise RuntimeError(f"alarm JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
+        raise RuntimeError(
+            f"alarm JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)"
+        )
     try:
         value = json.loads(
             raw,
@@ -16338,8 +17534,7 @@ def _diagnostics_state_payload(state: RecordingState) -> dict[str, object]:
         ),
         "cleanup_backup_journal_overflow": state.cleanup_backup_journal_overflow
         is True,
-        "cleanup_backup_journal_restore": state.cleanup_backup_journal_restore
-        is True,
+        "cleanup_backup_journal_restore": state.cleanup_backup_journal_restore is True,
         "recorder_scope_present": bool(state.recorder_scope),
     }
     if error.strip():
@@ -16347,7 +17542,9 @@ def _diagnostics_state_payload(state: RecordingState) -> dict[str, object]:
     return payload
 
 
-def _diagnostics_applet_lifecycle_payload(settings: dict[str, object]) -> dict[str, object]:
+def _diagnostics_applet_lifecycle_payload(
+    settings: dict[str, object],
+) -> dict[str, object]:
     raw = settings.get("applet-lifecycle")
     if not isinstance(raw, dict):
         return {
@@ -16488,7 +17685,11 @@ def build_diagnostics_payload(args: argparse.Namespace) -> dict[str, object]:
         "models": _redact_model_payload_paths(list_models()),
         "alarms": {
             "configured": len(alarm_entries),
-            "active": sum(1 for alarm in alarm_entries if isinstance(alarm, dict) and alarm.get("enabled", True)),
+            "active": sum(
+                1
+                for alarm in alarm_entries
+                if isinstance(alarm, dict) and alarm.get("enabled", True)
+            ),
             "last_checked_at": str(alarm_payload.get("last_checked_at") or ""),
         },
         "recent_transcripts": transcript_entries,
@@ -16522,7 +17723,11 @@ def command_settings_export(args: argparse.Namespace) -> dict[str, object]:
     post_commit_warnings: list[str] = []
     if isinstance(raw_warnings, list):
         for warning in raw_warnings:
-            if isinstance(warning, str) and warning in allowed_warnings and warning not in post_commit_warnings:
+            if (
+                isinstance(warning, str)
+                and warning in allowed_warnings
+                and warning not in post_commit_warnings
+            ):
                 post_commit_warnings.append(warning)
     if post_commit_warnings:
         result.update(
@@ -16592,12 +17797,26 @@ def command_profanity_filter_document(args: argparse.Namespace) -> dict[str, obj
 
 
 def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
-    text = _assert_clean_text(args.text, field_name="text", max_chars=MAX_TRANSCRIBER_TEXT_CHARS)
-    sanitize_special_chars_flag = _coerce_bool(args.sanitize_special_chars, field_name="sanitize_special_chars")
-    append_space = _coerce_bool(getattr(args, "append_space", False), field_name="append_space")
-    soften_profanity = _coerce_bool(getattr(args, "soften_profanity", False), field_name="soften_profanity")
-    text = prepare_output_text(text, append_space, sanitize_special_chars_flag, soften_profanity)
-    typing_delay_ms = _coerce_int(args.typing_delay_ms, field_name="typing-delay-ms", max_value=MAX_TYPING_DELAY_MS)
+    text = _assert_clean_text(
+        args.text, field_name="text", max_chars=MAX_TRANSCRIBER_TEXT_CHARS
+    )
+    sanitize_special_chars_flag = _coerce_bool(
+        args.sanitize_special_chars, field_name="sanitize_special_chars"
+    )
+    append_space = _coerce_bool(
+        getattr(args, "append_space", False), field_name="append_space"
+    )
+    soften_profanity = _coerce_bool(
+        getattr(args, "soften_profanity", False), field_name="soften_profanity"
+    )
+    text = prepare_output_text(
+        text, append_space, sanitize_special_chars_flag, soften_profanity
+    )
+    typing_delay_ms = _coerce_int(
+        args.typing_delay_ms,
+        field_name="typing-delay-ms",
+        max_value=MAX_TYPING_DELAY_MS,
+    )
     try:
         inserted = insert_text(text, args.insert_method, typing_delay_ms)
     except (KeyboardInterrupt, SystemExit) as exc:
@@ -16610,7 +17829,9 @@ def command_insert_text(args: argparse.Namespace) -> dict[str, object]:
 
 def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     ensure_runtime_dirs()
-    audio_path = _coerce_path(args.audio_path, field_name="audio file path", max_chars=MAX_AUDIO_PATH_CHARS)
+    audio_path = _coerce_path(
+        args.audio_path, field_name="audio file path", max_chars=MAX_AUDIO_PATH_CHARS
+    )
     language = _validate_pipeline_text_args(args, language=args.language)
     normalized_transcriber = normalize_backend(args.transcriber)
     audio_path = validate_audio_file(audio_path)
@@ -16683,9 +17904,7 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
             failure_message = TRANSIENT_TRANSCRIPT_CLEANUP_ERROR
             classified_failure = None
         elif isinstance(transcription_error, Exception):
-            classified_failure = _classified_transcription_failure(
-                transcription_error
-            )
+            classified_failure = _classified_transcription_failure(transcription_error)
             failure_message = str(classified_failure)
         else:
             classified_failure = None
@@ -16754,9 +17973,15 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         expected_stats=transcript_stats,
     )
     transient_transcript_cleanup = prune_stale_transient_transcripts(False)
-    cleanup_failed_paths = _cleanup_failed_paths(transcript_cleanup, transient_transcript_cleanup)
+    cleanup_failed_paths = _cleanup_failed_paths(
+        transcript_cleanup, transient_transcript_cleanup
+    )
     status = "done"
-    message = "recording finished without transcript" if not stripped_text else "transcription completed"
+    message = (
+        "recording finished without transcript"
+        if not stripped_text
+        else "transcription completed"
+    )
     if cleanup_failed_paths:
         status = "error"
         message = f"{message}; {_cleanup_failure_error(cleanup_failed_paths)}"
@@ -16764,7 +17989,11 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
     return {
         "status": status,
         "message": message,
-        **({"error": message, "cleanup_failed_path_count": len(cleanup_failed_paths)} if cleanup_failed_paths else {}),
+        **(
+            {"error": message, "cleanup_failed_path_count": len(cleanup_failed_paths)}
+            if cleanup_failed_paths
+            else {}
+        ),
         "transcript": text if reveal_transcript else "",
         "transcript_output_redacted": bool(text) and not reveal_transcript,
         **(
@@ -16774,7 +18003,9 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
         ),
         "security": _public_security_post_processing(security_post_processing),
         "transcript_file_cap": _public_cleanup_result(transcript_cleanup),
-        "transient_transcript_cleanup": _public_cleanup_result(transient_transcript_cleanup),
+        "transient_transcript_cleanup": _public_cleanup_result(
+            transient_transcript_cleanup
+        ),
         "artifact_encryption": artifact_encryption,
         "transcript_encryption": transcript_encryption,
         "transcript_encrypted": transcript_encryption != ARTIFACT_ENCRYPTION_OFF,
@@ -16783,7 +18014,9 @@ def command_transcribe_file(args: argparse.Namespace) -> dict[str, object]:
 
 def add_common_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--state-file", default=str(default_state_file()))
-    parser.add_argument("--json", action="store_true", help="print machine-readable JSON")
+    parser.add_argument(
+        "--json", action="store_true", help="print machine-readable JSON"
+    )
     parser.add_argument(
         "--log-level",
         default=_coerce_log_level_from_environment(),
@@ -16795,7 +18028,11 @@ def add_common_options(parser: argparse.ArgumentParser) -> None:
 def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--language", default="")
     parser.add_argument("--max-seconds", type=int, default=DEFAULT_MAX_SECONDS)
-    parser.add_argument("--recorder", default="auto", choices=["auto", "pw-record", "parecord", "arecord"])
+    parser.add_argument(
+        "--recorder",
+        default="auto",
+        choices=["auto", "pw-record", "parecord", "arecord"],
+    )
     parser.add_argument("--input-device", default="")
     parser.add_argument("--transcriber", default="auto", choices=TRANSCRIBER_CHOICES)
     parser.add_argument("--transcriber-command", default="")
@@ -16803,14 +18040,27 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--post-process-backend",
         default="none",
-        choices=["none", "command", "ollama", "openai-compatible", "openai", "local-openai"],
+        choices=[
+            "none",
+            "command",
+            "ollama",
+            "openai-compatible",
+            "openai",
+            "local-openai",
+        ],
     )
     parser.add_argument("--post-process-command", default="")
     parser.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     parser.add_argument("--ollama-model", default="")
-    parser.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
-    parser.add_argument("--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL)
-    parser.add_argument("--openai-compatible-text-model", default=DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
+    parser.add_argument(
+        "--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL
+    )
+    parser.add_argument(
+        "--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL
+    )
+    parser.add_argument(
+        "--openai-compatible-text-model", default=DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL
+    )
     parser.add_argument(
         "--openai-compatible-api-key-stdin",
         action="store_true",
@@ -16834,10 +18084,18 @@ def add_pipeline_options(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--insert-method",
         default="clipboard-paste",
-        choices=["clipboard-paste", "clipboard-paste-submit", "clipboard", "type", "none"],
+        choices=[
+            "clipboard-paste",
+            "clipboard-paste-submit",
+            "clipboard",
+            "type",
+            "none",
+        ],
     )
     parser.add_argument("--typing-delay-ms", type=int, default=DEFAULT_TYPING_DELAY_MS)
-    parser.add_argument("--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS)
+    parser.add_argument(
+        "--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS
+    )
     parser.add_argument(
         "--artifact-encryption",
         default=ARTIFACT_ENCRYPTION_OFF,
@@ -16888,7 +18146,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    for name, handler in [("start", command_start), ("stop", command_stop), ("toggle", command_toggle)]:
+    for name, handler in [
+        ("start", command_start),
+        ("stop", command_stop),
+        ("toggle", command_toggle),
+    ]:
         child = subparsers.add_parser(name)
         add_common_options(child)
         add_pipeline_options(child)
@@ -16948,9 +18210,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     text_models = subparsers.add_parser("text-models")
     add_common_options(text_models)
-    text_models.add_argument("--backend", default="ollama", choices=["ollama", "openai-compatible"])
+    text_models.add_argument(
+        "--backend", default="ollama", choices=["ollama", "openai-compatible"]
+    )
     text_models.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
-    text_models.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
+    text_models.add_argument(
+        "--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL
+    )
     text_models.add_argument(
         "--openai-compatible-api-key-stdin",
         action="store_true",
@@ -17042,10 +18308,18 @@ def build_parser() -> argparse.ArgumentParser:
     backup_create.add_argument("--directory", required=True)
     backup_create.add_argument("--settings-json", default="{}")
     backup_create.add_argument("--settings-json-stdin", action="store_true")
-    backup_create.add_argument("--config", action=argparse.BooleanOptionalAction, default=True)
-    backup_create.add_argument("--transcripts", action=argparse.BooleanOptionalAction, default=True)
-    backup_create.add_argument("--audio", action=argparse.BooleanOptionalAction, default=False)
-    backup_create.add_argument("--artifact-encryption", choices=ARTIFACT_ENCRYPTION_CHOICES, default="keyring")
+    backup_create.add_argument(
+        "--config", action=argparse.BooleanOptionalAction, default=True
+    )
+    backup_create.add_argument(
+        "--transcripts", action=argparse.BooleanOptionalAction, default=True
+    )
+    backup_create.add_argument(
+        "--audio", action=argparse.BooleanOptionalAction, default=False
+    )
+    backup_create.add_argument(
+        "--artifact-encryption", choices=ARTIFACT_ENCRYPTION_CHOICES, default="keyring"
+    )
     backup_create.add_argument("--open", action="store_true")
     backup_create.set_defaults(handler=command_backup_create)
 
@@ -17068,9 +18342,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     cleanup = subparsers.add_parser("cleanup")
     add_common_options(cleanup)
-    cleanup.add_argument("--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS)
+    cleanup.add_argument(
+        "--keep-transcripts", type=int, default=DEFAULT_KEEP_TRANSCRIPTS
+    )
     cleanup.add_argument("--keep-recordings", type=int, default=DEFAULT_KEEP_RECORDINGS)
-    cleanup.add_argument("--recording-max-age-days", type=int, default=DEFAULT_RECORDING_MAX_AGE_DAYS)
+    cleanup.add_argument(
+        "--recording-max-age-days", type=int, default=DEFAULT_RECORDING_MAX_AGE_DAYS
+    )
     cleanup.add_argument("--dry-run", action="store_true")
     cleanup.set_defaults(handler=command_cleanup)
 
@@ -17106,8 +18384,14 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(alarms_add)
     alarms_add.add_argument("--time", required=True, help="local alarm time in HH:MM")
     alarms_add.add_argument("--name", default="")
-    alarms_add.add_argument("--days", default="daily", help="daily, weekdays, weekends, or comma-separated day codes")
-    alarms_add.add_argument("--urgency", default="normal", choices=["silent", "normal", "critical"])
+    alarms_add.add_argument(
+        "--days",
+        default="daily",
+        help="daily, weekdays, weekends, or comma-separated day codes",
+    )
+    alarms_add.add_argument(
+        "--urgency", default="normal", choices=["silent", "normal", "critical"]
+    )
     alarms_add.add_argument("--disabled", action="store_true")
     alarms_add.set_defaults(handler=command_alarms_add)
 
@@ -17128,7 +18412,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     alarms_check = alarm_subparsers.add_parser("check")
     add_common_options(alarms_check)
-    alarms_check.add_argument("--mark", action="store_true", help="persist trigger state for due alarms")
+    alarms_check.add_argument(
+        "--mark", action="store_true", help="persist trigger state for due alarms"
+    )
     alarms_check.add_argument("--catch-up-minutes", type=int, default=15)
     alarms_check.set_defaults(handler=command_alarms_check)
 
@@ -17177,7 +18463,13 @@ def build_parser() -> argparse.ArgumentParser:
     insert.add_argument(
         "--insert-method",
         default="clipboard-paste",
-        choices=["clipboard-paste", "clipboard-paste-submit", "clipboard", "type", "none"],
+        choices=[
+            "clipboard-paste",
+            "clipboard-paste-submit",
+            "clipboard",
+            "type",
+            "none",
+        ],
     )
     insert.add_argument("--typing-delay-ms", type=int, default=DEFAULT_TYPING_DELAY_MS)
     insert.add_argument("--append-space", action="store_true")
@@ -17189,20 +18481,35 @@ def build_parser() -> argparse.ArgumentParser:
     add_common_options(transcribe_file)
     transcribe_file.add_argument("audio_path")
     transcribe_file.add_argument("--language", default="en")
-    transcribe_file.add_argument("--transcriber", default="auto", choices=TRANSCRIBER_CHOICES)
+    transcribe_file.add_argument(
+        "--transcriber", default="auto", choices=TRANSCRIBER_CHOICES
+    )
     transcribe_file.add_argument("--transcriber-command", default="")
     transcribe_file.add_argument("--whisper-model", default="")
     transcribe_file.add_argument(
         "--post-process-backend",
         default="none",
-        choices=["none", "command", "ollama", "openai-compatible", "openai", "local-openai"],
+        choices=[
+            "none",
+            "command",
+            "ollama",
+            "openai-compatible",
+            "openai",
+            "local-openai",
+        ],
     )
     transcribe_file.add_argument("--post-process-command", default="")
     transcribe_file.add_argument("--ollama-url", default=DEFAULT_OLLAMA_URL)
     transcribe_file.add_argument("--ollama-model", default="")
-    transcribe_file.add_argument("--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL)
-    transcribe_file.add_argument("--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL)
-    transcribe_file.add_argument("--openai-compatible-text-model", default=DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL)
+    transcribe_file.add_argument(
+        "--openai-compatible-url", default=DEFAULT_OPENAI_COMPATIBLE_URL
+    )
+    transcribe_file.add_argument(
+        "--openai-compatible-model", default=DEFAULT_OPENAI_COMPATIBLE_MODEL
+    )
+    transcribe_file.add_argument(
+        "--openai-compatible-text-model", default=DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL
+    )
     transcribe_file.add_argument(
         "--openai-compatible-api-key-stdin",
         action="store_true",
@@ -17246,7 +18553,9 @@ def run(argv: list[str] | None = None, *, bootstrap_error: str | None = None) ->
     json_output = False
     command_name = str(getattr(args, "command", "unknown"))
     requested_log_level = getattr(args, "log_level", DEFAULT_LOG_LEVEL)
-    lazy_status_error_logging = command_name == "status" and requested_log_level == "error"
+    lazy_status_error_logging = (
+        command_name == "status" and requested_log_level == "error"
+    )
     status_error_logging_promoted = False
     deferred_output_interrupt = False
 
@@ -17271,10 +18580,7 @@ def run(argv: list[str] | None = None, *, bootstrap_error: str | None = None) ->
         if type(payload) is not dict:
             raise RuntimeError("command returned invalid status")
         raw_status = payload.get("status")
-        if (
-            type(raw_status) is not str
-            or raw_status not in _PUBLIC_PAYLOAD_STATUSES
-        ):
+        if type(raw_status) is not str or raw_status not in _PUBLIC_PAYLOAD_STATUSES:
             raise RuntimeError("command returned invalid status")
         error_present = "error" in payload
         if error_present:
@@ -17308,11 +18614,15 @@ def run(argv: list[str] | None = None, *, bootstrap_error: str | None = None) ->
         status = raw_status
         if status == "error":
             if payload.get("message"):
-                payload["message"] = _redact_error_for_user(payload["message"], secret_values=secret_values)
+                payload["message"] = _redact_error_for_user(
+                    payload["message"], secret_values=secret_values
+                )
         if has_semantic_error:
             payload.pop("exit_code", None)
         if "error" in payload and payload["error"] is not None:
-            payload["error"] = _redact_error_for_user(payload["error"], secret_values=secret_values)
+            payload["error"] = _redact_error_for_user(
+                payload["error"], secret_values=secret_values
+            )
         payload.pop("failure_stage", None)
         payload.pop("failure_code", None)
         payload.pop("failure_reason", None)
@@ -17327,7 +18637,9 @@ def run(argv: list[str] | None = None, *, bootstrap_error: str | None = None) ->
                 command=command_name,
                 status=status,
                 error_type="payload",
-                error_message=_redact_error_for_user(payload.get("error", ""), secret_values=secret_values),
+                error_message=_redact_error_for_user(
+                    payload.get("error", ""), secret_values=secret_values
+                ),
                 **failure_fields,
             )
         else:

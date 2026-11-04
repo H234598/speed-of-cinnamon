@@ -145,7 +145,9 @@ def _model(name: str = "llama3.2:3b", **overrides: object) -> dict[str, object]:
     return value
 
 
-def _success(models: list[dict[str, object]], state: str = "listed") -> dict[str, object]:
+def _success(
+    models: list[dict[str, object]], state: str = "listed"
+) -> dict[str, object]:
     return {
         "nonce": NONCE,
         "result": {"listing_state": state, "models": models},
@@ -220,7 +222,9 @@ def _start_test_child(
     *,
     pass_fds: tuple[int, ...] = (),
 ) -> remote_http._WorkerHandle:
-    control_parent, control_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    control_parent, control_child = socket.socketpair(
+        socket.AF_UNIX, socket.SOCK_STREAM
+    )
     try:
         process = subprocess.Popen(
             [sys.executable, "-c", source],
@@ -275,7 +279,13 @@ def _dispose_test_child(handle: remote_http._WorkerHandle) -> None:
         handle.process.wait()
 
 
-def _output_script(*, chunks: tuple[bytes, ...], pauses: tuple[float, ...] = (), stderr: bytes = b"", hold: float = 0.0) -> str:
+def _output_script(
+    *,
+    chunks: tuple[bytes, ...],
+    pauses: tuple[float, ...] = (),
+    stderr: bytes = b"",
+    hold: float = 0.0,
+) -> str:
     return (
         "import os, time\n"
         f"chunks={chunks!r}\n"
@@ -321,7 +331,10 @@ class RemoteHttpCodecTest(unittest.TestCase):
                     frame = encode_request(request, monotonic_ns=lambda: NOW)
                     body = frame[4:]
                     expected_request = dict(request)
-                    if expected_request["operation"] == LIST_OPENAI_COMPATIBLE_MODELS_OPERATION:
+                    if (
+                        expected_request["operation"]
+                        == LIST_OPENAI_COMPATIBLE_MODELS_OPERATION
+                    ):
                         expected_request["payload"] = {
                             "url": "http://127.0.0.1:11434",
                             "api_key": "secret-token",
@@ -342,12 +355,16 @@ class RemoteHttpCodecTest(unittest.TestCase):
                         expected_request,
                     )
 
-    def test_postprocess_request_and_response_codec_bind_schema_and_deadline(self) -> None:
+    def test_postprocess_request_and_response_codec_bind_schema_and_deadline(
+        self,
+    ) -> None:
         request = _postprocess_request()
         frame = encode_request(request, monotonic_ns=lambda: NOW)
         self.assertEqual(decode_request(frame, monotonic_ns=lambda: NOW), request)
         response = _postprocess_success("hello world")
-        response_frame = encode_response(response, operation=POSTPROCESS_OLLAMA_OPERATION)
+        response_frame = encode_response(
+            response, operation=POSTPROCESS_OLLAMA_OPERATION
+        )
         self.assertEqual(
             decode_response(
                 response_frame,
@@ -372,7 +389,10 @@ class RemoteHttpCodecTest(unittest.TestCase):
             ),
             "remote-request-invalid",
         )
-        for wrong_operation in ("list-ollama-models", LIST_OPENAI_COMPATIBLE_MODELS_OPERATION):
+        for wrong_operation in (
+            "list-ollama-models",
+            LIST_OPENAI_COMPATIBLE_MODELS_OPERATION,
+        ):
             with self.subTest(wrong_operation=wrong_operation):
                 wrong_response = encode_response(
                     response,
@@ -432,7 +452,10 @@ class RemoteHttpCodecTest(unittest.TestCase):
             ),
             "remote-request-invalid",
         )
-        for wrong_operation in (POSTPROCESS_OLLAMA_OPERATION, LIST_OPENAI_COMPATIBLE_MODELS_OPERATION):
+        for wrong_operation in (
+            POSTPROCESS_OLLAMA_OPERATION,
+            LIST_OPENAI_COMPATIBLE_MODELS_OPERATION,
+        ):
             with self.subTest(wrong_operation=wrong_operation):
                 self.assertProtocolCode(
                     lambda wrong_operation=wrong_operation: decode_response(
@@ -443,7 +466,9 @@ class RemoteHttpCodecTest(unittest.TestCase):
                     "remote-worker-protocol-invalid",
                 )
 
-    def test_openai_postprocess_payload_exact_fields_types_and_limits_fail_closed(self) -> None:
+    def test_openai_postprocess_payload_exact_fields_types_and_limits_fail_closed(
+        self,
+    ) -> None:
         valid_payload = _openai_postprocess_request()["payload"]
         assert type(valid_payload) is dict
         missing = dict(valid_payload)
@@ -462,17 +487,27 @@ class RemoteHttpCodecTest(unittest.TestCase):
             {"payload": dict(valid_payload, prompt="p" * 4_097)},
             {"payload": dict(valid_payload, text="t" * 1_000_001)},
             {"payload": dict(valid_payload, url="https://api.openai.com/v1?unsafe=1")},
-            {"payload": dict(valid_payload, url="https://api.openai.com/" + "u" * 2_040)},
+            {
+                "payload": dict(
+                    valid_payload, url="https://api.openai.com/" + "u" * 2_040
+                )
+            },
             {"payload": dict(valid_payload, language=True)},
             {"payload": dict(valid_payload, personal_context="c" * 65_536)},
             {"payload": dict(valid_payload, vocabulary="v" * 65_536)},
-            {"payload": dict(valid_payload, vocabulary="\n".join("v" for _ in range(4_097)))},
+            {
+                "payload": dict(
+                    valid_payload, vocabulary="\n".join("v" for _ in range(4_097))
+                )
+            },
         ]
         for replacement in hostile:
             with self.subTest(replacement=replacement):
                 request = _openai_postprocess_request(payload=replacement["payload"])
                 self.assertProtocolCode(
-                    lambda request=request: encode_request(request, monotonic_ns=lambda: NOW),
+                    lambda request=request: encode_request(
+                        request, monotonic_ns=lambda: NOW
+                    ),
                     "remote-request-invalid",
                 )
 
@@ -503,7 +538,9 @@ class RemoteHttpCodecTest(unittest.TestCase):
             "remote-worker-protocol-invalid",
         )
 
-    def test_postprocess_payload_exact_fields_types_and_limits_fail_closed(self) -> None:
+    def test_postprocess_payload_exact_fields_types_and_limits_fail_closed(
+        self,
+    ) -> None:
         valid_payload = _postprocess_request()["payload"]
         assert type(valid_payload) is dict
         missing = dict(valid_payload)
@@ -521,13 +558,19 @@ class RemoteHttpCodecTest(unittest.TestCase):
             {"payload": dict(valid_payload, language="de\n")},
             {"payload": dict(valid_payload, personal_context="c" * 65_536)},
             {"payload": dict(valid_payload, vocabulary="v" * 65_536)},
-            {"payload": dict(valid_payload, vocabulary="\n".join("v" for _ in range(4_097)))},
+            {
+                "payload": dict(
+                    valid_payload, vocabulary="\n".join("v" for _ in range(4_097))
+                )
+            },
         ]
         for replacement in hostile:
             with self.subTest(replacement=replacement):
                 request = _postprocess_request(payload=replacement["payload"])
                 self.assertProtocolCode(
-                    lambda request=request: encode_request(request, monotonic_ns=lambda: NOW),
+                    lambda request=request: encode_request(
+                        request, monotonic_ns=lambda: NOW
+                    ),
                     "remote-request-invalid",
                 )
         for result in (
@@ -554,7 +597,9 @@ class RemoteHttpCodecTest(unittest.TestCase):
         for api_key, expected in (("  secret  ", "secret"), ("", ""), ("   ", "")):
             with self.subTest(api_key=repr(api_key)):
                 decoded = decode_request(
-                    encode_request(_openai_request(api_key=api_key), monotonic_ns=lambda: NOW),
+                    encode_request(
+                        _openai_request(api_key=api_key), monotonic_ns=lambda: NOW
+                    ),
                     monotonic_ns=lambda: NOW,
                 )
                 self.assertEqual(decoded["payload"]["api_key"], expected)  # type: ignore[index]
@@ -610,7 +655,10 @@ class RemoteHttpCodecTest(unittest.TestCase):
         ]
         for operation, response in operations + tuple(
             (operation, response)
-            for operation in ("list-ollama-models", LIST_OPENAI_COMPATIBLE_MODELS_OPERATION)
+            for operation in (
+                "list-ollama-models",
+                LIST_OPENAI_COMPATIBLE_MODELS_OPERATION,
+            )
             for response in error_responses
         ):
             with self.subTest(operation=operation, response=response):
@@ -641,14 +689,19 @@ class RemoteHttpCodecTest(unittest.TestCase):
                     ),
                     "remote-worker-protocol-invalid",
                 )
-                self.assertNotIn("operation", decode_response(frame, expected_nonce=NONCE, operation=operation))
+                self.assertNotIn(
+                    "operation",
+                    decode_response(frame, expected_nonce=NONCE, operation=operation),
+                )
 
     def test_truncated_prefix_and_body_are_fixed_failures(self) -> None:
         frame = encode_request(_request(), monotonic_ns=lambda: NOW)
         for hostile in (b"", frame[:1], frame[:3], frame[:-1]):
             with self.subTest(hostile=hostile):
                 self.assertProtocolCode(
-                    lambda hostile=hostile: decode_request(hostile, monotonic_ns=lambda: NOW),
+                    lambda hostile=hostile: decode_request(
+                        hostile, monotonic_ns=lambda: NOW
+                    ),
                     "remote-request-invalid",
                 )
 
@@ -666,8 +719,14 @@ class RemoteHttpCodecTest(unittest.TestCase):
             with self.subTest(scenario=scenario):
                 stream = _BlockingStream()
                 self.assertProtocolCode(
-                    lambda stream=stream, decoder=decoder, kwargs=kwargs: decoder(stream, **kwargs),
-                    "remote-request-invalid" if decoder is decode_request else "remote-worker-protocol-invalid",
+                    lambda stream=stream, decoder=decoder, kwargs=kwargs: decoder(
+                        stream, **kwargs
+                    ),
+                    (
+                        "remote-request-invalid"
+                        if decoder is decode_request
+                        else "remote-worker-protocol-invalid"
+                    ),
                 )
                 self.assertEqual(stream.read_calls, 0)
 
@@ -683,18 +742,26 @@ class RemoteHttpCodecTest(unittest.TestCase):
 
     def test_trailing_leading_and_second_frames_fail_closed(self) -> None:
         frame = encode_request(_request(), monotonic_ns=lambda: NOW)
-        second = encode_request(_request(nonce="fedcba9876543210fedcba9876543210"), monotonic_ns=lambda: NOW)
+        second = encode_request(
+            _request(nonce="fedcba9876543210fedcba9876543210"), monotonic_ns=lambda: NOW
+        )
         for hostile in (b"x" + frame, frame + b"x", frame + second):
             with self.subTest(hostile=hostile):
                 self.assertProtocolCode(
-                    lambda hostile=hostile: decode_request(hostile, monotonic_ns=lambda: NOW),
+                    lambda hostile=hostile: decode_request(
+                        hostile, monotonic_ns=lambda: NOW
+                    ),
                     "remote-request-invalid",
                 )
 
     def test_duplicate_top_level_and_nested_keys_fail_closed(self) -> None:
-        duplicate_request = _raw_request_json(nonce=json.dumps(NONCE) + "," + json.dumps(NONCE))
+        duplicate_request = _raw_request_json(
+            nonce=json.dumps(NONCE) + "," + json.dumps(NONCE)
+        )
         self.assertProtocolCode(
-            lambda: decode_request(_raw_frame(duplicate_request), monotonic_ns=lambda: NOW),
+            lambda: decode_request(
+                _raw_frame(duplicate_request), monotonic_ns=lambda: NOW
+            ),
             "remote-request-invalid",
         )
         model_json = (
@@ -719,7 +786,9 @@ class RemoteHttpCodecTest(unittest.TestCase):
             with self.subTest(token=token):
                 body = _raw_request_json(deadline=token)
                 self.assertProtocolCode(
-                    lambda body=body: decode_request(_raw_frame(body), monotonic_ns=lambda: NOW),
+                    lambda body=body: decode_request(
+                        _raw_frame(body), monotonic_ns=lambda: NOW
+                    ),
                     "remote-request-invalid",
                 )
 
@@ -729,7 +798,11 @@ class RemoteHttpCodecTest(unittest.TestCase):
             lambda: decode_request(_raw_frame(surrogate), monotonic_ns=lambda: NOW),
             "remote-request-invalid",
         )
-        invalid_utf8 = b'{"deadline_monotonic_ns":10000000001,"nonce":"' + NONCE.encode("ascii") + b'\xff"}'
+        invalid_utf8 = (
+            b'{"deadline_monotonic_ns":10000000001,"nonce":"'
+            + NONCE.encode("ascii")
+            + b'\xff"}'
+        )
         self.assertProtocolCode(
             lambda: decode_request(_raw_frame(invalid_utf8), monotonic_ns=lambda: NOW),
             "remote-request-invalid",
@@ -739,7 +812,9 @@ class RemoteHttpCodecTest(unittest.TestCase):
         for nonce in ("a" * 31, "A" * 32, "g" * 32):
             with self.subTest(nonce=nonce):
                 self.assertProtocolCode(
-                    lambda nonce=nonce: encode_request(_request(nonce=nonce), monotonic_ns=lambda: NOW),
+                    lambda nonce=nonce: encode_request(
+                        _request(nonce=nonce), monotonic_ns=lambda: NOW
+                    ),
                     "remote-request-invalid",
                 )
         noncanonical = _raw_request_json(nonce='"\\u0030' + NONCE[1:] + '"')
@@ -753,7 +828,8 @@ class RemoteHttpCodecTest(unittest.TestCase):
             with self.subTest(deadline=deadline):
                 self.assertProtocolCode(
                     lambda deadline=deadline: encode_request(
-                        _request(deadline_monotonic_ns=deadline), monotonic_ns=lambda: NOW
+                        _request(deadline_monotonic_ns=deadline),
+                        monotonic_ns=lambda: NOW,
                     ),
                     "remote-request-invalid",
                 )
@@ -776,11 +852,15 @@ class RemoteHttpCodecTest(unittest.TestCase):
         for request in cases:
             with self.subTest(request=request):
                 self.assertProtocolCode(
-                    lambda request=request: encode_request(request, monotonic_ns=lambda: NOW),
+                    lambda request=request: encode_request(
+                        request, monotonic_ns=lambda: NOW
+                    ),
                     "remote-request-invalid",
                 )
 
-    def test_openai_request_key_limits_and_cross_operation_response_schema(self) -> None:
+    def test_openai_request_key_limits_and_cross_operation_response_schema(
+        self,
+    ) -> None:
         for api_key in (
             "x" * (remote_http.MAX_OPENAI_COMPATIBLE_API_KEY_CHARS + 1),
             "secret\nvalue",
@@ -838,8 +918,16 @@ class RemoteHttpCodecTest(unittest.TestCase):
             )
         self.assertEqual(WORKER_ERROR_CODES.isdisjoint(SUPERVISOR_ERROR_CODES), True)
         for code in sorted(SUPERVISOR_ERROR_CODES | {"unknown-error"}):
-            response = {"error_code": code, "nonce": NONCE, "schema_version": 1, "status": "error"}
-            self.assertProtocolCode(lambda response=response: encode_response(response), "remote-worker-protocol-invalid")
+            response = {
+                "error_code": code,
+                "nonce": NONCE,
+                "schema_version": 1,
+                "status": "error",
+            }
+            self.assertProtocolCode(
+                lambda response=response: encode_response(response),
+                "remote-worker-protocol-invalid",
+            )
 
     def test_listing_model_schema_count_duplicates_and_limits(self) -> None:
         empty_fields = {
@@ -852,9 +940,14 @@ class RemoteHttpCodecTest(unittest.TestCase):
             "quantization": "",
             "description": "",
         }
-        hundred = [_model(f"model-{index}", **empty_fields) for index in range(MAX_MODEL_LIST_ENTRIES)]
+        hundred = [
+            _model(f"model-{index}", **empty_fields)
+            for index in range(MAX_MODEL_LIST_ENTRIES)
+        ]
         self.assertEqual(
-            decode_response(encode_response(_success(hundred)), expected_nonce=NONCE)["result"]["models"],
+            decode_response(encode_response(_success(hundred)), expected_nonce=NONCE)[
+                "result"
+            ]["models"],
             hundred,
         )
         too_many = hundred + [_model("model-over-limit", **empty_fields)]
@@ -871,34 +964,46 @@ class RemoteHttpCodecTest(unittest.TestCase):
         invalid_size["size"] = True
         for invalid_model in (
             {**_model(**empty_fields), "extra": "sentinel"},
-            {key: value for key, value in _model(**empty_fields).items() if key != "digest"},
+            {
+                key: value
+                for key, value in _model(**empty_fields).items()
+                if key != "digest"
+            },
             _model(**empty_fields, model="other"),
             invalid_size,
             _model(**empty_fields, name="x" * (remote_http.MAX_MODEL_CHARS + 1)),
         ):
             self.assertProtocolCode(
-                lambda invalid_model=invalid_model: encode_response(_success([invalid_model])),
+                lambda invalid_model=invalid_model: encode_response(
+                    _success([invalid_model])
+                ),
                 "remote-worker-protocol-invalid",
             )
         self.assertProtocolCode(
-            lambda: encode_response(_success([_model(**empty_fields)], state="missing-model-list")),
+            lambda: encode_response(
+                _success([_model(**empty_fields)], state="missing-model-list")
+            ),
             "remote-worker-protocol-invalid",
         )
 
     def test_url_character_and_byte_limits_are_preserved(self) -> None:
         self.assertProtocolCode(
             lambda: encode_request(
-                _request(payload={"url": "x" * (MAX_URL_CHARS + 1)}), monotonic_ns=lambda: NOW
+                _request(payload={"url": "x" * (MAX_URL_CHARS + 1)}),
+                monotonic_ns=lambda: NOW,
             ),
             "remote-request-invalid",
         )
         self.assertProtocolCode(
             lambda: encode_request(
-                _request(payload={"url": "é" * (MAX_URL_BYTES // 2 + 1)}), monotonic_ns=lambda: NOW
+                _request(payload={"url": "é" * (MAX_URL_BYTES // 2 + 1)}),
+                monotonic_ns=lambda: NOW,
             ),
             "remote-request-invalid",
         )
-        self.assertLessEqual(len("http://127.0.0.1:11434".encode("utf-8")), MAX_URL_BYTES)
+        self.assertLessEqual(
+            len("http://127.0.0.1:11434".encode("utf-8")), MAX_URL_BYTES
+        )
         self.assertLess(MAX_ERROR_FRAME_BYTES, MAX_REQUEST_FRAME_BYTES)
 
 
@@ -986,9 +1091,15 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             _dispose_test_child(handle)
 
     def test_supervisor_request_send_skips_ready_io_at_deadline(self) -> None:
-        control_parent, control_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-        stdout_parent, stdout_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-        stderr_parent, stderr_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        control_parent, control_child = socket.socketpair(
+            socket.AF_UNIX, socket.SOCK_STREAM
+        )
+        stdout_parent, stdout_child = socket.socketpair(
+            socket.AF_UNIX, socket.SOCK_STREAM
+        )
+        stderr_parent, stderr_child = socket.socketpair(
+            socket.AF_UNIX, socket.SOCK_STREAM
+        )
         try:
             process = mock.Mock()
             process.stdin = control_parent
@@ -1009,10 +1120,14 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             ]
             clock = mock.Mock(side_effect=(99, 99, 99, deadline_ns))
             with (
-                mock.patch.object(remote_http.selectors, "DefaultSelector", return_value=selector),
+                mock.patch.object(
+                    remote_http.selectors, "DefaultSelector", return_value=selector
+                ),
                 mock.patch.object(remote_http.os, "set_blocking"),
                 mock.patch.object(remote_http, "_send_control_chunk") as send_chunk,
-                mock.patch.object(remote_http, "_observe_descendants", return_value=(True, False)),
+                mock.patch.object(
+                    remote_http, "_observe_descendants", return_value=(True, False)
+                ),
             ):
                 with self.assertRaises(remote_http._SupervisorFailure) as context:
                     remote_http._pump_worker(
@@ -1050,7 +1165,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             selector.select.return_value = [mock.Mock(fd=control_parent.fileno())]
             clock = mock.Mock(side_effect=(99, 99, 99, deadline_ns))
             with (
-                mock.patch.object(remote_http.selectors, "DefaultSelector", return_value=selector),
+                mock.patch.object(
+                    remote_http.selectors, "DefaultSelector", return_value=selector
+                ),
                 mock.patch.object(remote_http, "_send_control_chunk") as send_chunk,
             ):
                 self.assertFalse(
@@ -1090,7 +1207,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         selector.select.return_value = [mock.Mock(fd=0, data="control")]
         control = mock.Mock()
         with (
-            mock.patch.object(remote_http_worker.selectors, "DefaultSelector", return_value=selector),
+            mock.patch.object(
+                remote_http_worker.selectors, "DefaultSelector", return_value=selector
+            ),
             mock.patch.object(remote_http_worker, "_recv_control_chunk") as recv_chunk,
             mock.patch.object(
                 remote_http_worker.time,
@@ -1110,7 +1229,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         selector = mock.Mock()
         selector.select.return_value = [mock.Mock(fd=0, data="control")]
         with (
-            mock.patch.object(remote_http_worker.selectors, "DefaultSelector", return_value=selector),
+            mock.patch.object(
+                remote_http_worker.selectors, "DefaultSelector", return_value=selector
+            ),
             mock.patch.object(remote_http_worker, "_recv_control_chunk") as recv_chunk,
             mock.patch.object(
                 remote_http_worker.time,
@@ -1132,7 +1253,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         selector = mock.Mock()
         selector.select.return_value = [mock.Mock(fd=1, data="stdout")]
         with (
-            mock.patch.object(remote_http_worker.selectors, "DefaultSelector", return_value=selector),
+            mock.patch.object(
+                remote_http_worker.selectors, "DefaultSelector", return_value=selector
+            ),
             mock.patch.object(remote_http_worker.os, "set_blocking"),
             mock.patch.object(remote_http_worker.os, "write") as write,
             mock.patch.object(remote_http_worker.os, "close"),
@@ -1213,7 +1336,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             process.stderr = None
             process.poll.return_value = 0
             handle = remote_http._WorkerHandle(process, 1, "start", -1)
-            request = _request(deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS)
+            request = _request(
+                deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS
+            )
             with (
                 mock.patch.object(remote_http, "_spawn_worker", return_value=handle),
                 mock.patch.object(
@@ -1221,7 +1346,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     "_pump_worker",
                     return_value=encode_response(_success([])),
                 ),
-                mock.patch.object(remote_http, "_cleanup_worker_body", return_value=True),
+                mock.patch.object(
+                    remote_http, "_cleanup_worker_body", return_value=True
+                ),
             ):
                 result = remote_http.run_list_ollama_models(request)
             self.assertEqual(result["status"], "error")
@@ -1271,7 +1398,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                         if stream.fileno() >= 0:
                             stream.close()
 
-    def test_pidfd_close_failure_is_public_cleanup_failure_for_both_states(self) -> None:
+    def test_pidfd_close_failure_is_public_cleanup_failure_for_both_states(
+        self,
+    ) -> None:
         real_close = os.close
         for release_pending in (False, True):
             with self.subTest(release_pending=release_pending):
@@ -1291,14 +1420,20 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 )
                 try:
                     with (
-                        mock.patch.object(remote_http.os, "close", side_effect=fail_pidfd_close),
-                        mock.patch.object(remote_http, "_spawn_worker", return_value=handle),
+                        mock.patch.object(
+                            remote_http.os, "close", side_effect=fail_pidfd_close
+                        ),
+                        mock.patch.object(
+                            remote_http, "_spawn_worker", return_value=handle
+                        ),
                         mock.patch.object(
                             remote_http,
                             "_pump_worker",
                             return_value=encode_response(_success([])),
                         ),
-                        mock.patch.object(remote_http, "_cleanup_worker_body", return_value=True),
+                        mock.patch.object(
+                            remote_http, "_cleanup_worker_body", return_value=True
+                        ),
                         mock.patch.object(
                             remote_http,
                             "_cleanup_released_worker_body",
@@ -1328,10 +1463,14 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         selector = mock.Mock()
         selector.select.return_value = [mock.Mock(data=123)]
         with (
-            mock.patch.object(remote_http.selectors, "DefaultSelector", return_value=selector),
+            mock.patch.object(
+                remote_http.selectors, "DefaultSelector", return_value=selector
+            ),
             mock.patch.object(remote_http.os, "pidfd_open", return_value=123),
             mock.patch.object(remote_http.os, "set_inheritable"),
-            mock.patch.object(remote_http, "_identity_present", side_effect=(True, True)),
+            mock.patch.object(
+                remote_http, "_identity_present", side_effect=(True, True)
+            ),
             mock.patch.object(remote_http, "_close_fd", return_value=False) as close_fd,
         ):
             self.assertFalse(
@@ -1348,7 +1487,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         pidfd = handle.pidfd
         real_close = os.close
         try:
-            with mock.patch.object(remote_http, "_close_fd", return_value=False) as close_fd:
+            with mock.patch.object(
+                remote_http, "_close_fd", return_value=False
+            ) as close_fd:
                 self.assertFalse(
                     remote_http._abandon_spawned_worker(handle.process, pidfd)
                 )
@@ -1380,10 +1521,18 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
 
         try:
             with (
-                mock.patch.object(remote_http, "_observe_descendants", return_value=(True, False)),
-                mock.patch.object(remote_http, "_drain_worker_output", return_value=True),
-                mock.patch.object(remote_http, "_send_worker_tree_signal", return_value=False),
-                mock.patch.object(remote_http.os, "close", side_effect=fail_pidfd_close),
+                mock.patch.object(
+                    remote_http, "_observe_descendants", return_value=(True, False)
+                ),
+                mock.patch.object(
+                    remote_http, "_drain_worker_output", return_value=True
+                ),
+                mock.patch.object(
+                    remote_http, "_send_worker_tree_signal", return_value=False
+                ),
+                mock.patch.object(
+                    remote_http.os, "close", side_effect=fail_pidfd_close
+                ),
             ):
                 self.assertFalse(
                     remote_http._cleanup_worker(
@@ -1472,11 +1621,14 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         for phase, attempts in (("running", range(2)), ("exited", range(20))):
             for attempt in attempts:
                 for late_stream in ("stdout", "stderr"):
-                    with self.subTest(
-                        phase=phase,
-                        attempt=attempt,
-                        late_stream=late_stream,
-                    ), tempfile.TemporaryDirectory() as directory:
+                    with (
+                        self.subTest(
+                            phase=phase,
+                            attempt=attempt,
+                            late_stream=late_stream,
+                        ),
+                        tempfile.TemporaryDirectory() as directory,
+                    ):
                         root = Path(directory)
                         stdout_path = root / "stdout.fifo"
                         stderr_path = root / "stderr.fifo"
@@ -1495,10 +1647,10 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                         os.set_inheritable(ready_write, True)
                         os.set_inheritable(done_write, True)
                         source = (
-                    "import os\n"
-                    f"frame={frame!r}\n"
-                    f"stdout_path={str(stdout_path)!r}\n"
-                    f"stderr_path={str(stderr_path)!r}\n"
+                            "import os\n"
+                            f"frame={frame!r}\n"
+                            f"stdout_path={str(stdout_path)!r}\n"
+                            f"stderr_path={str(stderr_path)!r}\n"
                             f"control_fd={control_read}\n"
                             f"ready_fd={ready_write}\n"
                             f"done_fd={done_write}\n"
@@ -1578,7 +1730,8 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
 
                         try:
                             request = _request(
-                                deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS,
+                                deadline_monotonic_ns=time.monotonic_ns()
+                                + LISTING_DEADLINE_NS,
                             )
                             with mock.patch.object(
                                 remote_http,
@@ -1591,14 +1744,18 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                                         "_drain_worker_output",
                                         side_effect=drain_and_release,
                                     ):
-                                        result = remote_http.run_list_ollama_models(request)
+                                        result = remote_http.run_list_ollama_models(
+                                            request
+                                        )
                                 else:
                                     with mock.patch.object(
                                         remote_http,
                                         "_cleanup_worker",
                                         side_effect=cleanup_after_root_exit,
                                     ):
-                                        result = remote_http.run_list_ollama_models(request)
+                                        result = remote_http.run_list_ollama_models(
+                                            request
+                                        )
                             self.assertTrue(handle.release_pending)
                             self.assertEqual(result["status"], "error")
                             self.assertEqual(
@@ -1632,11 +1789,16 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             ("partial", _output_script(chunks=(frame[:3],), hold=0.05)),
             (
                 "oversize length",
-                _output_script(chunks=(struct.pack(">I", MAX_RESPONSE_FRAME_BYTES),), hold=0.05),
+                _output_script(
+                    chunks=(struct.pack(">I", MAX_RESPONSE_FRAME_BYTES),), hold=0.05
+                ),
             ),
             ("trailing", _output_script(chunks=(frame + b"x",), hold=0.05)),
             ("second frame", _output_script(chunks=(frame + frame,), hold=0.05)),
-            ("stderr", _output_script(chunks=(frame,), stderr=b"worker detail", hold=0.05)),
+            (
+                "stderr",
+                _output_script(chunks=(frame,), stderr=b"worker detail", hold=0.05),
+            ),
         )
         for name, source in cases:
             with self.subTest(name=name):
@@ -1706,7 +1868,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
     def test_cleanup_reports_scan_identity_and_reap_failures(self) -> None:
         handle = _start_test_child("import time\ntime.sleep(1)\n")
         try:
-            with mock.patch.object(remote_http, "_descendant_snapshot", return_value=None) as scan:
+            with mock.patch.object(
+                remote_http, "_descendant_snapshot", return_value=None
+            ) as scan:
                 self.assertFalse(
                     remote_http._cleanup_worker(
                         handle,
@@ -1747,10 +1911,20 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
 
     def test_descendant_exit_requires_post_pidfd_identity_absence(self) -> None:
         cases = (
-            ("eventual absence", (True, True, True, True, True, False), True, 2_000_000_000),
+            (
+                "eventual absence",
+                (True, True, True, True, True, False),
+                True,
+                2_000_000_000,
+            ),
             ("deadline", None, False, 300_000_000),
             ("unknown", (True, True, None), False, 2_000_000_000),
-            ("read error", (True, True, RuntimeError("proc read failed")), False, 2_000_000_000),
+            (
+                "read error",
+                (True, True, RuntimeError("proc read failed")),
+                False,
+                2_000_000_000,
+            ),
         )
         for name, identity_sequence, expected, budget_ns in cases:
             with self.subTest(name=name):
@@ -1783,7 +1957,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     if identity_sequence is None:
                         self.assertGreater(identity_present.call_count, 2)
                     else:
-                        self.assertEqual(identity_present.call_count, len(identity_sequence))
+                        self.assertEqual(
+                            identity_present.call_count, len(identity_sequence)
+                        )
                 finally:
                     if handle.process.poll() is None:
                         handle.process.kill()
@@ -1964,7 +2140,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     handle.process.kill()
                 handle.process.wait()
 
-    def test_pump_binds_setsid_descendant_before_root_exit_and_cleanup_kills_it(self) -> None:
+    def test_pump_binds_setsid_descendant_before_root_exit_and_cleanup_kills_it(
+        self,
+    ) -> None:
         frame = self._valid_frame()
         for attempt in range(20):
             with self.subTest(attempt=attempt):
@@ -2003,7 +2181,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     return result
 
                 try:
-                    with mock.patch.object(remote_http, "_descendant_snapshot", side_effect=snapshot):
+                    with mock.patch.object(
+                        remote_http, "_descendant_snapshot", side_effect=snapshot
+                    ):
                         received = remote_http._pump_worker(
                             handle,
                             b"request",
@@ -2036,7 +2216,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                         os.close(release_write)
                     for pid, start_time in handle.descendants.items():
                         if remote_http._identity_present(pid, start_time) is True:
-                            remote_http._send_descendant_signal(pid, start_time, signal.SIGKILL)
+                            remote_http._send_descendant_signal(
+                                pid, start_time, signal.SIGKILL
+                            )
                     if handle.process.poll() is None:
                         handle.process.kill()
                         handle.process.wait()
@@ -2090,15 +2272,22 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     request = _request(
                         deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS
                     )
-                    with mock.patch.object(remote_http, "_spawn_worker", return_value=handle):
+                    with mock.patch.object(
+                        remote_http, "_spawn_worker", return_value=handle
+                    ):
                         result = remote_http.run_list_ollama_models(request)
                     child_pid = int(os.read(read_fd, 64))
                     child_start_time = remote_http._process_start_time(child_pid)
                     self.assertEqual(result["status"], "error")
-                    self.assertEqual(result["error_code"], "remote-worker-cleanup-unconfirmed")
+                    self.assertEqual(
+                        result["error_code"], "remote-worker-cleanup-unconfirmed"
+                    )
                     self.assertTrue(handle.root_exited_before_release)
                     if child_start_time is not None:
-                        if remote_http._identity_present(child_pid, child_start_time) is True:
+                        if (
+                            remote_http._identity_present(child_pid, child_start_time)
+                            is True
+                        ):
                             self.assertTrue(
                                 remote_http._send_descendant_signal(
                                     child_pid,
@@ -2136,7 +2325,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
 
         try:
             with (
-                mock.patch.object(remote_http, "_descendant_snapshot", side_effect=slow_snapshot),
+                mock.patch.object(
+                    remote_http, "_descendant_snapshot", side_effect=slow_snapshot
+                ),
                 mock.patch.object(remote_http, "_send_worker_tree_signal") as send_tree,
                 mock.patch.object(remote_http, "_drain_worker_output") as drain_output,
             ):
@@ -2177,12 +2368,17 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     request = _request(
                         deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS
                     )
-                    with mock.patch.object(remote_http, "_spawn_worker", return_value=handle):
+                    with mock.patch.object(
+                        remote_http, "_spawn_worker", return_value=handle
+                    ):
                         result = remote_http.run_list_ollama_models(request)
                     self.assertEqual(result["status"], "error")
                     self.assertIn(
                         result["error_code"],
-                        {"remote-worker-protocol-invalid", "remote-worker-cleanup-unconfirmed"},
+                        {
+                            "remote-worker-protocol-invalid",
+                            "remote-worker-cleanup-unconfirmed",
+                        },
                     )
                     self.assertLess(handle.process.returncode or 0, 0)
                     self.assertTrue(handle.release_pending)
@@ -2217,7 +2413,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         for index in range(7, 11):
             self.assertEqual(index + 1 + instructions[index][1], kill_index)
         self.assertEqual(instructions[-2][3], remote_http_worker._SECCOMP_RET_ALLOW)
-        self.assertEqual(instructions[-1][3], remote_http_worker._SECCOMP_RET_KILL_PROCESS)
+        self.assertEqual(
+            instructions[-1][3], remote_http_worker._SECCOMP_RET_KILL_PROCESS
+        )
         with mock.patch.object(
             remote_http_worker.os,
             "uname",
@@ -2313,7 +2511,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         process = mock.Mock()
         process.pid = 1234
         with (
-            mock.patch.object(remote_http.subprocess, "Popen", return_value=process) as popen,
+            mock.patch.object(
+                remote_http.subprocess, "Popen", return_value=process
+            ) as popen,
             mock.patch.object(remote_http.os, "pidfd_open", return_value=77),
             mock.patch.object(remote_http.os, "set_inheritable"),
             mock.patch.object(remote_http, "_process_start_time", return_value="start"),
@@ -2321,7 +2521,10 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             handle = remote_http._spawn_worker(b"request")
         self.assertEqual(handle.pid, 1234)
         args, kwargs = popen.call_args
-        self.assertEqual(args[0][:5], [sys.executable, "-I", "-B", "-c", remote_http._WORKER_BOOTSTRAP])
+        self.assertEqual(
+            args[0][:5],
+            [sys.executable, "-I", "-B", "-c", remote_http._WORKER_BOOTSTRAP],
+        )
         self.assertEqual(len(args[0]), 7)
         self.assertTrue(Path(args[0][5]).is_absolute())
         self.assertNotIn("dummy-api-key", args[0][6])
@@ -2345,7 +2548,10 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         self.assertTrue(kwargs["close_fds"])
         self.assertTrue(kwargs["start_new_session"])
         self.assertFalse(kwargs["shell"])
-        self.assertEqual(kwargs["env"], {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LC_CTYPE": "C.UTF-8"})
+        self.assertEqual(
+            kwargs["env"],
+            {"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LC_CTYPE": "C.UTF-8"},
+        )
         with self.assertRaises(OSError):
             os.fstat(kwargs["stdout"])
         with self.assertRaises(OSError):
@@ -2357,7 +2563,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         failed_process.pid = 1235
         failed_process.poll.return_value = None
         with (
-            mock.patch.object(remote_http.subprocess, "Popen", return_value=failed_process),
+            mock.patch.object(
+                remote_http.subprocess, "Popen", return_value=failed_process
+            ),
             mock.patch.object(remote_http.os, "pidfd_open", return_value=78),
             mock.patch.object(remote_http.os, "set_inheritable"),
             mock.patch.object(remote_http, "_process_start_time", return_value=None),
@@ -2374,7 +2582,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         endpoints: list[socket.socket] = []
         real_socketpair = socket.socketpair
 
-        def socketpair(*args: object, **kwargs: object) -> tuple[socket.socket, socket.socket]:
+        def socketpair(
+            *args: object, **kwargs: object
+        ) -> tuple[socket.socket, socket.socket]:
             pair = real_socketpair(*args, **kwargs)  # type: ignore[arg-type]
             endpoints.extend(pair)
             return pair
@@ -2398,7 +2608,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         real_socketpair = socket.socketpair
         real_set_inheritable = os.set_inheritable
 
-        def socketpair(*args: object, **kwargs: object) -> tuple[socket.socket, socket.socket]:
+        def socketpair(
+            *args: object, **kwargs: object
+        ) -> tuple[socket.socket, socket.socket]:
             pair = real_socketpair(*args, **kwargs)  # type: ignore[arg-type]
             endpoints.extend(pair)
             return pair
@@ -2414,7 +2626,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
 
         with (
             mock.patch.object(remote_http.socket, "socketpair", side_effect=socketpair),
-            mock.patch.object(remote_http.os, "set_inheritable", side_effect=set_inheritable),
+            mock.patch.object(
+                remote_http.os, "set_inheritable", side_effect=set_inheritable
+            ),
             mock.patch.object(remote_http.subprocess, "Popen") as popen,
         ):
             with self.assertRaises(remote_http._SupervisorFailure) as context:
@@ -2424,7 +2638,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         self.assertEqual(len(endpoints), 6)
         self.assertTrue(all(endpoint.fileno() == -1 for endpoint in endpoints))
 
-    def test_spawn_child_socket_close_failure_reaps_root_and_returns_no_handle(self) -> None:
+    def test_spawn_child_socket_close_failure_reaps_root_and_returns_no_handle(
+        self,
+    ) -> None:
         endpoints: list[socket.socket] = []
         wrappers: list[object] = []
         real_socketpair = socket.socketpair
@@ -2469,12 +2685,16 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
 
         try:
             with (
-                mock.patch.object(remote_http.socket, "socketpair", side_effect=socketpair),
+                mock.patch.object(
+                    remote_http.socket, "socketpair", side_effect=socketpair
+                ),
                 mock.patch.object(remote_http.subprocess, "Popen", side_effect=popen),
             ):
                 with self.assertRaises(remote_http._SupervisorFailure) as context:
                     remote_http._spawn_worker(b"request")
-            self.assertEqual(context.exception.code, "remote-worker-cleanup-unconfirmed")
+            self.assertEqual(
+                context.exception.code, "remote-worker-cleanup-unconfirmed"
+            )
             self.assertEqual(len(wrappers), 6)
             self.assertEqual(len(captured_process), 1)
             process = captured_process[0]
@@ -2495,7 +2715,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         process = mock.Mock()
         process.pid = 1236
 
-        def socketpair(*args: object, **kwargs: object) -> tuple[socket.socket, socket.socket]:
+        def socketpair(
+            *args: object, **kwargs: object
+        ) -> tuple[socket.socket, socket.socket]:
             pair = real_socketpair(*args, **kwargs)  # type: ignore[arg-type]
             endpoints.extend(pair)
             return pair
@@ -2503,7 +2725,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         with (
             mock.patch.object(remote_http.socket, "socketpair", side_effect=socketpair),
             mock.patch.object(remote_http.subprocess, "Popen", return_value=process),
-            mock.patch.object(remote_http.os, "pidfd_open", side_effect=OSError("pidfd failed")),
+            mock.patch.object(
+                remote_http.os, "pidfd_open", side_effect=OSError("pidfd failed")
+            ),
         ):
             with self.assertRaises(remote_http._SupervisorFailure) as context:
                 remote_http._spawn_worker(b"request")
@@ -2513,7 +2737,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         self.assertEqual(len(endpoints), 6)
         self.assertTrue(all(endpoint.fileno() == -1 for endpoint in endpoints))
 
-    def test_production_spawn_parent_sockets_reject_same_uid_proc_fd_injection(self) -> None:
+    def test_production_spawn_parent_sockets_reject_same_uid_proc_fd_injection(
+        self,
+    ) -> None:
         with _isolated_worker_python() as worker_python:
             with mock.patch.object(remote_http.sys, "executable", str(worker_python)):
                 handle = remote_http._spawn_worker(b"request")
@@ -2568,7 +2794,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         pidfds: list[int] = []
         real_spawn = remote_http._spawn_worker
 
-        def controlled_popen(_args: object, **kwargs: object) -> subprocess.Popen[bytes]:
+        def controlled_popen(
+            _args: object, **kwargs: object
+        ) -> subprocess.Popen[bytes]:
             nonlocal control_read
             process = real_popen(
                 [sys.executable, "-B", "-c", worker_source],
@@ -2668,7 +2896,10 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 pidfds.clear()
 
         try:
-            with mock.patch.object(remote_http.subprocess, "Popen", side_effect=controlled_popen):
+            with mock.patch.object(
+                remote_http.subprocess, "Popen", side_effect=controlled_popen
+            ):
+
                 def guarded_send(
                     stream: socket.socket,
                     data: bytes,
@@ -2687,14 +2918,19 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                         go_sent = True
                     return written
 
-                with mock.patch.object(remote_http, "_spawn_worker", side_effect=spawn_and_arm):
+                with mock.patch.object(
+                    remote_http, "_spawn_worker", side_effect=spawn_and_arm
+                ):
                     with mock.patch.object(
                         remote_http,
                         "_send_control_chunk",
                         side_effect=guarded_send,
                     ):
                         result = remote_http.run_list_ollama_models(
-                            _request(deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS)
+                            _request(
+                                deadline_monotonic_ns=time.monotonic_ns()
+                                + LISTING_DEADLINE_NS
+                            )
                         )
             self.assertEqual(injection_ready, b"1")
             self.assertIsNotNone(handle)
@@ -2726,7 +2962,11 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 with (
                     mock.patch.object(remote_http.subprocess, "Popen") as popen,
                     mock.patch.object(
-                        remote_http.os if target == "pidfd_open" else remote_http.signal,
+                        (
+                            remote_http.os
+                            if target == "pidfd_open"
+                            else remote_http.signal
+                        ),
                         target,
                         None,
                     ),
@@ -2736,12 +2976,16 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 self.assertEqual(context.exception.code, "remote-worker-unavailable")
                 popen.assert_not_called()
 
-    def test_abandon_after_pidfd_signal_failure_reaps_root_but_stays_unconfirmed(self) -> None:
+    def test_abandon_after_pidfd_signal_failure_reaps_root_but_stays_unconfirmed(
+        self,
+    ) -> None:
         for sender in (None, mock.Mock(side_effect=OSError("pidfd signal failed"))):
             with self.subTest(sender=sender):
                 handle = _start_test_child("import time\ntime.sleep(10)\n")
                 try:
-                    with mock.patch.object(remote_http.signal, "pidfd_send_signal", sender):
+                    with mock.patch.object(
+                        remote_http.signal, "pidfd_send_signal", sender
+                    ):
                         self.assertFalse(
                             remote_http._abandon_spawned_worker(
                                 handle.process,
@@ -2763,21 +3007,27 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         process.wait.assert_called_once()
         close_streams.assert_called_once()
 
-    def test_supervisor_returns_worker_result_and_cleanup_failure_is_terminal(self) -> None:
+    def test_supervisor_returns_worker_result_and_cleanup_failure_is_terminal(
+        self,
+    ) -> None:
         deadline = time.monotonic_ns() + LISTING_DEADLINE_NS
         request = _request(deadline_monotonic_ns=deadline)
         fake_handle = mock.Mock()
         fake_handle.process.poll.return_value = 0
         with (
             mock.patch.object(remote_http, "_spawn_worker", return_value=fake_handle),
-            mock.patch.object(remote_http, "_pump_worker", return_value=encode_response(_success([]))),
+            mock.patch.object(
+                remote_http, "_pump_worker", return_value=encode_response(_success([]))
+            ),
             mock.patch.object(remote_http, "_cleanup_worker", return_value=True),
         ):
             self.assertEqual(remote_http.run_list_ollama_models(request), _success([]))
 
         with (
             mock.patch.object(remote_http, "_spawn_worker", return_value=fake_handle),
-            mock.patch.object(remote_http, "_pump_worker", return_value=encode_response(_success([]))),
+            mock.patch.object(
+                remote_http, "_pump_worker", return_value=encode_response(_success([]))
+            ),
             mock.patch.object(remote_http, "_cleanup_worker", return_value=False),
         ):
             result = remote_http.run_list_ollama_models(request)
@@ -2796,7 +3046,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         with (
             mock.patch.object(remote_http, "_spawn_worker", return_value=fake_handle),
             mock.patch.object(remote_http, "_pump_worker", return_value=response_frame),
-            mock.patch.object(remote_http, "_cleanup_worker", return_value=True) as cleanup,
+            mock.patch.object(
+                remote_http, "_cleanup_worker", return_value=True
+            ) as cleanup,
         ):
             result = remote_http.run_postprocess_ollama(request)
         self.assertEqual(result, _postprocess_success("processed"))
@@ -2806,9 +3058,13 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             mock.ANY,
         )
 
-    def test_supervisor_reuses_shared_runner_for_openai_postprocess_operation(self) -> None:
+    def test_supervisor_reuses_shared_runner_for_openai_postprocess_operation(
+        self,
+    ) -> None:
         deadline = time.monotonic_ns() + POSTPROCESS_DEADLINE_NS
-        request = _openai_postprocess_request(deadline_monotonic_ns=deadline, api_key="")
+        request = _openai_postprocess_request(
+            deadline_monotonic_ns=deadline, api_key=""
+        )
         fake_handle = mock.Mock()
         fake_handle.process.poll.return_value = 0
         response_frame = encode_response(
@@ -2818,7 +3074,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         with (
             mock.patch.object(remote_http, "_spawn_worker", return_value=fake_handle),
             mock.patch.object(remote_http, "_pump_worker", return_value=response_frame),
-            mock.patch.object(remote_http, "_cleanup_worker", return_value=True) as cleanup,
+            mock.patch.object(
+                remote_http, "_cleanup_worker", return_value=True
+            ) as cleanup,
         ):
             result = remote_http.run_postprocess_openai_compatible(request)
         self.assertEqual(result, _postprocess_success("processed"))
@@ -2887,7 +3145,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
 
     def test_remote_runners_are_cli_boundary_and_legacy_is_nonremote_only(self) -> None:
         source_root = Path(__file__).resolve().parents[1] / "src" / "speed_of_cinnamon"
-        postprocessor_source = (source_root / "postprocessor.py").read_text(encoding="utf-8")
+        postprocessor_source = (source_root / "postprocessor.py").read_text(
+            encoding="utf-8"
+        )
         cli_source = (source_root / "cli.py").read_text(encoding="utf-8")
         self.assertIn("return post_process_with_ollama(", postprocessor_source)
         self.assertIn("text = post_process_text(", cli_source)
@@ -2903,7 +3163,7 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             'post_process_backend in {"openai-compatible", "openai", "local-openai"}',
             cli_source,
         )
-        self.assertIn('else:\n        text = post_process_text(', cli_source)
+        self.assertIn("else:\n        text = post_process_text(", cli_source)
 
     def test_cli_product_adapters_use_real_worker_for_all_four_operations(self) -> None:
         from speed_of_cinnamon import cli, postprocessor
@@ -2935,10 +3195,11 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                         header_lines = bytes(request_bytes[:header_end]).split(b"\r\n")
                         method, path, _version = header_lines[0].split(b" ", 2)
                         headers = {
-                            key.decode("ascii").lower(): value.decode("iso-8859-1").strip()
+                            key.decode("ascii")
+                            .lower(): value.decode("iso-8859-1")
+                            .strip()
                             for key, value in (
-                                line.split(b":", 1)
-                                for line in header_lines[1:]
+                                line.split(b":", 1) for line in header_lines[1:]
                             )
                         }
                         content_length = int(headers.get("content-length", "0"))
@@ -2947,7 +3208,11 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                             if not chunk:
                                 raise OSError("request body ended early")
                             request_bytes.extend(chunk)
-                        body = bytes(request_bytes[header_end + 4 : header_end + 4 + content_length])
+                        body = bytes(
+                            request_bytes[
+                                header_end + 4 : header_end + 4 + content_length
+                            ]
+                        )
                         records.append(
                             {
                                 "body": body.decode("utf-8"),
@@ -2960,7 +3225,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                             response_payload = {"models": [_model("ollama-cli-model")]}
                         elif path == b"/v1/models":
                             response_payload = {
-                                "data": [{"id": "openai-cli-model", "owned_by": "provider"}]
+                                "data": [
+                                    {"id": "openai-cli-model", "owned_by": "provider"}
+                                ]
                             }
                         elif path == b"/api/generate":
                             response_payload = {
@@ -2972,7 +3239,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                                 "choices": [
                                     {
                                         "finish_reason": "stop",
-                                        "message": {"content": "Transcript: cli-loopback-transcript"},
+                                        "message": {
+                                            "content": "Transcript: cli-loopback-transcript"
+                                        },
                                     }
                                 ]
                             }
@@ -2985,13 +3254,18 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                         connection.sendall(
                             b"HTTP/1.1 200 OK\r\n"
                             b"Content-Type: application/json\r\n"
-                            + f"Content-Length: {len(response_body)}\r\n".encode("ascii")
+                            + f"Content-Length: {len(response_body)}\r\n".encode(
+                                "ascii"
+                            )
                             + b"Connection: close\r\n\r\n"
                             + response_body
                         )
                     finally:
                         connection.close()
-                os.write(report_write, json.dumps(records, separators=(",", ":")).encode("utf-8"))
+                os.write(
+                    report_write,
+                    json.dumps(records, separators=(",", ":")).encode("utf-8"),
+                )
             except Exception:
                 exit_code = 1
             finally:
@@ -3086,9 +3360,15 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         try:
             with _isolated_worker_python() as worker_python:
                 with (
-                    mock.patch.object(remote_http.sys, "executable", str(worker_python)),
-                    mock.patch.object(remote_http, "_cleanup_worker", side_effect=observe_cleanup),
-                    mock.patch.object(remote_http, "_read_worker_output", side_effect=capture_output),
+                    mock.patch.object(
+                        remote_http.sys, "executable", str(worker_python)
+                    ),
+                    mock.patch.object(
+                        remote_http, "_cleanup_worker", side_effect=observe_cleanup
+                    ),
+                    mock.patch.object(
+                        remote_http, "_read_worker_output", side_effect=capture_output
+                    ),
                     mock.patch.object(
                         remote_http,
                         "run_list_ollama_models",
@@ -3109,12 +3389,36 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                         "run_postprocess_openai_compatible",
                         side_effect=observe_runner("run_postprocess_openai_compatible"),
                     ),
-                    mock.patch.object(cli, "post_process_text", side_effect=AssertionError("legacy bypass")),
-                    mock.patch.object(postprocessor, "list_ollama_models", side_effect=AssertionError("legacy bypass")),
-                    mock.patch.object(postprocessor, "list_openai_compatible_models", side_effect=AssertionError("legacy bypass")),
-                    mock.patch.object(postprocessor, "post_process_with_ollama", side_effect=AssertionError("legacy bypass")),
-                    mock.patch.object(postprocessor, "post_process_with_openai_compatible", side_effect=AssertionError("legacy bypass")),
-                    mock.patch.object(postprocessor, "post_process_text", side_effect=AssertionError("legacy bypass")),
+                    mock.patch.object(
+                        cli,
+                        "post_process_text",
+                        side_effect=AssertionError("legacy bypass"),
+                    ),
+                    mock.patch.object(
+                        postprocessor,
+                        "list_ollama_models",
+                        side_effect=AssertionError("legacy bypass"),
+                    ),
+                    mock.patch.object(
+                        postprocessor,
+                        "list_openai_compatible_models",
+                        side_effect=AssertionError("legacy bypass"),
+                    ),
+                    mock.patch.object(
+                        postprocessor,
+                        "post_process_with_ollama",
+                        side_effect=AssertionError("legacy bypass"),
+                    ),
+                    mock.patch.object(
+                        postprocessor,
+                        "post_process_with_openai_compatible",
+                        side_effect=AssertionError("legacy bypass"),
+                    ),
+                    mock.patch.object(
+                        postprocessor,
+                        "post_process_text",
+                        side_effect=AssertionError("legacy bypass"),
+                    ),
                     mock.patch.object(
                         cli,
                         "_apply_security_post_processing",
@@ -3171,7 +3475,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             _pid, status = os.waitpid(server_pid, 0)
             self.assertEqual(os.waitstatus_to_exitcode(status), 0)
 
-    def test_worker_listing_parser_rejects_nonfinite_float_at_json_boundary(self) -> None:
+    def test_worker_listing_parser_rejects_nonfinite_float_at_json_boundary(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         hostile_bodies = (
@@ -3192,7 +3498,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         self.assertEqual(finite["listing_state"], "listed")
         self.assertEqual(finite["models"][0]["size"], 0)  # type: ignore[index]
 
-    def test_worker_openai_listing_normalizes_and_discards_provider_metadata(self) -> None:
+    def test_worker_openai_listing_normalizes_and_discards_provider_metadata(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         result = remote_http_worker._decode_openai_listing(
@@ -3217,7 +3525,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             {"listing_state": "missing-model-list", "models": []},
         )
 
-    def test_worker_openai_listing_rejects_hostile_json_and_secret_anywhere(self) -> None:
+    def test_worker_openai_listing_rejects_hostile_json_and_secret_anywhere(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         nested = "null"
@@ -3241,7 +3551,12 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     remote_http_worker._decode_openai_listing(body, "secret-token")
                 self.assertEqual(context.exception.code, "remote-response-invalid")
         too_many = json.dumps(
-            {"data": [{"id": f"model-{index}"} for index in range(MAX_MODEL_LIST_ENTRIES + 1)]},
+            {
+                "data": [
+                    {"id": f"model-{index}"}
+                    for index in range(MAX_MODEL_LIST_ENTRIES + 1)
+                ]
+            },
             separators=(",", ":"),
         )
         with self.assertRaises(remote_http_worker._WorkerFailure) as context:
@@ -3277,7 +3592,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         response.close.assert_called_once()
         connection.close.assert_called_once()
 
-    def test_worker_openai_listing_revalidates_same_origin_redirect_with_headers(self) -> None:
+    def test_worker_openai_listing_revalidates_same_origin_redirect_with_headers(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         redirect_response = mock.Mock(status=302)
@@ -3299,7 +3616,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             return success_connection, success_response
 
         with (
-            mock.patch.object(remote_http_worker, "_open_connection", side_effect=open_connection),
+            mock.patch.object(
+                remote_http_worker, "_open_connection", side_effect=open_connection
+            ),
             mock.patch.object(
                 remote_http_worker,
                 "_read_response_text",
@@ -3311,7 +3630,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 "secret-token",
                 time.monotonic_ns() + LISTING_DEADLINE_NS,
             )
-        self.assertEqual(result, {"listing_state": "listed", "models": [_openai_model("gpt-test")]})
+        self.assertEqual(
+            result, {"listing_state": "listed", "models": [_openai_model("gpt-test")]}
+        )
         self.assertEqual(
             [url for url, _headers in opened],
             [
@@ -3334,13 +3655,17 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         redirect_connection.close.assert_called_once()
         success_connection.close.assert_called_once()
 
-    def test_listing_close_failures_are_fixed_worker_errors_for_both_operations(self) -> None:
+    def test_listing_close_failures_are_fixed_worker_errors_for_both_operations(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         cases = (
             (
                 "ollama",
-                _request(deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS),
+                _request(
+                    deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS
+                ),
                 remote_http_worker._read_listing,
                 '{"models":[]}',
                 "list-ollama-models",
@@ -3363,9 +3688,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     response_frames: list[bytes] = []
                     response = mock.Mock(status=200)
                     connection = mock.Mock()
-                    getattr(response if failing_close == "response" else connection, "close").side_effect = OSError(
-                        "close failed"
-                    )
+                    getattr(
+                        response if failing_close == "response" else connection, "close"
+                    ).side_effect = OSError("close failed")
                     with (
                         mock.patch.object(
                             remote_http_worker,
@@ -3391,11 +3716,15 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                         mock.patch.object(
                             remote_http_worker,
                             "_write_response_frame",
-                            side_effect=lambda _parent_pidfd, frame, _deadline: response_frames.append(frame),
+                            side_effect=lambda _parent_pidfd, frame, _deadline: response_frames.append(
+                                frame
+                            ),
                         ),
                         mock.patch.object(remote_http_worker, "_wait_for_release"),
                     ):
-                        self.assertEqual(remote_http_worker._run(-1), remote_http.WORKER_EXIT_CODE)
+                        self.assertEqual(
+                            remote_http_worker._run(-1), remote_http.WORKER_EXIT_CODE
+                        )
                     self.assertEqual(len(response_frames), 1)
                     self.assertEqual(
                         decode_response(
@@ -3433,7 +3762,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
 
         source_text = "hello transcript sentinel"
         with (
-            mock.patch.object(remote_http_worker, "_open_connection", side_effect=open_connection),
+            mock.patch.object(
+                remote_http_worker, "_open_connection", side_effect=open_connection
+            ),
             mock.patch.object(
                 remote_http_worker,
                 "_read_response_text",
@@ -3467,7 +3798,12 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         self.assertEqual(set(decoded_body), {"model", "prompt", "stream"})
         self.assertEqual(decoded_body["model"], "llama3.2:3b")
         self.assertIs(decoded_body["stream"], False)
-        for sentinel in (source_text, "context sentinel", "vocabulary sentinel", "instruction sentinel"):
+        for sentinel in (
+            source_text,
+            "context sentinel",
+            "vocabulary sentinel",
+            "instruction sentinel",
+        ):
             self.assertIn(sentinel, decoded_body["prompt"])
         response.close.assert_called_once()
         connection.close.assert_called_once()
@@ -3494,7 +3830,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         for raw_text in hostile:
             with self.subTest(raw_text=raw_text[:48]):
                 with self.assertRaises(remote_http_worker._WorkerFailure) as context:
-                    remote_http_worker._decode_ollama_postprocess_response(raw_text, "source")
+                    remote_http_worker._decode_ollama_postprocess_response(
+                        raw_text, "source"
+                    )
                 self.assertEqual(context.exception.code, "remote-response-invalid")
 
     def test_worker_postprocess_provider_error_cannot_be_success(self) -> None:
@@ -3507,7 +3845,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             )
         self.assertEqual(context.exception.code, "remote-http-failed")
 
-    def test_worker_postprocess_response_bytes_are_bounded_and_utf8_checked(self) -> None:
+    def test_worker_postprocess_response_bytes_are_bounded_and_utf8_checked(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         for name, chunk, expected_code in (
@@ -3523,7 +3863,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     "_open_connection",
                     return_value=(connection, response),
                 ):
-                    with self.assertRaises(remote_http_worker._WorkerFailure) as context:
+                    with self.assertRaises(
+                        remote_http_worker._WorkerFailure
+                    ) as context:
                         remote_http_worker._read_ollama_postprocess(
                             "http://127.0.0.1:11434",
                             "model",
@@ -3559,7 +3901,14 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 False,
             ),
         )
-        for name, url, api_key, flex_processing, service_tier_fallback, expect_flex in cases:
+        for (
+            name,
+            url,
+            api_key,
+            flex_processing,
+            service_tier_fallback,
+            expect_flex,
+        ) in cases:
             with self.subTest(name=name):
                 response = mock.Mock(status=200)
                 connection = mock.Mock()
@@ -3577,7 +3926,11 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     return connection, response
 
                 with (
-                    mock.patch.object(remote_http_worker, "_open_connection", side_effect=open_connection),
+                    mock.patch.object(
+                        remote_http_worker,
+                        "_open_connection",
+                        side_effect=open_connection,
+                    ),
                     mock.patch.object(
                         remote_http_worker,
                         "_read_response_text",
@@ -3625,7 +3978,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 response.close.assert_called_once()
                 connection.close.assert_called_once()
 
-    def test_worker_openai_postprocess_service_tier_fallback_is_single_and_bounded(self) -> None:
+    def test_worker_openai_postprocess_service_tier_fallback_is_single_and_bounded(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         redirect_error = (
@@ -3633,7 +3988,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             '"type":"invalid_request_error","param":"service_tier",'
             '"code":"unsupported_parameter"}}'
         )
-        success = '{"choices":[{"message":{"content":"processed"},"finish_reason":"stop"}]}'
+        success = (
+            '{"choices":[{"message":{"content":"processed"},"finish_reason":"stop"}]}'
+        )
         responses = [mock.Mock(status=400), mock.Mock(status=200)]
         connections = [mock.Mock(), mock.Mock()]
         opened: list[tuple[str, str, bytes]] = []
@@ -3652,7 +4009,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             return connections[index], responses[index]
 
         with (
-            mock.patch.object(remote_http_worker, "_open_connection", side_effect=open_connection),
+            mock.patch.object(
+                remote_http_worker, "_open_connection", side_effect=open_connection
+            ),
             mock.patch.object(
                 remote_http_worker,
                 "_read_response_text",
@@ -3707,7 +4066,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             )
 
         with (
-            mock.patch.object(remote_http_worker, "_open_connection", side_effect=open_connection),
+            mock.patch.object(
+                remote_http_worker, "_open_connection", side_effect=open_connection
+            ),
             mock.patch.object(
                 remote_http_worker,
                 "_read_response_text",
@@ -3745,7 +4106,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             response_object.close.assert_called_once()
             connection_object.close.assert_called_once()
 
-    def test_worker_openai_postprocess_gpt_payload_has_no_optional_generation_fields(self) -> None:
+    def test_worker_openai_postprocess_gpt_payload_has_no_optional_generation_fields(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         body = remote_http_worker._openai_postprocess_request_body(
@@ -3772,7 +4135,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             }
         )
 
-    def test_worker_openai_postprocess_generic_payload_has_no_optional_generation_fields(self) -> None:
+    def test_worker_openai_postprocess_generic_payload_has_no_optional_generation_fields(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         body = remote_http_worker._openai_postprocess_request_body(
@@ -3844,7 +4209,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             return connection, response
 
         with (
-            mock.patch.object(remote_http_worker, "_open_connection", side_effect=open_connection),
+            mock.patch.object(
+                remote_http_worker, "_open_connection", side_effect=open_connection
+            ),
             mock.patch.object(
                 remote_http_worker,
                 "_read_response_text",
@@ -3876,7 +4243,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         response.close.assert_called_once()
         connection.close.assert_called_once()
 
-    def test_worker_openai_postprocess_loopback_rejects_temperature_and_succeeds_once(self) -> None:
+    def test_worker_openai_postprocess_loopback_rejects_temperature_and_succeeds_once(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         server: socket.socket | None = None
@@ -3955,7 +4324,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                             b"HTTP/1.1 "
                             + status
                             + b"\r\nContent-Type: application/json\r\n"
-                            + f"Content-Length: {len(response_body)}\r\n".encode("ascii")
+                            + f"Content-Length: {len(response_body)}\r\n".encode(
+                                "ascii"
+                            )
                             + b"Connection: close\r\n\r\n"
                             + response_body
                         )
@@ -3999,7 +4370,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             if sensitive_value in repr(result):
                 self.fail("sensitive request data escaped worker result")
 
-    def test_worker_openai_postprocess_service_tier_fallback_requires_flag(self) -> None:
+    def test_worker_openai_postprocess_service_tier_fallback_requires_flag(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         response = mock.Mock(status=400)
@@ -4034,7 +4407,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         response.close.assert_called_once()
         connection.close.assert_called_once()
 
-    def test_worker_openai_postprocess_http_error_gate_rejects_malformed_without_retry(self) -> None:
+    def test_worker_openai_postprocess_http_error_gate_rejects_malformed_without_retry(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         deep = "0"
@@ -4080,7 +4455,8 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             ),
             (
                 "too deep",
-                '{"error":{"message":"service_tier unsupported",' f'"metadata":{deep}}}',
+                '{"error":{"message":"service_tier unsupported",'
+                f'"metadata":{deep}}}',
             ),
             ("wrong error shape", '{"error":"service_tier unsupported"}'),
             ("malformed json", '{"error":{"message":"service_tier unsupported"}'),
@@ -4115,7 +4491,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                         return_value=error_body,
                     ),
                 ):
-                    with self.assertRaises(remote_http_worker._WorkerFailure) as context:
+                    with self.assertRaises(
+                        remote_http_worker._WorkerFailure
+                    ) as context:
                         remote_http_worker._read_openai_postprocess(
                             "https://api.openai.com/v1",
                             "gpt-5.6-luna",
@@ -4139,20 +4517,47 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
 
         deep = "null"
         for _ in range(70):
-            deep = "{\"nested\":" + deep + "}"
+            deep = '{"nested":' + deep + "}"
         hostile = (
             ('{"choices":[],"choices":[]}', "remote-response-invalid"),
-            ('{"choices":[{"message":{"content":"ok"},"finish_reason":1e400}]}', "remote-response-invalid"),
-            ('{"choices":[{"message":{"content":"ok"},"finish_reason":NaN}]}', "remote-response-invalid"),
-            ('{"choices":[{"message":{"content":"ok"}}],"metadata":' + deep + "}", "remote-response-invalid"),
-            ('{"__proto__":{},"choices":[{"message":{"content":"ok"}}]}', "remote-response-invalid"),
-            ('{"error":"backend failed","choices":[{"message":{"content":"ok"}}]}', "remote-response-invalid"),
-            ('{"error":{"message":"backend failed"},"choices":[{"message":{"content":"ok"}}]}', "remote-response-invalid"),
-            ('{"metadata":{"secret-token":"x"},"choices":[{"message":{"content":"ok"}}]}', "remote-response-invalid"),
-            ('{"metadata":{"nested":"contains secret-token"},"choices":[{"message":{"content":"ok"}}]}', "remote-response-invalid"),
+            (
+                '{"choices":[{"message":{"content":"ok"},"finish_reason":1e400}]}',
+                "remote-response-invalid",
+            ),
+            (
+                '{"choices":[{"message":{"content":"ok"},"finish_reason":NaN}]}',
+                "remote-response-invalid",
+            ),
+            (
+                '{"choices":[{"message":{"content":"ok"}}],"metadata":' + deep + "}",
+                "remote-response-invalid",
+            ),
+            (
+                '{"__proto__":{},"choices":[{"message":{"content":"ok"}}]}',
+                "remote-response-invalid",
+            ),
+            (
+                '{"error":"backend failed","choices":[{"message":{"content":"ok"}}]}',
+                "remote-response-invalid",
+            ),
+            (
+                '{"error":{"message":"backend failed"},"choices":[{"message":{"content":"ok"}}]}',
+                "remote-response-invalid",
+            ),
+            (
+                '{"metadata":{"secret-token":"x"},"choices":[{"message":{"content":"ok"}}]}',
+                "remote-response-invalid",
+            ),
+            (
+                '{"metadata":{"nested":"contains secret-token"},"choices":[{"message":{"content":"ok"}}]}',
+                "remote-response-invalid",
+            ),
             ('{"choices":[]}', "remote-response-invalid"),
             ('{"choices":[{"message":{"content":[]}}]}', "remote-response-invalid"),
-            ('{"choices":[{"message":{"content":"ok"},"finish_reason":"length"}]}', "remote-response-invalid"),
+            (
+                '{"choices":[{"message":{"content":"ok"},"finish_reason":"length"}]}',
+                "remote-response-invalid",
+            ),
         )
         for raw_text, expected_code in hostile:
             with self.subTest(raw_text=raw_text[:64]):
@@ -4181,7 +4586,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 "build_openai_compatible_messages",
                 return_value=[{"role": "user", "content": "x"}],
             ),
-            mock.patch.object(remote_http_worker.remote_http, "MAX_REQUEST_FRAME_BYTES", 32),
+            mock.patch.object(
+                remote_http_worker.remote_http, "MAX_REQUEST_FRAME_BYTES", 32
+            ),
         ):
             with self.assertRaises(remote_http_worker._WorkerFailure) as context:
                 remote_http_worker._openai_postprocess_request_body(
@@ -4197,7 +4604,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 )
         self.assertEqual(context.exception.code, "remote-request-invalid")
 
-    def test_worker_openai_postprocess_response_bytes_are_bounded_and_utf8_checked(self) -> None:
+    def test_worker_openai_postprocess_response_bytes_are_bounded_and_utf8_checked(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         for name, chunk, expected_code in (
@@ -4213,7 +4622,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     "_open_connection",
                     return_value=(connection, response),
                 ):
-                    with self.assertRaises(remote_http_worker._WorkerFailure) as context:
+                    with self.assertRaises(
+                        remote_http_worker._WorkerFailure
+                    ) as context:
                         remote_http_worker._read_openai_postprocess(
                             "https://api.openai.com/v1",
                             "gpt-5.6-luna",
@@ -4231,7 +4642,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 response.close.assert_called_once()
                 connection.close.assert_called_once()
 
-    def test_worker_postprocess_preserves_method_on_same_origin_redirect_only(self) -> None:
+    def test_worker_postprocess_preserves_method_on_same_origin_redirect_only(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         redirect_response = mock.Mock(status=307)
@@ -4256,7 +4669,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             return success_connection, success_response
 
         with (
-            mock.patch.object(remote_http_worker, "_open_connection", side_effect=open_connection),
+            mock.patch.object(
+                remote_http_worker, "_open_connection", side_effect=open_connection
+            ),
             mock.patch.object(
                 remote_http_worker,
                 "_read_response_text",
@@ -4274,10 +4689,13 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 time.monotonic_ns() + POSTPROCESS_DEADLINE_NS,
             )
         self.assertEqual(result, {"text": "ok"})
-        self.assertEqual([item[0] for item in opened], [
-            "http://127.0.0.1:11434/base/api/generate",
-            "http://127.0.0.1:11434/base/api/generate-2",
-        ])
+        self.assertEqual(
+            [item[0] for item in opened],
+            [
+                "http://127.0.0.1:11434/base/api/generate",
+                "http://127.0.0.1:11434/base/api/generate-2",
+            ],
+        )
         self.assertEqual([item[1] for item in opened], ["POST", "POST"])
         self.assertEqual(opened[0][2], opened[1][2])
         redirect_response.close.assert_called_once()
@@ -4312,7 +4730,11 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     return success_connection, success_response
 
                 with (
-                    mock.patch.object(remote_http_worker, "_open_connection", side_effect=open_connection),
+                    mock.patch.object(
+                        remote_http_worker,
+                        "_open_connection",
+                        side_effect=open_connection,
+                    ),
                     mock.patch.object(
                         remote_http_worker,
                         "_read_response_text",
@@ -4347,7 +4769,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 redirect_connection.close.assert_called_once()
                 success_connection.close.assert_called_once()
 
-    def test_worker_openai_postprocess_rejects_301_302_303_and_cross_origin_redirects(self) -> None:
+    def test_worker_openai_postprocess_rejects_301_302_303_and_cross_origin_redirects(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         cases = (
@@ -4367,7 +4791,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     "_open_connection",
                     return_value=(connection, response),
                 ):
-                    with self.assertRaises(remote_http_worker._WorkerFailure) as context:
+                    with self.assertRaises(
+                        remote_http_worker._WorkerFailure
+                    ) as context:
                         remote_http_worker._read_openai_postprocess(
                             "https://api.openai.com/v1",
                             "gpt-5.6-luna",
@@ -4385,7 +4811,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 response.close.assert_called_once()
                 connection.close.assert_called_once()
 
-    def test_worker_postprocess_rejects_non_method_preserving_or_cross_origin_redirect(self) -> None:
+    def test_worker_postprocess_rejects_non_method_preserving_or_cross_origin_redirect(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         cases = (
@@ -4403,7 +4831,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     "_open_connection",
                     return_value=(connection, response),
                 ):
-                    with self.assertRaises(remote_http_worker._WorkerFailure) as context:
+                    with self.assertRaises(
+                        remote_http_worker._WorkerFailure
+                    ) as context:
                         remote_http_worker._read_ollama_postprocess(
                             "http://127.0.0.1:11434/base",
                             "model",
@@ -4529,7 +4959,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 connection.close.assert_called_once()
                 if isinstance(expected, remote_http_worker._WorkerFailure):
                     self.assertEqual(context.exception.code, expected.code)
-                elif isinstance(expected, (remote_http_worker._WorkerDeadline, KeyboardInterrupt)):
+                elif isinstance(
+                    expected, (remote_http_worker._WorkerDeadline, KeyboardInterrupt)
+                ):
                     self.assertEqual(context.exception.args, expected.args)
                 elif isinstance(expected, SystemExit):
                     self.assertEqual(context.exception.code, expected.code)
@@ -4538,7 +4970,11 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         from speed_of_cinnamon import remote_http_worker
 
         close_cases = (
-            ("deadline", remote_http_worker._WorkerDeadline(), remote_http_worker._WorkerDeadline),
+            (
+                "deadline",
+                remote_http_worker._WorkerDeadline(),
+                remote_http_worker._WorkerDeadline,
+            ),
             ("keyboard interrupt", KeyboardInterrupt(), KeyboardInterrupt),
             ("system exit", SystemExit(23), SystemExit),
         )
@@ -4548,7 +4984,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 connection.request.side_effect = OSError("request failed")
                 connection.close.side_effect = close_error
                 with (
-                    mock.patch.object(remote_http_worker, "_resolve_addresses", return_value=()),
+                    mock.patch.object(
+                        remote_http_worker, "_resolve_addresses", return_value=()
+                    ),
                     mock.patch.object(
                         remote_http_worker,
                         "_PinnedHTTPConnection",
@@ -4587,7 +5025,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 connection.request.side_effect = request_error
                 connection.close.side_effect = close_error
                 with (
-                    mock.patch.object(remote_http_worker, "_resolve_addresses", return_value=()),
+                    mock.patch.object(
+                        remote_http_worker, "_resolve_addresses", return_value=()
+                    ),
                     mock.patch.object(
                         remote_http_worker,
                         "_PinnedHTTPConnection",
@@ -4678,7 +5118,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             receiver.close()
 
     def test_worker_control_release_is_explicit_and_response_bound(self) -> None:
-        probe_sender, probe_receiver = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        probe_sender, probe_receiver = socket.socketpair(
+            socket.AF_UNIX, socket.SOCK_STREAM
+        )
         try:
             try:
                 probe_receiver.setsockopt(socket.SOL_SOCKET, socket.SO_PASSCRED, 1)
@@ -4703,7 +5145,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         )
         wrong_digest = bytearray(valid)
         wrong_digest[-1] ^= 1
-        replayed = remote_http._encode_control_release(nonce, encode_response(_success([_model()])))
+        replayed = remote_http._encode_control_release(
+            nonce, encode_response(_success([_model()]))
+        )
         cases = (
             ("valid", valid, response, True),
             ("wrong nonce", wrong_nonce, response, False),
@@ -4765,7 +5209,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             os.close(pidfd)
             receiver.close()
 
-    def test_real_listing_result_reaches_worker_response_without_second_decode(self) -> None:
+    def test_real_listing_result_reaches_worker_response_without_second_decode(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         deadline = time.monotonic_ns() + LISTING_DEADLINE_NS
@@ -4781,7 +5227,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 "_open_control_socket",
                 return_value=(fake_control, (123, 1000, 1000)),
             ),
-            mock.patch.object(remote_http_worker, "_read_request_frame", return_value=request_frame),
+            mock.patch.object(
+                remote_http_worker, "_read_request_frame", return_value=request_frame
+            ),
             mock.patch.object(remote_http_worker, "_install_deadline"),
             mock.patch.object(
                 remote_http_worker,
@@ -4796,7 +5244,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             mock.patch.object(
                 remote_http_worker,
                 "_write_response_frame",
-                side_effect=lambda _parent_pidfd, frame, _deadline: response_frames.append(frame),
+                side_effect=lambda _parent_pidfd, frame, _deadline: response_frames.append(
+                    frame
+                ),
             ),
             mock.patch.object(remote_http_worker, "_wait_for_release") as release,
         ):
@@ -4811,7 +5261,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
         fake_response.close.assert_called_once()
         fake_connection.close.assert_called_once()
 
-    def test_real_openai_listing_reaches_operation_specific_worker_response(self) -> None:
+    def test_real_openai_listing_reaches_operation_specific_worker_response(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         deadline = time.monotonic_ns() + LISTING_DEADLINE_NS
@@ -4829,7 +5281,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 "_open_control_socket",
                 return_value=(fake_control, (123, 1000, 1000)),
             ),
-            mock.patch.object(remote_http_worker, "_read_request_frame", return_value=request_frame),
+            mock.patch.object(
+                remote_http_worker, "_read_request_frame", return_value=request_frame
+            ),
             mock.patch.object(remote_http_worker, "_install_deadline"),
             mock.patch.object(
                 remote_http_worker,
@@ -4839,7 +5293,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             mock.patch.object(
                 remote_http_worker,
                 "_write_response_frame",
-                side_effect=lambda _parent_pidfd, frame, _deadline: response_frames.append(frame),
+                side_effect=lambda _parent_pidfd, frame, _deadline: response_frames.append(
+                    frame
+                ),
             ),
             mock.patch.object(remote_http_worker, "_wait_for_release"),
         ):
@@ -4859,7 +5315,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             result,
         )
 
-    def test_real_openai_postprocess_reaches_operation_specific_worker_response(self) -> None:
+    def test_real_openai_postprocess_reaches_operation_specific_worker_response(
+        self,
+    ) -> None:
         from speed_of_cinnamon import remote_http_worker
 
         deadline = time.monotonic_ns() + POSTPROCESS_DEADLINE_NS
@@ -4877,7 +5335,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 "_open_control_socket",
                 return_value=(fake_control, (123, 1000, 1000)),
             ),
-            mock.patch.object(remote_http_worker, "_read_request_frame", return_value=request_frame),
+            mock.patch.object(
+                remote_http_worker, "_read_request_frame", return_value=request_frame
+            ),
             mock.patch.object(remote_http_worker, "_install_deadline"),
             mock.patch.object(
                 remote_http_worker,
@@ -4887,7 +5347,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             mock.patch.object(
                 remote_http_worker,
                 "_write_response_frame",
-                side_effect=lambda _parent_pidfd, frame, _deadline: response_frames.append(frame),
+                side_effect=lambda _parent_pidfd, frame, _deadline: response_frames.append(
+                    frame
+                ),
             ),
             mock.patch.object(remote_http_worker, "_wait_for_release"),
         ):
@@ -4987,7 +5449,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             pidfd = os.pidfd_open(process.pid, 0)
             start_time = remote_http._process_start_time(process.pid)
             self.assertIsNotNone(start_time)
-            handle = remote_http._WorkerHandle(process, process.pid, start_time or "", pidfd)
+            handle = remote_http._WorkerHandle(
+                process, process.pid, start_time or "", pidfd
+            )
             received = remote_http._pump_worker(
                 handle,
                 request_frame,
@@ -5057,7 +5521,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS,
                     payload={"url": f"http://127.0.0.1:{server_port}"},
                 )
-                with mock.patch.object(remote_http.sys, "executable", str(worker_python)):
+                with mock.patch.object(
+                    remote_http.sys, "executable", str(worker_python)
+                ):
                     result = remote_http.run_list_ollama_models(request)
             self.assertEqual(result, _success([]))
         finally:
@@ -5168,8 +5634,12 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     )
 
                 with (
-                    mock.patch.object(remote_http.sys, "executable", str(worker_python)),
-                    mock.patch.object(remote_http, "_pump_worker", side_effect=inspect_worker),
+                    mock.patch.object(
+                        remote_http.sys, "executable", str(worker_python)
+                    ),
+                    mock.patch.object(
+                        remote_http, "_pump_worker", side_effect=inspect_worker
+                    ),
                 ):
                     result = remote_http.run_postprocess_ollama(request)
             request_bytes = os.read(report_read, 2_000_000)
@@ -5195,7 +5665,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             _pid, status = os.waitpid(server_pid, 0)
             self.assertEqual(os.waitstatus_to_exitcode(status), 0)
 
-    def test_production_spawn_real_openai_loopback_auth_and_secret_boundary(self) -> None:
+    def test_production_spawn_real_openai_loopback_auth_and_secret_boundary(
+        self,
+    ) -> None:
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(("127.0.0.1", 0))
@@ -5246,7 +5718,10 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                 request = _openai_request(
                     api_key=f"  {secret}  ",
                     deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS,
-                    payload={"url": f"http://127.0.0.1:{server_port}", "api_key": f"  {secret}  "},
+                    payload={
+                        "url": f"http://127.0.0.1:{server_port}",
+                        "api_key": f"  {secret}  ",
+                    },
                 )
                 real_pump = remote_http._pump_worker
 
@@ -5269,8 +5744,12 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     )
 
                 with (
-                    mock.patch.object(remote_http.sys, "executable", str(worker_python)),
-                    mock.patch.object(remote_http, "_pump_worker", side_effect=inspect_worker),
+                    mock.patch.object(
+                        remote_http.sys, "executable", str(worker_python)
+                    ),
+                    mock.patch.object(
+                        remote_http, "_pump_worker", side_effect=inspect_worker
+                    ),
                 ):
                     result = remote_http.run_list_openai_compatible_models(request)
             request_bytes = os.read(report_read, 65_536)
@@ -5290,7 +5769,9 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             _pid, status = os.waitpid(server_pid, 0)
             self.assertEqual(os.waitstatus_to_exitcode(status), 0)
 
-    def test_production_spawn_real_openai_postprocess_loopback_auth_secret_boundary(self) -> None:
+    def test_production_spawn_real_openai_postprocess_loopback_auth_secret_boundary(
+        self,
+    ) -> None:
         server: socket.socket | None = None
         try:
             server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -5450,8 +5931,12 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
                     return confirmed
 
                 with (
-                    mock.patch.object(remote_http.sys, "executable", str(worker_python)),
-                    mock.patch.object(remote_http, "_pump_worker", side_effect=inspect_worker),
+                    mock.patch.object(
+                        remote_http.sys, "executable", str(worker_python)
+                    ),
+                    mock.patch.object(
+                        remote_http, "_pump_worker", side_effect=inspect_worker
+                    ),
                     mock.patch.object(
                         remote_http,
                         "_read_worker_output",
@@ -5517,10 +6002,18 @@ class RemoteHttpLifecycleTest(unittest.TestCase):
             _pid, status = os.waitpid(server_pid, 0)
             self.assertEqual(os.waitstatus_to_exitcode(status), 0)
 
-    def test_installed_package_starts_under_exact_isolated_venv_worker_command(self) -> None:
+    def test_installed_package_starts_under_exact_isolated_venv_worker_command(
+        self,
+    ) -> None:
         with _isolated_worker_python() as venv_python:
             completed = subprocess.run(
-                [str(venv_python), "-I", "-B", "-m", "speed_of_cinnamon.remote_http_worker"],
+                [
+                    str(venv_python),
+                    "-I",
+                    "-B",
+                    "-m",
+                    "speed_of_cinnamon.remote_http_worker",
+                ],
                 input=b"\x00\x00\x00\x00",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -5575,7 +6068,9 @@ class SocP001RemoteDiagnosticsTest(unittest.TestCase):
         )
         for case, error in enumerate(valid):
             with self.subTest(case=case):
-                unsupported, flex_rejected = remote_http.classify_openai_error_fields(error)
+                unsupported, flex_rejected = remote_http.classify_openai_error_fields(
+                    error
+                )
                 self.assertTrue(unsupported)
                 self.assertEqual(flex_rejected, error["param"] == "service_tier")
 
@@ -5608,16 +6103,33 @@ class SocP001RemoteDiagnosticsTest(unittest.TestCase):
         for case, error in enumerate(invalid_markers):
             with self.subTest(case=case):
                 try:
-                    unsupported, flex_rejected = remote_http.classify_openai_error_fields(error)
+                    unsupported, flex_rejected = (
+                        remote_http.classify_openai_error_fields(error)
+                    )
                 except ValueError:
                     unsupported = flex_rejected = False
                 self.assertFalse(unsupported or flex_rejected)
 
         for case, error in enumerate(
             (
-                {"message": "fixed", "type": 1, "param": "temperature", "code": "unsupported_parameter"},
-                {"message": "fixed", "type": "invalid_request_error", "param": False, "code": "unsupported_parameter"},
-                {"message": "fixed", "type": "invalid_request_error", "param": "temperature", "code": 1},
+                {
+                    "message": "fixed",
+                    "type": 1,
+                    "param": "temperature",
+                    "code": "unsupported_parameter",
+                },
+                {
+                    "message": "fixed",
+                    "type": "invalid_request_error",
+                    "param": False,
+                    "code": "unsupported_parameter",
+                },
+                {
+                    "message": "fixed",
+                    "type": "invalid_request_error",
+                    "param": "temperature",
+                    "code": 1,
+                },
             )
         ):
             with self.subTest(case=case):
@@ -5864,7 +6376,9 @@ class SocP001RemoteDiagnosticsTest(unittest.TestCase):
                         value,
                         operation=POSTPROCESS_OPENAI_COMPATIBLE_OPERATION,
                     )
-                self.assertEqual(raised.exception.code, "remote-worker-protocol-invalid")
+                self.assertEqual(
+                    raised.exception.code, "remote-worker-protocol-invalid"
+                )
                 self.assertFalse(
                     "secret" in str(raised.exception),
                     "protocol exception leaked provider data",
@@ -5873,8 +6387,13 @@ class SocP001RemoteDiagnosticsTest(unittest.TestCase):
     def test_malformed_provider_payload_never_enters_failure_text(self) -> None:
         from speed_of_cinnamon import remote_http_worker as worker
 
-        secret = "sk-dummy-secret transcript-value https://user:pass@example.invalid/?key=x"
-        for raw in ("not-json " + secret, '{"error":{"message":"' + secret + '","extra":1}}'):
+        secret = (
+            "sk-dummy-secret transcript-value https://user:pass@example.invalid/?key=x"
+        )
+        for raw in (
+            "not-json " + secret,
+            '{"error":{"message":"' + secret + '","extra":1}}',
+        ):
             with self.subTest(raw=raw[:8]):
                 with self.assertRaises(worker._WorkerFailure) as raised:
                     worker._decode_openai_http_error(raw, "sk-dummy-secret")
@@ -5981,9 +6500,7 @@ class RemoteHttpBootstrapTest(unittest.TestCase):
         self.assertEqual(imports, ["__future__", "ctypes", "os", "resource", "signal"])
 
         functions = {
-            node.name: node
-            for node in tree.body
-            if isinstance(node, ast.FunctionDef)
+            node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
         }
         main_calls = {
             node.func.id: node.lineno
@@ -6024,15 +6541,22 @@ class RemoteHttpBootstrapTest(unittest.TestCase):
         def getrlimit(limit: int) -> tuple[int, int]:
             return observed.get(
                 limit,
-                (remote_http_worker.resource.RLIM_INFINITY, remote_http_worker.resource.RLIM_INFINITY),
+                (
+                    remote_http_worker.resource.RLIM_INFINITY,
+                    remote_http_worker.resource.RLIM_INFINITY,
+                ),
             )
 
         def setrlimit(limit: int, value: tuple[int, int]) -> None:
             observed[limit] = value
 
         with (
-            mock.patch.object(remote_http_worker.resource, "getrlimit", side_effect=getrlimit),
-            mock.patch.object(remote_http_worker.resource, "setrlimit", side_effect=setrlimit),
+            mock.patch.object(
+                remote_http_worker.resource, "getrlimit", side_effect=getrlimit
+            ),
+            mock.patch.object(
+                remote_http_worker.resource, "setrlimit", side_effect=setrlimit
+            ),
         ):
             remote_http_worker._set_resource_limits()
         expected = 384 * 1024 * 1024
@@ -6112,7 +6636,9 @@ raise SystemExit(1)
         )
         self.assertEqual(completed.returncode, 0)
 
-    def test_worker_runtime_attribute_compatibility_is_lazy_and_allowlisted(self) -> None:
+    def test_worker_runtime_attribute_compatibility_is_lazy_and_allowlisted(
+        self,
+    ) -> None:
         source_root = str(Path(remote_http.__file__).resolve().parents[1])
         code = """
 import sys
@@ -6201,7 +6727,6 @@ if not worker._RUNTIME_LOADED:
         worker_source: str | None = None,
     ) -> tuple[dict[str, object], Path]:
         import hashlib
-        import os
 
         root.mkdir(mode=0o700)
         (root / "__init__.py").write_text(
@@ -6216,14 +6741,23 @@ if not worker._RUNTIME_LOADED:
         )
         cache = root / "__pycache__"
         cache.mkdir(mode=0o700)
-        (cache / "remote_http_worker.cpython-314.pyc").write_bytes(b"not executable source")
+        (cache / "remote_http_worker.cpython-314.pyc").write_bytes(
+            b"not executable source"
+        )
 
         directories: list[list[object]] = []
         current = root.resolve(strict=True)
         while True:
             info = current.stat(follow_symlinks=False)
             directories.append(
-                [str(current), info.st_dev, info.st_ino, info.st_mode, info.st_uid, info.st_gid]
+                [
+                    str(current),
+                    info.st_dev,
+                    info.st_ino,
+                    info.st_mode,
+                    info.st_uid,
+                    info.st_gid,
+                ]
             )
             if current.parent == current:
                 break
@@ -6329,7 +6863,11 @@ if not worker._RUNTIME_LOADED:
                             json.dumps(snapshot, sort_keys=True, separators=(",", ":")),
                         ],
                         cwd=root.parent,
-                        env={"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LC_CTYPE": "C.UTF-8"},
+                        env={
+                            "LANG": "C.UTF-8",
+                            "LC_ALL": "C.UTF-8",
+                            "LC_CTYPE": "C.UTF-8",
+                        },
                         stdout=subprocess.PIPE,
                         stderr=subprocess.PIPE,
                         timeout=10,
@@ -6339,7 +6877,9 @@ if not worker._RUNTIME_LOADED:
                     self.assertEqual(completed.stdout, b"")
                     self.assertEqual(completed.stderr, b"")
 
-    def test_source_only_bootstrap_accepts_version_update_and_ignores_pyc_cwd_and_pythonpath(self) -> None:
+    def test_source_only_bootstrap_accepts_version_update_and_ignores_pyc_cwd_and_pythonpath(
+        self,
+    ) -> None:
         import tempfile
 
         with tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
@@ -6368,7 +6908,9 @@ if not worker._RUNTIME_LOADED:
             snapshot, worker = self._bootstrap_fixture(root)
             other_root = base / "other"
             other_root.mkdir(mode=0o700)
-            wrong_root = self._run_bootstrap_fixture(root, snapshot, root_arg=str(other_root))
+            wrong_root = self._run_bootstrap_fixture(
+                root, snapshot, root_arg=str(other_root)
+            )
             worker.write_text("import os\nos._exit(24)\n", encoding="utf-8")
             changed_source = self._run_bootstrap_fixture(root, snapshot)
             wrong_package = dict(snapshot)
@@ -6378,13 +6920,24 @@ if not worker._RUNTIME_LOADED:
         self.assertEqual(changed_source.returncode, 65)
         self.assertEqual(two_roots.returncode, 65)
 
-    def test_bootstrap_rejects_untrusted_file_modes_symlinks_and_hardlinks(self) -> None:
+    def test_bootstrap_rejects_untrusted_file_modes_symlinks_and_hardlinks(
+        self,
+    ) -> None:
         import os
         import tempfile
 
         results: list[int] = []
-        for mutation in ("write-mode", "dir-write-mode", "symlink", "hardlink", "owner"):
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory(dir=Path.home()) as temporary:
+        for mutation in (
+            "write-mode",
+            "dir-write-mode",
+            "symlink",
+            "hardlink",
+            "owner",
+        ):
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory(dir=Path.home()) as temporary,
+            ):
                 base = Path(temporary)
                 root = base / "speed_of_cinnamon"
                 snapshot, worker = self._bootstrap_fixture(root)
@@ -6395,7 +6948,9 @@ if not worker._RUNTIME_LOADED:
                     os.chmod(root, 0o775)
                 elif mutation == "symlink":
                     replacement = base / "replacement.py"
-                    replacement.write_text(worker.read_text(encoding="utf-8"), encoding="utf-8")
+                    replacement.write_text(
+                        worker.read_text(encoding="utf-8"), encoding="utf-8"
+                    )
                     worker.unlink()
                     worker.symlink_to(replacement)
                 elif mutation == "hardlink":
@@ -6415,7 +6970,9 @@ if not worker._RUNTIME_LOADED:
             root = Path(temporary) / "speed_of_cinnamon"
             snapshot, _worker = self._bootstrap_fixture(root)
             init = root / "__init__.py"
-            init.write_text("__version__ = __import__('os').getcwd()\n", encoding="utf-8")
+            init.write_text(
+                "__version__ = __import__('os').getcwd()\n", encoding="utf-8"
+            )
             import hashlib
 
             info = init.stat(follow_symlinks=False)
@@ -6459,7 +7016,9 @@ if not worker._RUNTIME_LOADED:
             self.assertFalse(marker.exists())
         self.assertEqual(completed.returncode, 65)
 
-    def test_controller_binding_rechecks_source_before_delayed_runtime_import(self) -> None:
+    def test_controller_binding_rechecks_source_before_delayed_runtime_import(
+        self,
+    ) -> None:
         import json
         import select
         import tempfile
@@ -6484,10 +7043,20 @@ if not worker._RUNTIME_LOADED:
                 worker_source=worker_source,
             )
             process = subprocess.Popen(
-                ["/usr/bin/python3.14", "-I", "-B", "-c", remote_http._WORKER_BOOTSTRAP,
-                 str(root), json.dumps(snapshot, sort_keys=True, separators=(",", ":"))],
-                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                cwd=base, env={"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LC_CTYPE": "C.UTF-8"},
+                [
+                    "/usr/bin/python3.14",
+                    "-I",
+                    "-B",
+                    "-c",
+                    remote_http._WORKER_BOOTSTRAP,
+                    str(root),
+                    json.dumps(snapshot, sort_keys=True, separators=(",", ":")),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                cwd=base,
+                env={"LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "LC_CTYPE": "C.UTF-8"},
             )
             try:
                 ready_line = process.stdout.readline()
@@ -6498,11 +7067,17 @@ if not worker._RUNTIME_LOADED:
                     except subprocess.TimeoutExpired:
                         child_exit = None
                     readable, _, _ = select.select([process.stderr], [], [], 0.2)
-                    stderr_sample = os.read(process.stderr.fileno(), 2048) if readable else b""
+                    stderr_sample = (
+                        os.read(process.stderr.fileno(), 2048) if readable else b""
+                    )
                     stderr_kind = (
-                        "empty" if not stderr_sample else
-                        "python-traceback" if stderr_sample.startswith(b"Traceback ") else
-                        "nonempty-redacted"
+                        "empty"
+                        if not stderr_sample
+                        else (
+                            "python-traceback"
+                            if stderr_sample.startswith(b"Traceback ")
+                            else "nonempty-redacted"
+                        )
                     )
                     diagnostic = (
                         f"child_exit={child_exit}, stderr_sample_bytes={len(stderr_sample)}, "
@@ -6526,7 +7101,9 @@ if not worker._RUNTIME_LOADED:
                     if stream is not None and not stream.closed:
                         stream.close()
 
-    def test_controller_binding_ignores_timestamp_pyc_and_executes_snapshotted_source(self) -> None:
+    def test_controller_binding_ignores_timestamp_pyc_and_executes_snapshotted_source(
+        self,
+    ) -> None:
         import hashlib
         import importlib.util
         import json
@@ -6564,12 +7141,21 @@ if not worker._RUNTIME_LOADED:
             cached_mtime = int(controller_path.stat().st_mtime)
             os.utime(controller_path, (cached_mtime, cached_mtime))
             import hashlib
+
             info = controller_path.stat(follow_symlinks=False)
             data = controller_path.read_bytes()
             snapshot["files"]["controller"] = [
-                str(controller_path), info.st_dev, info.st_ino, info.st_size,
-                info.st_mode, info.st_uid, info.st_gid, info.st_nlink,
-                info.st_mtime_ns, info.st_ctime_ns, hashlib.sha256(data).hexdigest(),
+                str(controller_path),
+                info.st_dev,
+                info.st_ino,
+                info.st_size,
+                info.st_mode,
+                info.st_uid,
+                info.st_gid,
+                info.st_nlink,
+                info.st_mtime_ns,
+                info.st_ctime_ns,
+                hashlib.sha256(data).hexdigest(),
             ]
             cache_path = Path(importlib.util.cache_from_source(str(controller_path)))
             cache_bytes = cache_path.read_bytes()
@@ -6577,7 +7163,9 @@ if not worker._RUNTIME_LOADED:
             cache_timestamp, cache_source_size = struct.unpack("<II", cache_bytes[8:16])
             source_before = hashlib.sha256(data).hexdigest()
             cache_code = marshal.loads(cache_bytes[16:])
-            cache_has_pyc_marker = isinstance(cache_code, type(compile("", "", "exec"))) and "PYC" in repr(cache_code.co_consts)
+            cache_has_pyc_marker = isinstance(
+                cache_code, type(compile("", "", "exec"))
+            ) and "PYC" in repr(cache_code.co_consts)
             cache_valid = (
                 cache_bytes[:4] == importlib.util.MAGIC_NUMBER
                 and cache_flags == 0
@@ -6632,7 +7220,9 @@ if not worker._RUNTIME_LOADED:
         self.assertEqual(completed.returncode, 23)
         self.assertTrue(cache_valid)
         self.assertEqual(source_before, source_after)
-        self.assertEqual(runtime_observation["controller"]["origin"], str(controller_path))
+        self.assertEqual(
+            runtime_observation["controller"]["origin"], str(controller_path)
+        )
         self.assertEqual(runtime_observation["worker"]["origin"], str(worker))
         self.assertEqual(runtime_observation["worker"]["loader"], "SourceLoader")
         self.assertEqual(observed, "SRC")
@@ -6705,7 +7295,9 @@ if not worker._RUNTIME_LOADED:
                 deadline_monotonic_ns=time.monotonic_ns() + LISTING_DEADLINE_NS,
                 payload={"url": f"http://127.0.0.1:{server.server_port}"},
             )
-            with mock.patch.object(remote_http.sys, "executable", "/usr/bin/python3.14"):
+            with mock.patch.object(
+                remote_http.sys, "executable", "/usr/bin/python3.14"
+            ):
                 result = remote_http.run_list_ollama_models(request)
             self.assertEqual(result, _success([]))
         finally:

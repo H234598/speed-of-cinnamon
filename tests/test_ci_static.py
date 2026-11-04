@@ -16,13 +16,19 @@ from speed_of_cinnamon import cli
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 
-def _is_command_sequence(node: ast.AST | None, safe_names: set[str] | None = None) -> bool:
+def _is_command_sequence(
+    node: ast.AST | None, safe_names: set[str] | None = None
+) -> bool:
     safe_names = safe_names or set()
     if isinstance(node, (ast.List, ast.Tuple)):
         return True
     if isinstance(node, ast.Name):
         return node.id in safe_names
-    if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in {"list", "tuple"}:
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"list", "tuple"}
+    ):
         return len(node.args) == 1 and isinstance(node.args[0], (ast.List, ast.Tuple))
     return False
 
@@ -34,14 +40,22 @@ def _safe_command_names(tree: ast.AST) -> set[str]:
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     names.add(target.id)
-        elif isinstance(node, ast.AnnAssign) and node.value is not None and _is_command_sequence(node.value):
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and node.value is not None
+            and _is_command_sequence(node.value)
+        ):
             if isinstance(node.target, ast.Name):
                 names.add(node.target.id)
     return names
 
 
 def _is_filtered_environment_call(node: ast.AST) -> bool:
-    return isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "_filtered_environment"
+    return (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"_filtered_environment", "_worker_environment"}
+    )
 
 
 def _safe_env_names(tree: ast.AST) -> set[str]:
@@ -51,13 +65,19 @@ def _safe_env_names(tree: ast.AST) -> set[str]:
             for target in node.targets:
                 if isinstance(target, ast.Name):
                     names.add(target.id)
-        elif isinstance(node, ast.AnnAssign) and node.value is not None and _is_filtered_environment_call(node.value):
+        elif (
+            isinstance(node, ast.AnnAssign)
+            and node.value is not None
+            and _is_filtered_environment_call(node.value)
+        ):
             if isinstance(node.target, ast.Name):
                 names.add(node.target.id)
     return names
 
 
-def _is_safe_env_argument(node: ast.AST | None, safe_names: set[str] | None = None) -> bool:
+def _is_safe_env_argument(
+    node: ast.AST | None, safe_names: set[str] | None = None
+) -> bool:
     if node is None:
         return True
     safe_names = safe_names or set()
@@ -94,7 +114,9 @@ def _subprocess_aliases(tree: ast.AST) -> tuple[set[str], set[str]]:
     return module_names, direct_call_names
 
 
-def _called_subprocess_name(func: ast.AST, module_names: set[str], direct_call_names: set[str]) -> str | None:
+def _called_subprocess_name(
+    func: ast.AST, module_names: set[str], direct_call_names: set[str]
+) -> str | None:
     if isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name):
         if func.value.id in module_names and func.attr in _SUBPROCESS_CALLS:
             return func.attr
@@ -103,7 +125,9 @@ def _called_subprocess_name(func: ast.AST, module_names: set[str], direct_call_n
     return None
 
 
-def _literal_subprocess_keywords(keywords: list[ast.keyword]) -> list[ast.keyword] | None:
+def _literal_subprocess_keywords(
+    keywords: list[ast.keyword],
+) -> list[ast.keyword] | None:
     resolved: list[ast.keyword] = []
     seen: set[str] = set()
     for keyword in keywords:
@@ -130,9 +154,17 @@ def _direct_safe_producers(body: list[ast.stmt]) -> tuple[set[str], set[str]]:
     environments: set[str] = set()
     for statement in body:
         if isinstance(statement, ast.Assign):
-            targets = [target.id for target in statement.targets if isinstance(target, ast.Name)]
+            targets = [
+                target.id
+                for target in statement.targets
+                if isinstance(target, ast.Name)
+            ]
             value = statement.value
-        elif isinstance(statement, ast.AnnAssign) and isinstance(statement.target, ast.Name) and statement.value is not None:
+        elif (
+            isinstance(statement, ast.AnnAssign)
+            and isinstance(statement.target, ast.Name)
+            and statement.value is not None
+        ):
             targets = [statement.target.id]
             value = statement.value
         else:
@@ -155,8 +187,12 @@ def _sibling_producer_veto(
     if not isinstance(tree, ast.Module):
         return []
     module_commands, module_environments = _direct_safe_producers(tree.body)
-    functions = [statement for statement in tree.body if isinstance(statement, ast.FunctionDef)]
-    producers = {function: _direct_safe_producers(function.body) for function in functions}
+    functions = [
+        statement for statement in tree.body if isinstance(statement, ast.FunctionDef)
+    ]
+    producers = {
+        function: _direct_safe_producers(function.body) for function in functions
+    }
     command_sources: dict[str, set[ast.FunctionDef]] = {}
     environment_sources: dict[str, set[ast.FunctionDef]] = {}
     for function, (commands, environments) in producers.items():
@@ -169,16 +205,26 @@ def _sibling_producer_veto(
     for function in functions:
         own_commands, own_environments = producers[function]
         for statement in function.body:
-            if not isinstance(statement, ast.Expr) or not isinstance(statement.value, ast.Call):
+            if not isinstance(statement, ast.Expr) or not isinstance(
+                statement.value, ast.Call
+            ):
                 continue
             call = statement.value
-            if _called_subprocess_name(call.func, module_names, direct_call_names) != "Popen":
+            if (
+                _called_subprocess_name(call.func, module_names, direct_call_names)
+                != "Popen"
+            ):
                 continue
             keywords = _literal_subprocess_keywords(call.keywords)
             if keywords is None:
                 continue
-            command = call.args[0] if call.args else next(
-                (keyword.value for keyword in keywords if keyword.arg == "args"), None
+            command = (
+                call.args[0]
+                if call.args
+                else next(
+                    (keyword.value for keyword in keywords if keyword.arg == "args"),
+                    None,
+                )
             )
             environment = next(
                 (keyword.value for keyword in keywords if keyword.arg == "env"), None
@@ -189,18 +235,28 @@ def _sibling_producer_veto(
                     name in safe_command_names
                     and name not in own_commands
                     and name not in module_commands
-                    and any(source is not function for source in command_sources.get(name, ()))
+                    and any(
+                        source is not function
+                        for source in command_sources.get(name, ())
+                    )
                 ):
-                    vetoes.append(f"{path}: Popen command safety comes only from a sibling function")
+                    vetoes.append(
+                        f"{path}: Popen command safety comes only from a sibling function"
+                    )
             if isinstance(environment, ast.Name):
                 name = environment.id
                 if (
                     name in safe_env_names
                     and name not in own_environments
                     and name not in module_environments
-                    and any(source is not function for source in environment_sources.get(name, ()))
+                    and any(
+                        source is not function
+                        for source in environment_sources.get(name, ())
+                    )
                 ):
-                    vetoes.append(f"{path}: Popen env safety comes only from a sibling function")
+                    vetoes.append(
+                        f"{path}: Popen env safety comes only from a sibling function"
+                    )
     return vetoes
 
 
@@ -218,20 +274,28 @@ def _subprocess_security_offenders(path: Path, tree: ast.AST) -> list[str]:
 
         keywords = _literal_subprocess_keywords(node.keywords)
         if keywords is None:
-            offenders.append(f"{path}: {call_name} keyword expansion must be a unique string-keyed literal dict")
+            offenders.append(
+                f"{path}: {call_name} keyword expansion must be a unique string-keyed literal dict"
+            )
             keywords = [keyword for keyword in node.keywords if keyword.arg is not None]
 
         for kw in keywords:
             if kw.arg == "shell":
                 if not (isinstance(kw.value, ast.Constant) and kw.value.value is False):
-                    offenders.append(f"{path}: {call_name} with unsupported shell value")
+                    offenders.append(
+                        f"{path}: {call_name} with unsupported shell value"
+                    )
                 continue
             if kw.arg == "env":
                 if not _is_safe_env_argument(kw.value, safe_env_names):
-                    offenders.append(f"{path}: {call_name} env must be a prepared value or string literal dict")
+                    offenders.append(
+                        f"{path}: {call_name} env must be a prepared value or string literal dict"
+                    )
 
         if node.args and any(keyword.arg == "args" for keyword in keywords):
-            offenders.append(f"{path}: {call_name} args specified both positionally and by keyword")
+            offenders.append(
+                f"{path}: {call_name} args specified both positionally and by keyword"
+            )
         command = None
         if node.args:
             command = node.args[0]
@@ -248,8 +312,12 @@ def _subprocess_security_offenders(path: Path, tree: ast.AST) -> list[str]:
             offenders.append(f"{path}: {call_name} command must be list/tuple")
     offenders.extend(
         _sibling_producer_veto(
-            path, tree, module_names, direct_call_names,
-            safe_command_names, safe_env_names,
+            path,
+            tree,
+            module_names,
+            direct_call_names,
+            safe_command_names,
+            safe_env_names,
         )
     )
     return offenders
@@ -264,7 +332,9 @@ def _workflow_block_lines(text: str, header: str) -> list[str]:
             end = start
             while end < len(lines):
                 candidate = lines[end]
-                if candidate and (len(candidate) - len(candidate.lstrip(" ")) <= header_indent):
+                if candidate and (
+                    len(candidate) - len(candidate.lstrip(" ")) <= header_indent
+                ):
                     break
                 end += 1
             return [candidate for candidate in lines[start:end] if candidate.strip()]
@@ -274,20 +344,87 @@ def _workflow_block_lines(text: str, header: str) -> list[str]:
 class CiStaticTest(unittest.TestCase):
     def test_applet_crash_safety_gates_are_present_and_isolated(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-        harness = (REPO_ROOT / "scripts" / "applet-crash-safety.sh").read_text(encoding="utf-8")
+        harness = (REPO_ROOT / "scripts" / "applet-crash-safety.sh").read_text(
+            encoding="utf-8"
+        )
+
+        def block(signature: str, terminator: str = "\n}\n") -> str:
+            self.assertIn(signature, harness)
+            tail = harness.split(signature, 1)[1]
+            self.assertIn(terminator, tail)
+            return tail.split(terminator, 1)[0]
+
+        namespace = block("verify_private_namespace() {", "\nPY\n}")
+        nested = block("run_nested() {")
+        server = block("run_dbus_server() {")
+        bus_binding = block("verify_private_dbus_binding() {", "\nPY\n}")
+        signal_owned = block("signal_owned_process() {", "\nPY\n}")
+        terminate_owned = block("terminate_owned_process() {")
+        bootstrap_cleanup = block("\nbootstrap_cleanup() {")
+        cleanup = block("\ncleanup() {")
 
         self.assertIn("applet-safety-check", makefile)
         self.assertIn("applet-crash-safety: applet-safety-check", makefile)
         self.assertIn("Xephyr", harness)
-        self.assertIn("dbus-run-session", harness)
+        self.assertIn(
+            "unset DBUS_SESSION_BUS_ADDRESS DISPLAY WAYLAND_DISPLAY XAUTHORITY", harness
+        )
+        self.assertIn(
+            '"${bwrap_bin}" --die-with-parent --new-session --clearenv', nested
+        )
+        self.assertIn("--tmpfs /tmp --tmpfs /run", nested)
+        self.assertIn(
+            '--dir /run/soc-bus --ro-bind "${controller_root}/dbus" /run/soc-bus',
+            nested,
+        )
+        self.assertIn(
+            '--setenv DBUS_SESSION_BUS_ADDRESS "unix:path=/run/soc-bus/session.sock"',
+            nested,
+        )
+        self.assertIn(
+            '--tmpfs /run --dir /run/soc-bus --bind "${controller_root}/dbus" /run/soc-bus',
+            server,
+        )
+        self.assertIn(
+            "run_dbus_server /usr/bin/dbus-daemon --session --nofork --nopidfile --nosyslog",
+            harness,
+        )
+        self.assertIn('--address="unix:path=/run/soc-bus/session.sock"', harness)
+        self.assertIn('dbus_address="unix:path=/run/soc-bus/session.sock"', harness)
+        self.assertIn(
+            "count_private_dbus_matches(handle, socket_inodes, bound_path)", bus_binding
+        )
+        self.assertIn("os.pidfd_open(daemon_pid, 0)", bus_binding)
+        self.assertIn("read_uid(daemon_pid)", bus_binding)
+        self.assertIn("if socket_identity_after != socket_identity:", bus_binding)
+        self.assertIn("if bound_matches == 0:", bus_binding)
+        self.assertIn("if bound_matches > 1:", bus_binding)
+        self.assertIn(
+            "if ! capture_private_dbus_binding || [[ -z ${dbus_socket_identity} ]]; then",
+            harness,
+        )
+        self.assertIn('export DBUS_SESSION_BUS_ADDRESS="${dbus_address}"', harness)
+        self.assertLess(
+            harness.index(
+                "if ! capture_private_dbus_binding || [[ -z ${dbus_socket_identity} ]]; then"
+            ),
+            harness.index('export DBUS_SESSION_BUS_ADDRESS="${dbus_address}"'),
+        )
         self.assertIn("APPLET_CRASH_SAFETY_CYCLES", harness)
         self.assertIn("max_cycles=1000", harness)
         self.assertIn("${#cycles} -gt 4", harness)
         self.assertIn("cycles > max_cycles", harness)
         self.assertIn("APPLET_CRASH_SAFETY_DBUS_TIMEOUT_SECONDS", harness)
         self.assertIn("max_dbus_timeout_seconds=60", harness)
-        self.assertIn('APPLET_CRASH_SAFETY_DBUS_TIMEOUT_SECONDS="${dbus_timeout_seconds}"', harness)
-        self.assertIn("timeout --signal=TERM --kill-after=2s \"${dbus_timeout_seconds}s\" \\\n    gdbus call --session", harness)
+        self.assertIn(
+            'dbus_timeout_seconds="${APPLET_CRASH_SAFETY_DBUS_TIMEOUT_SECONDS:-10}"',
+            harness,
+        )
+        self.assertIn("((dbus_timeout_seconds > max_dbus_timeout_seconds))", harness)
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=2s "${dbus_timeout_seconds}s" \\\n\t\tgdbus call --session',
+            harness,
+        )
         self.assertEqual(harness.count("gdbus call --session"), 1)
         self.assertIn("max_heartbeat_limit_ms=60000", harness)
         self.assertIn("${#heartbeat_limit_ms} -gt 5", harness)
@@ -298,27 +435,88 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("NO_AT_BRIDGE", harness)
         self.assertIn("Cjs-CRITICAL", harness)
         self.assertIn("Cinnamon RSS grew by more than 50 MiB", harness)
-        self.assertIn("validate_directory_path()", harness)
+        self.assertIn('mounts.get("/run") != "tmpfs"', namespace)
+        self.assertIn('mounts.get("/tmp") != "tmpfs"', namespace)
+        self.assertIn('"/run/soc-controller/dbus"', namespace)
+        self.assertIn('"/run/soc-work"', namespace)
+        self.assertIn("stat.S_ISLNK(entry.st_mode)", namespace)
+        self.assertIn("entry.st_uid != os.geteuid()", namespace)
+        self.assertIn("if variable in os.environ:", namespace)
+        self.assertIn("if ! verify_private_namespace; then", harness)
+        self.assertIn('test_root="/run/soc-work/session"', harness)
+        self.assertIn('mkdir -p -- "${test_root}"', harness)
+        self.assertIn('chmod 700 "${controller_root}"', harness)
+        self.assertIn('"/run/soc-work" "${test_root}"', harness)
+        self.assertIn("sandbox+=(--unshare-pid --unshare-net", nested)
+        self.assertLess(
+            harness.index("if ! verify_private_namespace; then"),
+            harness.index('mkdir -p -- "${test_root}"'),
+        )
         self.assertIn("stat.S_ISLNK(entry.st_mode)", harness)
-        self.assertIn('require_private="${2:-0}"', harness)
         self.assertIn("entry.st_mode & 0o077", harness)
-        self.assertIn("entry.st_uid != os.getuid()", harness)
-        self.assertIn('test_tmp_root="${TMPDIR:-/tmp}"', harness)
-        self.assertIn("temporary root is unsafe", harness)
-        self.assertIn("test root is unsafe", harness)
-        self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', harness)
-        self.assertIn('test_root_identity=""', harness)
-        self.assertIn('--expected-identity "${test_root_identity}"', harness)
-        self.assertIn("refusing applet crash-safety cleanup without verified identity", harness)
-        self.assertIn('python3 "${safe_fs}" remove applet-crash-safety', harness)
-        self.assertIn("cleanup_test_root()", harness)
-        self.assertIn("terminate_process()", harness)
-        self.assertIn('kill -TERM "${pid}"', harness)
-        self.assertIn('for _ in $(seq 1 40);', harness)
-        self.assertIn('kill -KILL "${pid}"', harness)
-        self.assertIn('terminate_process "${cinnamon_pid}"', harness)
-        self.assertIn('terminate_process "${xephyr_pid}"', harness)
-        self.assertIn("nested_status=$?", harness)
+        self.assertIn("controller_entry.st_uid != expected_uid", bus_binding)
+        self.assertIn("directory_entry.st_uid != expected_uid", bus_binding)
+        self.assertIn("stat.S_ISLNK(socket_entry.st_mode)", bus_binding)
+        self.assertIn("socket_entry.st_uid != expected_uid", bus_binding)
+        self.assertIn('export TMPDIR="${tmp_dir}"', harness)
+        self.assertIn("run_nested setup env SPEED_OF_CINNAMON_TEST_HOME=1", harness)
+        self.assertIn(
+            'scripts/safe-local-fs.py" assert-private-chain install "${session_home}" --allow-missing',
+            harness,
+        )
+        self.assertIn('owner_pid="${BASHPID}"', terminate_owned)
+        self.assertIn(
+            'parent_pid="$(owned_process_parent_pid "${pid}" "${expected_start}")" || return 1',
+            terminate_owned,
+        )
+        self.assertIn(
+            'signal_owned_process "${pid}" "${expected_start}" SIGTERM || return 1',
+            terminate_owned,
+        )
+        self.assertIn(
+            'signal_owned_process "${pid}" "${expected_start}" SIGKILL || return 1',
+            terminate_owned,
+        )
+        self.assertIn(
+            'wait_owned_process_reap "${pid}" "${expected_start}"', terminate_owned
+        )
+        self.assertIn("before = identity()", signal_owned)
+        self.assertIn("before[1] != expected_start", signal_owned)
+        self.assertIn("pidfd = os.pidfd_open(pid, 0)", signal_owned)
+        self.assertIn("rebound = identity()", signal_owned)
+        self.assertIn("rebound[1] != expected_start", signal_owned)
+        self.assertIn("signal.pidfd_send_signal(pidfd, signum, None, 0)", signal_owned)
+        self.assertIn("os.close(pidfd)", signal_owned)
+        self.assertIn(
+            'terminate_owned_process "${dbus_server_pid}" "${dbus_server_start_time}" 4',
+            bootstrap_cleanup,
+        )
+        self.assertIn(
+            'terminate_owned_process "${dbus_pid}" "${dbus_start_time}" 4',
+            bootstrap_cleanup,
+        )
+        for process in (
+            "smoke",
+            "cinnamon",
+            "xephyr_server",
+            "xephyr",
+            "dbus_server",
+            "dbus",
+        ):
+            pid_ref = "${" + process + "_pid}"
+            start_ref = "${" + process + "_start_time}"
+            self.assertIn(
+                f'terminate_owned_process "{pid_ref}" "{start_ref}" 4', cleanup
+            )
+        self.assertIn("local status=$?", bootstrap_cleanup)
+        self.assertIn("local status=$?", cleanup)
+        self.assertIn("if ((cleanup_failed != 0 && status == 0)); then", cleanup)
+        self.assertIn('exit "${status}"', bootstrap_cleanup)
+        self.assertIn('exit "${status}"', cleanup)
+        self.assertIn("trap bootstrap_cleanup EXIT", harness)
+        self.assertIn("trap cleanup EXIT", harness)
+        self.assertNotIn('kill -TERM "${pid}"', harness)
+        self.assertNotIn('kill -KILL "${pid}"', harness)
         self.assertNotIn("exec dbus-run-session", harness)
         self.assertNotIn('rm -rf -- "${test_root}"', harness)
         self.assertNotIn('rm -f -- "${crash_error_log}"', harness)
@@ -329,25 +527,64 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertIn("clean", makefile.splitlines()[0])
         self.assertIn("clean:\n", makefile)
-        self.assertIn("rm -rf -- build dist reports .coverage .pytest_cache .mypy_cache *.egg-info", makefile)
-        self.assertIn("find src tests -type d -name __pycache__ -prune -exec rm -rf -- {} +", makefile)
+        self.assertIn(
+            "rm -rf -- build dist reports .coverage .pytest_cache .mypy_cache *.egg-info",
+            makefile,
+        )
+        self.assertIn(
+            "find src tests -type d -name __pycache__ -prune -exec rm -rf -- {} +",
+            makefile,
+        )
 
     def test_makefile_test_targets_isolate_user_error_journal(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
 
-        self.assertIn('test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-test.XXXXXX")"', makefile)
+        self.assertIn(
+            'test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-test.XXXXXX")"',
+            makefile,
+        )
         self.assertIn('tmp_dir="$$test_root/tmp"', makefile)
         self.assertIn("trap 'rm -rf -- \"$$test_root\"' EXIT", makefile)
-        self.assertIn('TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m unittest discover -s tests', makefile)
-        self.assertIn('SOC_RUN_GUI_LIVE_TESTS=0 TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m unittest discover -s tests', makefile)
-        self.assertIn('test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-check-fast.XXXXXX")"', makefile)
-        self.assertIn('TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" node --test tests/test_applet_keyboard.mjs', makefile)
-        self.assertIn('test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-smoke-doctor.XXXXXX")"', makefile)
-        self.assertIn('TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m speed_of_cinnamon.cli doctor --json', makefile)
-        self.assertIn('test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-coverage.XXXXXX")"', makefile)
-        self.assertIn('TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m coverage run', makefile)
-        self.assertIn('SOC_RUN_GUI_LIVE_TESTS=0 TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m coverage run', makefile)
-        self.assertIn("find src tests -type f \\( -name '*.pyc' -o -name '*.pyo' \\) -delete", makefile)
+        self.assertIn(
+            'TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m unittest discover -s tests',
+            makefile,
+        )
+        self.assertIn(
+            'SOC_RUN_GUI_LIVE_TESTS=0 TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m unittest discover -s tests',
+            makefile,
+        )
+        self.assertIn(
+            'test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-check-fast.XXXXXX")"',
+            makefile,
+        )
+        self.assertIn(
+            'TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" node --test tests/test_applet_keyboard.mjs',
+            makefile,
+        )
+        self.assertIn(
+            'test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-smoke-doctor.XXXXXX")"',
+            makefile,
+        )
+        self.assertIn(
+            'TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m speed_of_cinnamon.cli doctor --json',
+            makefile,
+        )
+        self.assertIn(
+            'test_root="$$(mktemp -d "$${HOME}/.cache/speed-of-cinnamon-coverage.XXXXXX")"',
+            makefile,
+        )
+        self.assertIn(
+            'TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m coverage run',
+            makefile,
+        )
+        self.assertIn(
+            'SOC_RUN_GUI_LIVE_TESTS=0 TMPDIR="$$tmp_dir" XDG_STATE_HOME="$$state_home" PYTHONPATH=src $(PYTHON) -m coverage run',
+            makefile,
+        )
+        self.assertIn(
+            "find src tests -type f \\( -name '*.pyc' -o -name '*.pyo' \\) -delete",
+            makefile,
+        )
         self.assertNotIn("~/.local", makefile)
 
     def test_makefile_lint_uses_private_external_python_cache(self) -> None:
@@ -378,7 +615,9 @@ class CiStaticTest(unittest.TestCase):
             "$(PYTHON) -m json.tool files/speed-of-cinnamon@H234598/settings-schema.json >/dev/null",
             lint,
         )
-        self.assertIn("node --check files/speed-of-cinnamon@H234598/applet.js >/dev/null", lint)
+        self.assertIn(
+            "node --check files/speed-of-cinnamon@H234598/applet.js >/dev/null", lint
+        )
 
     def test_cli_reference_and_manpage_cover_subcommands(self) -> None:
         parser = cli.build_parser()
@@ -390,10 +629,12 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertTrue(subcommands)
         docs = {
-            "docs/cli-reference.md": (REPO_ROOT / "docs" / "cli-reference.md").read_text(encoding="utf-8"),
-            "docs/man/speed-of-cinnamon.1": (REPO_ROOT / "docs" / "man" / "speed-of-cinnamon.1").read_text(
-                encoding="utf-8"
-            ),
+            "docs/cli-reference.md": (
+                REPO_ROOT / "docs" / "cli-reference.md"
+            ).read_text(encoding="utf-8"),
+            "docs/man/speed-of-cinnamon.1": (
+                REPO_ROOT / "docs" / "man" / "speed-of-cinnamon.1"
+            ).read_text(encoding="utf-8"),
         }
         for command in subcommands:
             if command in {"start", "stop", "toggle", "cancel", "status"}:
@@ -401,10 +642,21 @@ class CiStaticTest(unittest.TestCase):
             for path, text in docs.items():
                 self.assertIn(command, text, f"{command} missing from {path}")
 
-        project_version = (REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8").split('version = "')[1].split('"')[0]
-        self.assertIn(f"speed-of-cinnamon {project_version}", docs["docs/man/speed-of-cinnamon.1"])
+        project_version = (
+            (REPO_ROOT / "pyproject.toml")
+            .read_text(encoding="utf-8")
+            .split('version = "')[1]
+            .split('"')[0]
+        )
+        self.assertIn(
+            f"speed-of-cinnamon {project_version}", docs["docs/man/speed-of-cinnamon.1"]
+        )
         parser = cli.build_parser()
-        subparser_action = next(action for action in parser._actions if action.__class__.__name__ == "_SubParsersAction")
+        subparser_action = next(
+            action
+            for action in parser._actions
+            if action.__class__.__name__ == "_SubParsersAction"
+        )
         toggle_help = subparser_action.choices["toggle"].format_help()
         transcribe_file_help = subparser_action.choices["transcribe-file"].format_help()
         for help_text in (toggle_help, transcribe_file_help):
@@ -414,26 +666,43 @@ class CiStaticTest(unittest.TestCase):
             self.assertIn("choose passphrase", help_text)
             self.assertIn("explicitly when needed", help_text)
             self.assertNotIn("keyring falls back to", help_text)
-        self.assertIn("fails closed if the Secret Service is unavailable", docs["docs/man/speed-of-cinnamon.1"])
-        self.assertNotIn("falls back to passphrase mode only when an explicit passphrase source is", docs["docs/man/speed-of-cinnamon.1"])
-        self.assertNotIn("falls back to passphrase mode when\nkeyring access fails", docs["docs/man/speed-of-cinnamon.1"])
+        self.assertIn(
+            "fails closed if the Secret Service is unavailable",
+            docs["docs/man/speed-of-cinnamon.1"],
+        )
+        self.assertNotIn(
+            "falls back to passphrase mode only when an explicit passphrase source is",
+            docs["docs/man/speed-of-cinnamon.1"],
+        )
+        self.assertNotIn(
+            "falls back to passphrase mode when\nkeyring access fails",
+            docs["docs/man/speed-of-cinnamon.1"],
+        )
 
     def test_command_chain_security_tests_are_present(self) -> None:
         command_chain_test = REPO_ROOT / "tests" / "test_command_chain.py"
-        self.assertTrue(command_chain_test.exists(), "command chain security tests must exist")
+        self.assertTrue(
+            command_chain_test.exists(), "command chain security tests must exist"
+        )
         text = command_chain_test.read_text(encoding="utf-8")
         self.assertIn("class CommandChainTest", text)
         self.assertIn("unsupported shell operator", text)
 
     def test_recorder_stop_paths_require_process_identity_guard(self) -> None:
-        source = (REPO_ROOT / "src" / "speed_of_cinnamon" / "cli.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "src" / "speed_of_cinnamon" / "cli.py").read_text(
+            encoding="utf-8"
+        )
         stop_start = source.index("def command_stop(")
         cancel_start = source.index("def command_cancel(")
         next_command = source.index("def command_toggle(", cancel_start)
         stop_block = source[stop_start:cancel_start]
         cancel_block = source[cancel_start:next_command]
-        helper_start = source.index("def _reconcile_recording_process(state: RecordingState)")
-        helper_end = source.index("def _raise_if_state_unreadable(state: RecordingState)", helper_start)
+        helper_start = source.index(
+            "def _reconcile_recording_process(state: RecordingState)"
+        )
+        helper_end = source.index(
+            "def _raise_if_state_unreadable(state: RecordingState)", helper_start
+        )
         helper_block = source[helper_start:helper_end]
 
         self.assertIn("_reconcile_recording_process(state)", stop_block)
@@ -444,30 +713,40 @@ class CiStaticTest(unittest.TestCase):
             or "_is_recording_process_alive(pid)" in helper_block
         )
         probe_start = source.index("def _recording_process_absence_probe(pid: int)")
-        probe_end = source.index("def _reconcile_recording_process(state: RecordingState)", probe_start)
+        probe_end = source.index(
+            "def _reconcile_recording_process(state: RecordingState)", probe_start
+        )
         probe_block = source[probe_start:probe_end]
         self.assertIn("process_group_has_live_processes(pid)", probe_block)
         self.assertIn("_RECORDING_PROCESS_IDENTITY_UNKNOWN", probe_block)
         self.assertIn("_recording_process_stable_absence(", helper_block)
         absence_start = source.index("def _recording_process_stable_absence(")
-        absence_end = source.index("def _reconcile_recording_process(state: RecordingState)", absence_start)
+        absence_end = source.index(
+            "def _reconcile_recording_process(state: RecordingState)", absence_start
+        )
         absence_block = source[absence_start:absence_end]
         self.assertIn("_recording_process_absence_probe(pid)", absence_block)
         source_tree = ast.parse(source)
         reconcile_helpers = [
-            node for node in ast.walk(source_tree)
-            if isinstance(node, ast.FunctionDef) and node.name == "_reconcile_recording_process"
+            node
+            for node in ast.walk(source_tree)
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_reconcile_recording_process"
         ]
         self.assertEqual(len(reconcile_helpers), 1)
+
         def check_reconcile_identity(reconcile_helper: ast.FunctionDef) -> None:
             identity_bindings = [
-                node for node in reconcile_helper.body
+                node
+                for node in reconcile_helper.body
                 if isinstance(node, ast.Assign)
-                and ast.unparse(node) == "expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)"
+                and ast.unparse(node)
+                == "expected_identity = _recording_process_identity_for_lifecycle(state.process_identity)"
             ]
             self.assertEqual(len(identity_bindings), 1)
             identity_guards = [
-                node for node in reconcile_helper.body
+                node
+                for node in reconcile_helper.body
                 if isinstance(node, ast.If)
                 and ast.unparse(node.test) == "expected_identity is None"
             ]
@@ -476,23 +755,29 @@ class CiStaticTest(unittest.TestCase):
             invalid_return = identity_guards[0].body[0]
             self.assertIsInstance(invalid_return, ast.Return)
             self.assertIsInstance(invalid_return.value, ast.Name)
-            self.assertEqual(invalid_return.value.id, "_RECORDING_PROCESS_IDENTITY_INVALID_ERROR")
+            self.assertEqual(
+                invalid_return.value.id, "_RECORDING_PROCESS_IDENTITY_INVALID_ERROR"
+            )
             leader_branches = [
-                node for node in reconcile_helper.body
+                node
+                for node in reconcile_helper.body
                 if isinstance(node, ast.If) and ast.unparse(node.test) == "leader_alive"
             ]
             self.assertEqual(len(leader_branches), 1)
             leader_branch = leader_branches[0]
             mismatch_guards = [
-                node for node in leader_branch.body
+                node
+                for node in leader_branch.body
                 if isinstance(node, ast.If)
-                and ast.unparse(node.test) == "identity_relation != _PROCESS_IDENTITY_SAME"
+                and ast.unparse(node.test)
+                == "identity_relation != _PROCESS_IDENTITY_SAME"
                 and len(node.body) == 1
                 and isinstance(node.body[0], ast.Return)
             ]
             self.assertEqual(len(mismatch_guards), 1)
             stop_bindings = [
-                node for node in leader_branch.body
+                node
+                for node in leader_branch.body
                 if isinstance(node, ast.AnnAssign)
                 and isinstance(node.target, ast.Name)
                 and node.target.id == "stop_kwargs"
@@ -500,19 +785,25 @@ class CiStaticTest(unittest.TestCase):
             self.assertEqual(len(stop_bindings), 1)
             stop_binding = stop_bindings[0]
             self.assertIsInstance(stop_binding.value, ast.Dict)
-            self.assertTrue(all(
-                isinstance(key, ast.Constant) and isinstance(key.value, str)
-                for key in stop_binding.value.keys
-            ))
+            self.assertTrue(
+                all(
+                    isinstance(key, ast.Constant) and isinstance(key.value, str)
+                    for key in stop_binding.value.keys
+                )
+            )
             identity_values = [
-                value for key, value in zip(stop_binding.value.keys, stop_binding.value.values)
+                value
+                for key, value in zip(
+                    stop_binding.value.keys, stop_binding.value.values
+                )
                 if key.value == "expected_process_identity"
             ]
             self.assertEqual(len(identity_values), 1)
             self.assertIsInstance(identity_values[0], ast.Name)
             self.assertEqual(identity_values[0].id, "expected_identity")
             stop_call_statements = [
-                statement for statement in leader_branch.body
+                statement
+                for statement in leader_branch.body
                 if any(
                     isinstance(node, ast.Call)
                     and ast.unparse(node) == "stop_process(pid, **stop_kwargs)"
@@ -520,18 +811,37 @@ class CiStaticTest(unittest.TestCase):
                 )
             ]
             self.assertEqual(len(stop_call_statements), 1)
-            self.assertLess(reconcile_helper.body.index(identity_bindings[0]), reconcile_helper.body.index(identity_guards[0]))
-            self.assertLess(reconcile_helper.body.index(identity_guards[0]), reconcile_helper.body.index(leader_branch))
-            self.assertLess(leader_branch.body.index(mismatch_guards[0]), leader_branch.body.index(stop_binding))
-            self.assertLess(leader_branch.body.index(stop_binding), leader_branch.body.index(stop_call_statements[0]))
+            self.assertLess(
+                reconcile_helper.body.index(identity_bindings[0]),
+                reconcile_helper.body.index(identity_guards[0]),
+            )
+            self.assertLess(
+                reconcile_helper.body.index(identity_guards[0]),
+                reconcile_helper.body.index(leader_branch),
+            )
+            self.assertLess(
+                leader_branch.body.index(mismatch_guards[0]),
+                leader_branch.body.index(stop_binding),
+            )
+            self.assertLess(
+                leader_branch.body.index(stop_binding),
+                leader_branch.body.index(stop_call_statements[0]),
+            )
             scope_branches = [
-                node for node in reconcile_helper.body
-                if isinstance(node, ast.If) and ast.unparse(node.test) == "state.recorder_scope and (not scope_gone)"
+                node
+                for node in reconcile_helper.body
+                if isinstance(node, ast.If)
+                and ast.unparse(node.test)
+                == "state.recorder_scope and (not scope_gone)"
             ]
             self.assertEqual(len(scope_branches), 1)
-            self.assertLess(reconcile_helper.body.index(identity_guards[0]), reconcile_helper.body.index(scope_branches[0]))
+            self.assertLess(
+                reconcile_helper.body.index(identity_guards[0]),
+                reconcile_helper.body.index(scope_branches[0]),
+            )
             scope_calls = [
-                node for node in ast.walk(scope_branches[0])
+                node
+                for node in ast.walk(scope_branches[0])
                 if isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
                 and node.func.id == "stop_process"
@@ -540,9 +850,16 @@ class CiStaticTest(unittest.TestCase):
             self.assertEqual([ast.unparse(arg) for arg in scope_calls[0].args], ["pid"])
             self.assertEqual(len(scope_calls[0].keywords), 2)
             self.assertEqual(
-                {keyword.arg: ast.unparse(keyword.value) for keyword in scope_calls[0].keywords},
-                {"expected_process_identity": "expected_identity", "expected_recorder_scope": "state.recorder_scope"},
+                {
+                    keyword.arg: ast.unparse(keyword.value)
+                    for keyword in scope_calls[0].keywords
+                },
+                {
+                    "expected_process_identity": "expected_identity",
+                    "expected_recorder_scope": "state.recorder_scope",
+                },
             )
+
         check_reconcile_identity(reconcile_helpers[0])
         from copy import deepcopy
 
@@ -554,8 +871,8 @@ class CiStaticTest(unittest.TestCase):
             "    if leader_alive:\n"
             "        if identity_relation != _PROCESS_IDENTITY_SAME:\n"
             "            return _RECORDING_PROCESS_IDENTITY_INVALID_ERROR\n"
-            "        stop_kwargs: dict[str, object] = {\"expected_process_identity\": expected_identity, "
-            "\"expected_recorder_scope\": state.recorder_scope}\n"
+            '        stop_kwargs: dict[str, object] = {"expected_process_identity": expected_identity, '
+            '"expected_recorder_scope": state.recorder_scope}\n'
             "        if not stop_process(pid, **stop_kwargs):\n"
             "            return _RECORDING_PROCESS_IDENTITY_INVALID_ERROR\n"
             "    if state.recorder_scope and not scope_gone:\n"
@@ -565,26 +882,40 @@ class CiStaticTest(unittest.TestCase):
         ).body[0]
         check_reconcile_identity(synthetic_reconcile)
         for mutation in (
-            "wrong_identity_value", "duplicate_identity_override", "dict_unpack",
-            "invalid_guard_return", "late_binding", "scope_before_guard",
+            "wrong_identity_value",
+            "duplicate_identity_override",
+            "dict_unpack",
+            "invalid_guard_return",
+            "late_binding",
+            "scope_before_guard",
         ):
             with self.subTest(mutation=mutation):
                 variant = deepcopy(synthetic_reconcile)
-                binding = next(node for node in variant.body if isinstance(node, ast.Assign))
+                binding = next(
+                    node for node in variant.body if isinstance(node, ast.Assign)
+                )
                 guard = next(
-                    node for node in variant.body
-                    if isinstance(node, ast.If) and ast.unparse(node.test) == "expected_identity is None"
+                    node
+                    for node in variant.body
+                    if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == "expected_identity is None"
                 )
                 leader = next(
-                    node for node in variant.body
-                    if isinstance(node, ast.If) and ast.unparse(node.test) == "leader_alive"
+                    node
+                    for node in variant.body
+                    if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == "leader_alive"
                 )
                 scope = next(
-                    node for node in variant.body
+                    node
+                    for node in variant.body
                     if isinstance(node, ast.If)
-                    and ast.unparse(node.test) == "state.recorder_scope and (not scope_gone)"
+                    and ast.unparse(node.test)
+                    == "state.recorder_scope and (not scope_gone)"
                 )
-                mapping = next(node for node in leader.body if isinstance(node, ast.AnnAssign)).value
+                mapping = next(
+                    node for node in leader.body if isinstance(node, ast.AnnAssign)
+                ).value
                 if mutation == "wrong_identity_value":
                     mapping.values[0] = ast.Name(id="wrong_identity", ctx=ast.Load())
                 elif mutation == "duplicate_identity_override":
@@ -635,12 +966,15 @@ class CiStaticTest(unittest.TestCase):
             self.assertIn("process_error = _reconcile_recording_process(state)", block)
 
     def test_start_stale_recording_uses_shared_reconciliation(self) -> None:
-        source = (REPO_ROOT / "src" / "speed_of_cinnamon" / "cli.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "src" / "speed_of_cinnamon" / "cli.py").read_text(
+            encoding="utf-8"
+        )
         tree = ast.parse(source)
         start_node = next(
             node
             for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef) and node.name == "_command_start_locked"
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_command_start_locked"
         )
 
         recording_branch_checked = False
@@ -672,12 +1006,15 @@ class CiStaticTest(unittest.TestCase):
         self.assertTrue(recording_branch_checked)
 
     def test_start_error_state_does_not_use_one_probe_group_helper(self) -> None:
-        source = (REPO_ROOT / "src" / "speed_of_cinnamon" / "cli.py").read_text(encoding="utf-8")
+        source = (REPO_ROOT / "src" / "speed_of_cinnamon" / "cli.py").read_text(
+            encoding="utf-8"
+        )
         tree = ast.parse(source)
         start_node = next(
             node
             for node in ast.walk(tree)
-            if isinstance(node, ast.FunctionDef) and node.name == "_command_start_locked"
+            if isinstance(node, ast.FunctionDef)
+            and node.name == "_command_start_locked"
         )
         error_branch = next(
             node
@@ -691,8 +1028,7 @@ class CiStaticTest(unittest.TestCase):
                 and value.left.value.id == "current"
                 and value.left.attr == "status"
                 and any(
-                    isinstance(comparator, ast.Constant)
-                    and comparator.value == "error"
+                    isinstance(comparator, ast.Constant) and comparator.value == "error"
                     for comparator in value.comparators
                 )
                 for value in node.test.values
@@ -701,13 +1037,14 @@ class CiStaticTest(unittest.TestCase):
         calls = [
             child.func.id
             for child in ast.walk(error_branch)
-            if isinstance(child, ast.Call)
-            and isinstance(child.func, ast.Name)
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
         ]
         self.assertIn("_reconcile_recording_process", calls)
         self.assertNotIn("_recording_process_group_is_active", calls)
 
-    def test_runtime_and_release_code_do_not_execute_subprocess_with_shell_strings(self) -> None:
+    def test_runtime_and_release_code_do_not_execute_subprocess_with_shell_strings(
+        self,
+    ) -> None:
         code_roots = [REPO_ROOT / "src", REPO_ROOT / "scripts"]
         offenders = []
         for code_root in code_roots:
@@ -719,7 +1056,9 @@ class CiStaticTest(unittest.TestCase):
 
         self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
 
-    def test_release_version_tests_do_not_execute_subprocess_with_shell_strings(self) -> None:
+    def test_release_version_tests_do_not_execute_subprocess_with_shell_strings(
+        self,
+    ) -> None:
         path = REPO_ROOT / "tests" / "test_next_version.py"
         tree = ast.parse(path.read_text(encoding="utf-8"))
         offenders = _subprocess_security_offenders(path, tree)
@@ -727,7 +1066,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertFalse(offenders, f"unsafe subprocess usage found: {offenders}")
 
     def test_command_sequence_validation_accepts_supported_forms(self) -> None:
-        allowed = ["[\"a\", \"b\"]", "(\"a\", \"b\")", "list([\"a\", \"b\"])", "tuple((\"a\", \"b\"))"]
+        allowed = ['["a", "b"]', '("a", "b")', 'list(["a", "b"])', 'tuple(("a", "b"))']
         blocked = ["command", "tuple('a',)", "list()", "list('ab')", "tuple(command)"]
 
         for expr in allowed:
@@ -738,8 +1077,14 @@ class CiStaticTest(unittest.TestCase):
             self.assertFalse(_is_command_sequence(node))
 
     def test_subprocess_env_literal_requirement(self) -> None:
-        allowed = ["{\"A\": \"B\", \"C\": \"D\"}", "_filtered_environment()"]
-        blocked = ["env", "{\"A\": b, \"C\": os.environ['C']}", "dict(a='b')", "os.environ.copy()", "{k: v for k, v in vars.items()}"]
+        allowed = ['{"A": "B", "C": "D"}', "_filtered_environment()"]
+        blocked = [
+            "env",
+            '{"A": b, "C": os.environ[\'C\']}',
+            "dict(a='b')",
+            "os.environ.copy()",
+            "{k: v for k, v in vars.items()}",
+        ]
 
         for expr in allowed:
             node = ast.parse(expr, mode="eval").body
@@ -758,11 +1103,20 @@ class CiStaticTest(unittest.TestCase):
 
         offenders = _subprocess_security_offenders(Path("sample.py"), tree)
 
-        self.assertTrue(any("unsupported shell value" in offender for offender in offenders))
-        self.assertTrue(any("Popen first arg is string constant" in offender for offender in offenders))
+        self.assertTrue(
+            any("unsupported shell value" in offender for offender in offenders)
+        )
+        self.assertTrue(
+            any(
+                "Popen first arg is string constant" in offender
+                for offender in offenders
+            )
+        )
 
     def test_subprocess_static_scan_rejects_sibling_only_safe_names(self) -> None:
-        command_veto = "sample.py: Popen command safety comes only from a sibling function"
+        command_veto = (
+            "sample.py: Popen command safety comes only from a sibling function"
+        )
         env_veto = "sample.py: Popen env safety comes only from a sibling function"
         cases = (
             (
@@ -821,7 +1175,9 @@ class CiStaticTest(unittest.TestCase):
                 "def target():\n"
                 "    environment = {'LANG': 'C'}\n"
                 "    subprocess.Popen(['/bin/true'], env=environment)\n",
-                ("sample.py: Popen env must be a prepared value or string literal dict",),
+                (
+                    "sample.py: Popen env must be a prepared value or string literal dict",
+                ),
             ),
             (
                 "normalized_args_and_environment",
@@ -836,9 +1192,10 @@ class CiStaticTest(unittest.TestCase):
             ),
             (
                 "unknown_keywords_stay_unsafe",
-                "def target():\n"
-                "    subprocess.Popen(['/bin/true'], **kwargs)\n",
-                ("sample.py: Popen keyword expansion must be a unique string-keyed literal dict",),
+                "def target():\n" "    subprocess.Popen(['/bin/true'], **kwargs)\n",
+                (
+                    "sample.py: Popen keyword expansion must be a unique string-keyed literal dict",
+                ),
             ),
         )
         for name, source, expected in cases:
@@ -860,23 +1217,87 @@ class CiStaticTest(unittest.TestCase):
                 'subprocess.Popen(["/bin/true"], **{"shell": True, "env": os.environ.copy()})',
                 ("unsupported shell value", "env must be a prepared value"),
             ),
-            ("shell_true", 'subprocess.Popen(["/bin/true"], **{"shell": True})', ("unsupported shell value",)),
-            ("ambient_env", 'subprocess.Popen(["/bin/true"], **{"env": os.environ.copy()})', ("env must be a prepared value",)),
-            ("unknown_mapping", 'subprocess.Popen(["/bin/true"], **kwargs)', ("keyword expansion must be",)),
-            ("mapping_call", 'subprocess.Popen(["/bin/true"], **dict(shell=False))', ("keyword expansion must be",)),
-            ("nested_unpack", 'subprocess.Popen(["/bin/true"], **{**other})', ("keyword expansion must be",)),
-            ("dynamic_key", 'subprocess.Popen(["/bin/true"], **{key: False})', ("keyword expansion must be",)),
-            ("nonstring_key", 'subprocess.Popen(["/bin/true"], **{1: False})', ("keyword expansion must be",)),
-            ("duplicate_dict_key", 'subprocess.Popen(["/bin/true"], **{"shell": False, "shell": True})', ("keyword expansion must be",)),
-            ("duplicate_explicit_key", 'subprocess.Popen(["/bin/true"], shell=False, **{"shell": True})', ("keyword expansion must be",)),
-            ("string_args", 'subprocess.Popen(**{"args": "echo unsafe"})', ("first arg is string constant",)),
-            ("ambiguous_args", 'subprocess.Popen(["/bin/true"], **{"args": ["/bin/false"]})', ("args specified both",)),
-            ("safe_literal", 'subprocess.Popen(["/bin/true"], **{"shell": False, "env": {"LANG": "C"}})', ()),
+            (
+                "shell_true",
+                'subprocess.Popen(["/bin/true"], **{"shell": True})',
+                ("unsupported shell value",),
+            ),
+            (
+                "ambient_env",
+                'subprocess.Popen(["/bin/true"], **{"env": os.environ.copy()})',
+                ("env must be a prepared value",),
+            ),
+            (
+                "unknown_mapping",
+                'subprocess.Popen(["/bin/true"], **kwargs)',
+                ("keyword expansion must be",),
+            ),
+            (
+                "mapping_call",
+                'subprocess.Popen(["/bin/true"], **dict(shell=False))',
+                ("keyword expansion must be",),
+            ),
+            (
+                "nested_unpack",
+                'subprocess.Popen(["/bin/true"], **{**other})',
+                ("keyword expansion must be",),
+            ),
+            (
+                "dynamic_key",
+                'subprocess.Popen(["/bin/true"], **{key: False})',
+                ("keyword expansion must be",),
+            ),
+            (
+                "nonstring_key",
+                'subprocess.Popen(["/bin/true"], **{1: False})',
+                ("keyword expansion must be",),
+            ),
+            (
+                "duplicate_dict_key",
+                'subprocess.Popen(["/bin/true"], **{"shell": False, "shell": True})',
+                ("keyword expansion must be",),
+            ),
+            (
+                "duplicate_explicit_key",
+                'subprocess.Popen(["/bin/true"], shell=False, **{"shell": True})',
+                ("keyword expansion must be",),
+            ),
+            (
+                "string_args",
+                'subprocess.Popen(**{"args": "echo unsafe"})',
+                ("first arg is string constant",),
+            ),
+            (
+                "ambiguous_args",
+                'subprocess.Popen(["/bin/true"], **{"args": ["/bin/false"]})',
+                ("args specified both",),
+            ),
+            (
+                "safe_literal",
+                'subprocess.Popen(["/bin/true"], **{"shell": False, "env": {"LANG": "C"}})',
+                (),
+            ),
             ("empty_mapping", 'subprocess.Popen(["/bin/true"], **{})', ()),
-            ("explicit_and_empty", 'subprocess.Popen(["/bin/true"], shell=False, **{})', ()),
-            ("disjoint_mappings", 'subprocess.Popen(["/bin/true"], **{"shell": False}, **{"env": {"LANG": "C"}})', ()),
-            ("filtered_environment", 'subprocess.Popen(["/bin/true"], **{"env": _filtered_environment({"LANG": "C"})})', ()),
-            ("list_args", 'subprocess.Popen(**{"args": ["/bin/true"], "shell": False})', ()),
+            (
+                "explicit_and_empty",
+                'subprocess.Popen(["/bin/true"], shell=False, **{})',
+                (),
+            ),
+            (
+                "disjoint_mappings",
+                'subprocess.Popen(["/bin/true"], **{"shell": False}, **{"env": {"LANG": "C"}})',
+                (),
+            ),
+            (
+                "filtered_environment",
+                'subprocess.Popen(["/bin/true"], **{"env": _filtered_environment({"LANG": "C"})})',
+                (),
+            ),
+            (
+                "list_args",
+                'subprocess.Popen(**{"args": ["/bin/true"], "shell": False})',
+                (),
+            ),
         )
         for name, source, expected in cases:
             with self.subTest(name=name):
@@ -886,9 +1307,180 @@ class CiStaticTest(unittest.TestCase):
                 self.assertEqual(ast.dump(tree, include_attributes=True), original_ast)
                 if expected:
                     for fragment in expected:
-                        self.assertTrue(any(fragment in offender for offender in offenders), offenders)
+                        self.assertTrue(
+                            any(fragment in offender for offender in offenders),
+                            offenders,
+                        )
                 else:
                     self.assertEqual(offenders, [])
+
+    def test_verify_dist_releases_owned_decimal_parent_lock_fds(self) -> None:
+        import fcntl
+        import os
+        import signal
+        import stat
+
+        script = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
+        marker = "release_parent_lock() {\n"
+        self.assertEqual(script.count(marker), 1)
+        body, ending, _ = script.split(marker, 1)[1].partition("\n}\n")
+        self.assertEqual(ending, "\n}\n")
+        release_function = marker + body + ending
+        workspace = Path(
+            tempfile.mkdtemp(prefix="soc-lockfd-", dir=os.environ.get("TMPDIR"))
+        )
+        workspace_identity = workspace.lstat()
+        self.assertEqual(stat.S_IMODE(workspace_identity.st_mode), 0o700)
+        lock_path = workspace / "lock"
+        lock_fd = None
+        lock_identity = None
+        try:
+            lock_fd = os.open(
+                lock_path,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600,
+            )
+            lock_identity = os.fstat(lock_fd)
+            path_identity = lock_path.lstat()
+            self.assertEqual(
+                (lock_identity.st_dev, lock_identity.st_ino, lock_identity.st_uid),
+                (path_identity.st_dev, path_identity.st_ino, path_identity.st_uid),
+            )
+            self.assertEqual(stat.S_IMODE(path_identity.st_mode), 0o600)
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            accepted = ("3", "9", "10", "29", "30")
+            rejected = ("0", "1", "2", "", "03", "010", "3x")
+            for value, target_fd, expected in (
+                *((value, int(value), "accept") for value in accepted),
+                *((value, 10, "reject") for value in rejected),
+            ):
+                with self.subTest(value=value):
+                    fixture = (
+                        "read -r ready; [[ $ready == go ]] || exit 70\n"
+                        f'exec {target_fd}<&"$4" || exit 71\n'
+                        "given=$1; target_fd=$2; expected=$3; parent_lock_fd=$given\n"
+                        "[[ -e /proc/self/fd/$target_fd ]] || exit 72\n"
+                        "if release_parent_lock; then\n"
+                        "  [[ $expected == accept && -z $parent_lock_fd "
+                        "&& ! -e /proc/self/fd/$target_fd ]] || exit 73\n"
+                        "else\n"
+                        '  [[ $expected == reject && $parent_lock_fd == "$given" '
+                        "&& -e /proc/self/fd/$target_fd ]] || exit 74\n"
+                        "fi\n"
+                        "[[ -e /proc/self/fd/0 && -e /proc/self/fd/1 "
+                        "&& -e /proc/self/fd/2 ]] || exit 75\n"
+                    )
+                    process = subprocess.Popen(
+                        [
+                            "/bin/bash",
+                            "--noprofile",
+                            "--norc",
+                            "-p",
+                            "-c",
+                            release_function + fixture,
+                            "fixture",
+                            value,
+                            str(target_fd),
+                            expected,
+                            str(lock_fd),
+                        ],
+                        cwd=REPO_ROOT,
+                        env={
+                            "HOME": str(workspace),
+                            "PATH": "/usr/bin:/bin",
+                            "LC_ALL": "C.UTF-8",
+                        },
+                        stdin=subprocess.PIPE,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        text=True,
+                        start_new_session=True,
+                        close_fds=True,
+                        pass_fds=(lock_fd,),
+                    )
+                    try:
+                        pidfd = os.pidfd_open(process.pid)
+                    except OSError:
+                        process.stdin.close()
+                        process.wait(timeout=3)
+                        process.stdout.close()
+                        process.stderr.close()
+                        raise
+                    birth = None
+                    try:
+                        birth = (
+                            Path(f"/proc/{process.pid}/stat")
+                            .read_text()
+                            .rsplit(")", 1)[1]
+                            .split()[19]
+                        )
+                        uid_line = next(
+                            line
+                            for line in Path(f"/proc/{process.pid}/status")
+                            .read_text()
+                            .splitlines()
+                            if line.startswith("Uid:")
+                        )
+                        self.assertEqual(
+                            [int(part) for part in uid_line.split()[1:]],
+                            [os.getuid()] * 4,
+                        )
+                        self.assertGreater(int(birth), 0)
+                        output, errors = process.communicate(input="go\n", timeout=5)
+                        self.assertEqual(process.returncode, 0, (value, output, errors))
+                        self.assertEqual(output, "")
+                        if expected == "reject":
+                            self.assertIn(
+                                "dist parent lock descriptor is invalid during release",
+                                errors,
+                            )
+                        else:
+                            self.assertEqual(errors, "")
+                    finally:
+                        if process.poll() is None:
+                            if birth is None:
+                                process.stdin.close()
+                                process.wait(timeout=3)
+                            else:
+                                current_birth = (
+                                    Path(f"/proc/{process.pid}/stat")
+                                    .read_text()
+                                    .rsplit(")", 1)[1]
+                                    .split()[19]
+                                )
+                                self.assertEqual(current_birth, birth)
+                                signal.pidfd_send_signal(pidfd, signal.SIGTERM)
+                                try:
+                                    process.communicate(timeout=3)
+                                except subprocess.TimeoutExpired:
+                                    signal.pidfd_send_signal(pidfd, signal.SIGKILL)
+                                    process.communicate(timeout=3)
+                        os.close(pidfd)
+        finally:
+            if lock_fd is not None:
+                os.close(lock_fd)
+            if lock_identity is not None:
+                current_lock = lock_path.lstat()
+                self.assertEqual(
+                    (current_lock.st_dev, current_lock.st_ino, current_lock.st_uid),
+                    (lock_identity.st_dev, lock_identity.st_ino, lock_identity.st_uid),
+                )
+                lock_path.unlink()
+            current_workspace = workspace.lstat()
+            self.assertEqual(
+                (
+                    current_workspace.st_dev,
+                    current_workspace.st_ino,
+                    current_workspace.st_uid,
+                ),
+                (
+                    workspace_identity.st_dev,
+                    workspace_identity.st_ino,
+                    workspace_identity.st_uid,
+                ),
+            )
+            workspace.rmdir()
 
     def test_shell_and_workflow_files_avoid_high_risk_shell_patterns(self) -> None:
         roots = [REPO_ROOT / "scripts", REPO_ROOT / ".github" / "workflows"]
@@ -913,30 +1505,53 @@ class CiStaticTest(unittest.TestCase):
             for line in text.splitlines():
                 stripped = line.strip()
                 for pattern in ("eval ", "bash -c", "sh -c", "rm -rf /"):
-                    if pattern in stripped and not (path == applet and stripped in allowed_applet_shell_lines):
+                    if pattern in stripped and not (
+                        path == applet and stripped in allowed_applet_shell_lines
+                    ):
                         offenders.append(f"{path}: high-risk shell pattern {pattern!r}")
                 if path == applet:
                     for pattern in ("sudo dnf install -y", "sudo apt-get install -y"):
-                        if pattern in stripped and stripped not in allowed_applet_shell_lines:
-                            offenders.append(f"{path}: high-risk shell pattern {pattern!r}")
+                        if (
+                            pattern in stripped
+                            and stripped not in allowed_applet_shell_lines
+                        ):
+                            offenders.append(
+                                f"{path}: high-risk shell pattern {pattern!r}"
+                            )
             if 'rm -rf -- "${stage_root}"' in text:
                 offenders.append(f"{path}: install cleanup must use safe_fs")
             if 'rm -rf -- "${python_dir}"' in text:
                 offenders.append(f"{path}: uninstall target cleanup must use safe_fs")
-        self.assertEqual(offenders, [], f"high-risk shell/workflow patterns found: {offenders}")
+        self.assertEqual(
+            offenders, [], f"high-risk shell/workflow patterns found: {offenders}"
+        )
 
         applet_text = applet.read_text(encoding="utf-8")
         self.assertNotIn("sudo ", applet_text)
         self.assertNotIn("apt-get", applet_text)
         self.assertNotIn("dnf install", applet_text)
-        self.assertIn("does not run privileged package-manager commands from the applet", applet_text)
-        self.assertIn("does not run privileged uninstall commands from the applet", applet_text)
+        self.assertIn(
+            "does not run privileged package-manager commands from the applet",
+            applet_text,
+        )
+        self.assertIn(
+            "does not run privileged uninstall commands from the applet", applet_text
+        )
 
-        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
-        verify_script = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
+        publish_script = (
+            REPO_ROOT / "scripts" / "publish-github-release.sh"
+        ).read_text(encoding="utf-8")
+        verify_script = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn('readonly RELEASE_TARGET_REPOSITORY="H234598/speed-of-cinnamon"', publish_script)
-        self.assertIn("if [[ -z \"${repo}\" && -z \"${remote_repo}\" ]]; then", publish_script)
+        self.assertIn(
+            'readonly RELEASE_TARGET_REPOSITORY="H234598/speed-of-cinnamon"',
+            publish_script,
+        )
+        self.assertIn(
+            "if [[ -z ${repo} && -z ${remote_repo} ]]; then", publish_script
+        )
         self.assertIn("run_rpm_bounded -qp --scripts", verify_script)
         self.assertIn("run_rpm_bounded -qp --triggers", verify_script)
         self.assertIn("{FILECAPS}", verify_script)
@@ -951,7 +1566,11 @@ class CiStaticTest(unittest.TestCase):
             text = path.read_text(encoding="utf-8")
             if "os.environ.copy(" in text:
                 offenders.append(str(path))
-        self.assertEqual(offenders, [], f"os.environ.copy should not be used in runtime code: {offenders}")
+        self.assertEqual(
+            offenders,
+            [],
+            f"os.environ.copy should not be used in runtime code: {offenders}",
+        )
 
     def test_runtime_code_has_no_shell_invocations(self) -> None:
         patterns = [
@@ -969,7 +1588,11 @@ class CiStaticTest(unittest.TestCase):
             if any(pattern in text for pattern in patterns):
                 offenders.append(str(path))
         offenders = sorted(set(offenders))
-        self.assertEqual(offenders, [], f"shell-like runtime execution should be avoided: {offenders}")
+        self.assertEqual(
+            offenders,
+            [],
+            f"shell-like runtime execution should be avoided: {offenders}",
+        )
 
     def test_runtime_command_resolver_prefers_trusted_path(self) -> None:
         files = [
@@ -984,9 +1607,14 @@ class CiStaticTest(unittest.TestCase):
             path = REPO_ROOT / rel_path
             self.assertTrue(path.exists(), f"missing expected file: {path}")
             text = path.read_text(encoding="utf-8")
-            self.assertIn('_TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"', text)
-            self.assertIn('def _which(command_name: str) -> str | None:', text)
-            self.assertIn("shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)", text)
+            self.assertIn(
+                '_TRUSTED_COMMAND_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+                text,
+            )
+            self.assertIn("def _which(command_name: str) -> str | None:", text)
+            self.assertIn(
+                "shutil.which(command_name, path=_TRUSTED_COMMAND_PATH)", text
+            )
             self.assertNotIn("SPEED_OF_CINNAMON_TRUSTED_PATH", text)
 
     def test_dependabot_covers_project_ci_and_action_dependencies(self) -> None:
@@ -997,24 +1625,36 @@ class CiStaticTest(unittest.TestCase):
         self.assertEqual(config.count("interval: weekly"), 3)
         self.assertEqual(config.count("open-pull-requests-limit: 5"), 3)
         self.assertIn("package-ecosystem: pip\n    directory: /", config)
-        self.assertIn("package-ecosystem: pip\n    directory: /.github/requirements", config)
+        self.assertIn(
+            "package-ecosystem: pip\n    directory: /.github/requirements", config
+        )
         self.assertIn("package-ecosystem: github-actions\n    directory: /", config)
         self.assertIn("python-project:", config)
         self.assertIn("python-ci:", config)
         self.assertNotIn("ubuntu-latest", config)
 
     def test_ci_uploads_release_and_rpm_artifacts(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        bandit_requirements = (REPO_ROOT / ".github" / "requirements" / "ci-bandit.txt").read_text(encoding="utf-8")
-        coverage_requirements = (REPO_ROOT / ".github" / "requirements" / "ci-coverage.txt").read_text(encoding="utf-8")
-        security_workflow = (REPO_ROOT / ".github" / "workflows" / "security-scan.yml").read_text(encoding="utf-8")
+        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        bandit_requirements = (
+            REPO_ROOT / ".github" / "requirements" / "ci-bandit.txt"
+        ).read_text(encoding="utf-8")
+        coverage_requirements = (
+            REPO_ROOT / ".github" / "requirements" / "ci-coverage.txt"
+        ).read_text(encoding="utf-8")
+        security_workflow = (
+            REPO_ROOT / ".github" / "workflows" / "security-scan.yml"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("workflow-lint:", workflow)
         self.assertIn("spelling-lint:", workflow)
         self.assertIn("workflow-change-detection:", workflow)
         self.assertIn("needs: workflow-lint", workflow)
         self.assertIn("needs: workflow-change-detection", workflow)
-        self.assertIn("uses: crate-ci/typos@f8a58b6b53f2279f71eb605f03a4ae4d10608f45", workflow)
+        self.assertIn(
+            "uses: crate-ci/typos@f8a58b6b53f2279f71eb605f03a4ae4d10608f45", workflow
+        )
         self.assertIn("config: ./typos.toml", workflow)
         self.assertIn("security-scan:", workflow)
         self.assertIn("uses: ./.github/workflows/security-scan.yml", workflow)
@@ -1044,7 +1684,7 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("run: make coverage", workflow)
         self.assertNotIn("curl -fsSL https://qlty.sh | sh", workflow)
         self.assertNotIn("https://qlty.sh", workflow)
-        self.assertNotIn("sh \"${qlty_installer}\"", workflow)
+        self.assertNotIn('sh "${qlty_installer}"', workflow)
         check_start = workflow.index("  check:\n")
         steps_start = workflow.index("\n    steps:", check_start)
         self.assertNotIn(
@@ -1056,7 +1696,9 @@ class CiStaticTest(unittest.TestCase):
             "if: ${{ github.event_name == 'push' && steps.qlty-secret.outputs.configured == 'true' }}",
             workflow,
         )
-        self.assertEqual(workflow.count("QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}"), 1)
+        self.assertEqual(
+            workflow.count("QLTY_COVERAGE_TOKEN: ${{ secrets.QLTY_COVERAGE_TOKEN }}"), 1
+        )
         self.assertIn(
             "uses: qltysh/qlty-action/coverage@fd52dc852530a708d68c3b7342f8d33d1df4cd55 # v2.2.1",
             workflow,
@@ -1066,36 +1708,67 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("format: lcov", workflow)
         self.assertIn("cli-version: 0.630.0", workflow)
         self.assertIn("sudo apt-get update", workflow)
-        self.assertIn("sudo apt-get install -y --no-install-recommends cpio rpm shellcheck squashfs-tools", workflow)
+        self.assertIn(
+            "sudo apt-get install -y --no-install-recommends cpio rpm shellcheck squashfs-tools",
+            workflow,
+        )
         self.assertIn("if ! command -v -- snapcraft", workflow)
         self.assertIn('snapcraft_expected_version="8.14.5"', workflow)
         self.assertIn('snapcraft_expected_revision="17614"', workflow)
-        self.assertIn('snap install snapcraft --classic --revision="${snapcraft_expected_revision}"', workflow)
-        self.assertIn('snap refresh snapcraft --revision="${snapcraft_expected_revision}"', workflow)
+        self.assertIn(
+            'snap install snapcraft --classic --revision="${snapcraft_expected_revision}"',
+            workflow,
+        )
+        self.assertIn(
+            'snap refresh snapcraft --revision="${snapcraft_expected_revision}"',
+            workflow,
+        )
         self.assertIn('snapcraft_revision="$(snap list snapcraft | awk', workflow)
-        self.assertIn("snapcraft_version=\"$(snapcraft --version | awk '{print $NF}')\"", workflow)
+        self.assertIn(
+            "snapcraft_version=\"$(snapcraft --version | awk '{print $NF}')\"", workflow
+        )
         self.assertIn("Unsupported snapcraft installation", workflow)
         self.assertIn('snapcraft_base="core22"', workflow)
         self.assertIn('snapcraft_base_expected_revision="2411"', workflow)
-        self.assertIn('snap install "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"', workflow)
-        self.assertIn('snap refresh "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"', workflow)
-        self.assertIn('snapcraft_base_revision="$(snap list "${snapcraft_base}" | awk', workflow)
+        self.assertIn(
+            'snap install "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"',
+            workflow,
+        )
+        self.assertIn(
+            'snap refresh "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"',
+            workflow,
+        )
+        self.assertIn(
+            'snapcraft_base_revision="$(snap list "${snapcraft_base}" | awk', workflow
+        )
         self.assertNotIn("channel=8.x/stable", workflow)
         self.assertNotIn("channel=latest/stable", workflow)
         self.assertIn("Could not install required snap base core22.", workflow)
         self.assertNotIn("for candidate in core24 core22", workflow)
-        self.assertNotIn("Could not install a compatible snap base (tried core24, core22).", workflow)
+        self.assertNotIn(
+            "Could not install a compatible snap base (tried core24, core22).", workflow
+        )
         self.assertIn("run: make rpm-check", workflow)
         self.assertIn("run: make rpm-generic", workflow)
         self.assertIn("build_generic_rpm=false", workflow)
         self.assertIn("run: make rpm-generic-check", workflow)
-        self.assertIn("if: env.BUILD_GENERIC_RPM == '1' && github.event_name != 'pull_request'", workflow)
+        self.assertIn(
+            "if: env.BUILD_GENERIC_RPM == '1' && github.event_name != 'pull_request'",
+            workflow,
+        )
         self.assertIn("name: Build Snap package", workflow)
-        self.assertIn("if: env.SNAP_BUILD == '1' && github.event_name != 'pull_request'", workflow)
+        self.assertIn(
+            "if: env.SNAP_BUILD == '1' && github.event_name != 'pull_request'", workflow
+        )
         self.assertIn('make SNAP_BUILD="${SNAP_BUILD}" snap-check', workflow)
-        self.assertIn("uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7", workflow)
+        self.assertIn(
+            "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
+            workflow,
+        )
         self.assertIn("name: speed-of-cinnamon-source-${{ github.sha }}", workflow)
-        self.assertGreaterEqual(workflow.count("github.event_name != 'pull_request'"), 4)
+        self.assertGreaterEqual(
+            workflow.count("github.event_name != 'pull_request'"), 4
+        )
         self.assertIn("dist/speed-of-cinnamon-*.tar.gz", workflow)
         self.assertIn("dist/speed-of-cinnamon-*.tar.gz.sha256", workflow)
         self.assertIn("name: speed-of-cinnamon-rpm-${{ github.sha }}", workflow)
@@ -1107,26 +1780,37 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("name: speed-of-cinnamon-snap-${{ github.sha }}", workflow)
         self.assertIn("dist/snap/*.snap", workflow)
         self.assertEqual(workflow.count("if-no-files-found: error"), 4)
-        self.assertIn("uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6", workflow)
+        self.assertIn(
+            "uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6",
+            workflow,
+        )
         self.assertIn("persist-credentials: false", workflow)
         self.assertIn("SNAPCRAFT_BASE<<SNAPCRAFT_BASE", workflow)
         self.assertIn("runs-on: ubuntu-24.04", workflow)
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
-        self.assertNotIn("echo \"GITHUB_OUTPUT", workflow)
+        self.assertNotIn('echo "GITHUB_OUTPUT', workflow)
         self.assertNotIn("echo 'GITHUB_OUTPUT", workflow)
-        self.assertNotIn("echo \"GITHUB_ENV", workflow)
+        self.assertNotIn('echo "GITHUB_ENV', workflow)
         self.assertNotIn("echo 'GITHUB_ENV", workflow)
         self.assertNotIn("::set-output", workflow)
         self.assertNotIn("::set-state", workflow)
 
-        codacy_workflow = (REPO_ROOT / ".github" / "workflows" / "codacy.yml").read_text(encoding="utf-8")
+        codacy_workflow = (
+            REPO_ROOT / ".github" / "workflows" / "codacy.yml"
+        ).read_text(encoding="utf-8")
         self.assertIn("runs-on: ubuntu-24.04", codacy_workflow)
         self.assertIn(
             "python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt",
             codacy_workflow,
         )
-        self.assertIn("python -m bandit -q -r src/speed_of_cinnamon -x tests -f sarif -o results.sarif --exit-zero", codacy_workflow)
-        self.assertIn("uses: github/codeql-action/upload-sarif@a6fd1787519fd23e68309fad43738e41a6ff2a9d # v4", codacy_workflow)
+        self.assertIn(
+            "python -m bandit -q -r src/speed_of_cinnamon -x tests -f sarif -o results.sarif --exit-zero",
+            codacy_workflow,
+        )
+        self.assertIn(
+            "uses: github/codeql-action/upload-sarif@a6fd1787519fd23e68309fad43738e41a6ff2a9d # v4",
+            codacy_workflow,
+        )
         self.assertNotIn("pull_request:", codacy_workflow)
         self.assertNotIn("codacy/codacy-analysis-cli-action", codacy_workflow)
         self.assertNotIn("ubuntu-latest", codacy_workflow)
@@ -1134,7 +1818,10 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("name: Security Scan", security_workflow)
         self.assertIn("workflow_call:", security_workflow)
         self.assertIn("workflow_dispatch:", security_workflow)
-        self.assertIn("inputs:\n      ref:\n        required: false\n        type: string", security_workflow)
+        self.assertIn(
+            "inputs:\n      ref:\n        required: false\n        type: string",
+            security_workflow,
+        )
         self.assertIn(
             'workflow_dispatch:\n    inputs:\n      ref:\n        description: "Git ref to scan"\n        required: false\n        type: string',
             security_workflow,
@@ -1155,13 +1842,18 @@ class CiStaticTest(unittest.TestCase):
         )
         self.assertIn("run: make python-security-scan", security_workflow)
         self.assertIn("run: make shell-security-scan", security_workflow)
-        self.assertIn("run: |\n          sudo apt-get update\n          sudo apt-get install -y --no-install-recommends shellcheck", security_workflow)
+        self.assertIn(
+            "run: |\n          sudo apt-get update\n          sudo apt-get install -y --no-install-recommends shellcheck",
+            security_workflow,
+        )
         self.assertIn("permissions:", security_workflow)
         self.assertIn("contents: read", security_workflow)
         self.assertNotIn("contents: write", security_workflow)
 
     def test_workflow_change_detection_uses_validated_env_revisions(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("BASE_SHA: ${{ github.event.pull_request.base.sha }}", workflow)
         self.assertIn("HEAD_SHA: ${{ github.event.pull_request.head.sha }}", workflow)
@@ -1175,21 +1867,32 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn('head="${{ github.event.pull_request.head.sha }}"', workflow)
 
     def test_release_workflow_validates_tag_against_pyproject_version(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn('tags:\n      - "v*.*.*"', workflow)
         checkout_ref = "ref: ${{ needs.validate-release-tag.outputs.ref }}"
         self.assertEqual(workflow.count(checkout_ref), 4)
         self.assertNotIn("format('refs/tags/{0}', inputs.tag)", workflow)
         self.assertIn("validate-release-tag:", workflow)
-        self.assertIn("with:\n      ref: ${{ needs.validate-release-tag.outputs.ref }}", workflow)
+        self.assertIn(
+            "with:\n      ref: ${{ needs.validate-release-tag.outputs.ref }}", workflow
+        )
         self.assertNotIn("format('refs/tags/{0}', inputs.tag)", workflow)
-        self.assertNotIn("if [[ ! \"${tag}\" =~ ^v[0-9]+(\\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]", workflow)
-        self.assertIn('if [[ ! "${tag}" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then', workflow)
-        self.assertIn('project_version="$(python3 - <<\'PY\'', workflow)
+        self.assertNotIn(
+            'if [[ ! "${tag}" =~ ^v[0-9]+(\\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]',
+            workflow,
+        )
+        self.assertIn(
+            'if [[ ! "${tag}" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then', workflow
+        )
+        self.assertIn("project_version=\"$(python3 - <<'PY'", workflow)
         self.assertIn("MAX_PROJECT_METADATA_BYTES = 1 << 20", workflow)
         self.assertIn("handle.read(MAX_PROJECT_METADATA_BYTES + 1)", workflow)
-        self.assertNotIn('pathlib.Path("pyproject.toml").read_text(encoding="utf-8")', workflow)
+        self.assertNotIn(
+            'pathlib.Path("pyproject.toml").read_text(encoding="utf-8")', workflow
+        )
         self.assertIn('expected_tag="v${project_version}"', workflow)
         self.assertIn('if [[ "${tag}" != "${expected_tag}" ]]; then', workflow)
         self.assertIn(
@@ -1198,7 +1901,9 @@ class CiStaticTest(unittest.TestCase):
         )
 
     def test_release_publisher_ignores_stale_dist_versions(self) -> None:
-        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+        publish_script = (
+            REPO_ROOT / "scripts" / "publish-github-release.sh"
+        ).read_text(encoding="utf-8")
 
         expected_selectors = (
             'source_archives=(dist/speed-of-cinnamon-"${version}".tar.gz)',
@@ -1212,7 +1917,9 @@ class CiStaticTest(unittest.TestCase):
         for selector in expected_selectors:
             self.assertIn(selector, publish_script)
 
-        self.assertIn('require_one "source archive" "${source_archives[@]}"', publish_script)
+        self.assertIn(
+            'require_one "source archive" "${source_archives[@]}"', publish_script
+        )
         self.assertIn('require_one "checksum file" "${checksums[@]}"', publish_script)
         self.assertIn('require_one "RPM" "${rpms[@]}"', publish_script)
         self.assertIn('require_one "source RPM" "${srpms[@]}"', publish_script)
@@ -1232,12 +1939,16 @@ class CiStaticTest(unittest.TestCase):
                 offenders.append(f"{path}: missing set -euo pipefail")
             if "IFS=$'\\n\\t'" not in text:
                 offenders.append(f"{path}: missing strict IFS")
-            has_trusted_path = "readonly TRUSTED_COMMAND_PATH=" in text or "readonly TRUSTED_PATH=" in text
+            has_trusted_path = (
+                "readonly TRUSTED_COMMAND_PATH=" in text
+                or "readonly TRUSTED_PATH=" in text
+            )
             if not has_trusted_path:
                 offenders.append(f"{path}: missing trusted command path")
             has_trusted_export = (
                 'export PATH="${TRUSTED_COMMAND_PATH}"' in text
-                or 'PATH="${TRUSTED_PATH}"' in text and "export PATH" in text
+                or 'PATH="${TRUSTED_PATH}"' in text
+                and "export PATH" in text
             )
             if not has_trusted_export:
                 offenders.append(f"{path}: missing trusted PATH export")
@@ -1245,14 +1956,24 @@ class CiStaticTest(unittest.TestCase):
         self.assertEqual(offenders, [])
 
     def test_release_publish_does_not_clobber_existing_assets(self) -> None:
-        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
-        self.assertIn('readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"', publish_script)
+        publish_script = (
+            REPO_ROOT / "scripts" / "publish-github-release.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn(
+            'readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+            publish_script,
+        )
         self.assertIn('export PATH="${TRUSTED_COMMAND_PATH}"', publish_script)
         self.assertIn("contains_control_chars() {", publish_script)
         self.assertIn("0x80 <= ord(char) <= 0x9F for char in value", publish_script)
         self.assertIn("0xDC80 <= ord(char) <= 0xDCFF for char in value", publish_script)
-        self.assertNotIn("asset name must not contain control characters: %s", publish_script)
-        self.assertNotIn("${asset}\" == *$'\\n'* || \"${asset}\" == *$'\\r'* || \"${asset}\" == *$'\\t'*", publish_script)
+        self.assertNotIn(
+            "asset name must not contain control characters: %s", publish_script
+        )
+        self.assertNotIn(
+            "${asset}\" == *$'\\n'* || \"${asset}\" == *$'\\r'* || \"${asset}\" == *$'\\t'*",
+            publish_script,
+        )
         self.assertIn("gh release upload", publish_script)
         self.assertNotIn("--clobber", publish_script)
         self.assertIn("--json assets", publish_script)
@@ -1260,17 +1981,24 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn(".assets[].name", publish_script)
         self.assertIn("release asset already exists", publish_script)
         self.assertIn("--draft", publish_script)
-        self.assertIn("gh release edit \"${tag}\" \\", publish_script)
+        self.assertIn('gh release edit "${tag}" \\', publish_script)
         self.assertIn("cleanup_release_state() {", publish_script)
         self.assertIn("mark_release_mutation()", publish_script)
         self.assertIn("publish_release_succeeded()", publish_script)
         self.assertIn("rollback_release_state", publish_script)
-        self.assertIn('gh release delete "${tag}" --repo "${repo}" --yes', publish_script)
-        self.assertIn('gh release delete-asset "${tag}" "${asset_name}" --repo "${repo}" --yes', publish_script)
+        self.assertIn(
+            'gh release delete "${tag}" --repo "${repo}" --yes', publish_script
+        )
+        self.assertIn(
+            'gh release delete-asset "${tag}" "${asset_name}" --repo "${repo}" --yes',
+            publish_script,
+        )
         self.assertIn("uploaded_asset_names=()", publish_script)
-        self.assertIn('uploaded_asset_names+=("$(basename "${upload_ref}")")', publish_script)
+        self.assertIn(
+            'uploaded_asset_names+=("$(basename "${upload_ref}")")', publish_script
+        )
         self.assertIn("declare -A staged_names_seen=()", publish_script)
-        self.assertIn('duplicate release asset staging name: %s\\n', publish_script)
+        self.assertIn("duplicate release asset staging name: %s\\n", publish_script)
         self.assertIn('staged_names_seen["${staged_name}"]=1', publish_script)
         self.assertIn("existing_release_title=", publish_script)
         self.assertIn("existing_release_title_captured=", publish_script)
@@ -1281,15 +2009,24 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("--prerelease", publish_script)
         self.assertIn("--prerelease=false", publish_script)
         self.assertNotIn("--latest", publish_script)
-        self.assertIn("failed to snapshot existing release notes for rollback", publish_script)
+        self.assertIn(
+            "failed to snapshot existing release notes for rollback", publish_script
+        )
         self.assertIn('gh release edit "${tag}" \\', publish_script)
         self.assertIn("--draft=false", publish_script)
-        self.assertNotIn('gh release edit "${tag}" --repo "${repo}" --draft=false >/dev/null 2>&1 || true', publish_script)
+        self.assertNotIn(
+            'gh release edit "${tag}" --repo "${repo}" --draft=false >/dev/null 2>&1 || true',
+            publish_script,
+        )
 
     def test_workflow_downloads_bound_curl_network_calls(self) -> None:
         for name in ("ci.yml", "super-linter.yml", "release.yml"):
-            workflow = (REPO_ROOT / ".github" / "workflows" / name).read_text(encoding="utf-8")
-            curl_lines = [line.strip() for line in workflow.splitlines() if "curl -fs" in line]
+            workflow = (REPO_ROOT / ".github" / "workflows" / name).read_text(
+                encoding="utf-8"
+            )
+            curl_lines = [
+                line.strip() for line in workflow.splitlines() if "curl -fs" in line
+            ]
             self.assertTrue(curl_lines, name)
             for line in curl_lines:
                 self.assertIn("--connect-timeout 15", line)
@@ -1300,7 +2037,11 @@ class CiStaticTest(unittest.TestCase):
     def test_workflow_pip_installs_bound_network_calls(self) -> None:
         for path in (REPO_ROOT / ".github" / "workflows").glob("*.y*ml"):
             workflow = path.read_text(encoding="utf-8")
-            pip_lines = [line.strip() for line in workflow.splitlines() if "python -m pip install" in line]
+            pip_lines = [
+                line.strip()
+                for line in workflow.splitlines()
+                if "python -m pip install" in line
+            ]
             for line in pip_lines:
                 self.assertIn("--timeout 30", line, path.name)
                 self.assertIn("--retries 3", line, path.name)
@@ -1314,174 +2055,511 @@ class CiStaticTest(unittest.TestCase):
             'readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/snap/bin:/var/lib/snapd/snap/bin"\n'
             'export PATH="${TRUSTED_COMMAND_PATH}"'
         )
-        build_dist = (REPO_ROOT / "scripts" / "build-dist.sh").read_text(encoding="utf-8")
+        build_dist = (REPO_ROOT / "scripts" / "build-dist.sh").read_text(
+            encoding="utf-8"
+        )
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
-        build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(encoding="utf-8")
-        verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
-        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
-        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(encoding="utf-8")
+        build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(
+            encoding="utf-8"
+        )
+        verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(
+            encoding="utf-8"
+        )
+        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(
+            encoding="utf-8"
+        )
+        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(
+            encoding="utf-8"
+        )
         snapcraft = (REPO_ROOT / "snap" / "snapcraft.yaml").read_text(encoding="utf-8")
-        uninstall_local = (REPO_ROOT / "scripts" / "uninstall-local.sh").read_text(encoding="utf-8")
+        uninstall_local = (REPO_ROOT / "scripts" / "uninstall-local.sh").read_text(
+            encoding="utf-8"
+        )
+        snap_scan_start = build_snap.index('if ! snap_file="$(')
+        snap_scan = build_snap[
+            snap_scan_start : build_snap.index('\nPY\n)"; then', snap_scan_start)
+        ]
+        cleanup_start = build_snap.index("cleanup_tmpdir() {")
+        cleanup_block = build_snap[
+            cleanup_start : build_snap.index(
+                "\n}\ntrap cleanup_tmpdir EXIT", cleanup_start
+            )
+        ]
 
-        for script_text in (build_dist, build_rpm, verify_dist, verify_rpm, verify_snap):
+        for script_text in (
+            build_dist,
+            build_rpm,
+            verify_dist,
+            verify_rpm,
+            verify_snap,
+        ):
             self.assertIn(trusted_path_preamble, script_text)
         self.assertIn(snap_trusted_path_preamble, build_snap)
-        self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_rpm)
+        self.assertIn(
+            'safe_fs_cmd=("${lifecycle_python}" -I -B "${safe_fs}")', build_rpm
+        )
         self.assertIn("activate_with_finalize_lock() {", build_rpm)
-        self.assertIn('[sys.executable, safe_fs, "install-tree", "build-rpm", staging_path, final_path, "RPM build directory"]', build_rpm)
-        self.assertIn('require_regular_source_file "${tarball}" "tarball source"', build_rpm)
-        self.assertIn('require_regular_source_file "${spec_source}" "spec source"', build_rpm)
-        self.assertIn('if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${tarball}" "${stage_topdir}/SOURCES/$(basename "${tarball}")" 0644; then', build_rpm)
-        self.assertIn('if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${spec_source}" "${spec_file}" 0644; then', build_rpm)
+        self.assertIn('safe_fs_base = [sys.executable, "-I", "-B", safe_fs]', build_rpm)
+        self.assertIn(
+            'run_safe_fs(\n            "install-tree",\n            "build-rpm",\n'
+            '            staging_path,\n            publish_path,\n            "RPM build directory",',
+            build_rpm,
+        )
+        self.assertIn(
+            'require_regular_source_file "${tarball}" "tarball source"', build_rpm
+        )
+        self.assertIn(
+            'require_regular_source_file "${spec_source}" "spec source"', build_rpm
+        )
+        self.assertIn(
+            'if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${tarball}" "${stage_topdir}/SOURCES/$(basename "${tarball}")" 0644; then',
+            build_rpm,
+        )
+        self.assertIn(
+            'if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${spec_source}" "${spec_file}" 0644; then',
+            build_rpm,
+        )
         self.assertNotIn('mv -T -- "${stage_topdir}" "${final_topdir}"', build_rpm)
         self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_snap)
         self.assertIn("activate_snap_output() {", build_snap)
-        self.assertIn('[sys.executable, safe_fs, *arguments]', build_snap)
-        self.assertIn('snap_workspace="$(mktemp -d "${repo_tmp_root}/speed-of-cinnamon-snap-tree-XXXXXX")"', build_snap)
-        self.assertIn('repo_tmp_root="${repo_tmp_abs}"', build_snap)
+        self.assertIn("[sys.executable, safe_fs, *arguments]", build_snap)
+        self.assertIn(
+            'snap_workspace="$(mktemp -d "${snap_tmp_parent}/speed-of-cinnamon-snap-tree-XXXXXX")"',
+            build_snap,
+        )
+        self.assertIn('repo_tmp_root="${root_abs}"', build_snap)
+        self.assertIn(
+            'if ! validate_snap_tmp_root "${repo_tmp_root}"; then', build_snap
+        )
+        self.assertIn(
+            'snap_tmp_parent="${repo_tmp_root}/speed-of-cinnamon-snap-${EUID}"',
+            build_snap,
+        )
+        self.assertIn(
+            "if [[ -L ${snap_tmp_parent} || ! -d ${snap_tmp_parent} ]]; then",
+            build_snap,
+        )
+        self.assertLess(
+            build_snap.index('if ! validate_snap_tmp_root "${repo_tmp_root}"; then'),
+            build_snap.index(
+                "if [[ -L ${snap_tmp_parent} || ! -d ${snap_tmp_parent} ]]; then"
+            ),
+        )
+        self.assertLess(
+            build_snap.index(
+                "if [[ -L ${snap_tmp_parent} || ! -d ${snap_tmp_parent} ]]; then"
+            ),
+            build_snap.index(
+                'snap_workspace="$(mktemp -d "${snap_tmp_parent}/speed-of-cinnamon-snap-tree-XXXXXX")"'
+            ),
+        )
         self.assertIn('snap_workspace_abs="$(realpath "${snap_workspace}")', build_snap)
-        self.assertIn('temporary snap workspace escaped temporary root', build_snap)
-        self.assertIn('"${safe_fs_cmd[@]}" remove build-snap "${snap_workspace}" --kind dir', build_snap)
-        self.assertIn('"${safe_fs_cmd[@]}" remove build-snap "${snap_workspace_dist}" --kind dir', build_snap)
-        self.assertIn('install-tree build-snap "${repo_dir}/snap" "${snap_workspace}/snap" "snap source tree"', build_snap)
-        self.assertIn('install-tree build-snap "${repo_dir}/src" "${snap_workspace}/src" "Python source tree"', build_snap)
-        self.assertIn('override-prime: |', snapcraft)
-        self.assertIn('find "${CRAFT_PRIME}" -type d -name "__pycache__" -prune -exec rm -rf -- {} +', snapcraft)
-        self.assertIn('find "${CRAFT_PRIME}" -type f \\( -name "*.pyc" -o -name "*.pyo" \\) -delete', snapcraft)
-        self.assertIn('remove_python_bytecode_from_snap_source() {', build_snap)
-        self.assertIn('find "${snap_workspace}/src" -type d -name "__pycache__" -print0', build_snap)
-        self.assertIn('find "${snap_workspace}/src" -type f \\( -name "*.pyc" -o -name "*.pyo" \\) -print0', build_snap)
-        self.assertIn('if ! remove_python_bytecode_from_snap_source; then', build_snap)
-        self.assertIn('copy-file build-snap "${repo_dir}/pyproject.toml" "${snap_workspace}/pyproject.toml" 0644', build_snap)
-        self.assertIn('copy-file build-snap "${repo_dir}/README.md" "${snap_workspace}/README.md" 0644', build_snap)
-        self.assertIn('mkdirs build-snap "${snap_workspace}/.github/requirements"', build_snap)
+        self.assertIn("temporary snap workspace escaped temporary root", build_snap)
+        self.assertIn(
+            'run_cleanup_safe_fs remove build-snap "${snap_workspace}" --kind dir \\'
+            '\n\t\t\t--expected-identity "${snap_workspace_identity}"',
+            build_snap,
+        )
+        unverified_cleanup_start = cleanup_block.index(
+            "elif [[ -n ${snap_workspace} ]]; then"
+        )
+        unverified_cleanup = cleanup_block[
+            unverified_cleanup_start : cleanup_block.index(
+                "\n\tfi", unverified_cleanup_start
+            )
+        ]
+        cleanup_failure = cleanup_block[
+            cleanup_block.index("if ((cleanup_failed)); then") :
+        ]
+        self.assertIn("cleanup_failed=1", unverified_cleanup)
+        self.assertIn("if ((primary_status == 0)); then", cleanup_failure)
+        self.assertIn("exit 1", cleanup_failure)
+        self.assertLess(
+            cleanup_failure.index("if ((primary_status == 0)); then"),
+            cleanup_failure.index("exit 1"),
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" remove build-snap "${snap_workspace_dist}" --kind dir',
+            build_snap,
+        )
+        self.assertIn(
+            'install-tree build-snap "${repo_dir}/snap" "${snap_workspace}/snap" "snap source tree"',
+            build_snap,
+        )
+        self.assertIn(
+            'install-tree build-snap "${repo_dir}/src" "${snap_source_staging}/src" "Python source tree"',
+            build_snap,
+        )
+        self.assertIn(
+            'if ! "${safe_fs_cmd[@]}" replace build-snap \\\n'
+            '\t"${snap_source_staging}" "${snap_source}" \\\n'
+            "\t--src-kind dir --dst-must-not-exist \\\n"
+            '\t--expected-src-identity "${snap_source_staging_identity}"; then',
+            build_snap,
+        )
+        self.assertIn("override-prime: |", snapcraft)
+        self.assertIn(
+            'find "${CRAFT_PRIME}" -type d -name "__pycache__" -prune -exec rm -rf -- {} +',
+            snapcraft,
+        )
+        self.assertIn(
+            'find "${CRAFT_PRIME}" -type f \\( -name "*.pyc" -o -name "*.pyo" \\) -delete',
+            snapcraft,
+        )
+        self.assertIn("remove_python_bytecode_from_snap_source() {", build_snap)
+        self.assertIn(
+            'find "${snap_source_staging}/src" -type d -name "__pycache__" -print0',
+            build_snap,
+        )
+        self.assertIn(
+            'find "${snap_source_staging}/src" -type f \\( -name "*.pyc" -o -name "*.pyo" \\) -print0',
+            build_snap,
+        )
+        self.assertIn("if ! remove_python_bytecode_from_snap_source; then", build_snap)
+        self.assertIn(
+            'copy-file build-snap "${repo_dir}/pyproject.toml" "${snap_source_staging}/pyproject.toml" 0644',
+            build_snap,
+        )
+        self.assertIn(
+            'copy-file build-snap "${repo_dir}/README.md" "${snap_source_staging}/README.md" 0644',
+            build_snap,
+        )
+        self.assertIn(
+            'mkdirs build-snap "${snap_source_staging}/.github/requirements"',
+            build_snap,
+        )
         self.assertIn('"${repo_dir}/.github/requirements/ci-project.txt"', build_snap)
-        self.assertIn('"${snap_workspace}/.github/requirements/ci-project.txt" 0644 --dst-must-not-exist', build_snap)
-        self.assertNotIn('install-tree build-snap "${repo_dir}" "${snap_workspace}" "snap temporary source tree"', build_snap)
-        self.assertIn('python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}"', build_snap)
-        self.assertIn('snapcraft_rendered_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snapcraft_file_rendered}" --kind file)"', build_snap)
-        self.assertIn('os.fchmod(fd, int(mode_text, 8))', build_snap)
-        self.assertNotIn('chmod "${snapcraft_mode}" "${snapcraft_file_rendered}"', build_snap)
-        self.assertIn('snapcraft_args=(--destructive-mode)', build_snap)
+        self.assertIn(
+            '"${snap_source_staging}/.github/requirements/ci-project.txt" 0644 --dst-must-not-exist',
+            build_snap,
+        )
+        self.assertNotIn(
+            'install-tree build-snap "${repo_dir}" "${snap_workspace}" "snap temporary source tree"',
+            build_snap,
+        )
+        self.assertIn(
+            'python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}"',
+            build_snap,
+        )
+        self.assertIn(
+            'snapcraft_rendered_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snapcraft_file_rendered}" --kind file)"',
+            build_snap,
+        )
+        self.assertIn("os.fchmod(fd, int(mode_text, 8))", build_snap)
+        self.assertNotIn(
+            'chmod "${snapcraft_mode}" "${snapcraft_file_rendered}"', build_snap
+        )
+        self.assertIn("snapcraft_args=(--destructive-mode)", build_snap)
         self.assertIn('snapcraft pack "${snapcraft_args[@]}"', build_snap)
         self.assertNotIn('snapcraft "${snapcraft_args[@]}" pack', build_snap)
         self.assertNotIn('snap_stage_usr="${snap_workspace}/stage/usr"', build_snap)
         self.assertLess(
             build_snap.index('snapcraft pack "${snapcraft_args[@]}"'),
-            build_snap.index('"${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace_dist}"'),
+            build_snap.index(
+                '"${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace_dist}"'
+            ),
         )
-        self.assertIn('copy-file build-snap "${snap_files[0]}" "${snap_stage_path}" 0644 --dst-must-not-exist', build_snap)
-        self.assertIn('snap_stage_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snap_stage_path}" --kind file)"', build_snap)
-        self.assertIn('activate_snap_output "${dist_parent}/.build-snap.finalize.lock" "${snap_stage_path}" "${output_path}"', build_snap)
+        self.assertIn(
+            'copy-file build-snap "${snap_file}" "${snap_stage_path}" 0644 --dst-must-not-exist',
+            build_snap,
+        )
+        self.assertIn(
+            "directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)",
+            snap_scan,
+        )
+        self.assertIn("candidate_stat = os.stat(", snap_scan)
+        self.assertIn("dir_fd=directory_fd,", snap_scan)
+        self.assertIn("follow_symlinks=False,", snap_scan)
+        self.assertIn("if stat.S_ISLNK(candidate_stat.st_mode):", snap_scan)
+        self.assertIn("if not stat.S_ISREG(candidate_stat.st_mode):", snap_scan)
+        self.assertIn('if getattr(candidate_stat, "st_nlink", 1) != 1:', snap_scan)
+        self.assertIn("if len(candidates) != 1:", snap_scan)
+        self.assertIn("sys.stdout.write(candidates[0])", snap_scan)
+        for scan_guard in (
+            "if stat.S_ISLNK(candidate_stat.st_mode):",
+            "if not stat.S_ISREG(candidate_stat.st_mode):",
+            'if getattr(candidate_stat, "st_nlink", 1) != 1:',
+        ):
+            self.assertLess(
+                snap_scan.index(scan_guard),
+                snap_scan.index("candidates.append(candidate_path)"),
+            )
+        self.assertIn('path="${snap_file}"', build_snap)
+        self.assertIn("if [[ -L ${path} ]]; then", build_snap)
+        self.assertIn('absolute="$(realpath "${path}")"', build_snap)
+        self.assertIn(
+            'if [[ ${absolute} != "${snap_workspace}/speed-of-cinnamon_${version}_"* &&',
+            build_snap,
+        )
+        self.assertIn("if [[ ! -s ${path} ]]; then", build_snap)
+        self.assertLess(
+            build_snap.index('if ! snap_file="$('),
+            build_snap.index('path="${snap_file}"'),
+        )
+        self.assertLess(
+            build_snap.index("if [[ ! -s ${path} ]]; then"),
+            build_snap.index(
+                'copy-file build-snap "${snap_file}" "${snap_stage_path}" 0644 --dst-must-not-exist'
+            ),
+        )
+        self.assertIn(
+            'snap_stage_identity="$("${safe_fs_cmd[@]}" identity build-snap "${snap_stage_path}" --kind file)"',
+            build_snap,
+        )
+        self.assertIn(
+            'activate_snap_output "${dist_dir}/.build-snap.finalize.lock" "${snap_stage_path}" "${output_path}"',
+            build_snap,
+        )
         self.assertNotIn('rm -rf -- "${snap_workspace}"', build_snap)
         self.assertNotIn("mv -T", build_snap)
         self.assertIn("contains_control_chars() {", verify_dist)
         self.assertIn("0x80 <= ord(char) <= 0x9F for char in value", verify_dist)
         self.assertIn("0xDC80 <= ord(char) <= 0xDCFF for char in value", verify_dist)
         self.assertIn("0x80 <= ord(char) <= 0x9F for char in member.name", verify_dist)
-        self.assertIn("0xDC80 <= ord(char) <= 0xDCFF for char in member.name", verify_dist)
+        self.assertIn(
+            "0xDC80 <= ord(char) <= 0xDCFF for char in member.name", verify_dist
+        )
         self.assertIn("0x80 <= ord(char) <= 0x9F for char in entry", verify_rpm)
         self.assertIn("0xDC80 <= ord(char) <= 0xDCFF for char in entry", verify_rpm)
         self.assertIn('read_bounded_utf8(file_list, "RPM file listing")', verify_rpm)
-        self.assertIn('read_bounded_utf8(Path(sys.argv[2]), "RPM file metadata")', verify_rpm)
+        self.assertIn(
+            'read_bounded_utf8(Path(sys.argv[2]), "RPM file metadata")', verify_rpm
+        )
         self.assertNotIn('file_list.read_text(encoding="utf-8")', verify_rpm)
         self.assertNotIn(".splitlines()", verify_rpm)
         self.assertNotIn("entry.strip()", verify_rpm)
         self.assertNotIn("entry = raw.strip()", verify_rpm)
         self.assertIn("contains_unsafe_text(path_text)", verify_snap)
         self.assertIn("contains_unsafe_text(path_text)", verify_snap)
-        self.assertIn('read_bounded_utf8(Path(sys.argv[1]), "snap listing")', verify_snap)
+        self.assertIn(
+            'read_bounded_utf8(Path(sys.argv[1]), "snap listing")', verify_snap
+        )
         self.assertNotIn('Path(sys.argv[1]).read_text(encoding="utf-8")', verify_snap)
         self.assertNotIn(".splitlines()", verify_snap)
         self.assertNotIn("raw.strip()", verify_snap)
-        self.assertNotIn("${tarball_input}\" == *$'\\n'* || \"${tarball_input}\" == *$'\\r'* || \"${tarball_input}\" == *$'\\t'*", verify_dist)
+        self.assertNotIn(
+            "${tarball_input}\" == *$'\\n'* || \"${tarball_input}\" == *$'\\r'* || \"${tarball_input}\" == *$'\\t'*",
+            verify_dist,
+        )
         self.assertIn("contains_control_chars() {", verify_snap)
         self.assertNotIn("archive path contains control characters: %s", verify_dist)
         self.assertNotIn("snap file path contains control characters: %s", verify_snap)
-        self.assertNotIn("${snap_path}\" == *$'\\n'* || \"${snap_path}\" == *$'\\r'* || \"${snap_path}\" == *$'\\t'*", verify_snap)
-        self.assertIn('safe_fs rmdir uninstall "${app_data}" --ignore-non-empty', uninstall_local)
-        self.assertNotIn('safe_fs rmdir uninstall "${app_data}" --ignore-non-empty || true', uninstall_local)
+        self.assertNotIn(
+            "${snap_path}\" == *$'\\n'* || \"${snap_path}\" == *$'\\r'* || \"${snap_path}\" == *$'\\t'*",
+            verify_snap,
+        )
+        self.assertIn(
+            'safe_fs rmdir uninstall "${app_data}" --ignore-non-empty', uninstall_local
+        )
+        self.assertNotIn(
+            'safe_fs rmdir uninstall "${app_data}" --ignore-non-empty || true',
+            uninstall_local,
+        )
         self.assertIn(
             'readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"\n'
             'export PATH="${TRUSTED_COMMAND_PATH}"',
             uninstall_local,
         )
 
-        safe_fs = (REPO_ROOT / "scripts" / "safe-local-fs.py").read_text(encoding="utf-8")
+        safe_fs = (REPO_ROOT / "scripts" / "safe-local-fs.py").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("COPY_CHUNK_SIZE = 1 << 20", safe_fs)
         self.assertIn("source file must not be hardlinked during", safe_fs)
         self.assertIn("_copy_file_atomically_from_checked_source", safe_fs)
-        self.assertIn("def _rmtree_safe(", safe_fs)
-        self.assertIn("shutil.rmtree is not fd-safe", safe_fs)
-        self.assertIn('getattr(shutil.rmtree, "avoids_symlink_attacks", False)', safe_fs)
+        remove_tree = safe_fs[
+            safe_fs.index("def _remove_tree_bounded_fd_body(") : safe_fs.index(
+                "\ndef _remove_tree_bounded_fd("
+            )
+        ]
+        remove_file_branch = remove_tree[
+            remove_tree.index(
+                "elif stat_is_file_no_follow(\n                    child_stat.st_mode\n                ) or stat_is_symlink_no_follow(child_stat.st_mode):"
+            ) :
+        ]
+        remove_command = safe_fs[
+            safe_fs.index("def cmd_remove(") : safe_fs.index("\ndef cmd_remove_leaf(")
+        ]
+        remove_named = safe_fs[
+            safe_fs.index("def _remove_named_directory(") : safe_fs.index(
+                "\ndef _remove_named_file("
+            )
+        ]
+        remove_wrapper = safe_fs[
+            safe_fs.index("def _remove_tree_bounded_fd(") : safe_fs.index(
+                "\ndef _remove_named_directory("
+            )
+        ]
+        reject_tree = safe_fs[
+            safe_fs.index("def _reject_unsafe_tree(") : safe_fs.index(
+                "\ndef _bounded_tree_walk("
+            )
+        ]
+        install_command = safe_fs[
+            safe_fs.index("def cmd_install_tree(") : safe_fs.index("\ndef cmd_remove(")
+        ]
+        self.assertIn(
+            "_require_private_identity_removal_parent(\n                parent_fd",
+            remove_command,
+        )
+        self.assertIn("_assert_expected_identity(", remove_command)
+        self.assertIn("_validate_private_dir_chain(", remove_command)
+        self.assertIn(
+            "_remove_named_directory(\n                parent_fd, leaf, path, stat_result",
+            remove_command,
+        )
+        self.assertLess(
+            remove_command.index("_assert_expected_identity("),
+            remove_command.index(
+                "_remove_named_directory(\n                parent_fd, leaf, path, stat_result"
+            ),
+        )
+        self.assertIn("_remove_tree_bounded_fd(", remove_named)
+        self.assertIn("_remove_tree_bounded_fd_body(", remove_wrapper)
+        self.assertIn(
+            "child_stat = os.stat(name, dir_fd=directory_fd, follow_symlinks=False)",
+            remove_tree,
+        )
+        self.assertIn("| os.O_NOFOLLOW", remove_tree)
+        self.assertIn("if not _same_identity(child_stat, opened_stat):", remove_tree)
+        self.assertIn("if not _same_identity(child_stat, delete_stat):", remove_tree)
+        self.assertIn("os.unlink(delete_name, dir_fd=directory_fd)", remove_tree)
+        self.assertIn("os.rmdir(delete_name, dir_fd=directory_fd)", remove_tree)
+        self.assertIn(
+            "if not _same_identity(expected_root_stat, final_stat):", remove_tree
+        )
+        self.assertLess(
+            remove_file_branch.index("if not _same_identity(child_stat, delete_stat):"),
+            remove_file_branch.index("os.unlink(delete_name, dir_fd=directory_fd)"),
+        )
+        self.assertLess(
+            remove_tree.index("if not _same_identity(expected_root_stat, final_stat):"),
+            remove_tree.index("os.rmdir(final_name, dir_fd=parent_fd)"),
+        )
+        self.assertIn("_reject_unsafe_tree(", install_command)
+        self.assertIn("reject_symlink_ancestors=True", install_command)
+        self.assertIn("_bounded_tree_walk(", reject_tree)
+        self.assertIn("stat_is_symlink_no_follow(stat_result.st_mode)", reject_tree)
+        self.assertIn("stat_result.st_nlink != 1", reject_tree)
+        self.assertIn("source_signature = _tree_signature(", install_command)
+        self.assertIn("_copy_tree_fd(", install_command)
+        self.assertIn("if existing is not None:", install_command)
+        self.assertIn("_rename_without_replacing(", install_command)
         self.assertNotIn("data = handle.read()", safe_fs)
 
     def test_publish_script_stages_all_assets_before_release_upload(self) -> None:
-        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+        publish_script = (
+            REPO_ROOT / "scripts" / "publish-github-release.sh"
+        ).read_text(encoding="utf-8")
 
         self.assertIn("upload_refs=()", publish_script)
         self.assertIn('for asset in "${assets[@]}"; do', publish_script)
         self.assertIn('staged_path="${staging_dir}/${staged_name}"', publish_script)
-        self.assertIn('if [[ "${asset}" == "${generic_asset}" ]]; then', publish_script)
+        self.assertIn('if [[ ${asset} == "${generic_asset}" ]]; then', publish_script)
         self.assertIn('staged_name="$(generic_asset_label "${asset}")"', publish_script)
-        self.assertIn('if [[ -n "${staged_names_seen[${staged_name}]:-}" ]]; then', publish_script)
+        self.assertIn(
+            "if [[ -n ${staged_names_seen[${staged_name}]:-} ]]; then", publish_script
+        )
         self.assertIn('asset_abs="$(realpath "${asset}")"', publish_script)
-        self.assertIn('copy-file publish "${asset_abs}" "${staged_path}" 0644', publish_script)
+        self.assertIn(
+            'copy-file publish "${asset_abs}" "${staged_path}" 0644', publish_script
+        )
         self.assertIn('verify_staged_asset_path "${staged_path}"', publish_script)
         self.assertNotIn('verify_asset_path "${staged_path}"', publish_script)
-        self.assertNotIn("chmod 0444 -- \"${staged_path}\"", publish_script)
+        self.assertNotIn('chmod 0444 -- "${staged_path}"', publish_script)
         self.assertIn("chmod_and_fsync_regular_file() {", publish_script)
-        self.assertIn('staged_asset_identity="$("${safe_fs_cmd[@]}" identity publish "${staged_path}" --kind file)"', publish_script)
-        self.assertIn('chmod_and_fsync_regular_file "${staged_path}" 0444 "staged release asset" "${staged_asset_identity}"', publish_script)
+        self.assertIn(
+            'staged_asset_identity="$("${safe_fs_cmd[@]}" identity publish "${staged_path}" --kind file)"',
+            publish_script,
+        )
+        self.assertIn(
+            'chmod_and_fsync_regular_file "${staged_path}" 0444 "staged release asset" "${staged_asset_identity}"',
+            publish_script,
+        )
         self.assertIn('for upload_ref in "${upload_refs[@]}"; do', publish_script)
-        self.assertIn('gh release upload "${tag}" "${upload_ref}" --repo "${repo}"', publish_script)
-        self.assertIn('failed to upload release asset: %s\\n', publish_script)
+        self.assertIn(
+            'gh release upload "${tag}" "${upload_ref}" --repo "${repo}"',
+            publish_script,
+        )
+        self.assertIn("failed to upload release asset: %s\\n", publish_script)
         self.assertIn('if ! gh release edit "${tag}" \\', publish_script)
-        self.assertIn("failed to publish release after uploading assets.", publish_script)
-        self.assertIn('--draft', publish_script)
+        self.assertIn(
+            "failed to publish release after uploading assets.", publish_script
+        )
+        self.assertIn("--draft", publish_script)
         self.assertIn("--draft=false", publish_script)
         self.assertIn("trap cleanup_notes EXIT", publish_script)
 
     def test_publish_script_rejects_only_strict_semver_tag(self) -> None:
-        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+        publish_script = (
+            REPO_ROOT / "scripts" / "publish-github-release.sh"
+        ).read_text(encoding="utf-8")
 
-        self.assertIn('if [[ ! "${tag}" =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then', publish_script)
+        self.assertIn(
+            "if [[ ! ${tag} =~ ^v[0-9]+\\.[0-9]+\\.[0-9]+$ ]]; then", publish_script
+        )
         self.assertNotIn("^(\\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$", publish_script)
 
     def test_publish_script_resolves_repository_from_verified_checkout(self) -> None:
-        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+        publish_script = (
+            REPO_ROOT / "scripts" / "publish-github-release.sh"
+        ).read_text(encoding="utf-8")
         self.assertIn("resolve_github_remote_repo()", publish_script)
         self.assertIn("run_git_bounded remote get-url origin", publish_script)
         self.assertIn('remote_url="${remote_url%.git}"', publish_script)
-        self.assertIn("GITHUB_REPOSITORY is not set and origin is not a GitHub repository; cannot verify target repository safely.", publish_script)
-        self.assertIn("checked out origin (%s) does not match GITHUB_REPOSITORY (%s).", publish_script)
-        self.assertIn('readonly RELEASE_TARGET_REPOSITORY="H234598/speed-of-cinnamon"', publish_script)
-        self.assertNotIn('repo="${GITHUB_REPOSITORY:-H234598/speed-of-cinnamon}"', publish_script)
+        self.assertIn(
+            "GITHUB_REPOSITORY is not set and origin is not a GitHub repository; cannot verify target repository safely.",
+            publish_script,
+        )
+        self.assertIn(
+            "checked out origin (%s) does not match GITHUB_REPOSITORY (%s).",
+            publish_script,
+        )
+        self.assertIn(
+            'readonly RELEASE_TARGET_REPOSITORY="H234598/speed-of-cinnamon"',
+            publish_script,
+        )
+        self.assertNotIn(
+            'repo="${GITHUB_REPOSITORY:-H234598/speed-of-cinnamon}"', publish_script
+        )
 
     def test_wiki_publish_does_not_bootstrap_after_clone_failure(self) -> None:
-        publish_script = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
+        publish_script = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("failed to clone wiki repository", publish_script)
-        self.assertNotIn("git -C \"${work_dir}/wiki\" init", publish_script)
+        self.assertNotIn('git -C "${work_dir}/wiki" init', publish_script)
 
     def test_wiki_publish_uses_cloned_remote_default_branch(self) -> None:
-        publish_script = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
+        publish_script = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn(
             'if ! remote_head_ref="$(run_git_bounded symbolic-ref --quiet --short refs/remotes/origin/HEAD)"; then',
             publish_script,
         )
-        self.assertIn('run_git_bounded push origin "HEAD:${wiki_branch}"', publish_script)
+        self.assertIn(
+            'run_git_bounded push origin "HEAD:${wiki_branch}"', publish_script
+        )
         self.assertNotIn("run_git_bounded push origin HEAD:master", publish_script)
 
     def test_frogbot_checkouts_do_not_persist_credentials(self) -> None:
         for workflow_name in ("frogbot-scan-and-fix.yml", "frogbot-scan-pr.yml"):
-            workflow = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(encoding="utf-8")
-            self.assertIn("uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6", workflow)
+            workflow = (REPO_ROOT / ".github" / "workflows" / workflow_name).read_text(
+                encoding="utf-8"
+            )
+            self.assertIn(
+                "uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6",
+                workflow,
+            )
             self.assertIn("persist-credentials: false", workflow)
             self.assertIn("JF_GIT_TOKEN: ${{ github.token }}", workflow)
             self.assertNotIn("secrets.GITHUB_TOKEN", workflow)
 
     def test_frogbot_scan_and_fix_limits_top_level_permissions(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-and-fix.yml").read_text(encoding="utf-8")
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "frogbot-scan-and-fix.yml"
+        ).read_text(encoding="utf-8")
         top_level_permissions = _workflow_block_lines(workflow, "permissions:")
 
         self.assertIn("  contents: read", top_level_permissions)
@@ -1499,7 +2577,9 @@ class CiStaticTest(unittest.TestCase):
         )
 
     def test_frogbot_pr_scan_limits_top_level_permissions(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-pr.yml").read_text(encoding="utf-8")
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "frogbot-scan-pr.yml"
+        ).read_text(encoding="utf-8")
         top_level_permissions = _workflow_block_lines(workflow, "permissions:")
 
         self.assertIn("  contents: read", top_level_permissions)
@@ -1513,24 +2593,32 @@ class CiStaticTest(unittest.TestCase):
             workflow,
         )
         self.assertIn(
-            "    permissions:\n"
-            "      contents: read\n"
-            "      pull-requests: write",
+            "    permissions:\n" "      contents: read\n" "      pull-requests: write",
             workflow,
         )
 
     def test_frogbot_pr_scan_does_not_use_pull_request_target(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "frogbot-scan-pr.yml").read_text(encoding="utf-8")
+        workflow = (
+            REPO_ROOT / ".github" / "workflows" / "frogbot-scan-pr.yml"
+        ).read_text(encoding="utf-8")
         self.assertIn("pull_request:", workflow)
         self.assertNotIn("pull_request_target:", workflow)
-        self.assertIn("github.event.pull_request.head.repo.full_name == github.repository", workflow)
+        self.assertIn(
+            "github.event.pull_request.head.repo.full_name == github.repository",
+            workflow,
+        )
         self.assertIn("ref: ${{ github.event.pull_request.head.sha }}", workflow)
 
     def test_authorship_guard_is_part_of_check_target(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-        verifier = (REPO_ROOT / "scripts" / "verify-authorship.sh").read_text(encoding="utf-8")
+        verifier = (REPO_ROOT / "scripts" / "verify-authorship.sh").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn("check: verify-version-consistency test lint lint-workflows-check verify-authorship smoke-doctor security-scan", makefile)
+        self.assertIn(
+            "check: verify-version-consistency test lint lint-workflows-check verify-authorship smoke-doctor security-scan",
+            makefile,
+        )
         self.assertIn("coverage:", makefile)
         self.assertIn("coverage run --source=src/speed_of_cinnamon", makefile)
         self.assertIn("coverage lcov -o reports/lcov.info", makefile)
@@ -1539,13 +2627,25 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("override PYTHON := $(PYTHON)", makefile)
         self.assertIn("$(error python3 is required)", makefile)
         self.assertIn("verify-authorship:\n\t./scripts/verify-authorship.sh", makefile)
-        self.assertIn("check: verify-version-consistency test lint lint-workflows-check verify-authorship smoke-doctor security-scan", makefile)
-        self.assertIn("python-security-scan:\n\tbandit -q -r src/speed_of_cinnamon scripts -x tests", makefile)
+        self.assertIn(
+            "check: verify-version-consistency test lint lint-workflows-check verify-authorship smoke-doctor security-scan",
+            makefile,
+        )
+        self.assertIn(
+            "python-security-scan:\n\tbandit -q -r src/speed_of_cinnamon scripts -x tests",
+            makefile,
+        )
         self.assertIn("shell-security-scan:\n\tshellcheck scripts/*.sh", makefile)
-        self.assertIn("security-scan: python-security-scan shell-security-scan", makefile)
+        self.assertIn(
+            "security-scan: python-security-scan shell-security-scan", makefile
+        )
         self.assertIn('expected_name = "H234598"', verifier)
-        self.assertIn('expected_email = "54270221+H234598@users.noreply.github.com"', verifier)
-        self.assertIn('expected_repo = "github.com/H234598/speed-of-cinnamon"', verifier)
+        self.assertIn(
+            'expected_email = "54270221+H234598@users.noreply.github.com"', verifier
+        )
+        self.assertIn(
+            'expected_repo = "github.com/H234598/speed-of-cinnamon"', verifier
+        )
         self.assertIn("allowed_history_commit_identities = {", verifier)
         self.assertNotIn("allowed_committers = {", verifier)
         for commit in (
@@ -1562,30 +2662,48 @@ class CiStaticTest(unittest.TestCase):
             "a2b9e0a52cf5f5310ea11a6e7b5e7723dda8d98c",
         ):
             self.assertIn(commit, verifier)
-        self.assertIn('(author_name, author_email) == (expected_name, expected_email)', verifier)
-        self.assertIn('(committer_name, committer_email) == (expected_name, expected_email)', verifier)
-        self.assertIn("history_identity = allowed_history_commit_identities.get(sha)", verifier)
-        self.assertIn('run_git("rev-parse", "--is-shallow-repository", check=False)', verifier)
-        self.assertIn("cannot verify full commit history in shallow clone; use fetch-depth: 0", verifier)
+        self.assertIn(
+            "(author_name, author_email) == (expected_name, expected_email)", verifier
+        )
+        self.assertIn(
+            "(committer_name, committer_email) == (expected_name, expected_email)",
+            verifier,
+        )
+        self.assertIn(
+            "history_identity = allowed_history_commit_identities.get(sha)", verifier
+        )
+        self.assertIn(
+            'run_git("rev-parse", "--is-shallow-repository", check=False)', verifier
+        )
+        self.assertIn(
+            "cannot verify full commit history in shallow clone; use fetch-depth: 0",
+            verifier,
+        )
         self.assertIn("readonly TRUSTED_PATH='/usr/bin:/usr/sbin:/bin:/sbin'", verifier)
         self.assertIn('PATH="${TRUSTED_PATH}"', verifier)
         self.assertIn('python_bin="$(command -v python3 || true)"', verifier)
         self.assertIn('git_bin="$(command -v git || true)"', verifier)
-        self.assertIn('"${python_bin}" - <<', verifier)
+        self.assertIn('"${python_bin}" - "${repo_dir}" "${git_bin}" <<', verifier)
         self.assertIn("git_bin = sys.argv[2]", verifier)
         self.assertIn("if not Path(git_bin).is_absolute():", verifier)
         self.assertIn('[git_bin, "-C", str(repo_dir), *args]', verifier)
         self.assertNotIn('["git", "-C", str(repo_dir), *args]', verifier)
         self.assertIn("allowed_remote_urls = {", verifier)
         self.assertIn("normalize_remote_url(remote)", verifier)
-        self.assertIn('remote_stdout = run_git("config", "--get", "remote.origin.url", check=False).stdout', verifier)
+        self.assertIn(
+            'remote_stdout = run_git("config", "--get", "remote.origin.url", check=False).stdout',
+            verifier,
+        )
         self.assertIn('remote = remote_stdout.removesuffix("\\n")', verifier)
         self.assertIn("if remote != remote.strip():", verifier)
-        self.assertNotIn('run_git("config", "--get", "remote.origin.url", check=False).stdout.strip()', verifier)
+        self.assertNotIn(
+            'run_git("config", "--get", "remote.origin.url", check=False).stdout.strip()',
+            verifier,
+        )
         self.assertIn("0x80 <= ord(char) <= 0x9F for char in remote", verifier)
         self.assertIn("normalized_remote not in allowed_remote_urls", verifier)
         self.assertNotIn("expected_repo not in normalized_remote", verifier)
-        self.assertNotIn('allowed_committers = {', verifier)
+        self.assertNotIn("allowed_committers = {", verifier)
         self.assertIn('("GitHub", "noreply@github.com")', verifier)
         self.assertIn("def iter_git_log_records", verifier)
         self.assertIn("MAX_COMMIT_LOG_BYTES = 16 * 1024 * 1024", verifier)
@@ -1605,12 +2723,20 @@ class CiStaticTest(unittest.TestCase):
             r"(?m)^dist-check:\s*release-validate-flags$",
             "dist-check must validate release flags before running",
         )
-        self.assertRegex(makefile, r"(?m)^rpm:\s*release-validate-flags$", "rpm must validate release flags before running")
         self.assertRegex(
-            makefile, r"(?m)^rpm-check:\s*release-validate-flags$", "rpm-check must validate release flags before running"
+            makefile,
+            r"(?m)^rpm:\s*release-validate-flags$",
+            "rpm must validate release flags before running",
         )
         self.assertRegex(
-            makefile, r"(?m)^rpm-generic:\s*release-validate-flags$", "rpm-generic must validate release flags before running"
+            makefile,
+            r"(?m)^rpm-check:\s*release-validate-flags$",
+            "rpm-check must validate release flags before running",
+        )
+        self.assertRegex(
+            makefile,
+            r"(?m)^rpm-generic:\s*release-validate-flags$",
+            "rpm-generic must validate release flags before running",
         )
         self.assertRegex(
             makefile,
@@ -1620,16 +2746,24 @@ class CiStaticTest(unittest.TestCase):
 
     def test_makefile_lint_workflows_check_in_check_target(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-        lint_workflows = (REPO_ROOT / "scripts" / "lint-workflows.sh").read_text(encoding="utf-8")
+        lint_workflows = (REPO_ROOT / "scripts" / "lint-workflows.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("lint-workflows-check:", makefile)
         self.assertIn("lint-workflows-check", makefile)
 
         self.assertIn("\t@export ACTIONLINT_STRICT=true; \\", makefile)
         self.assertIn("./scripts/lint-workflows.sh \\", makefile)
-        self.assertIn('ALLOW_WORKFLOW_LINT_FALLBACK:-0', makefile)
-        self.assertIn("workflow lint skipped locally by ALLOW_WORKFLOW_LINT_FALLBACK=1; install actionlint for strict checks.", makefile)
+        self.assertIn("ALLOW_WORKFLOW_LINT_FALLBACK:-0", makefile)
+        self.assertIn(
+            "workflow lint skipped locally by ALLOW_WORKFLOW_LINT_FALLBACK=1; install actionlint for strict checks.",
+            makefile,
+        )
         self.assertNotIn("ACTIONLINT_STRICT=false", makefile)
-        self.assertNotIn("workflow lint skipped locally; install actionlint for strict checks.", makefile)
+        self.assertNotIn(
+            "workflow lint skipped locally; install actionlint for strict checks.",
+            makefile,
+        )
         self.assertIn("readonly MAX_WORKFLOW_FILES=256", lint_workflows)
         self.assertIn("class StrictLoader(yaml.SafeLoader):", lint_workflows)
         self.assertIn("duplicate workflow YAML key", lint_workflows)
@@ -1637,10 +2771,12 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("find .github/workflows -maxdepth 1", lint_workflows)
         self.assertIn('python3 - "${workflows[@]}"', lint_workflows)
         self.assertNotIn("glob.glob", lint_workflows)
-        self.assertIn('if [[ "${#workflows[@]}" -eq 0 ]]; then', lint_workflows)
+        self.assertIn("if [[ ${#workflows[@]} -eq 0 ]]; then", lint_workflows)
 
     def test_fedora_dependencies_include_artifact_crypto_backend(self) -> None:
-        dependencies = (REPO_ROOT / "scripts" / "install-fedora-deps.sh").read_text(encoding="utf-8")
+        dependencies = (REPO_ROOT / "scripts" / "install-fedora-deps.sh").read_text(
+            encoding="utf-8"
+        )
         command = '"${sudo_cmd}" "${dnf_cmd}" install -y \\\n'
         self.assertEqual(dependencies.count(command), 1)
         install_block = dependencies.split(command, 1)[1].split("\n\n", 1)[0]
@@ -1648,13 +2784,27 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("python3-cryptography", packages)
 
     def test_man_pages_and_wiki_are_packaged(self) -> None:
-        spec = (REPO_ROOT / "packaging" / "speed-of-cinnamon.spec").read_text(encoding="utf-8")
-        generic_spec = (REPO_ROOT / "packaging" / "speed-of-cinnamon-generic.spec").read_text(encoding="utf-8")
-        dist_verifier = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
-        rpm_verifier = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
-        install_local = (REPO_ROOT / "scripts" / "install-local.sh").read_text(encoding="utf-8")
-        fedora_deps = (REPO_ROOT / "scripts" / "install-fedora-deps.sh").read_text(encoding="utf-8")
-        wiki_publisher = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
+        spec = (REPO_ROOT / "packaging" / "speed-of-cinnamon.spec").read_text(
+            encoding="utf-8"
+        )
+        generic_spec = (
+            REPO_ROOT / "packaging" / "speed-of-cinnamon-generic.spec"
+        ).read_text(encoding="utf-8")
+        dist_verifier = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(
+            encoding="utf-8"
+        )
+        rpm_verifier = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(
+            encoding="utf-8"
+        )
+        install_local = (REPO_ROOT / "scripts" / "install-local.sh").read_text(
+            encoding="utf-8"
+        )
+        fedora_deps = (REPO_ROOT / "scripts" / "install-fedora-deps.sh").read_text(
+            encoding="utf-8"
+        )
+        wiki_publisher = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(
+            encoding="utf-8"
+        )
 
         for path in [
             "docs/man/speed-of-cinnamon.1",
@@ -1667,137 +2817,272 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("install -m 0644 docs/man/speed-of-cinnamon.1", spec)
         self.assertIn("install -m 0644 docs/man/speed-of-cinnamon-alarms.1", spec)
         for rpm_spec in (spec, generic_spec):
-            self.assertIn('find src/speed_of_cinnamon \\( -type l -o -type f -links +1 \\) -print -quit', rpm_spec)
-            self.assertIn('find files/speed-of-cinnamon@H234598 \\( -type l -o -type f -links +1 \\) -print -quit', rpm_spec)
+            self.assertIn(
+                "find src/speed_of_cinnamon \\( -type l -o -type f -links +1 \\) -print -quit",
+                rpm_spec,
+            )
+            self.assertIn(
+                "find files/speed-of-cinnamon@H234598 \\( -type l -o -type f -links +1 \\) -print -quit",
+                rpm_spec,
+            )
             self.assertIn("refusing unsafe python package source tree", rpm_spec)
             self.assertIn("refusing unsafe applet source tree", rpm_spec)
-            self.assertIn("refusing python package source tree with control characters in file names", rpm_spec)
-            self.assertIn("refusing applet source tree with control characters in file names", rpm_spec)
+            self.assertIn(
+                "refusing python package source tree with control characters in file names",
+                rpm_spec,
+            )
+            self.assertIn(
+                "refusing applet source tree with control characters in file names",
+                rpm_spec,
+            )
         self.assertIn("%{_mandir}/man1/speed-of-cinnamon.1*", spec)
         self.assertIn("%{_mandir}/man1/speed-of-cinnamon-alarms.1*", spec)
         self.assertIn("speed-of-cinnamon\\.1(\\.gz)?", rpm_verifier)
         self.assertIn("speed-of-cinnamon-alarms\\.1(\\.gz)?", rpm_verifier)
         self.assertIn("docs/man/speed-of-cinnamon.1", install_local)
-        self.assertIn('SPEED_OF_CINNAMON_TEST_HOME:-0', install_local)
-        self.assertIn('readonly REQUIRED_TOOLS=(dirname find grep getent id mktemp realpath cut python3)', install_local)
+        self.assertIn("SPEED_OF_CINNAMON_TEST_HOME:-0", install_local)
+        self.assertIn(
+            "readonly REQUIRED_TOOLS=(dirname find flock grep getent id mktemp realpath cut python3)",
+            install_local,
+        )
         self.assertIn("check_required_tools()", install_local)
         self.assertIn("missing_tool", install_local)
         self.assertIn("required tool missing:", install_local)
-        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', install_local)
+        self.assertIn(
+            'repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"',
+            install_local,
+        )
         self.assertNotIn("for tool in find grep command realpath; do", install_local)
         self.assertIn('dbus_send_command=""', install_local)
         self.assertIn(
-            'if [[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" && -n "${account_home}" && "${HOME}" == "${account_home}" ]]; then',
+            'if [[ -n ${DBUS_SESSION_BUS_ADDRESS:-} && -n ${account_home} && ${HOME} == "${account_home}" ]]; then',
             install_local,
         )
-        self.assertIn('dbus_send_command="$(command -v -- dbus-send || true)"', install_local)
-        self.assertIn('timeout_command="$(command -v -- timeout || true)"', install_local)
-        self.assertIn('if [[ -n "${dbus_send_command}" && -n "${timeout_command}" ]]; then', install_local)
+        self.assertIn(
+            'dbus_send_command="$(command -v -- dbus-send || true)"', install_local
+        )
+        self.assertIn(
+            'timeout_command="$(command -v -- timeout || true)"', install_local
+        )
+        self.assertIn(
+            "if [[ -n ${dbus_send_command} && -n ${timeout_command} ]]; then",
+            install_local,
+        )
         self.assertIn("reject_unsafe_tree()", install_local)
-        self.assertIn('find "${tree}" \\( -type l -o -type f -links +1 \\) -print -quit', install_local)
+        self.assertIn(
+            'find "${tree}" \\( -type l -o -type f -links +1 \\) -print -quit',
+            install_local,
+        )
         self.assertIn("reject_unsafe_file()", install_local)
         self.assertIn("write_staging_dir()", install_local)
         self.assertIn("activate_staged()", install_local)
         self.assertIn("rollback_staged_items()", install_local)
         self.assertIn("validate_staged_workspace()", install_local)
-        self.assertIn('staged_workspace="$(mktemp -d "${app_data}/install-stage-XXXXXX")"', install_local)
-        stage_creation = install_local.index('staged_workspace="$(mktemp -d "${app_data}/install-stage-XXXXXX")"')
-        cleanup_trap = install_local.index("trap install_exit_cleanup EXIT", stage_creation)
-        validation_call = install_local.index("validate_staged_workspace\n", stage_creation)
-        self.assertLess(cleanup_trap, validation_call)
-        self.assertNotIn('staged_workspace="$(mktemp -d "${temp_root}/speed-of-cinnamon-install-stage-XXXXXX")"', install_local)
+        self.assertIn(
+            'staged_workspace="$(mktemp -d "${app_data}/install-stage-XXXXXX")"',
+            install_local,
+        )
+        cleanup_trap = install_local.index("trap install_exit_cleanup EXIT")
+        stage_creation = install_local.index(
+            'staged_workspace="$(mktemp -d "${app_data}/install-stage-XXXXXX")"',
+            cleanup_trap,
+        )
+        validation_call = install_local.index(
+            "validate_staged_workspace\n", stage_creation
+        )
+        self.assertLess(cleanup_trap, stage_creation)
+        self.assertLess(stage_creation, validation_call)
+        self.assertNotIn(
+            'staged_workspace="$(mktemp -d "${temp_root}/speed-of-cinnamon-install-stage-XXXXXX")"',
+            install_local,
+        )
         self.assertIn("resolve_tmp_root >/dev/null", install_local)
-        self.assertIn('safe_fs remove install "${staged_workspace}" --kind dir', install_local)
+        self.assertIn(
+            'safe_fs remove install "${staged_workspace}" --kind dir', install_local
+        )
         self.assertNotIn('rm -rf -- "${staged_workspace}"', install_local)
-        self.assertIn('if [[ -L "${staged_workspace}" || ! -d "${staged_workspace}" ]]; then', install_local)
-        self.assertIn('if [[ "${staged_real}" != "${app_data_real}/install-stage-"* ]]; then', install_local)
+        self.assertIn(
+            "if [[ -L ${staged_workspace} || ! -d ${staged_workspace} ]]; then",
+            install_local,
+        )
+        self.assertIn(
+            'if [[ ${staged_real} != "${app_data_real}/install-stage-"* ]]; then',
+            install_local,
+        )
         self.assertIn(
             'safe_fs write-wrapper install "${stage_root}/speed-of-cinnamon/bin/speed-of-cinnamon" "${app_data}/python" "${python3_path}"',
             install_local,
         )
-        self.assertIn('readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"', install_local)
+        self.assertIn(
+            'readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+            install_local,
+        )
         self.assertIn('export PATH="${TRUSTED_COMMAND_PATH}"', install_local)
-        self.assertIn('readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"', fedora_deps)
+        self.assertIn(
+            'readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+            fedora_deps,
+        )
         self.assertIn('export PATH="${TRUSTED_COMMAND_PATH}"', fedora_deps)
         self.assertIn('dnf_cmd="$(command -v -- dnf)"', fedora_deps)
         self.assertIn('sudo_cmd="$(command -v -- sudo)"', fedora_deps)
         self.assertIn('"${sudo_cmd}" "${dnf_cmd}" install -y', fedora_deps)
         self.assertNotIn("sudo dnf install -y", fedora_deps)
-        self.assertIn('readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"', wiki_publisher)
+        self.assertIn(
+            'readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+            wiki_publisher,
+        )
         self.assertIn('export PATH="${TRUSTED_COMMAND_PATH}"', wiki_publisher)
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', wiki_publisher)
         self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', wiki_publisher)
-        self.assertIn('expected_wiki_url="https://github.com/H234598/speed-of-cinnamon.wiki.git"', wiki_publisher)
+        self.assertIn(
+            'expected_wiki_url="https://github.com/H234598/speed-of-cinnamon.wiki.git"',
+            wiki_publisher,
+        )
         self.assertIn('wiki_url="${WIKI_URL:-${expected_wiki_url}}"', wiki_publisher)
-        self.assertIn('if [[ "${wiki_url}" != "${expected_wiki_url}" ]]; then', wiki_publisher)
-        self.assertIn('Invalid wiki URL: expected %s, got %s', wiki_publisher)
-        self.assertIn('temporary root must be an absolute path:', wiki_publisher)
-        self.assertIn('temporary root must not be a symlink:', wiki_publisher)
-        self.assertIn('temporary root is not a writable directory:', wiki_publisher)
+        self.assertIn(
+            'if [[ ${wiki_url} != "${expected_wiki_url}" ]]; then', wiki_publisher
+        )
+        self.assertIn("Invalid wiki URL: expected %s, got %s", wiki_publisher)
+        self.assertIn("temporary root must be an absolute path:", wiki_publisher)
+        self.assertIn("temporary root must not be a symlink:", wiki_publisher)
+        self.assertIn("temporary root is not a writable directory:", wiki_publisher)
         self.assertIn('work_dir_abs="$(realpath "${work_dir}")', wiki_publisher)
-        self.assertIn('temporary wiki publish workspace escaped temporary root', wiki_publisher)
-        self.assertIn('"${safe_fs_cmd[@]}" mkdirs publish-wiki "${work_root}"', wiki_publisher)
-        self.assertIn('"${safe_fs_cmd[@]}" remove publish-wiki "${work_dir}" --kind dir', wiki_publisher)
-        self.assertIn('"${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/wiki/Home.md" "${work_dir}/wiki/Home.md" 0644', wiki_publisher)
-        self.assertIn('"${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/user-guide.md" "${work_dir}/wiki/User-Guide.md" 0644', wiki_publisher)
+        self.assertIn(
+            "temporary wiki publish workspace escaped temporary root", wiki_publisher
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" mkdirs publish-wiki "${work_root}"', wiki_publisher
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" remove publish-wiki "${work_dir}" --kind dir',
+            wiki_publisher,
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/wiki/Home.md" "${work_dir}/wiki/Home.md" 0644',
+            wiki_publisher,
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" copy-file publish-wiki "${repo_dir}/docs/user-guide.md" "${work_dir}/wiki/User-Guide.md" 0644',
+            wiki_publisher,
+        )
         self.assertNotIn('cp "${repo_dir}/docs/wiki/Home.md"', wiki_publisher)
         self.assertNotIn('rm -rf -- "${work_dir}"', wiki_publisher)
-        self.assertIn('safe_fs install-tree install "${source_root}/src/speed_of_cinnamon" "${stage_root}/speed-of-cinnamon/python/speed_of_cinnamon" "python package"', install_local)
+        self.assertIn(
+            'safe_fs install-tree install "${source_root}/src/speed_of_cinnamon" "${stage_root}/speed-of-cinnamon/python/speed_of_cinnamon" "python package"',
+            install_local,
+        )
         self.assertIn('activated_had_existing+=("0")', install_local)
         self.assertIn('remove-leaf install "${target}"', install_local)
         self.assertNotIn('mktemp -d "${parent}/.${name}.install.', install_local)
-        self.assertIn('safe_fs copy-file install "${source_root}/docs/man/speed-of-cinnamon.1"', install_local)
-        self.assertIn("python3 -m compileall -q", dist_verifier)
-        self.assertIn('${package_dir}/scripts/safe-local-fs.py', dist_verifier)
-        self.assertIn("archive backend wrapper helper does not invoke the expected CLI module", dist_verifier)
+        self.assertIn(
+            'safe_fs copy-file install "${source_root}/docs/man/speed-of-cinnamon.1"',
+            install_local,
+        )
+        self.assertIn("run_python_bounded -m compileall -q", dist_verifier)
+        self.assertIn("${package_dir}/scripts/safe-local-fs.py", dist_verifier)
+        self.assertIn(
+            "archive backend wrapper helper does not invoke the expected CLI module",
+            dist_verifier,
+        )
         self.assertIn("scripts/safe-local-fs.py", dist_verifier)
-        self.assertIn("archive backend wrapper helper must not resolve python3 through PATH at runtime", dist_verifier)
-        self.assertIn('python_executable = _validate_absolute(args.python_executable, "python executable path")', dist_verifier)
-        self.assertIn('write_wrapper.add_argument("python_executable")', dist_verifier)
-        self.assertIn(' -m speed_of_cinnamon.cli \\"$@\\"', dist_verifier)
-        self.assertNotIn('exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"', dist_verifier)
+        self.assertIn(
+            "archive backend wrapper helper must not resolve python3 through PATH at runtime",
+            dist_verifier,
+        )
+        safe_local_fs = (REPO_ROOT / "scripts" / "safe-local-fs.py").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            'python_executable = _validate_absolute(\n        args.python_executable, "python executable path"\n    )',
+            safe_local_fs,
+        )
+        self.assertIn('write_wrapper.add_argument("python_executable")', safe_local_fs)
+        self.assertIn(' -m speed_of_cinnamon.cli "$@"', safe_local_fs)
+        self.assertNotIn(
+            'exec "$(command -v -- python3)" -m speed_of_cinnamon.cli "$@"',
+            dist_verifier,
+        )
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', dist_verifier)
-        self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', dist_verifier)
-        self.assertIn('"${safe_fs_cmd[@]}" copy-file verify-dist "${tarball}" "${tarball_snapshot}" 0644', dist_verifier)
-        self.assertIn('"${safe_fs_cmd[@]}" remove verify-dist "${tmp_dir}" --kind dir', dist_verifier)
-        self.assertIn('tarball_snapshot="${tmp_dir}/speed-of-cinnamon-verify.tar.gz"', dist_verifier)
+        self.assertIn(
+            'safe_fs_cmd=("${VERIFY_PYTHON_INTERPRETER}" -I -S -B "${safe_fs}")',
+            dist_verifier,
+        )
+        self.assertIn(
+            'snapshot_archive_bounded "${tarball}" "${tarball_snapshot}" "${MAX_DIST_ARCHIVE_BYTES}" "${tmp_dir_identity}"',
+            dist_verifier,
+        )
+        self.assertIn(
+            'run_safe_fs_bounded remove verify-dist "${tmp_dir}" --kind dir',
+            dist_verifier,
+        )
+        self.assertIn(
+            'tarball_snapshot="${tmp_dir}/speed-of-cinnamon-verify.tar.gz"',
+            dist_verifier,
+        )
         self.assertIn("RPM package contains unsafe path entry", rpm_verifier)
-        self.assertIn("RPM expansion contains unsupported symlink entries.", rpm_verifier)
-        self.assertIn("RPM expansion contains unsupported hardlink entries.", rpm_verifier)
+        self.assertIn(
+            "RPM expansion contains unsupported symlink entries.", rpm_verifier
+        )
+        self.assertIn(
+            "RPM expansion contains unsupported hardlink entries.", rpm_verifier
+        )
         self.assertIn("RPM package must be a regular file", rpm_verifier)
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', rpm_verifier)
-        self.assertIn('"${safe_fs_cmd[@]}" copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644', rpm_verifier)
-        self.assertIn('"${safe_fs_cmd[@]}" remove verify-rpm "${tmp_dir}" --kind dir', rpm_verifier)
-        self.assertIn('rpm_snapshot="${tmp_dir}/speed-of-cinnamon-verify.rpm"', rpm_verifier)
-        self.assertIn('run_rpm_bounded -qp --qf', rpm_verifier)
-        self.assertIn('"${rpm_snapshot}" > "${metadata_file}"', rpm_verifier)
-        self.assertIn('run_rpm_bounded -qpl "${rpm_snapshot}" > "${file_list}"', rpm_verifier)
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644',
+            rpm_verifier,
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" remove verify-rpm "${tmp_dir}" --kind dir',
+            rpm_verifier,
+        )
+        self.assertIn(
+            'rpm_snapshot="${tmp_dir}/speed-of-cinnamon-verify.rpm"', rpm_verifier
+        )
+        self.assertIn("run_rpm_bounded -qp --qf", rpm_verifier)
+        self.assertIn('"${rpm_snapshot}" >"${metadata_file}"', rpm_verifier)
+        self.assertIn(
+            'run_rpm_bounded -qpl "${rpm_snapshot}" >"${file_list}"', rpm_verifier
+        )
         self.assertIn('file_metadata="${tmp_dir}/rpm-file-metadata.txt"', rpm_verifier)
         self.assertIn("%{FILEMODES:octal}", rpm_verifier)
         self.assertIn("%{FILELINKTOS}", rpm_verifier)
         self.assertIn("RPM package contains unsupported file type", rpm_verifier)
         self.assertIn("RPM package contains unsupported link target", rpm_verifier)
-        self.assertIn("RPM package contains group/world-writable file mode", rpm_verifier)
+        self.assertIn(
+            "RPM package contains group/world-writable file mode", rpm_verifier
+        )
         self.assertIn("RPM package contains disallowed executable mode", rpm_verifier)
-        self.assertIn("RPM package file metadata does not match file listing", rpm_verifier)
+        self.assertIn(
+            "RPM package file metadata does not match file listing", rpm_verifier
+        )
         self.assertIn('run_rpm2cpio_bounded "${rpm_snapshot}" |', rpm_verifier)
-        self.assertIn('run_cpio_bounded -idmu --no-absolute-filenames --quiet', rpm_verifier)
+        self.assertIn(
+            "run_cpio_bounded -idmu --no-absolute-filenames --quiet", rpm_verifier
+        )
         self.assertIn("python3 -m compileall -q", rpm_verifier)
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
-        self.assertIn('py_auto_byte_compile 0', build_rpm)
-        self.assertIn('__brp_python_bytecompile %{nil}', build_rpm)
-        self.assertIn('__brp_python_hardlink %{nil}', build_rpm)
+        self.assertIn("py_auto_byte_compile 0", build_rpm)
+        self.assertIn("__brp_python_bytecompile %{nil}", build_rpm)
+        self.assertIn("__brp_python_hardlink %{nil}", build_rpm)
         self.assertIn("speed-of-cinnamon.wiki.git", wiki_publisher)
         self.assertIn("User-Guide.md", wiki_publisher)
 
     def test_verify_dist_blocks_dangerous_archive_entries(self) -> None:
-        dist_verifier = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
-        self.assertIn('safe local filesystem helper must not be hardlinked', dist_verifier)
-        self.assertIn('stat -c \'%h\' "${safe_fs}"', dist_verifier)
-        self.assertIn("tarfile.open(tarball_snapshot, \"r:gz\")", dist_verifier)
+        dist_verifier = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(
+            "safe local filesystem helper must not be hardlinked", dist_verifier
+        )
+        self.assertIn("stat -c '%h' \"${safe_fs}\"", dist_verifier)
+        self.assertIn('tarfile.open(tarball_snapshot, "r:gz")', dist_verifier)
         self.assertIn("member.issym()", dist_verifier)
         self.assertIn("member.islnk()", dist_verifier)
-        self.assertIn("raise SystemExit(f\"dist archive contains unsupported link entry", dist_verifier)
+        self.assertIn(
+            'raise SystemExit(f"dist archive contains unsupported link entry',
+            dist_verifier,
+        )
         self.assertIn("package_root = None", dist_verifier)
         self.assertIn("dist archive contains multiple top-level entries", dist_verifier)
         self.assertIn("dist archive contains an empty path entry", dist_verifier)
@@ -1809,10 +3094,18 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("archive.extract(member, target)", dist_verifier)
 
     def test_verify_dist_uses_private_snapshot_for_tar_tooling(self) -> None:
-        verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
-        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
-        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(encoding="utf-8")
-        snapshot_copy = verify_dist.index('if ! snapshot_archive_bounded "${tarball}" "${tarball_snapshot}" "${MAX_DIST_ARCHIVE_BYTES}" "${tmp_dir_identity}"; then')
+        verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(
+            encoding="utf-8"
+        )
+        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(
+            encoding="utf-8"
+        )
+        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(
+            encoding="utf-8"
+        )
+        snapshot_copy = verify_dist.index(
+            'if ! snapshot_archive_bounded "${tarball}" "${tarball_snapshot}" "${MAX_DIST_ARCHIVE_BYTES}" "${tmp_dir_identity}"; then'
+        )
         tar_listing = verify_dist.index('run_tar_bounded -tzf "${tarball_snapshot}"')
         tarfile_open = verify_dist.index('tarfile.open(tarball_snapshot, "r:gz")')
 
@@ -1822,32 +3115,55 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("archive snapshot must not be hardlinked", verify_dist)
         self.assertIn('tarball_input="$1"', verify_dist)
         self.assertIn("archive path contains control characters", verify_dist)
-        self.assertIn('if [[ -L "$expected_tarball" || ! -f "$expected_tarball" ]]; then', verify_dist)
-        self.assertIn('open_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)', verify_dist)
-        self.assertIn('source_fd = os.open(source_name, open_flags)', verify_dist)
-        self.assertIn('not stat.S_ISREG(source_stat.st_mode)', verify_dist)
-        self.assertIn('source_stat.st_size > max_bytes', verify_dist)
-        self.assertIn('identity(parent_stat) != destination_identity', verify_dist)
-        self.assertIn('os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW', verify_dist)
-        self.assertIn('if signature(os.fstat(source_fd)) != source_signature:', verify_dist)
+        self.assertIn(
+            "if [[ -L $expected_tarball || ! -f $expected_tarball ]]; then",
+            verify_dist,
+        )
+        self.assertIn(
+            'open_flags = os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)',
+            verify_dist,
+        )
+        self.assertIn("source_fd = os.open(source_name, open_flags)", verify_dist)
+        self.assertIn("not stat.S_ISREG(source_stat.st_mode)", verify_dist)
+        self.assertIn("source_stat.st_size > max_bytes", verify_dist)
+        self.assertIn("identity(parent_stat) != destination_identity", verify_dist)
+        self.assertIn(
+            "os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW", verify_dist
+        )
+        self.assertIn(
+            "if signature(os.fstat(source_fd)) != source_signature:", verify_dist
+        )
         self.assertIn("archive missing or invalid", verify_dist)
         self.assertIn("failed to resolve archive path", verify_dist)
-        self.assertIn('if ! requested_tarball="$(run_command_bounded realpath -m -- "$requested_tarball_input")"; then', verify_dist)
-        self.assertIn('if [[ "$requested_tarball" != "$expected_tarball" ]]; then', verify_dist)
+        self.assertIn(
+            'if ! requested_tarball="$(run_command_bounded realpath -m -- "$requested_tarball_input")"; then',
+            verify_dist,
+        )
+        self.assertIn(
+            'if [[ $requested_tarball != "$expected_tarball" ]]; then', verify_dist
+        )
         self.assertNotIn('tar -tzf "${tarball}"', verify_dist)
         self.assertNotIn('tarfile.open(tarball, "r:gz")', verify_dist)
-        self.assertIn('readonly MAX_DIST_ARCHIVE_BYTES=$((128 * 1024 * 1024))', verify_dist)
-        self.assertIn('readonly MAX_RPM_ARCHIVE_BYTES=$((256 * 1024 * 1024))', verify_rpm)
-        self.assertIn('readonly MAX_SNAP_ARCHIVE_BYTES=$((512 * 1024 * 1024))', verify_snap)
-        self.assertIn('MAX_DIST_MEMBERS = int(sys.argv[3])', verify_dist)
-        self.assertIn('MAX_RPM_FILES = int(sys.argv[2])', verify_rpm)
-        self.assertIn('MAX_SNAP_ENTRIES = int(sys.argv[2])', verify_snap)
-        self.assertIn('MAX_DIST_TOTAL_EXTRACTED_BYTES = int(sys.argv[7])', verify_dist)
-        self.assertIn('MAX_RPM_TOTAL_FILE_BYTES = int(sys.argv[4])', verify_rpm)
-        self.assertIn('MAX_SNAP_TOTAL_FILE_BYTES = int(sys.argv[6])', verify_snap)
+        self.assertIn(
+            "readonly MAX_DIST_ARCHIVE_BYTES=$((128 * 1024 * 1024))", verify_dist
+        )
+        self.assertIn(
+            "readonly MAX_RPM_ARCHIVE_BYTES=$((256 * 1024 * 1024))", verify_rpm
+        )
+        self.assertIn(
+            "readonly MAX_SNAP_ARCHIVE_BYTES=$((512 * 1024 * 1024))", verify_snap
+        )
+        self.assertIn("MAX_DIST_MEMBERS = int(sys.argv[3])", verify_dist)
+        self.assertIn("MAX_RPM_FILES = int(sys.argv[2])", verify_rpm)
+        self.assertIn("MAX_SNAP_ENTRIES = int(sys.argv[2])", verify_snap)
+        self.assertIn("MAX_DIST_TOTAL_EXTRACTED_BYTES = int(sys.argv[7])", verify_dist)
+        self.assertIn("MAX_RPM_TOTAL_FILE_BYTES = int(sys.argv[4])", verify_rpm)
+        self.assertIn("MAX_SNAP_TOTAL_FILE_BYTES = int(sys.argv[6])", verify_snap)
 
     def test_dev_backend_path_does_not_append_env_pythonpath(self) -> None:
-        dev_backend = (REPO_ROOT / "scripts" / "dev-backend.sh").read_text(encoding="utf-8")
+        dev_backend = (REPO_ROOT / "scripts" / "dev-backend.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertNotIn("PYTHONPATH:+", dev_backend)
         self.assertIn('export PYTHONPATH="${repo_dir}/src"', dev_backend)
         self.assertIn(
@@ -1859,186 +3175,349 @@ class CiStaticTest(unittest.TestCase):
             dev_backend.index('export PATH="${TRUSTED_COMMAND_PATH}"'),
             dev_backend.index('repo_dir="$(cd "$(dirname'),
         )
-        self.assertIn('python3_path="$(realpath -- "$(command -v -- python3)")"', dev_backend)
-        self.assertIn('exec "${python3_path}" -m speed_of_cinnamon.cli "$@"', dev_backend)
+        self.assertIn(
+            'python3_path="$(realpath -- "$(command -v -- python3)")"', dev_backend
+        )
+        self.assertIn(
+            'exec "${python3_path}" -m speed_of_cinnamon.cli "$@"', dev_backend
+        )
         self.assertNotIn('exec "$(command -v -- python3)"', dev_backend)
 
     def test_build_snap_rejects_symlinked_snap_dir(self) -> None:
-        build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(encoding="utf-8")
-        snap_launcher = (REPO_ROOT / "snap" / "local" / "bin" / "speed-of-cinnamon").read_text(encoding="utf-8")
-        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(encoding="utf-8")
+        build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(
+            encoding="utf-8"
+        )
+        snap_launcher = (
+            REPO_ROOT / "snap" / "local" / "bin" / "speed-of-cinnamon"
+        ).read_text(encoding="utf-8")
+        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn('snap_dir="${repo_dir}/snap"', build_snap)
-        self.assertIn('for tool in python3 snapcraft timeout cp mktemp mkdir find realpath stat chmod grep sort basename; do', build_snap)
-        self.assertIn('if [[ -L "${snap_dir}" ]]; then', build_snap)
-        self.assertIn('snap directory must not be a symlink', build_snap)
+        self.assertIn(
+            "for tool in python3 snapcraft timeout cp mktemp mkdir find realpath stat chmod grep basename; do",
+            build_snap,
+        )
+        self.assertIn("if [[ -L ${snap_dir} ]]; then", build_snap)
+        self.assertIn("snap directory must not be a symlink", build_snap)
         self.assertIn('dist_parent="${repo_dir}/dist"', build_snap)
-        self.assertIn('if [[ -L "${dist_parent}" ]]; then', build_snap)
-        self.assertIn('dist directory must not be a symlink', build_snap)
+        self.assertIn("if [[ -L ${dist_parent} ]]; then", build_snap)
+        self.assertIn("dist directory must not be a symlink", build_snap)
         self.assertIn('dist_dir="${dist_parent}/snap"', build_snap)
         self.assertIn('snapcraft_file="${snap_dir}/snapcraft.yaml"', build_snap)
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', build_snap)
-        self.assertIn('require_regular_source_file "${safe_fs}" "safe local filesystem helper"', build_snap)
+        self.assertIn(
+            'require_regular_source_file "${safe_fs}" "safe local filesystem helper"',
+            build_snap,
+        )
         self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_snap)
-        self.assertIn('repo_tmp_abs="$(realpath "${repo_tmp_root}")"', build_snap)
-        self.assertIn('repo_tmp_root="${repo_tmp_abs}"', build_snap)
-        self.assertIn('snap temporary root must be outside repository', build_snap)
-        self.assertIn('snap_workspace="$(mktemp -d "${repo_tmp_root}/speed-of-cinnamon-snap-tree-XXXXXX")"', build_snap)
+        self.assertIn('repo_tmp_root="${root_abs}"', build_snap)
+        self.assertIn("snap temporary root must be outside repository", build_snap)
+        self.assertIn(
+            'snap_workspace="$(mktemp -d "${snap_tmp_parent}/speed-of-cinnamon-snap-tree-XXXXXX")"',
+            build_snap,
+        )
         self.assertIn('snap_workspace_abs="$(realpath "${snap_workspace}")', build_snap)
-        self.assertIn('temporary snap workspace escaped temporary root', build_snap)
-        self.assertIn('snapcraft_file_rendered="${snap_workspace}/snap/snapcraft.yaml"', build_snap)
-        self.assertIn('install-tree build-snap "${repo_dir}/snap" "${snap_workspace}/snap" "snap source tree"', build_snap)
-        self.assertIn('install-tree build-snap "${repo_dir}/src" "${snap_workspace}/src" "Python source tree"', build_snap)
-        self.assertIn('copy-file build-snap "${repo_dir}/pyproject.toml" "${snap_workspace}/pyproject.toml" 0644', build_snap)
-        self.assertIn('copy-file build-snap "${repo_dir}/README.md" "${snap_workspace}/README.md" 0644', build_snap)
-        self.assertNotIn('install-tree build-snap "${repo_dir}" "${snap_workspace}" "snap temporary source tree"', build_snap)
-        self.assertIn('TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"', snap_launcher)
+        self.assertIn("temporary snap workspace escaped temporary root", build_snap)
+        self.assertIn(
+            'snapcraft_file_rendered="${snap_workspace}/snap/snapcraft.yaml"',
+            build_snap,
+        )
+        self.assertIn(
+            'install-tree build-snap "${repo_dir}/snap" "${snap_workspace}/snap" "snap source tree"',
+            build_snap,
+        )
+        self.assertIn(
+            'install-tree build-snap "${repo_dir}/src" "${snap_source_staging}/src" "Python source tree"',
+            build_snap,
+        )
+        self.assertIn(
+            'copy-file build-snap "${repo_dir}/pyproject.toml" "${snap_source_staging}/pyproject.toml" 0644',
+            build_snap,
+        )
+        self.assertIn(
+            'copy-file build-snap "${repo_dir}/README.md" "${snap_source_staging}/README.md" 0644',
+            build_snap,
+        )
+        self.assertNotIn(
+            'install-tree build-snap "${repo_dir}" "${snap_workspace}" "snap temporary source tree"',
+            build_snap,
+        )
+        self.assertIn(
+            'TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"',
+            snap_launcher,
+        )
         self.assertIn('export PATH="${TRUSTED_COMMAND_PATH}"', snap_launcher)
-        self.assertIn('export PATH="${SNAP_ROOT}/usr/sbin:${SNAP_ROOT}/usr/bin:${SNAP_ROOT}/sbin:${SNAP_ROOT}/bin:${TRUSTED_COMMAND_PATH}"', snap_launcher)
+        self.assertIn(
+            'export PATH="${SNAP_ROOT}/usr/sbin:${SNAP_ROOT}/usr/bin:${SNAP_ROOT}/sbin:${SNAP_ROOT}/bin:${TRUSTED_COMMAND_PATH}"',
+            snap_launcher,
+        )
         self.assertIn('python3_path="$(command -v -- python3 || true)"', snap_launcher)
-        self.assertIn('exec "${python3_path}" -m speed_of_cinnamon.cli "$@"', snap_launcher)
-        self.assertNotIn('exec python3 "${SNAP_ROOT}/src/speed_of_cinnamon/cli.py" "$@"', snap_launcher)
-        self.assertLess(snap_launcher.index('export PATH="${TRUSTED_COMMAND_PATH}"'), snap_launcher.index('if [ -n "${SNAP:-}" ]'))
-        self.assertIn('"${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace_dist}"', build_snap)
+        self.assertIn(
+            'exec "${python3_path}" -m speed_of_cinnamon.cli "$@"', snap_launcher
+        )
+        self.assertNotIn(
+            'exec python3 "${SNAP_ROOT}/src/speed_of_cinnamon/cli.py" "$@"',
+            snap_launcher,
+        )
+        self.assertLess(
+            snap_launcher.index('export PATH="${TRUSTED_COMMAND_PATH}"'),
+            snap_launcher.index('if [ -n "${SNAP:-}" ]'),
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" mkdirs build-snap "${snap_workspace_dist}"', build_snap
+        )
         self.assertNotIn('mkdir -p "${snap_workspace_dist}"', build_snap)
-        self.assertIn('python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}"', build_snap)
-        self.assertNotIn('output_path.write_text', build_snap)
-        self.assertIn('os.replace(tmp_name, output_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)', build_snap)
-        self.assertIn('os.fsync(parent_fd)', build_snap)
-        self.assertIn('activate_snap_output() {', build_snap)
-        self.assertIn('backup_created = False', build_snap)
-        self.assertIn('def _safe_fs_identity(path_stat):', build_snap)
+        self.assertIn(
+            'python3 - "${snapcraft_file_rendered}" "${snapcraft_file_rendered}" "${version}" "${snapcraft_base}"',
+            build_snap,
+        )
+        self.assertNotIn("output_path.write_text", build_snap)
+        self.assertIn(
+            "os.replace(tmp_name, output_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+            build_snap,
+        )
+        self.assertIn("os.fsync(parent_fd)", build_snap)
+        self.assertIn("activate_snap_output() {", build_snap)
+        self.assertIn("def _safe_fs_identity(path_stat):", build_snap)
         self.assertIn('"--expected-src-identity",', build_snap)
-        self.assertIn('"--expected-dst-identity",', build_snap)
+        self.assertIn('"--expected-source-identity",', build_snap)
+        self.assertIn('"--expected-target-identity",', build_snap)
         self.assertIn('"--expected-identity",', build_snap)
-        self.assertIn('refusing to restore changed snap output', build_snap)
         self.assertNotIn("cleanup_existing_dist_snaps() {", build_snap)
-        self.assertNotIn('find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_*.snap" ! -type f -print -quit', build_snap)
-        self.assertNotIn('"${safe_fs_cmd[@]}" remove build-snap "${existing_snap}" --kind file', build_snap)
+        self.assertNotIn(
+            'find "${dist_dir}" -maxdepth 1 -name "speed-of-cinnamon_*.snap" ! -type f -print -quit',
+            build_snap,
+        )
+        self.assertNotIn(
+            '"${safe_fs_cmd[@]}" remove build-snap "${existing_snap}" --kind file',
+            build_snap,
+        )
         self.assertNotIn("cleanup_existing_root_snaps", build_snap)
         self.assertNotIn(
             'find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap"',
             build_snap,
         )
-        self.assertNotIn('cleanup_existing_dist_snaps "$(basename "${output_path}")"', build_snap)
-        candidate_scan_start = build_snap.index('{\n  find "${snap_workspace}"')
-        candidate_scan_end = build_snap.index('} | sort -z', candidate_scan_start)
+        self.assertNotIn(
+            'cleanup_existing_dist_snaps "$(basename "${output_path}")"', build_snap
+        )
+        candidate_scan_start = build_snap.index('if ! snap_file="$(')
+        candidate_scan_end = build_snap.index('\nPY\n)"; then', candidate_scan_start)
         candidate_scan = build_snap[candidate_scan_start:candidate_scan_end]
         self.assertNotIn('find "${dist_dir}"', candidate_scan)
         self.assertNotIn('find "${repo_dir}"', candidate_scan)
         self.assertNotIn('rm -rf -- "${snap_workspace}"', build_snap)
-        self.assertNotIn('snapcraft_backup', build_snap)
-        self.assertNotIn('mv -f -- "${snapcraft_backup}" "${snapcraft_file}"', build_snap)
+        self.assertNotIn("snapcraft_backup", build_snap)
+        self.assertNotIn(
+            'mv -f -- "${snapcraft_backup}" "${snapcraft_file}"', build_snap
+        )
         self.assertNotIn("mv -T", build_snap)
         self.assertNotIn("NamedTemporaryFile", build_snap)
         self.assertNotIn("cleanup_existing_root_snaps() {", build_snap)
         self.assertNotIn("speed-of-cinnamon-snap-root-cleanup-XXXXXX", build_snap)
-        self.assertNotIn("refusing to clean non-regular snap artifact from repository root", build_snap)
-        self.assertNotIn('refusing to overwrite existing snap artifact for version', build_snap)
-        self.assertNotIn('if find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then', build_snap)
-        self.assertNotIn('rm -f -- "${dist_dir}/speed-of-cinnamon_${version}"_*.snap', build_snap)
+        self.assertNotIn(
+            "refusing to clean non-regular snap artifact from repository root",
+            build_snap,
+        )
+        self.assertNotIn(
+            "refusing to overwrite existing snap artifact for version", build_snap
+        )
+        self.assertNotIn(
+            'if find "${repo_dir}" -maxdepth 1 -name "speed-of-cinnamon_${version}_*.snap" -print -quit | grep -q .; then',
+            build_snap,
+        )
+        self.assertNotIn(
+            'rm -f -- "${dist_dir}/speed-of-cinnamon_${version}"_*.snap', build_snap
+        )
         self.assertNotIn('path.with_name(path.name + ".tmp")', build_snap)
         self.assertIn('snap_dir="${repo_dir}/dist/snap"', verify_snap)
         self.assertIn("require_cmd grep", verify_snap)
         self.assertIn("require_cmd basename", verify_snap)
         self.assertIn('snap_filename="$(basename "${absolute}")"', verify_snap)
-        self.assertIn('^speed-of-cinnamon_([^_]+)_[^/]+\\.snap$', verify_snap)
+        self.assertIn("^speed-of-cinnamon_([^_]+)_[^/]+\\.snap$", verify_snap)
         self.assertIn('snap_filename_version="${BASH_REMATCH[1]}"', verify_snap)
-        self.assertIn('snap metadata version does not match snap filename', verify_snap)
-        self.assertIn('snap metadata name does not match speed-of-cinnamon', verify_snap)
-        self.assertIn('if [[ -L "${snap_dir}" ]]; then', verify_snap)
-        self.assertIn('snap directory must not be a symlink', verify_snap)
-        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', verify_snap)
+        self.assertIn("snap metadata version does not match snap filename", verify_snap)
+        self.assertIn(
+            "snap metadata name does not match speed-of-cinnamon", verify_snap
+        )
+        self.assertIn("if [[ -L ${snap_dir} ]]; then", verify_snap)
+        self.assertIn("snap directory must not be a symlink", verify_snap)
+        self.assertIn(
+            'repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"',
+            verify_snap,
+        )
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', verify_snap)
-        self.assertIn('safe local filesystem helper must not be hardlinked', verify_snap)
-        self.assertIn('stat -c \'%h\' "${safe_fs}"', verify_snap)
+        self.assertIn(
+            "safe local filesystem helper must not be hardlinked", verify_snap
+        )
+        self.assertIn("stat -c '%h' \"${safe_fs}\"", verify_snap)
         self.assertIn('tmp_dir_abs="$(realpath "${tmp_dir}")', verify_snap)
         self.assertIn('if contains_control_chars "${tmp_root}"; then', verify_snap)
-        self.assertIn('temporary root contains control characters', verify_snap)
+        self.assertIn("temporary root contains control characters", verify_snap)
         self.assertIn('realpath "${snap_path}" 2>/dev/null', verify_snap)
         self.assertIn('realpath "${tmp_root}" 2>/dev/null', verify_snap)
-        self.assertNotIn('temporary root must be an absolute path: %s', verify_snap)
-        self.assertNotIn('temporary root must not be a symlink: %s', verify_snap)
-        self.assertNotIn('temporary root is not a writable directory: %s', verify_snap)
-        self.assertNotIn('failed to resolve temporary root: %s', verify_snap)
-        self.assertIn('temporary snap verification directory escaped temporary root', verify_snap)
-        self.assertIn('"${safe_fs_cmd[@]}" copy-file verify-snap "${absolute}" "${snap_snapshot}" 0644', verify_snap)
-        self.assertIn('"${safe_fs_cmd[@]}" remove verify-snap "${tmp_dir}" --kind dir', verify_snap)
-        self.assertIn('run_unsquashfs_bounded -lln -no-progress "${snap_snapshot}" > "${snap_listing}"', verify_snap)
+        self.assertNotIn("temporary root must be an absolute path: %s", verify_snap)
+        self.assertNotIn("temporary root must not be a symlink: %s", verify_snap)
+        self.assertNotIn("temporary root is not a writable directory: %s", verify_snap)
+        self.assertNotIn("failed to resolve temporary root: %s", verify_snap)
+        self.assertIn(
+            "temporary snap verification directory escaped temporary root", verify_snap
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" copy-file verify-snap "${absolute}" "${snap_snapshot}" 0644',
+            verify_snap,
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" remove verify-snap "${tmp_dir}" --kind dir',
+            verify_snap,
+        )
+        self.assertIn(
+            'run_unsquashfs_bounded -lln -no-progress "${snap_snapshot}" >"${snap_listing}"',
+            verify_snap,
+        )
         self.assertIn("snap package contains unsupported entry type", verify_snap)
         self.assertIn("snap package contains unsupported link entry", verify_snap)
         self.assertIn("snap package contains malformed link entry", verify_snap)
         self.assertIn("snap package contains unsafe link target", verify_snap)
-        self.assertIn("def validate_symlink_target(path: PurePosixPath, target_text: str) -> None:", verify_snap)
-        self.assertIn("resolved = posixpath.normpath(posixpath.join(str(path.parent), target_text))", verify_snap)
+        self.assertIn(
+            "def validate_symlink_target(path: PurePosixPath, target_text: str) -> None:",
+            verify_snap,
+        )
+        self.assertIn(
+            "resolved = posixpath.normpath(posixpath.join(str(path.parent), target_text))",
+            verify_snap,
+        )
         self.assertIn("snap package is missing required entries", verify_snap)
         self.assertIn("squashfs-root/meta/snap.yaml", verify_snap)
         self.assertIn("squashfs-root/bin/speed-of-cinnamon", verify_snap)
         self.assertIn("squashfs-root/src/speed_of_cinnamon/cli.py", verify_snap)
         self.assertIn("REQUIRED_REGULAR_ENTRIES = {", verify_snap)
-        required_regular_entries_start = verify_snap.index("REQUIRED_REGULAR_ENTRIES = {")
-        required_regular_entries_end = verify_snap.index("def symbolic_mode_to_octal", required_regular_entries_start)
+        required_regular_entries_start = verify_snap.index(
+            "REQUIRED_REGULAR_ENTRIES = {"
+        )
+        required_regular_entries_end = verify_snap.index(
+            "def symbolic_mode_to_octal", required_regular_entries_start
+        )
         self.assertIn(
             '    "squashfs-root/src/speed_of_cinnamon/cli.py",',
             verify_snap[required_regular_entries_start:required_regular_entries_end],
         )
         self.assertIn("for required_entry in REQUIRED_REGULAR_ENTRIES:", verify_snap)
-        self.assertIn('required entry is not regular file', verify_snap)
+        self.assertIn("required entry is not regular file", verify_snap)
         self.assertLess(
             verify_snap.index("for required_entry in REQUIRED_REGULAR_ENTRIES:"),
             verify_snap.index("run_unsquashfs_bounded -cat"),
         )
-        self.assertIn('run_unsquashfs_bounded -cat "${snap_snapshot}" meta/snap.yaml > "${snap_yaml}"', verify_snap)
-        self.assertIn('run_unsquashfs_bounded -cat "${snap_snapshot}" bin/speed-of-cinnamon > "${snap_backend}"', verify_snap)
+        self.assertIn(
+            'run_unsquashfs_bounded -cat "${snap_snapshot}" meta/snap.yaml >"${snap_yaml}"',
+            verify_snap,
+        )
+        self.assertIn(
+            'run_unsquashfs_bounded -cat "${snap_snapshot}" bin/speed-of-cinnamon >"${snap_backend}"',
+            verify_snap,
+        )
         self.assertIn("src/speed_of_cinnamon/cli.py", verify_snap)
         self.assertIn("speed_of_cinnamon[.]cli", verify_snap)
-        self.assertIn("snap launcher does not target speed_of_cinnamon.cli", verify_snap)
+        self.assertIn(
+            "snap launcher does not target speed_of_cinnamon.cli", verify_snap
+        )
         self.assertIn("snap file must not be hardlinked", verify_snap)
         self.assertIn("contains_control_chars() {", verify_snap)
         self.assertIn("0x80 <= ord(char) <= 0x9F for char in value", verify_snap)
         self.assertIn("0xDC80 <= ord(char) <= 0xDCFF for char in value", verify_snap)
-        self.assertIn('snap file path contains control characters', verify_snap)
-        self.assertNotIn('snap file path contains control characters: %s', verify_snap)
+        self.assertIn("snap file path contains control characters", verify_snap)
+        self.assertNotIn("snap file path contains control characters: %s", verify_snap)
 
-    def test_build_snap_and_verify_rpm_guard_paths_against_canonical_repo_dir(self) -> None:
-        build_dist = (REPO_ROOT / "scripts" / "build-dist.sh").read_text(encoding="utf-8")
+    def test_build_snap_and_verify_rpm_guard_paths_against_canonical_repo_dir(
+        self,
+    ) -> None:
+        build_dist = (REPO_ROOT / "scripts" / "build-dist.sh").read_text(
+            encoding="utf-8"
+        )
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
-        build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(encoding="utf-8")
-        publish_wiki = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(encoding="utf-8")
-        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
+        build_snap = (REPO_ROOT / "scripts" / "build-snap.sh").read_text(
+            encoding="utf-8"
+        )
+        publish_wiki = (REPO_ROOT / "scripts" / "publish-wiki.sh").read_text(
+            encoding="utf-8"
+        )
+        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', build_dist)
-        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', build_rpm)
-        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', build_snap)
-        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', publish_wiki)
-        self.assertIn('repo_tmp_abs="$(realpath "${repo_tmp_root}")"', build_snap)
-        self.assertIn('if [[ "${repo_tmp_abs}" == "${repo_dir}" || "${repo_tmp_abs}" == "${repo_dir}/"* ]]; then', build_snap)
-        self.assertIn('repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', verify_rpm)
-        self.assertIn('safe local filesystem helper must not be hardlinked', verify_rpm)
-        self.assertIn('stat -c \'%h\' "${safe_fs}"', verify_rpm)
-        self.assertIn('"${repo_dir}"/dist/rpmbuild-generic/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm', verify_rpm)
+        self.assertIn(
+            'repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', build_dist
+        )
+        self.assertIn(
+            'repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', build_rpm
+        )
+        self.assertIn(
+            'repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', build_snap
+        )
+        self.assertIn(
+            'repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"',
+            publish_wiki,
+        )
+        self.assertIn('root_abs="$(realpath "${requested_root}")"', build_snap)
+        self.assertIn(
+            'if [[ ${root_abs} == "${repo_dir}" || ${root_abs} == "${repo_dir}/"* ]]; then',
+            build_snap,
+        )
+        self.assertIn(
+            'repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"', verify_rpm
+        )
+        self.assertIn("safe local filesystem helper must not be hardlinked", verify_rpm)
+        self.assertIn("stat -c '%h' \"${safe_fs}\"", verify_rpm)
+        self.assertIn(
+            '"${repo_dir}"/dist/rpmbuild-generic/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm',
+            verify_rpm,
+        )
         self.assertIn("contains_control_chars() {", verify_rpm)
         self.assertIn("0x80 <= ord(char) <= 0x9F for char in value", verify_rpm)
         self.assertIn("0xDC80 <= ord(char) <= 0xDCFF for char in value", verify_rpm)
         self.assertIn('if contains_control_chars "${rpm_path}"; then', verify_rpm)
         self.assertIn("RPM package path contains control characters", verify_rpm)
-        self.assertIn('if ! rpm_path="$(realpath "${rpm_path}" 2>/dev/null)"; then', verify_rpm)
-        self.assertIn('if [[ -L "${rpm_path}" || ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".rpm" ||', verify_rpm)
+        self.assertIn(
+            'if ! rpm_path="$(realpath "${rpm_path}" 2>/dev/null)"; then', verify_rpm
+        )
+        self.assertIn(
+            'if [[ -L ${rpm_path} || ! -f ${rpm_path} || ! (${rpm_path} == "${repo_dir}/dist/rpmbuild/"*".rpm" ||',
+            verify_rpm,
+        )
         self.assertIn('rpm_filename="$(basename "${rpm_path}")"', verify_rpm)
-        self.assertIn('^speed-of-cinnamon-(.+)-[^-]+\\.noarch\\.rpm$', verify_rpm)
+        self.assertIn("^speed-of-cinnamon-(.+)-[^-]+\\.noarch\\.rpm$", verify_rpm)
         self.assertIn('rpm_filename_version="${BASH_REMATCH[1]}"', verify_rpm)
         self.assertIn('rpm_metadata_version="$(awk -F= ', verify_rpm)
-        self.assertIn('RPM metadata version does not match package filename', verify_rpm)
-        self.assertIn('if ! unsupported_links="$(timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" find "${tmp_dir}" -type l -print -quit)"; then', verify_rpm)
-        self.assertIn('if ! unsupported_hardlinks="$(timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" find "${tmp_dir}" -type f -links +1 -print -quit)"; then', verify_rpm)
-        self.assertNotIn('find "${tmp_dir}" -type l -print -quit | grep -q .', verify_rpm)
-        self.assertNotIn('find "${tmp_dir}" -type f -links +1 -print -quit | grep -q .', verify_rpm)
+        self.assertIn(
+            "RPM metadata version does not match package filename", verify_rpm
+        )
+        self.assertIn(
+            'if ! unsupported_links="$(timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" find "${tmp_dir}" -type l -print -quit)"; then',
+            verify_rpm,
+        )
+        self.assertIn(
+            'if ! unsupported_hardlinks="$(timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" find "${tmp_dir}" -type f -links +1 -print -quit)"; then',
+            verify_rpm,
+        )
+        self.assertNotIn(
+            'find "${tmp_dir}" -type l -print -quit | grep -q .', verify_rpm
+        )
+        self.assertNotIn(
+            'find "${tmp_dir}" -type f -links +1 -print -quit | grep -q .', verify_rpm
+        )
 
     def test_verify_rpm_uses_private_snapshot_for_rpm_tooling(self) -> None:
-        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
-        snapshot_copy = verify_rpm.index('"${safe_fs_cmd[@]}" copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644')
-        metadata_check = verify_rpm.index('"${rpm_snapshot}" > "${metadata_file}"')
-        file_list_check = verify_rpm.index('run_rpm_bounded -qpl "${rpm_snapshot}" > "${file_list}"')
-        file_metadata_check = verify_rpm.index('"${rpm_snapshot}" > "${file_metadata}"')
+        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(
+            encoding="utf-8"
+        )
+        snapshot_copy = verify_rpm.index(
+            '"${safe_fs_cmd[@]}" copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644'
+        )
+        metadata_check = verify_rpm.index('"${rpm_snapshot}" >"${metadata_file}"')
+        file_list_check = verify_rpm.index(
+            'run_rpm_bounded -qpl "${rpm_snapshot}" >"${file_list}"'
+        )
+        file_metadata_check = verify_rpm.index('"${rpm_snapshot}" >"${file_metadata}"')
         extraction_check = verify_rpm.index('run_rpm2cpio_bounded "${rpm_snapshot}" |')
 
         self.assertLess(snapshot_copy, metadata_check)
@@ -2046,91 +3525,123 @@ class CiStaticTest(unittest.TestCase):
         self.assertLess(snapshot_copy, file_metadata_check)
         self.assertLess(file_metadata_check, extraction_check)
         self.assertLess(snapshot_copy, extraction_check)
-        self.assertIn('run_cpio_bounded -idmu --no-absolute-filenames --quiet', verify_rpm)
-        self.assertIn('%{FILESIZES}', verify_rpm)
-        self.assertIn('if file_size > MAX_RPM_FILE_BYTES:', verify_rpm)
-        self.assertIn('if total_file_bytes > MAX_RPM_TOTAL_FILE_BYTES:', verify_rpm)
-        self.assertNotIn('rpm -qp --qf \'name=%{NAME}\\nversion=%{VERSION}\\narch=%{ARCH}\\npackager=%{PACKAGER}\\nvendor=%{VENDOR}\\nurl=%{URL}\\n\' "${rpm_path}"', verify_rpm)
+        self.assertIn(
+            "run_cpio_bounded -idmu --no-absolute-filenames --quiet", verify_rpm
+        )
+        self.assertIn("%{FILESIZES}", verify_rpm)
+        self.assertIn("if file_size > MAX_RPM_FILE_BYTES:", verify_rpm)
+        self.assertIn("if total_file_bytes > MAX_RPM_TOTAL_FILE_BYTES:", verify_rpm)
+        self.assertNotIn(
+            "rpm -qp --qf 'name=%{NAME}\\nversion=%{VERSION}\\narch=%{ARCH}\\npackager=%{PACKAGER}\\nvendor=%{VENDOR}\\nurl=%{URL}\\n' \"${rpm_path}\"",
+            verify_rpm,
+        )
         self.assertNotIn('rpm -qpl "${rpm_path}"', verify_rpm)
         self.assertNotIn('rpm2cpio "${rpm_path}"', verify_rpm)
 
-    def test_temp_root_resolution_is_fail_closed_in_build_dist_and_install_local(self) -> None:
-        build_dist = (REPO_ROOT / "scripts" / "build-dist.sh").read_text(encoding="utf-8")
-        install_local = (REPO_ROOT / "scripts" / "install-local.sh").read_text(encoding="utf-8")
+    def test_temp_root_resolution_is_fail_closed_in_build_dist_and_install_local(
+        self,
+    ) -> None:
+        build_dist = (REPO_ROOT / "scripts" / "build-dist.sh").read_text(
+            encoding="utf-8"
+        )
+        install_local = (REPO_ROOT / "scripts" / "install-local.sh").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn('work_root="${TMPDIR:-/tmp}"', build_dist)
-        self.assertIn('printf \'temporary root must be an absolute path:', build_dist)
-        self.assertIn('temporary root must be an absolute path:', build_dist)
-        self.assertIn('printf \'temporary root must not be a symlink:', build_dist)
-        self.assertIn('printf \'failed to resolve temporary root:', build_dist)
+        self.assertIn("printf 'temporary root must be an absolute path:", build_dist)
+        self.assertIn("temporary root must be an absolute path:", build_dist)
+        self.assertIn(
+            "printf 'temporary root must be a writable directory and not a symlink:",
+            build_dist,
+        )
+        self.assertIn("printf 'failed to resolve temporary root:", build_dist)
         self.assertNotIn("${repo_dir}/.tmp", build_dist)
         self.assertNotIn('mkdir -p "${work_root}"', build_dist)
         self.assertNotIn('mkdir -p "${base}"', install_local)
 
         self.assertIn('local base="${TMPDIR:-/tmp}"', install_local)
-        self.assertIn('temporary root must be an absolute path:', install_local)
-        self.assertIn('printf \'temporary root must not be a symlink:', install_local)
-        self.assertIn('printf \'failed to resolve temporary root:', install_local)
+        self.assertIn("temporary root must be an absolute path:", install_local)
+        self.assertIn("printf 'temporary root must not be a symlink:", install_local)
+        self.assertIn("printf 'failed to resolve temporary root:", install_local)
         self.assertNotIn("${repo_dir}/.tmp", install_local)
 
-    def test_tmp_root_resolves_fail_closed_in_build_and_verify_rpm_and_dist(self) -> None:
+    def test_tmp_root_resolves_fail_closed_in_build_and_verify_rpm_and_dist(
+        self,
+    ) -> None:
         build_rpm = (REPO_ROOT / "scripts" / "build-rpm.sh").read_text(encoding="utf-8")
-        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(encoding="utf-8")
-        verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
+        verify_rpm = (REPO_ROOT / "scripts" / "verify-rpm.sh").read_text(
+            encoding="utf-8"
+        )
+        verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn('repo_tmp_root="${TMPDIR:-/tmp}"', build_rpm)
-        self.assertIn('temporary root must be an absolute path:', build_rpm)
-        self.assertIn('temporary root must not be a symlink:', build_rpm)
-        self.assertIn('temporary root is not a writable directory:', build_rpm)
-        self.assertIn('failed to resolve temporary root:', build_rpm)
+        self.assertIn('rpm_runtime_root="${XDG_RUNTIME_DIR}"', build_rpm)
+        self.assertIn("RPM runtime root must be an absolute path:", build_rpm)
+        self.assertIn("RPM runtime root must not be a symlink:", build_rpm)
+        self.assertIn("RPM runtime root is not a writable directory:", build_rpm)
+        self.assertIn("failed to resolve RPM runtime root:", build_rpm)
         self.assertNotIn("${repo_dir}/.tmp", build_rpm)
-        self.assertNotIn('mkdir -p "${repo_tmp_root}"', build_rpm)
+        self.assertNotIn('mkdir -p "${rpm_runtime_root}"', build_rpm)
 
         self.assertIn('tmp_root="${TMPDIR:-/tmp}"', verify_rpm)
         self.assertIn('if contains_control_chars "${tmp_root}"; then', verify_rpm)
-        self.assertIn('temporary root contains control characters', verify_rpm)
-        self.assertIn('temporary root must be an absolute path', verify_rpm)
-        self.assertIn('temporary root must not be a symlink', verify_rpm)
-        self.assertIn('temporary root is not a writable directory', verify_rpm)
-        self.assertIn('failed to resolve temporary root', verify_rpm)
-        self.assertNotIn('temporary root must be an absolute path: %s', verify_rpm)
-        self.assertNotIn('temporary root must not be a symlink: %s', verify_rpm)
-        self.assertNotIn('temporary root is not a writable directory: %s', verify_rpm)
-        self.assertNotIn('failed to resolve temporary root: %s', verify_rpm)
+        self.assertIn("temporary root contains control characters", verify_rpm)
+        self.assertIn("temporary root must be an absolute path", verify_rpm)
+        self.assertIn("temporary root must not be a symlink", verify_rpm)
+        self.assertIn("temporary root is not a writable directory", verify_rpm)
+        self.assertIn("failed to resolve temporary root", verify_rpm)
+        self.assertNotIn("temporary root must be an absolute path: %s", verify_rpm)
+        self.assertNotIn("temporary root must not be a symlink: %s", verify_rpm)
+        self.assertNotIn("temporary root is not a writable directory: %s", verify_rpm)
+        self.assertNotIn("failed to resolve temporary root: %s", verify_rpm)
         self.assertIn('tmp_dir_abs="$(realpath "${tmp_dir}")', verify_rpm)
-        self.assertIn('temporary RPM verification directory escaped temporary root', verify_rpm)
+        self.assertIn(
+            "temporary RPM verification directory escaped temporary root", verify_rpm
+        )
         self.assertNotIn("${repo_dir}/.tmp", verify_rpm)
 
         self.assertIn('tmp_root="${TMPDIR:-/tmp}"', verify_dist)
         self.assertIn('if contains_control_chars "${tmp_root}"; then', verify_dist)
-        self.assertIn('temporary root contains control characters', verify_dist)
-        self.assertIn('temporary root must be an absolute path', verify_dist)
-        self.assertIn('temporary root must not be a symlink', verify_dist)
-        self.assertIn('temporary root is not a writable directory', verify_dist)
-        self.assertIn('failed to resolve temporary root', verify_dist)
-        self.assertNotIn('temporary root must be an absolute path: %s', verify_dist)
-        self.assertNotIn('temporary root must not be a symlink: %s', verify_dist)
-        self.assertNotIn('temporary root is not a writable directory: %s', verify_dist)
-        self.assertNotIn('failed to resolve temporary root: %s', verify_dist)
-        self.assertIn('tmp_dir_abs="$(realpath "${tmp_dir}")', verify_dist)
-        self.assertIn('temporary dist verification directory escaped temporary root', verify_dist)
+        self.assertIn("temporary root contains control characters", verify_dist)
+        self.assertIn("temporary root must be an absolute path", verify_dist)
+        self.assertIn("temporary root must not be a symlink", verify_dist)
+        self.assertIn("temporary root is not a writable directory", verify_dist)
+        self.assertIn("failed to resolve temporary root", verify_dist)
+        self.assertNotIn("temporary root must be an absolute path: %s", verify_dist)
+        self.assertNotIn("temporary root must not be a symlink: %s", verify_dist)
+        self.assertNotIn("temporary root is not a writable directory: %s", verify_dist)
+        self.assertNotIn("failed to resolve temporary root: %s", verify_dist)
+        self.assertIn(
+            'tmp_dir_abs="$(run_command_bounded realpath "${tmp_dir}")', verify_dist
+        )
+        self.assertIn(
+            "temporary dist verification directory escaped temporary root", verify_dist
+        )
         self.assertNotIn("${repo_dir}/.tmp", verify_dist)
 
     def test_tmp_root_resolves_fail_closed_for_release_notes(self) -> None:
-        publish_script = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+        publish_script = (
+            REPO_ROOT / "scripts" / "publish-github-release.sh"
+        ).read_text(encoding="utf-8")
 
         self.assertIn('notes_tmp_root="${TMPDIR:-/tmp}"', publish_script)
-        self.assertIn('temporary root must be an absolute path:', publish_script)
-        self.assertIn('temporary root must not be a symlink:', publish_script)
-        self.assertIn('temporary root is not a writable directory:', publish_script)
-        self.assertIn('failed to resolve temporary root:', publish_script)
+        self.assertIn("temporary root must be an absolute path:", publish_script)
+        self.assertIn("temporary root must not be a symlink:", publish_script)
+        self.assertIn("temporary root is not a writable directory:", publish_script)
+        self.assertIn("failed to resolve temporary root:", publish_script)
         self.assertNotIn("${repo_dir}/.tmp", publish_script)
 
     def test_tag_release_workflow_publishes_verified_assets(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
-        publisher = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(encoding="utf-8")
+        workflow = (REPO_ROOT / ".github" / "workflows" / "release.yml").read_text(
+            encoding="utf-8"
+        )
+        publisher = (REPO_ROOT / "scripts" / "publish-github-release.sh").read_text(
+            encoding="utf-8"
+        )
 
-        self.assertIn('name: Release', workflow)
+        self.assertIn("name: Release", workflow)
         self.assertIn('- "v*.*.*"', workflow)
         self.assertIn("workflow_dispatch:", workflow)
         self.assertNotIn("run_workflow_lint:", workflow)
@@ -2170,17 +3681,24 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("rhysd/actionlint/releases/download/v${version}", workflow)
         self.assertIn("sha256sum -c -", workflow)
         self.assertIn('actionlint_version="1.7.12"', workflow)
-        self.assertIn("rhysd/actionlint/releases/download/v${actionlint_version}", workflow)
+        self.assertIn(
+            "rhysd/actionlint/releases/download/v${actionlint_version}", workflow
+        )
         self.assertGreaterEqual(workflow.count('actionlint_tmp_dir="$(mktemp -d)"'), 2)
         self.assertIn("trap 'rm -rf -- \"${actionlint_tmp_dir}\"' EXIT", workflow)
-        self.assertIn('sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint', workflow)
+        self.assertIn(
+            'sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint',
+            workflow,
+        )
         self.assertNotIn('"/tmp/${archive}"', workflow)
         self.assertNotIn('"/tmp/${actionlint_archive}"', workflow)
         self.assertIn("Verify release tag provenance", workflow)
         self.assertIn('git rev-list -n 1 "${tag}^{commit}"', workflow)
         self.assertIn("security-scan:", workflow)
         self.assertIn("uses: ./.github/workflows/security-scan.yml", workflow)
-        self.assertIn("with:\n      ref: ${{ needs.validate-release-tag.outputs.ref }}", workflow)
+        self.assertIn(
+            "with:\n      ref: ${{ needs.validate-release-tag.outputs.ref }}", workflow
+        )
         self.assertIn(
             "needs:\n"
             "      - validate-release-tag\n"
@@ -2192,14 +3710,34 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn('ACTIONLINT_STRICT: "true"', workflow)
         self.assertIn("fetch-depth: 0", workflow)
         self.assertIn("run: gh --version", workflow)
-        self.assertIn("uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6", workflow)
-        self.assertIn("uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6", workflow)
+        self.assertIn(
+            "uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6",
+            workflow,
+        )
+        self.assertIn(
+            "uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6",
+            workflow,
+        )
         self.assertIn("persist-credentials: false", workflow)
-        self.assertIn("uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7", workflow)
-        self.assertIn("name: speed-of-cinnamon-source-${{ steps.release_tag.outputs.tag }}", workflow)
-        self.assertIn("name: speed-of-cinnamon-rpm-${{ steps.release_tag.outputs.tag }}", workflow)
-        self.assertIn("name: speed-of-cinnamon-generic-rpm-${{ steps.release_tag.outputs.tag }}", workflow)
-        self.assertIn("name: speed-of-cinnamon-snap-${{ steps.release_tag.outputs.tag }}", workflow)
+        self.assertIn(
+            "uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7",
+            workflow,
+        )
+        self.assertIn(
+            "name: speed-of-cinnamon-source-${{ steps.release_tag.outputs.tag }}",
+            workflow,
+        )
+        self.assertIn(
+            "name: speed-of-cinnamon-rpm-${{ steps.release_tag.outputs.tag }}", workflow
+        )
+        self.assertIn(
+            "name: speed-of-cinnamon-generic-rpm-${{ steps.release_tag.outputs.tag }}",
+            workflow,
+        )
+        self.assertIn(
+            "name: speed-of-cinnamon-snap-${{ steps.release_tag.outputs.tag }}",
+            workflow,
+        )
         self.assertNotIn("name: speed-of-cinnamon-source-${{ github.sha }}", workflow)
         self.assertIn("runs-on: ubuntu-24.04", workflow)
         self.assertNotIn("runs-on: ubuntu-latest", workflow)
@@ -2210,36 +3748,72 @@ class CiStaticTest(unittest.TestCase):
             "python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-bandit.txt",
             workflow,
         )
-        self.assertIn("sudo apt-get install -y --no-install-recommends cpio rpm shellcheck squashfs-tools", workflow)
+        self.assertIn(
+            "sudo apt-get install -y --no-install-recommends cpio rpm shellcheck squashfs-tools",
+            workflow,
+        )
         self.assertIn('snapcraft_expected_version="8.14.5"', workflow)
         self.assertIn('snapcraft_expected_revision="17614"', workflow)
-        self.assertIn('snap install snapcraft --classic --revision="${snapcraft_expected_revision}"', workflow)
-        self.assertIn('snap refresh snapcraft --revision="${snapcraft_expected_revision}"', workflow)
+        self.assertIn(
+            'snap install snapcraft --classic --revision="${snapcraft_expected_revision}"',
+            workflow,
+        )
+        self.assertIn(
+            'snap refresh snapcraft --revision="${snapcraft_expected_revision}"',
+            workflow,
+        )
         self.assertIn('snapcraft_revision="$(snap list snapcraft | awk', workflow)
-        self.assertIn("snapcraft_version=\"$(snapcraft --version | awk '{print $NF}')\"", workflow)
+        self.assertIn(
+            "snapcraft_version=\"$(snapcraft --version | awk '{print $NF}')\"", workflow
+        )
         self.assertIn("Unsupported snapcraft installation", workflow)
         self.assertIn('snapcraft_base="core22"', workflow)
         self.assertIn('snapcraft_base_expected_revision="2411"', workflow)
-        self.assertIn('snap install "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"', workflow)
-        self.assertIn('snap refresh "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"', workflow)
-        self.assertIn('snapcraft_base_revision="$(snap list "${snapcraft_base}" | awk', workflow)
+        self.assertIn(
+            'snap install "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"',
+            workflow,
+        )
+        self.assertIn(
+            'snap refresh "${snapcraft_base}" --revision="${snapcraft_base_expected_revision}"',
+            workflow,
+        )
+        self.assertIn(
+            'snapcraft_base_revision="$(snap list "${snapcraft_base}" | awk', workflow
+        )
         self.assertNotIn("channel=8.x/stable", workflow)
         self.assertNotIn("channel=latest/stable", workflow)
         self.assertIn("Could not install required snap base core22.", workflow)
         self.assertNotIn("for candidate in core24 core22", workflow)
-        self.assertNotIn("Could not install a compatible snap base (tried core24, core22).", workflow)
+        self.assertNotIn(
+            "Could not install a compatible snap base (tried core24, core22).", workflow
+        )
         self.assertIn("run: make check", workflow)
         self.assertIn("run: make dist-check", workflow)
         self.assertIn("run: make rpm", workflow)
         self.assertIn("run: make rpm-check", workflow)
         self.assertIn("run: make verify-release-attestations", workflow)
-        self.assertIn("verify-release-attestations:", (REPO_ROOT / "Makefile").read_text(encoding="utf-8"))
-        self.assertIn("$(PYTHON) ./scripts/verify-release-attestation.py", (REPO_ROOT / "Makefile").read_text(encoding="utf-8"))
-        self.assertIn("scripts/verify-release-attestation.py", (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8"))
-        self.assertIn("scripts/export-release-attestations.sh", (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8"))
+        self.assertIn(
+            "verify-release-attestations:",
+            (REPO_ROOT / "Makefile").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "$(PYTHON) ./scripts/verify-release-attestation.py",
+            (REPO_ROOT / "Makefile").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "scripts/verify-release-attestation.py",
+            (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8"),
+        )
+        self.assertIn(
+            "scripts/export-release-attestations.sh",
+            (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8"),
+        )
         self.assertIn("run: make rpm-generic", workflow)
         self.assertIn("run: make rpm-generic-check", workflow)
-        self.assertTrue("if: env.BUILD_GENERIC_RPM == 'true'" in workflow or "if: env.BUILD_GENERIC_RPM == '1'" in workflow)
+        self.assertTrue(
+            "if: env.BUILD_GENERIC_RPM == 'true'" in workflow
+            or "if: env.BUILD_GENERIC_RPM == '1'" in workflow
+        )
         self.assertIn("name: Build Snap package", workflow)
         self.assertIn('SNAP_BUILD: "1"', workflow)
         self.assertNotIn("build_snap:", workflow)
@@ -2249,15 +3823,25 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("--skip-snap", workflow)
         self.assertIn("build_generic_rpm:", workflow)
         self.assertIn("run: shellcheck scripts/*.sh", workflow)
-        self.assertIn("GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}", workflow)
+        self.assertIn(
+            "GH_TOKEN: ${{ secrets.RELEASE_GITHUB_TOKEN || github.token }}", workflow
+        )
         self.assertIn("RELEASE_TAG:", workflow)
         self.assertIn("RELEASE_EXPECTED_COMMIT:", workflow)
         self.assertIn("RELEASE_EXPECTED_COMMIT<<RELEASE_EXPECTED_COMMIT", workflow)
         self.assertIn("printf '%s\\n' \"${tag_commit}\"", workflow)
         self.assertIn("args+=(--skip-generic-rpm)", workflow)
-        self.assertIn('./scripts/publish-github-release.sh "${args[@]}" "${RELEASE_TAG}"', workflow)
-        self.assertIn('commit="${RELEASE_EXPECTED_COMMIT:-${GITHUB_SHA:-${tag_commit}}}"', publisher)
-        self.assertIn("release expected commit does not match release tag commit", publisher)
+        self.assertIn(
+            './scripts/publish-github-release.sh "${args[@]}" "${RELEASE_TAG}"',
+            workflow,
+        )
+        self.assertIn(
+            'commit="${RELEASE_EXPECTED_COMMIT:-${GITHUB_SHA:-${tag_commit}}}"',
+            publisher,
+        )
+        self.assertIn(
+            "release expected commit does not match release tag commit", publisher
+        )
         self.assertNotIn('commit="${GITHUB_SHA:-${tag_commit}}"', publisher)
         self.assertNotIn("GITHUB_SHA does not match release tag commit", publisher)
         self.assertIn("build_generic_rpm", workflow)
@@ -2270,39 +3854,60 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("::set-state", workflow)
         self.assertTrue(
             'snaps=(dist/snap/speed-of-cinnamon_"${version}"_*.snap)' in publisher
-            or 'snaps=(dist/snap/speed-of-cinnamon_${version}_*.snap)' in publisher
+            or "snaps=(dist/snap/speed-of-cinnamon_${version}_*.snap)" in publisher
         )
-        self.assertIn("required_tools=(git timeout python3 realpath awk sha256sum grep stat mktemp chmod basename dirname)", publisher)
+        self.assertIn(
+            "required_tools=(git timeout python3 realpath awk sha256sum grep stat mktemp chmod basename dirname)",
+            publisher,
+        )
         self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', publisher)
         self.assertIn('staging_dir_abs="$(realpath "${staging_dir}")', publisher)
         self.assertIn('staging_root="${TMPDIR:-/tmp}"', publisher)
-        self.assertIn('if [[ ! "${staging_root}" == /* ]]; then', publisher)
-        self.assertIn('release staging directory escaped temporary root', publisher)
+        self.assertIn("if [[ ${staging_root} != /* ]]; then", publisher)
+        self.assertIn("release staging directory escaped temporary root", publisher)
         self.assertIn('notes_file_abs="$(realpath "${notes_file}")', publisher)
-        self.assertIn('release notes file escaped temporary root', publisher)
-        self.assertIn('existing_notes_file_abs="$(realpath "${existing_notes_file}")', publisher)
-        self.assertIn('existing release notes file escaped temporary root', publisher)
+        self.assertIn("release notes file escaped temporary root", publisher)
+        self.assertIn(
+            'existing_notes_file_abs="$(realpath "${existing_notes_file}")', publisher
+        )
+        self.assertIn("existing release notes file escaped temporary root", publisher)
         self.assertIn("fsync_regular_file() {", publisher)
         self.assertIn("write_regular_file_from_stdin() {", publisher)
         self.assertIn("MAX_RELEASE_NOTES_BYTES = 1_000_000", publisher)
         self.assertIn("sys.stdin.buffer.read(MAX_RELEASE_NOTES_BYTES + 1)", publisher)
         self.assertIn("exceeds {MAX_RELEASE_NOTES_BYTES} bytes", publisher)
-        self.assertIn('write_regular_file_from_stdin "${notes_file}" "release notes file" "${notes_file_identity}" <<EOF', publisher)
-        self.assertIn('write_regular_file_from_stdin "${existing_notes_file}" "existing release notes file" "${existing_notes_file_identity}"', publisher)
+        self.assertIn(
+            'write_regular_file_from_stdin "${notes_file}" "release notes file" "${notes_file_identity}" <<EOF',
+            publisher,
+        )
+        self.assertIn(
+            'write_regular_file_from_stdin "${existing_notes_file}" "existing release notes file" "${existing_notes_file_identity}"',
+            publisher,
+        )
         self.assertIn("flags = os.O_WRONLY", publisher)
-        self.assertIn("actual_identity = f\"{file_stat.st_dev}:{file_stat.st_ino}:{file_stat.st_mode}\"", publisher)
+        self.assertIn(
+            'actual_identity = f"{file_stat.st_dev}:{file_stat.st_ino}:{file_stat.st_mode}"',
+            publisher,
+        )
         self.assertIn("if actual_identity != expected_identity:", publisher)
         self.assertNotIn("flags = os.O_WRONLY | os.O_CREAT", publisher)
         self.assertIn("flags |= os.O_NOFOLLOW", publisher)
         self.assertNotIn("os.O_TRUNC", publisher)
         self.assertNotIn('cat > "${notes_file}"', publisher)
         self.assertNotIn('> "${existing_notes_file}"', publisher)
-        self.assertIn('"${safe_fs_cmd[@]}" remove publish "${staging_dir}" --kind dir', publisher)
-        self.assertIn('"${safe_fs_cmd[@]}" remove-leaf publish "${notes_file}"', publisher)
-        self.assertIn('"${safe_fs_cmd[@]}" remove-leaf publish "${existing_notes_file}"', publisher)
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" remove publish "${staging_dir}" --kind dir', publisher
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" remove-leaf publish "${notes_file}"', publisher
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" remove-leaf publish "${existing_notes_file}"',
+            publisher,
+        )
         self.assertNotIn('rm -rf -- "${staging_dir}"', publisher)
         self.assertNotIn('rm -f -- "${notes_file}"', publisher)
-        self.assertIn("if [[ \"${dry_run}\" == \"false\" ]]; then", publisher)
+        self.assertIn('if [[ ${dry_run} == "false" ]]; then', publisher)
         self.assertIn("required_tools+=(gh)", publisher)
         self.assertIn("skip_generic=", publisher)
         self.assertIn("generic_rpms=(", publisher)
@@ -2320,12 +3925,14 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("asset is outside repository: %s", publisher)
         self.assertNotIn("asset is not a regular file: %s", publisher)
         self.assertNotIn("asset must not be a symlink: %s", publisher)
-        self.assertIn("if [[ -L \"${asset}\" ]];", publisher)
+        self.assertIn("if [[ -L ${asset} ]];", publisher)
         self.assertIn("asset must not be a symlink", publisher)
         self.assertIn("checksum_target", publisher)
         self.assertIn("checksum file target mismatch", publisher)
         self.assertIn('checksum_dir="$(dirname "${checksum_ref}")"', publisher)
-        self.assertIn('sha256sum --check --strict --status "${checksum_file}"', publisher)
+        self.assertIn(
+            'sha256sum --check --strict --status "${checksum_file}"', publisher
+        )
         self.assertIn("checksum mismatch for", publisher)
         self.assertIn("gh release create", publisher)
         self.assertIn("gh release upload", publisher)
@@ -2333,7 +3940,9 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("--clobber", publisher)
 
     def test_ci_workflow_is_read_only(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+        workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("permissions:", workflow)
         self.assertIn("contents: read", workflow)
@@ -2349,19 +3958,34 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("workflows_changed<<WORKFLOWS_CHANGED", workflow)
 
     def test_pylint_workflow_is_read_only(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "pylint.yml").read_text(encoding="utf-8")
-        requirements = (REPO_ROOT / ".github" / "requirements" / "ci-pylint.txt").read_text(encoding="utf-8")
+        workflow = (REPO_ROOT / ".github" / "workflows" / "pylint.yml").read_text(
+            encoding="utf-8"
+        )
+        requirements = (
+            REPO_ROOT / ".github" / "requirements" / "ci-pylint.txt"
+        ).read_text(encoding="utf-8")
         top_level_permissions = _workflow_block_lines(workflow, "permissions:")
-        checkout_block = _workflow_block_lines(workflow, "- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6")
+        checkout_block = _workflow_block_lines(
+            workflow,
+            "- uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6",
+        )
 
         self.assertEqual(top_level_permissions, ["  contents: read"])
-        self.assertEqual(checkout_block, [
-            "        with:",
-            "          persist-credentials: false",
-        ])
-        self.assertIn("python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-pylint.txt", workflow)
+        self.assertEqual(
+            checkout_block,
+            [
+                "        with:",
+                "          persist-credentials: false",
+            ],
+        )
+        self.assertIn(
+            "python -m pip install --disable-pip-version-check --no-cache-dir --require-hashes -r .github/requirements/ci-pylint.txt",
+            workflow,
+        )
         self.assertIn("mapfile -d '' py_files < <(git ls-files -z -- '*.py')", workflow)
-        self.assertIn('pylint --errors-only --disable=no-member -- "${py_files[@]}"', workflow)
+        self.assertIn(
+            'pylint --errors-only --disable=no-member -- "${py_files[@]}"', workflow
+        )
         self.assertNotIn("$(git ls-files '*.py')", workflow)
         self.assertNotIn("pylint==4.0.5", workflow)
         self.assertIn("--require-hashes", requirements)
@@ -2373,13 +3997,17 @@ class CiStaticTest(unittest.TestCase):
         self.assertNotIn("pull-requests: write", workflow)
 
     def test_scorecard_workflow_does_not_request_oidc_token(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "scorecard.yml").read_text(encoding="utf-8")
+        workflow = (REPO_ROOT / ".github" / "workflows" / "scorecard.yml").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("security-events: write", workflow)
         self.assertNotIn("id-token: write", workflow)
         self.assertIn("publish_results: false", workflow)
 
     def test_osv_pr_scan_does_not_inherit_security_events_write(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "osv-scanner.yml").read_text(encoding="utf-8")
+        workflow = (REPO_ROOT / ".github" / "workflows" / "osv-scanner.yml").read_text(
+            encoding="utf-8"
+        )
         top_level_permissions = _workflow_block_lines(workflow, "permissions:")
         scan_scheduled = _workflow_block_lines(workflow, "scan-scheduled:")
         scan_pr = _workflow_block_lines(workflow, "scan-pr:")
@@ -2392,12 +4020,19 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("      contents: read", scan_pr)
         self.assertNotIn("      security-events: write", scan_pr)
 
-    def test_bandit_workflow_runs_native_blocking_scan_without_extra_token_scope(self) -> None:
-        workflow = (REPO_ROOT / ".github" / "workflows" / "bandit.yml").read_text(encoding="utf-8")
+    def test_bandit_workflow_runs_native_blocking_scan_without_extra_token_scope(
+        self,
+    ) -> None:
+        workflow = (REPO_ROOT / ".github" / "workflows" / "bandit.yml").read_text(
+            encoding="utf-8"
+        )
         self.assertIn("runs-on: ubuntu-24.04", workflow)
         self.assertNotIn("ubuntu-latest", workflow)
         self.assertIn("persist-credentials: false", workflow)
-        self.assertIn("actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6", workflow)
+        self.assertIn(
+            "actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6",
+            workflow,
+        )
         self.assertIn(".github/requirements/ci-bandit.txt", workflow)
         self.assertIn("--require-hashes", workflow)
         self.assertIn("run: make python-security-scan", workflow)
@@ -2411,7 +4046,9 @@ class CiStaticTest(unittest.TestCase):
         allowed_mutable_refs: set[str] = set()
         offenders: list[str] = []
         for path in sorted((REPO_ROOT / ".github" / "workflows").glob("*.yml")):
-            for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            for line_number, line in enumerate(
+                path.read_text(encoding="utf-8").splitlines(), start=1
+            ):
                 match = re.search(r"\buses:\s*[\"']?([^\"'\s#]+)", line)
                 if not match:
                     continue
@@ -2419,34 +4056,56 @@ class CiStaticTest(unittest.TestCase):
                 if ref.startswith("./"):
                     continue
                 if "@" not in ref:
-                    offenders.append(f"{path}:{line_number}: action reference must include @ref")
+                    offenders.append(
+                        f"{path}:{line_number}: action reference must include @ref"
+                    )
                     continue
                 pinned_ref = ref.rsplit("@", 1)[1]
                 if re.fullmatch(r"[0-9a-fA-F]{40}", pinned_ref):
                     continue
                 if ref not in allowed_mutable_refs:
-                    offenders.append(f"{path}:{line_number}: mutable action ref must be reviewed explicitly: {ref}")
+                    offenders.append(
+                        f"{path}:{line_number}: mutable action ref must be reviewed explicitly: {ref}"
+                    )
 
         self.assertEqual(offenders, [])
 
     def test_workflows_install_pinned_actionlint_release(self) -> None:
-        ci_workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
-        lint_workflow = (REPO_ROOT / ".github" / "workflows" / "super-linter.yml").read_text(encoding="utf-8")
-        linter = (REPO_ROOT / "scripts" / "lint-workflows.sh").read_text(encoding="utf-8")
+        ci_workflow = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(
+            encoding="utf-8"
+        )
+        lint_workflow = (
+            REPO_ROOT / ".github" / "workflows" / "super-linter.yml"
+        ).read_text(encoding="utf-8")
+        linter = (REPO_ROOT / "scripts" / "lint-workflows.sh").read_text(
+            encoding="utf-8"
+        )
         self.assertIn('version="1.7.12"', ci_workflow)
         self.assertIn('version="1.7.12"', lint_workflow)
         self.assertIn("rhysd/actionlint/releases/download/v${version}", ci_workflow)
         self.assertIn("rhysd/actionlint/releases/download/v${version}", lint_workflow)
-        self.assertIn("archive_sha256=\"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8\"", ci_workflow)
-        self.assertIn("archive_sha256=\"8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8\"", lint_workflow)
+        self.assertIn(
+            'archive_sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"',
+            ci_workflow,
+        )
+        self.assertIn(
+            'archive_sha256="8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8"',
+            lint_workflow,
+        )
         self.assertIn("sha256sum -c -", ci_workflow)
         self.assertIn("sha256sum -c -", lint_workflow)
         self.assertEqual(ci_workflow.count('actionlint_tmp_dir="$(mktemp -d)"'), 2)
         self.assertIn('actionlint_tmp_dir="$(mktemp -d)"', lint_workflow)
         self.assertIn("trap 'rm -rf -- \"${actionlint_tmp_dir}\"' EXIT", ci_workflow)
         self.assertIn("trap 'rm -rf -- \"${actionlint_tmp_dir}\"' EXIT", lint_workflow)
-        self.assertIn('sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint', ci_workflow)
-        self.assertIn('sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint', lint_workflow)
+        self.assertIn(
+            'sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint',
+            ci_workflow,
+        )
+        self.assertIn(
+            'sudo install -m 0755 "${actionlint_tmp_dir}/actionlint" /usr/local/bin/actionlint',
+            lint_workflow,
+        )
         self.assertNotIn('"/tmp/${archive}"', ci_workflow)
         self.assertNotIn('"/tmp/${archive}"', lint_workflow)
         self.assertNotIn("rhysd/actionlint:", linter)
@@ -2455,8 +4114,10 @@ class CiStaticTest(unittest.TestCase):
     def test_local_release_targets_support_generic_rpm_toggle(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
         self.assertIn("BUILD_GENERIC_RPM ?= 1", makefile)
-        self.assertIn("if [ \"$(BUILD_GENERIC_RPM)\" = \"0\" ]; then", makefile)
-        self.assertIn("Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\\n", makefile)
+        self.assertIn('if [ "$(BUILD_GENERIC_RPM)" = "0" ]; then', makefile)
+        self.assertIn(
+            "Skipping generic RPM generation (BUILD_GENERIC_RPM=0).\\n", makefile
+        )
         self.assertIn("--skip-generic-rpm", makefile)
         self.assertIn(
             "release-dry-run: check release-validate-flags release-require-snap verify-real-e2e-attestation verify-local-model-e2e-attestation verify-release-attestations dist-check rpm rpm-check",
@@ -2468,8 +4129,8 @@ class CiStaticTest(unittest.TestCase):
         )
         self.assertIn("release-validate-flags", makefile)
         self.assertIn("release-validate-flags:", makefile)
-        self.assertIn('SNAP_BUILD must be 0 or 1.\\n', makefile)
-        self.assertIn('BUILD_GENERIC_RPM must be 0 or 1.\\n', makefile)
+        self.assertIn("SNAP_BUILD must be 0 or 1.\\n", makefile)
+        self.assertIn("BUILD_GENERIC_RPM must be 0 or 1.\\n", makefile)
         self.assertIn("-name 'speed-of-cinnamon_$(PROJECT_VERSION)_*.snap'", makefile)
         self.assertIn("release-require-snap:", makefile)
         self.assertIn(
@@ -2479,8 +4140,13 @@ class CiStaticTest(unittest.TestCase):
 
     def test_makefile_lint_checks_applet_js_syntax(self) -> None:
         makefile = (REPO_ROOT / "Makefile").read_text(encoding="utf-8")
-        self.assertIn("node --check files/speed-of-cinnamon@H234598/applet.js >/dev/null", makefile)
-        self.assertIn("SNAP_BUILD=0 is not allowed for release or release-dry-run.", makefile)
+        self.assertIn(
+            "node --check files/speed-of-cinnamon@H234598/applet.js >/dev/null",
+            makefile,
+        )
+        self.assertIn(
+            "SNAP_BUILD=0 is not allowed for release or release-dry-run.", makefile
+        )
         self.assertIn("release-dry-run-no-snap:", makefile)
 
     def test_build_rpm_stages_topdir_before_replacing_previous_build(self) -> None:
@@ -2490,58 +4156,101 @@ class CiStaticTest(unittest.TestCase):
             'stage_topdir="$(mktemp -d "${rpmbuild_tmpdir}/.$(basename "${final_topdir}").stage.XXXXXX")"',
             build_rpm,
         )
-        self.assertIn('stage_fd = open_bound_directory(stage_path, stage_identity, "RPM staging directory")', build_rpm)
-        self.assertIn('for descriptor in bound_fds:', build_rpm)
-        self.assertIn('os.set_inheritable(descriptor, True)', build_rpm)
+        self.assertIn(
+            'stage_fd = open_bound_directory(stage_path, stage_identity, "RPM staging directory")',
+            build_rpm,
+        )
+        self.assertIn("for descriptor in bound_fds:", build_rpm)
+        self.assertIn("os.set_inheritable(descriptor, True)", build_rpm)
         self.assertIn('f"_topdir {procfd(stage_fd)}"', build_rpm)
-        self.assertIn('os.execv(rpmbuild_path, command)', build_rpm)
+        self.assertIn("os.execv(rpmbuild_path, command)", build_rpm)
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', build_rpm)
-        self.assertIn('require_regular_source_file "${safe_fs}" "safe local filesystem helper"', build_rpm)
-        self.assertIn('safe_fs_cmd=("${lifecycle_python}" -I -B "${safe_fs}")', build_rpm)
+        self.assertIn(
+            'require_regular_source_file "${safe_fs}" "safe local filesystem helper"',
+            build_rpm,
+        )
+        self.assertIn(
+            'safe_fs_cmd=("${lifecycle_python}" -I -B "${safe_fs}")', build_rpm
+        )
         self.assertIn('"${safe_fs_cmd[@]}" mkdirs build-rpm "${dist_dir}"', build_rpm)
-        self.assertIn('for rpm_stage_dir in BUILD BUILDROOT RPMS SOURCES SPECS SRPMS; do', build_rpm)
-        self.assertIn('rpmbuild_tmpdir_abs="$(realpath "${rpmbuild_tmpdir}")', build_rpm)
-        self.assertIn('temporary RPM workspace escaped temporary root', build_rpm)
+        self.assertIn(
+            "for rpm_stage_dir in BUILD BUILDROOT RPMS SOURCES SPECS SRPMS; do",
+            build_rpm,
+        )
+        self.assertIn(
+            'rpmbuild_tmpdir_abs="$(realpath "${rpmbuild_tmpdir}")', build_rpm
+        )
+        self.assertIn("temporary RPM workspace escaped temporary root", build_rpm)
         self.assertIn('stage_topdir_abs="$(realpath "${stage_topdir}")', build_rpm)
-        self.assertIn('temporary RPM stage directory escaped temporary workspace', build_rpm)
-        self.assertIn('dist_finalize_lock="${dist_dir}/.build-rpm.finalize.lock"', build_rpm)
+        self.assertIn(
+            "temporary RPM stage directory escaped temporary workspace", build_rpm
+        )
+        self.assertIn(
+            'dist_finalize_lock="${dist_dir}/.build-rpm.finalize.lock"', build_rpm
+        )
         self.assertIn("activate_with_finalize_lock() {", build_rpm)
         self.assertIn("import fcntl", build_rpm)
         self.assertIn("import stat", build_rpm)
         self.assertIn("parent_fd = os.open(lock_parent, parent_flags)", build_rpm)
-        self.assertIn('if parent_stat.st_uid != os.geteuid() or parent_stat.st_mode & 0o022:', build_rpm)
-        self.assertIn('fcntl.flock(parent_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)', build_rpm)
-        self.assertIn('revalidate_parent("finalization lock parent after flock")', build_rpm)
+        self.assertIn(
+            "if parent_stat.st_uid != os.geteuid() or parent_stat.st_mode & 0o022:",
+            build_rpm,
+        )
+        self.assertIn(
+            "fcntl.flock(parent_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)", build_rpm
+        )
+        self.assertIn(
+            'revalidate_parent("finalization lock parent after flock")', build_rpm
+        )
         self.assertNotIn("lock_fd = os.open(lock_path, flags, 0o600)", build_rpm)
         self.assertNotIn("spec_path.write_text", build_rpm)
-        self.assertIn("os.replace(tmp_name, spec_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)", build_rpm)
+        self.assertIn(
+            "os.replace(tmp_name, spec_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+            build_rpm,
+        )
         self.assertIn("os.fsync(parent_fd)", build_rpm)
-        self.assertIn('if (( rpmbuild_status != 0 )); then', build_rpm)
-        self.assertIn('if ! finalization_result="$(activate_with_finalize_lock', build_rpm)
-        self.assertIn('  "${dist_finalize_lock}" "${stage_topdir}" "${final_topdir}"', build_rpm)
+        self.assertIn("if ((rpmbuild_status != 0)); then", build_rpm)
+        self.assertIn(
+            'if ! finalization_result="$(activate_with_finalize_lock', build_rpm
+        )
+        self.assertIn(
+            '\t"${dist_finalize_lock}" "${stage_topdir}" "${final_topdir}"', build_rpm
+        )
         self.assertLess(
-            build_rpm.index('if (( rpmbuild_status != 0 )); then'),
+            build_rpm.index("if ((rpmbuild_status != 0)); then"),
             build_rpm.index('if ! finalization_result="$(activate_with_finalize_lock'),
         )
         self.assertIn(
-            'run_safe_fs(\n'
+            "run_safe_fs(\n"
             '            "install-tree",\n'
             '            "build-rpm",\n'
-            '            staging_path,\n'
-            '            publish_path,\n'
+            "            staging_path,\n"
+            "            publish_path,\n"
             '            "RPM build directory",',
             build_rpm,
         )
-        self.assertIn('run_cleanup_safe_fs remove build-rpm "${stage_topdir}"', build_rpm)
-        stage_cleanup_start = build_rpm.index('run_cleanup_safe_fs remove build-rpm "${stage_topdir}"')
-        stage_cleanup = build_rpm[stage_cleanup_start:stage_cleanup_start + 200]
-        self.assertIn('--kind dir', stage_cleanup)
+        self.assertIn(
+            'run_cleanup_safe_fs remove build-rpm "${stage_topdir}"', build_rpm
+        )
+        stage_cleanup_start = build_rpm.index(
+            'run_cleanup_safe_fs remove build-rpm "${stage_topdir}"'
+        )
+        stage_cleanup = build_rpm[stage_cleanup_start : stage_cleanup_start + 200]
+        self.assertIn("--kind dir", stage_cleanup)
         self.assertIn('--expected-identity "${stage_topdir_identity}"', stage_cleanup)
-        self.assertIn('run_cleanup_safe_fs remove build-rpm "${rpmbuild_tmpdir}"', build_rpm)
-        workspace_cleanup_start = build_rpm.index('run_cleanup_safe_fs remove build-rpm "${rpmbuild_tmpdir}"')
-        workspace_cleanup = build_rpm[workspace_cleanup_start:workspace_cleanup_start + 200]
-        self.assertIn('--kind dir', workspace_cleanup)
-        self.assertIn('--expected-identity "${rpmbuild_tmpdir_identity}"', workspace_cleanup)
+        self.assertIn(
+            'run_cleanup_safe_fs remove build-rpm "${rpmbuild_tmpdir}"', build_rpm
+        )
+        workspace_cleanup_start = build_rpm.index(
+            'run_cleanup_safe_fs remove build-rpm "${rpmbuild_tmpdir}"'
+        )
+        workspace_cleanup = build_rpm[
+            workspace_cleanup_start : workspace_cleanup_start + 200
+        ]
+        self.assertIn("--kind dir", workspace_cleanup)
+        self.assertIn(
+            '--expected-identity "${rpmbuild_tmpdir_identity}"', workspace_cleanup
+        )
         self.assertNotIn('mv -T -- "${stage_topdir}" "${final_topdir}"', build_rpm)
         self.assertNotIn('rm -rf "${topdir}"', build_rpm)
         self.assertNotIn('rm -rf -- "${stage_topdir}"', build_rpm)
@@ -2550,73 +4259,142 @@ class CiStaticTest(unittest.TestCase):
     def test_parallel_build_dist_does_not_corrupt_archive(self) -> None:
         build_dist = REPO_ROOT / "scripts" / "build-dist.sh"
         build_dist_source = build_dist.read_text(encoding="utf-8")
-        self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', build_dist_source)
-        self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_dist_source)
-        self.assertIn('"${safe_fs_cmd[@]}" mkdirs build-dist "${dist_dir}"', build_dist_source)
-        self.assertIn('"${safe_fs_cmd[@]}" mkdirs build-dist "${work_dir}/${package}"', build_dist_source)
-        self.assertNotIn('mkdir -p "${dist_dir}" "${work_dir}/${package}"', build_dist_source)
-        self.assertIn('safe local filesystem helper must not be hardlinked', build_dist_source)
-        self.assertIn('stat -c \'%h\' "${safe_fs}"', build_dist_source)
-        self.assertIn('work_dir_abs="$(realpath "${work_dir}")', build_dist_source)
-        self.assertIn('temporary build-dist workspace escaped temporary root', build_dist_source)
-        self.assertIn('"${safe_fs_cmd[@]}" remove build-dist "${work_dir}" --kind dir', build_dist_source)
-        self.assertIn('"${safe_fs_cmd[@]}" remove build-dist "${cache_dir}" --kind dir', build_dist_source)
-        self.assertIn('"${safe_fs_cmd[@]}" remove build-dist "${bytecode_file}" --kind file', build_dist_source)
         self.assertIn(
-            'python3 "${safe_fs}" install-tree build-dist "${source_path}" "${target_path}"',
+            'safe_fs="${repo_dir}/scripts/safe-local-fs.py"', build_dist_source
+        )
+        self.assertIn('safe_fs_cmd=(python3 "${safe_fs}")', build_dist_source)
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" mkdirs build-dist "${dist_dir}"', build_dist_source
+        )
+        self.assertIn(
+            '"${safe_fs_cmd[@]}" mkdirs build-dist "${work_dir}/${package}"',
+            build_dist_source,
+        )
+        self.assertNotIn(
+            'mkdir -p "${dist_dir}" "${work_dir}/${package}"', build_dist_source
+        )
+        self.assertIn(
+            "safe local filesystem helper must not be hardlinked", build_dist_source
+        )
+        self.assertIn("stat -c '%h' \"${safe_fs}\"", build_dist_source)
+        self.assertIn('work_dir_abs="$(realpath "${work_dir}")', build_dist_source)
+        self.assertIn(
+            "temporary build-dist workspace escaped workspace base", build_dist_source
+        )
+        self.assertIn(
+            'cleanup_safe_fs remove build-dist "${work_dir}" --kind dir',
+            build_dist_source,
+        )
+        self.assertIn(
+            'run_build_command "${safe_fs_cmd[@]}" remove build-dist "${cache_dir}" --kind dir',
+            build_dist_source,
+        )
+        self.assertIn(
+            'run_build_command "${safe_fs_cmd[@]}" remove build-dist "${bytecode_file}" --kind file',
+            build_dist_source,
+        )
+        self.assertIn(
+            'run_build_command python3 "${safe_fs}" install-tree build-dist "${source_path}" "${target_path}"',
             build_dist_source,
         )
         self.assertIn(
             'python3 "${safe_fs}" copy-file build-dist "${source_path}" "${target_path}" 0644',
             build_dist_source,
         )
-        self.assertNotIn('cp -a "${repo_dir}/${path}" "${work_dir}/${package}/"', build_dist_source)
+        self.assertNotIn(
+            'cp -a "${repo_dir}/${path}" "${work_dir}/${package}/"', build_dist_source
+        )
         self.assertNotIn('rm -rf -- "${work_dir}"', build_dist_source)
         self.assertNotIn("-exec rm -rf {} +", build_dist_source)
-        self.assertIn('dist_staging_dir="$(mktemp -d "${repo_dir}/.build-dist-staging-XXXXXX")"', build_dist_source)
-        self.assertIn('dist staging directory escaped repository root', build_dist_source)
-        self.assertIn('staging_tarball="$(mktemp "${dist_staging_dir}/.${package}.tar.gz.XXXXXX")"', build_dist_source)
-        self.assertIn('staging_checksum="$(mktemp "${dist_staging_dir}/.${package}.tar.gz.sha256.XXXXXX")"', build_dist_source)
-        self.assertNotIn('staging_tarball="$(mktemp "${dist_dir}/.${package}.tar.gz.XXXXXX")"', build_dist_source)
-        self.assertIn('"${safe_fs_cmd[@]}" remove build-dist "${dist_staging_dir}" --kind dir', build_dist_source)
+        self.assertIn(
+            'dist_staging_dir="$(mktemp -d "${work_dir}/dist-staging-XXXXXX")"',
+            build_dist_source,
+        )
+        self.assertIn(
+            "dist staging directory escaped build workspace", build_dist_source
+        )
+        self.assertIn(
+            'staging_tarball="$(mktemp "${dist_staging_dir}/stage.tar.gz.XXXXXX")"',
+            build_dist_source,
+        )
+        self.assertIn(
+            'staging_checksum="$(mktemp "${dist_staging_dir}/stage.tar.gz.sha256.XXXXXX")"',
+            build_dist_source,
+        )
+        self.assertNotIn(
+            'staging_tarball="$(mktemp "${dist_dir}/.${package}.tar.gz.XXXXXX")"',
+            build_dist_source,
+        )
+        self.assertIn(
+            'cleanup_safe_fs remove build-dist "${dist_staging_dir}" --kind dir',
+            build_dist_source,
+        )
         self.assertIn("fsync_regular_file() {", build_dist_source)
         self.assertIn("write_regular_file_from_stdin() {", build_dist_source)
         self.assertIn("local expected_identity=${3:-}", build_dist_source)
-        self.assertIn('write_regular_file_from_stdin "${work_dir}/${package}/RELEASE-MANIFEST.txt" "release manifest" <<EOF', build_dist_source)
-        self.assertIn('write_regular_file_from_stdin "${staging_tarball}" "staged dist tarball" "${staging_tarball_identity}"', build_dist_source)
-        self.assertIn('write_regular_file_from_stdin "${staging_checksum}" "staged dist checksum" "${staging_checksum_identity}"', build_dist_source)
-        self.assertIn('timeout --signal=TERM --kill-after=30s "${DIST_BUILD_TIMEOUT_SECONDS}s" tar --sort=name --owner=0 --group=0 --numeric-owner --mtime="@0" -C "${work_dir}" -czf - "${package}"', build_dist_source)
+        self.assertIn(
+            'write_regular_file_from_stdin "${work_dir}/${package}/RELEASE-MANIFEST.txt" "release manifest" <<EOF',
+            build_dist_source,
+        )
+        self.assertIn("build_staged_tarball \\", build_dist_source)
+        self.assertIn(
+            '"tar",\n            "--sort=name",\n            "--owner=0",\n            "--group=0",\n            "--numeric-owner",\n            "--mtime=@0",',
+            build_dist_source,
+        )
         self.assertNotIn('-czf "${staging_tarball}"', build_dist_source)
         self.assertIn("flags = os.O_WRONLY", build_dist_source)
         self.assertIn("flags |= os.O_CREAT", build_dist_source)
-        self.assertIn("if expected_identity and actual_identity != expected_identity:", build_dist_source)
+        self.assertIn(
+            "if expected_identity and actual_identity != expected_identity:",
+            build_dist_source,
+        )
         self.assertIn("flags |= os.O_NOFOLLOW", build_dist_source)
         self.assertNotIn("os.O_TRUNC", build_dist_source)
-        self.assertNotIn('cat > "${work_dir}/${package}/RELEASE-MANIFEST.txt"', build_dist_source)
+        self.assertNotIn(
+            'cat > "${work_dir}/${package}/RELEASE-MANIFEST.txt"', build_dist_source
+        )
         self.assertNotIn('> "${staging_checksum}"', build_dist_source)
-        self.assertIn('fsync_regular_file "${staging_tarball}" "staged dist tarball"', build_dist_source)
-        self.assertIn("dist_finalize_lock=\"${dist_dir}/.build-dist.finalize.lock\"", build_dist_source)
+        self.assertIn(
+            'dist_finalize_lock="${dist_dir}/.build-dist.finalize.lock"',
+            build_dist_source,
+        )
         self.assertIn("replace_with_finalize_lock() {", build_dist_source)
         self.assertIn("import fcntl", build_dist_source)
         self.assertIn("import secrets", build_dist_source)
         self.assertIn("import stat", build_dist_source)
-        self.assertIn("def _rollback(entries):", build_dist_source)
-        self.assertIn('"backup_attempted": False', build_dist_source)
-        self.assertIn('"backup_created": False', build_dist_source)
-        self.assertIn('entry["activation_attempted"] = True', build_dist_source)
-        self.assertIn('exc.add_note("finalization rollback failed: "', build_dist_source)
-        self.assertIn('"--dst-must-not-exist",', build_dist_source)
+        self.assertIn(
+            "def _rollback(parent_fd, transaction_fd, transaction_name, record):",
+            build_dist_source,
+        )
         self.assertIn('"--expected-src-identity",', build_dist_source)
         self.assertIn('"--expected-dst-identity",', build_dist_source)
         self.assertIn('"--expected-identity",', build_dist_source)
-        self.assertIn("refusing to restore changed final during rollback", build_dist_source)
-        self.assertIn('"remove-leaf", "build-dist", entry["backup"]', build_dist_source)
-        self.assertIn("parent_fd = os.open(lock_parent, parent_flags)", build_dist_source)
-        self.assertIn('lock_fd = os.open(lock_name, flags, 0o600, dir_fd=parent_fd)', build_dist_source)
-        self.assertNotIn("lock_fd = os.open(lock_path, flags, 0o600)", build_dist_source)
+        self.assertIn(
+            "build-dist rollback did not restore final", build_dist_source
+        )
+        self.assertIn(
+            '"remove-leaf",\n                "build-dist rollback",',
+            build_dist_source,
+        )
+        self.assertIn(
+            "parent_chain_fds, parent_chain_paths, parent_chain_identities = _open_lock_parent_chain(lock_parent)",
+            build_dist_source,
+        )
+        self.assertIn(
+            "fcntl.flock(parent_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)",
+            build_dist_source,
+        )
+        self.assertNotIn(
+            "lock_fd = os.open(lock_path, flags, 0o600)", build_dist_source
+        )
         self.assertIn('"${dist_finalize_lock}"', build_dist_source)
-        self.assertIn('  "${staging_tarball}" \\\n  "${final_tarball}" \\\n  "${staging_checksum}" \\\n  "${final_checksum}"', build_dist_source)
-        self.assertNotIn('mv -T -- "${staging_checksum}" "${final_checksum}"', build_dist_source)
+        self.assertIn(
+            '\t"${staging_tarball}" \\\n\t"${final_tarball}" \\\n\t"${staging_checksum}" \\\n\t"${final_checksum}"',
+            build_dist_source,
+        )
+        self.assertNotIn(
+            'mv -T -- "${staging_checksum}" "${final_checksum}"', build_dist_source
+        )
         self.assertNotIn('> "${final_checksum}"', build_dist_source)
 
         def run_build() -> tuple[int, str]:
@@ -2675,7 +4453,10 @@ class CiStaticTest(unittest.TestCase):
                     tarball_paths.add(stripped)
                     continue
                 match = None
-            self.assertIsNotNone(match, f"expected build output to include built archive path: {output!r}")
+            self.assertIsNotNone(
+                match,
+                f"expected build output to include built archive path: {output!r}",
+            )
             tarball_paths.add(match.group(1).strip())
 
         self.assertEqual(len(tarball_paths), 1)
@@ -2686,7 +4467,9 @@ class CiStaticTest(unittest.TestCase):
             self.assertTrue(any(member.isdir() for member in archive.getmembers()))
 
     def test_verify_dist_script_enforces_file_mode_policy(self) -> None:
-        verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(encoding="utf-8")
+        verify_dist = (REPO_ROOT / "scripts" / "verify-dist.sh").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("def validate_mode(path: Path)", verify_dist)
         self.assertIn("permissions & 0o7000", verify_dist)
@@ -2697,10 +4480,15 @@ class CiStaticTest(unittest.TestCase):
         self.assertIn("permissions & 0o777 > 0o755", verify_dist)
 
     def test_verify_snap_script_enforces_file_mode_policy(self) -> None:
-        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(encoding="utf-8")
+        verify_snap = (REPO_ROOT / "scripts" / "verify-snap.sh").read_text(
+            encoding="utf-8"
+        )
 
         self.assertIn("symbolic_mode_to_octal", verify_snap)
-        self.assertIn("def enforce_mode_policy(path: PurePosixPath, mode_text: str, is_link: bool)", verify_snap)
+        self.assertIn(
+            "def enforce_mode_policy(path: PurePosixPath, mode_text: str, is_link: bool)",
+            verify_snap,
+        )
         self.assertIn("mode & 0o7000", verify_snap)
         self.assertIn("mode & 0o022", verify_snap)
         self.assertIn("permissions > 0o644", verify_snap)
@@ -2709,13 +4497,17 @@ class CiStaticTest(unittest.TestCase):
 
     def test_verify_snap_rejects_world_writable_required_file(self) -> None:
         if shutil.which("mksquashfs") is None:
-            self.skipTest("mksquashfs is required for executable snap verifier fixtures")
+            self.skipTest(
+                "mksquashfs is required for executable snap verifier fixtures"
+            )
 
         verify_snap = REPO_ROOT / "scripts" / "verify-snap.sh"
         snap_dir = REPO_ROOT / "dist" / "snap"
         snap_dir.mkdir(parents=True, exist_ok=True)
 
-        with tempfile.TemporaryDirectory() as source_tmp, tempfile.TemporaryDirectory(dir=snap_dir) as snap_tmp:
+        with tempfile.TemporaryDirectory() as source_tmp, tempfile.TemporaryDirectory(
+            dir=snap_dir
+        ) as snap_tmp:
             source_dir = Path(source_tmp)
             (source_dir / "meta").mkdir()
             (source_dir / "bin").mkdir()
@@ -2724,7 +4516,9 @@ class CiStaticTest(unittest.TestCase):
                 "name: speed-of-cinnamon\nversion: 0.0.0\n", encoding="utf-8"
             )
             backend = source_dir / "bin" / "speed-of-cinnamon"
-            backend.write_text("#!/bin/sh\n# src/speed_of_cinnamon/cli.py\n", encoding="utf-8")
+            backend.write_text(
+                "#!/bin/sh\n# src/speed_of_cinnamon/cli.py\n", encoding="utf-8"
+            )
             backend.chmod(0o755)
             cli = source_dir / "src" / "speed_of_cinnamon" / "cli.py"
             cli.write_text("# fixture\n", encoding="utf-8")
@@ -2732,7 +4526,13 @@ class CiStaticTest(unittest.TestCase):
 
             snap_path = Path(snap_tmp) / "speed-of-cinnamon_0.0.0_amd64.snap"
             subprocess.run(
-                ["mksquashfs", str(source_dir), str(snap_path), "-noappend", "-no-progress"],
+                [
+                    "mksquashfs",
+                    str(source_dir),
+                    str(snap_path),
+                    "-noappend",
+                    "-no-progress",
+                ],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -2751,13 +4551,17 @@ class CiStaticTest(unittest.TestCase):
 
     def test_verify_snap_rejects_symlink_target_outside_package_root(self) -> None:
         if shutil.which("mksquashfs") is None:
-            self.skipTest("mksquashfs is required for executable snap verifier fixtures")
+            self.skipTest(
+                "mksquashfs is required for executable snap verifier fixtures"
+            )
 
         verify_snap = REPO_ROOT / "scripts" / "verify-snap.sh"
         snap_dir = REPO_ROOT / "dist" / "snap"
         snap_dir.mkdir(parents=True, exist_ok=True)
 
-        with tempfile.TemporaryDirectory() as source_tmp, tempfile.TemporaryDirectory(dir=snap_dir) as snap_tmp:
+        with tempfile.TemporaryDirectory() as source_tmp, tempfile.TemporaryDirectory(
+            dir=snap_dir
+        ) as snap_tmp:
             source_dir = Path(source_tmp)
             (source_dir / "meta").mkdir()
             (source_dir / "bin").mkdir()
@@ -2766,14 +4570,24 @@ class CiStaticTest(unittest.TestCase):
                 "name: speed-of-cinnamon\nversion: 0.0.0\n", encoding="utf-8"
             )
             backend = source_dir / "bin" / "speed-of-cinnamon"
-            backend.write_text("#!/bin/sh\n# src/speed_of_cinnamon/cli.py\n", encoding="utf-8")
+            backend.write_text(
+                "#!/bin/sh\n# src/speed_of_cinnamon/cli.py\n", encoding="utf-8"
+            )
             backend.chmod(0o755)
-            (source_dir / "src" / "speed_of_cinnamon" / "cli.py").write_text("# fixture\n", encoding="utf-8")
+            (source_dir / "src" / "speed_of_cinnamon" / "cli.py").write_text(
+                "# fixture\n", encoding="utf-8"
+            )
             (source_dir / "unsafe-link").symlink_to("../../outside")
 
             snap_path = Path(snap_tmp) / "speed-of-cinnamon_0.0.0_amd64.snap"
             subprocess.run(
-                ["mksquashfs", str(source_dir), str(snap_path), "-noappend", "-no-progress"],
+                [
+                    "mksquashfs",
+                    str(source_dir),
+                    str(snap_path),
+                    "-noappend",
+                    "-no-progress",
+                ],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
@@ -2792,26 +4606,41 @@ class CiStaticTest(unittest.TestCase):
 
     def test_verify_snap_rejects_manifest_version_mismatch(self) -> None:
         if shutil.which("mksquashfs") is None:
-            self.skipTest("mksquashfs is required for executable snap verifier fixtures")
+            self.skipTest(
+                "mksquashfs is required for executable snap verifier fixtures"
+            )
 
         verify_snap = REPO_ROOT / "scripts" / "verify-snap.sh"
         snap_dir = REPO_ROOT / "dist" / "snap"
         snap_dir.mkdir(parents=True, exist_ok=True)
 
-        with tempfile.TemporaryDirectory() as source_tmp, tempfile.TemporaryDirectory(dir=snap_dir) as snap_tmp:
+        with tempfile.TemporaryDirectory() as source_tmp, tempfile.TemporaryDirectory(
+            dir=snap_dir
+        ) as snap_tmp:
             source_dir = Path(source_tmp)
             (source_dir / "meta").mkdir()
             (source_dir / "bin").mkdir()
             (source_dir / "src" / "speed_of_cinnamon").mkdir(parents=True)
             (source_dir / "usr" / "bin").mkdir(parents=True)
-            (source_dir / "usr" / "lib" / "python3" / "dist-packages" / "cryptography").mkdir(parents=True)
+            (
+                source_dir
+                / "usr"
+                / "lib"
+                / "python3"
+                / "dist-packages"
+                / "cryptography"
+            ).mkdir(parents=True)
             (source_dir / "meta" / "snap.yaml").write_text(
                 "name: speed-of-cinnamon\nversion: 9.9.9\n", encoding="utf-8"
             )
             backend = source_dir / "bin" / "speed-of-cinnamon"
-            backend.write_text("#!/bin/sh\n# src/speed_of_cinnamon/cli.py\n", encoding="utf-8")
+            backend.write_text(
+                "#!/bin/sh\n# src/speed_of_cinnamon/cli.py\n", encoding="utf-8"
+            )
             backend.chmod(0o755)
-            (source_dir / "src" / "speed_of_cinnamon" / "cli.py").write_text("# fixture\n", encoding="utf-8")
+            (source_dir / "src" / "speed_of_cinnamon" / "cli.py").write_text(
+                "# fixture\n", encoding="utf-8"
+            )
             python3 = source_dir / "usr" / "bin" / "python3"
             python3.write_text("#!/bin/sh\n", encoding="utf-8")
             python3.chmod(0o755)
@@ -2839,7 +4668,13 @@ class CiStaticTest(unittest.TestCase):
 
             snap_path = Path(snap_tmp) / "speed-of-cinnamon_0.0.0_amd64.snap"
             subprocess.run(
-                ["mksquashfs", str(source_dir), str(snap_path), "-noappend", "-no-progress"],
+                [
+                    "mksquashfs",
+                    str(source_dir),
+                    str(snap_path),
+                    "-noappend",
+                    "-no-progress",
+                ],
                 check=True,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,

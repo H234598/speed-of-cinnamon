@@ -35,7 +35,10 @@ def _contains_escaped_null(value: str) -> bool:
 def _contains_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise RuntimeError("value must be text")
-    return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
+    return any(
+        ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F
+        for char in value
+    )
 
 
 def _is_oversized_utf8_text(value: str, *, max_chars: int) -> bool:
@@ -56,7 +59,9 @@ def _has_oversized_path_component(path: Path) -> bool:
 
 
 def _xdg_path(environment_variable: str, default: Path | Callable[[], Path]) -> Path:
-    if isinstance(environment_variable, bool) or not isinstance(environment_variable, str):
+    if isinstance(environment_variable, bool) or not isinstance(
+        environment_variable, str
+    ):
         raise RuntimeError("environment variable name must be text")
 
     def fallback() -> Path:
@@ -88,7 +93,9 @@ def _xdg_path(environment_variable: str, default: Path | Callable[[], Path]) -> 
         or _has_oversized_path_component(candidate)
     ):
         return fallback()
-    if len(candidate_text) + len(_MAX_XDG_DERIVED_SUFFIX) > MAX_XDG_PATH_CHARS or _is_oversized_utf8_text(
+    if len(candidate_text) + len(
+        _MAX_XDG_DERIVED_SUFFIX
+    ) > MAX_XDG_PATH_CHARS or _is_oversized_utf8_text(
         candidate_text + _MAX_XDG_DERIVED_SUFFIX,
         max_chars=MAX_XDG_PATH_CHARS,
     ):
@@ -127,9 +134,13 @@ def _private_runtime_temp_root() -> Path:
     try:
         _resolve_no_follow_flag(field_name="temporary directory")
     except OSError as exc:
-        raise RuntimeError("secure temporary directory open is not supported on this platform") from exc
+        raise RuntimeError(
+            "secure temporary directory open is not supported on this platform"
+        ) from exc
     try:
-        fd = ensure_directory_without_following_symlinks(private_root, field_name="temporary directory")
+        fd = ensure_directory_without_following_symlinks(
+            private_root, field_name="temporary directory"
+        )
     except (OSError, RuntimeError) as exc:
         raise RuntimeError("temporary directory is not safe") from exc
     try:
@@ -139,7 +150,9 @@ def _private_runtime_temp_root() -> Path:
             if not stat_module.S_ISDIR(file_stat.st_mode):
                 raise RuntimeError("temporary directory is not a directory")
             if hasattr(os, "getuid") and file_stat.st_uid != os.getuid():
-                raise RuntimeError("temporary directory is not owned by the current user")
+                raise RuntimeError(
+                    "temporary directory is not owned by the current user"
+                )
             os.fchmod(fd, 0o700)
             file_stat = os.fstat(fd)
         except BaseException as exc:
@@ -287,14 +300,18 @@ def ensure_runtime_dirs() -> None:
         logs_dir(),
         models_dir(),
         ctranslate2_models_dir(),
-        ):
-        fd = ensure_directory_without_following_symlinks(directory, field_name="runtime directory")
+    ):
+        fd = ensure_directory_without_following_symlinks(
+            directory, field_name="runtime directory"
+        )
         primary_error: BaseException | None = None
         try:
             try:
                 os.fchmod(fd, 0o700)
             except OSError as exc:
-                raise RuntimeError("runtime directory could not be made private") from exc
+                raise RuntimeError(
+                    "runtime directory could not be made private"
+                ) from exc
             assert_fd_is_private_directory(fd, field_name="runtime directory")
         except BaseException as exc:
             primary_error = exc

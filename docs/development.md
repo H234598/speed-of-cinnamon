@@ -205,15 +205,15 @@ Successful runs upload:
 
 ### Kanonische Release-Matrix
 
-| Zweck | Ziel/Befehl | Snap | Generic RPM | Publish-Verhalten |
-| --- | --- | --- | --- | --- |
-| Normale lokale Checks | `make check` | Nein | Nein | Kein Publish |
-| Manueller CI-Dispatch | `gh workflow run ci.yml -f build_snap=false -f build_generic_rpm=false` | Optional | Optional | Kein Publish |
-| Lokale Release-Validierung | `make release-dry-run` | Pflicht | Standardmaessig ja | Kein Publish |
-| Lokale Release-Validierung ohne Snap | `make release-dry-run-no-snap` | Nein | Standardmaessig ja | Kein Publish |
-| Lokaler echter Release-Versuch | `make release` | Pflicht | Standardmaessig ja | Kann publizieren |
-| Manueller Workflow-Release | `gh workflow run release.yml -f tag=vX.Y.Z` | Pflicht | Ja | Publiziert, sofern `dry_run=false` |
-| Manueller Workflow-Release ohne Generic RPM | `gh workflow run release.yml -f tag=vX.Y.Z -f build_generic_rpm=false` | Pflicht | Nein | Publiziert, sofern `dry_run=false` |
+| Zweck                                       | Ziel/Befehl                                                             | Snap     | Generic RPM        | Publish-Verhalten                  |
+| ------------------------------------------- | ----------------------------------------------------------------------- | -------- | ------------------ | ---------------------------------- |
+| Normale lokale Checks                       | `make check`                                                            | Nein     | Nein               | Kein Publish                       |
+| Manueller CI-Dispatch                       | `gh workflow run ci.yml -f build_snap=false -f build_generic_rpm=false` | Optional | Optional           | Kein Publish                       |
+| Lokale Release-Validierung                  | `make release-dry-run`                                                  | Pflicht  | Standardmaessig ja | Kein Publish                       |
+| Lokale Release-Validierung ohne Snap        | `make release-dry-run-no-snap`                                          | Nein     | Standardmaessig ja | Kein Publish                       |
+| Lokaler echter Release-Versuch              | `make release`                                                          | Pflicht  | Standardmaessig ja | Kann publizieren                   |
+| Manueller Workflow-Release                  | `gh workflow run release.yml -f tag=vX.Y.Z`                             | Pflicht  | Ja                 | Publiziert, sofern `dry_run=false` |
+| Manueller Workflow-Release ohne Generic RPM | `gh workflow run release.yml -f tag=vX.Y.Z -f build_generic_rpm=false`  | Pflicht  | Nein               | Publiziert, sofern `dry_run=false` |
 
 Die Matrix ist kanonisch fuer die Zuordnung von Checks, Pakettypen und Publish-Verhalten. `SNAP_BUILD=0` darf nicht
 mit `release` oder `release-dry-run` verwendet werden; Snap-freie lokale Validierung nutzt ausschliesslich

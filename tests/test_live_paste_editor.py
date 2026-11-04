@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import base64
 import json
 import os
 import re
@@ -15,19 +16,35 @@ from pathlib import Path
 
 APPLET_UUID = "speed-of-cinnamon@H234598"
 GUI_LIVE_TESTS_ENV = "SOC_RUN_GUI_LIVE_TESTS"
+ISOLATED_GUI_SESSION_ENV = "SOC_ISOLATED_GUI_SESSION"
 EVAL_TIMEOUT_SECONDS = 5
 EDITOR_TIMEOUT_SECONDS = 15
 PASTE_TIMEOUT_SECONDS = 8
 
 
+def _isolated_acceptance_mode() -> bool:
+    return os.environ.get(ISOLATED_GUI_SESSION_ENV) == "1"
+
+
+def _capability_unavailable(message: str) -> None:
+    if _isolated_acceptance_mode():
+        raise AssertionError(message)
+    raise unittest.SkipTest(message)
+
+
 def _require_display() -> None:
-    if not os.environ.get("DISPLAY"):
-        raise unittest.SkipTest("live paste test requires an X11 DISPLAY")
+    display = os.environ.get("DISPLAY", "")
+    if not display:
+        _capability_unavailable("live paste test requires an X11 DISPLAY")
+    if _isolated_acceptance_mode() and re.fullmatch(r":[1-9][0-9]*", display) is None:
+        raise AssertionError(
+            "isolated live paste test requires a nonzero local X11 DISPLAY"
+        )
 
 
 def _require_live_test_opt_in() -> None:
     if os.environ.get(GUI_LIVE_TESTS_ENV) != "1":
-        raise unittest.SkipTest(
+        _capability_unavailable(
             f"desktop live paste tests disabled; set {GUI_LIVE_TESTS_ENV}=1 explicitly"
         )
 
@@ -35,7 +52,8 @@ def _require_live_test_opt_in() -> None:
 def _require_tool(name: str) -> str:
     path = shutil.which(name)
     if not path:
-        raise unittest.SkipTest(f"live paste test requires {name}")
+        _capability_unavailable(f"live paste test requires {name}")
+        raise AssertionError("unreachable")
     return path
 
 
@@ -50,10 +68,14 @@ def _require_unlocked_screensaver() -> None:
             timeout=2,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        raise unittest.SkipTest(f"live paste test requires an unlocked screensaver: {exc}") from exc
+        _capability_unavailable(
+            f"live paste test requires an unlocked screensaver: {exc}"
+        )
     state = f"{result.stdout}\n{result.stderr}".lower()
-    if result.returncode != 0 or ("not active" not in state and "inactive" not in state):
-        raise unittest.SkipTest("live paste test requires an unlocked screensaver")
+    if result.returncode != 0 or (
+        "not active" not in state and "inactive" not in state
+    ):
+        _capability_unavailable("live paste test requires an unlocked screensaver")
 
 
 def _run(
@@ -76,6 +98,19 @@ def _run(
             f"stdout={result.stdout!r}\nstderr={result.stderr!r}"
         )
     return result
+
+
+def _read_xclip_target(xclip: str, target: str) -> bytes:
+    result = subprocess.run(
+        [xclip, "-selection", "clipboard", "-target", target, "-out"],
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        timeout=2,
+    )
+    if result.returncode != 0:
+        raise AssertionError(f"nested clipboard target {target!r} could not be read")
+    return result.stdout
 
 
 def _cinnamon_eval(script: str) -> object:
@@ -121,9 +156,11 @@ def _require_cinnamon_applet() -> None:
 """
         )
     except (AssertionError, subprocess.SubprocessError) as exc:
-        raise unittest.SkipTest(f"live paste test requires Cinnamon Eval: {exc}") from exc
+        _capability_unavailable(f"live paste test requires Cinnamon Eval: {exc}")
     if payload is not True:
-        raise unittest.SkipTest(f"live paste test requires current running applet {APPLET_UUID}")
+        _capability_unavailable(
+            f"live paste test requires current running applet {APPLET_UUID}"
+        )
 
 
 def _require_clipboard_target_probe() -> None:
@@ -142,9 +179,17 @@ def _require_clipboard_target_probe() -> None:
 """
         )
     except (AssertionError, subprocess.SubprocessError) as exc:
-        raise unittest.SkipTest(f"live paste test requires clipboard target probing: {exc}") from exc
-    if not isinstance(payload, dict) or payload.get("program") not in {"xclip", "wl-paste"} or payload.get("targetArgs") is not True:
-        raise unittest.SkipTest("live paste test requires a clipboard helper with target probing support")
+        _capability_unavailable(
+            f"live paste test requires clipboard target probing: {exc}"
+        )
+    if (
+        not isinstance(payload, dict)
+        or payload.get("program") not in {"xclip", "wl-paste"}
+        or payload.get("targetArgs") is not True
+    ):
+        _capability_unavailable(
+            "live paste test requires a clipboard helper with target probing support"
+        )
 
 
 def _suspend_live_error_journal() -> bool:
@@ -212,7 +257,9 @@ def _suspend_auto_relisten_for_live_test() -> dict[str, bool]:
 """
     )
     if not isinstance(payload, dict) or payload.get("busy") is True:
-        raise unittest.SkipTest("live paste test requires an idle applet without a concurrent workflow")
+        _capability_unavailable(
+            "live paste test requires an idle applet without a concurrent workflow"
+        )
     return {
         "enabled": payload.get("enabled") is True,
         "timeoutEnabled": payload.get("timeoutEnabled") is True,
@@ -221,7 +268,9 @@ def _suspend_auto_relisten_for_live_test() -> dict[str, bool]:
 
 def _restore_auto_relisten_after_live_test(state: dict[str, bool]) -> None:
     enabled = state.get("enabled") is True if isinstance(state, dict) else False
-    timeout_enabled = state.get("timeoutEnabled") is True if isinstance(state, dict) else False
+    timeout_enabled = (
+        state.get("timeoutEnabled") is True if isinstance(state, dict) else False
+    )
     try:
         _cinnamon_eval(
             f"""
@@ -246,7 +295,9 @@ def _window_ids_for(args: list[str]) -> list[str]:
     result = _run(args, timeout=2, check=False)
     if result.returncode != 0:
         return []
-    return [line.strip() for line in result.stdout.splitlines() if line.strip().isdigit()]
+    return [
+        line.strip() for line in result.stdout.splitlines() if line.strip().isdigit()
+    ]
 
 
 def _window_text_property(window_id: str, property_name: str) -> str:
@@ -257,37 +308,58 @@ def _window_text_property(window_id: str, property_name: str) -> str:
     return result.stdout.strip()
 
 
-def _is_owned_test_window(window_id: str, *, expected_title: str, expected_class: str) -> bool:
+def _is_owned_test_window(
+    window_id: str, *, expected_title: str, expected_class: str
+) -> bool:
     actual_title = _window_text_property(window_id, "getwindowname")
     actual_class = _window_text_property(window_id, "getwindowclassname")
-    return expected_title in actual_title and actual_class.lower() == expected_class.lower()
+    return (
+        expected_title in actual_title
+        and actual_class.lower() == expected_class.lower()
+    )
 
 
-def _wait_for_window(title: str, process_pid: int, class_name: str, known_windows: set[str]) -> str:
+def _wait_for_window(
+    title: str, process_pid: int, class_name: str, known_windows: set[str]
+) -> str:
     xdotool = _require_tool("xdotool")
     deadline = time.monotonic() + EDITOR_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         candidates: list[str] = []
-        candidates.extend(_window_ids_for([xdotool, "search", "--onlyvisible", "--pid", str(process_pid)]))
-        candidates.extend(_window_ids_for([xdotool, "search", "--onlyvisible", "--name", title]))
-        class_windows = set(_window_ids_for([xdotool, "search", "--onlyvisible", "--class", class_name]))
+        candidates.extend(
+            _window_ids_for(
+                [xdotool, "search", "--onlyvisible", "--pid", str(process_pid)]
+            )
+        )
+        candidates.extend(
+            _window_ids_for([xdotool, "search", "--onlyvisible", "--name", title])
+        )
+        class_windows = set(
+            _window_ids_for([xdotool, "search", "--onlyvisible", "--class", class_name])
+        )
         candidates.extend(sorted(class_windows - known_windows))
         seen: set[str] = set()
         for window_id in candidates:
             if window_id in seen:
                 continue
             seen.add(window_id)
-            if _is_owned_test_window(window_id, expected_title=title, expected_class=class_name):
+            if _is_owned_test_window(
+                window_id, expected_title=title, expected_class=class_name
+            ):
                 return window_id
         time.sleep(0.2)
-    raise AssertionError(f"test window for {title!r} with class {class_name!r} did not appear")
+    raise AssertionError(
+        f"test window for {title!r} with class {class_name!r} did not appear"
+    )
 
 
 def _wait_for_xed_window(title: str, editor_pid: int, known_windows: set[str]) -> str:
     return _wait_for_window(title, editor_pid, "xed", known_windows)
 
 
-def _wait_for_terminal_window(title: str, terminal_pid: int, known_windows: set[str]) -> str:
+def _wait_for_terminal_window(
+    title: str, terminal_pid: int, known_windows: set[str]
+) -> str:
     return _wait_for_window(title, terminal_pid, "Gnome-terminal", known_windows)
 
 
@@ -296,7 +368,9 @@ def _activate_window(window_id: str) -> None:
     deadline = time.monotonic() + EVAL_TIMEOUT_SECONDS
     while time.monotonic() < deadline:
         _run([xdotool, "windowactivate", "--sync", window_id], timeout=5)
-        active = _run([xdotool, "getactivewindow"], timeout=EVAL_TIMEOUT_SECONDS, check=False)
+        active = _run(
+            [xdotool, "getactivewindow"], timeout=EVAL_TIMEOUT_SECONDS, check=False
+        )
         if active.returncode == 0 and active.stdout.strip() == str(window_id):
             time.sleep(0.2)
             return
@@ -327,7 +401,11 @@ def _wait_for_applet_text_insert_idle() -> None:
         )
         if isinstance(payload, dict) and payload.get("completed") is False:
             raise AssertionError(f"applet text insertion failed: {payload!r}")
-        if isinstance(payload, dict) and payload.get("idle") is True and payload.get("completed") is True:
+        if (
+            isinstance(payload, dict)
+            and payload.get("idle") is True
+            and payload.get("completed") is True
+        ):
             _cinnamon_eval(
                 f"""
 (() => {{
@@ -342,8 +420,12 @@ def _wait_for_applet_text_insert_idle() -> None:
     raise AssertionError(f"applet text insertion did not become idle: {payload!r}")
 
 
-def _close_owned_test_window(window_id: str, *, expected_title: str, expected_class: str) -> None:
-    if not _is_owned_test_window(window_id, expected_title=expected_title, expected_class=expected_class):
+def _close_owned_test_window(
+    window_id: str, *, expected_title: str, expected_class: str
+) -> None:
+    if not _is_owned_test_window(
+        window_id, expected_title=expected_title, expected_class=expected_class
+    ):
         return
     _run([_require_tool("xdotool"), "windowclose", window_id], timeout=3, check=False)
 
@@ -357,6 +439,7 @@ def _trigger_applet_clipboard_paste(
     retitle_window_id: str = "",
     retitle_window_name: str = "",
     clear_target_window_id: str = "",
+    use_real_clipboard_snapshot: bool = False,
 ) -> object:
     if simulate_menu_click:
         target_setup = """
@@ -398,29 +481,43 @@ def _trigger_applet_clipboard_paste(
     deadline = time.monotonic() + EVAL_TIMEOUT_SECONDS
     remembered = False
     while time.monotonic() < deadline:
-        remembered = _cinnamon_eval(
-            f"""
+        remembered = (
+            _cinnamon_eval(
+                f"""
 (() => {{
   const applet = imports.ui.appletManager.getRunningInstancesForUuid({json.dumps(APPLET_UUID)})[0];
   return !!applet && applet._hasRememberedTargetWindow() && !applet._isTargetWindowXLookupPending();
 }})()
 """
-        ) is True
+            )
+            is True
+        )
         if remembered:
             break
         time.sleep(0.05)
 
     if retitle_window_id and retitle_window_name:
         _run(
-            [_require_tool("xdotool"), "set_window", "--name", retitle_window_name, retitle_window_id],
+            [
+                _require_tool("xdotool"),
+                "set_window",
+                "--name",
+                retitle_window_name,
+                retitle_window_id,
+            ],
             timeout=EVAL_TIMEOUT_SECONDS,
         )
         time.sleep(0.1)
     if clear_target_window_id:
         _activate_window(clear_target_window_id)
         xdotool = _require_tool("xdotool")
-        _run([xdotool, "key", "--clearmodifiers", "ctrl+a"], timeout=EVAL_TIMEOUT_SECONDS)
-        _run([xdotool, "key", "--clearmodifiers", "BackSpace"], timeout=EVAL_TIMEOUT_SECONDS)
+        _run(
+            [xdotool, "key", "--clearmodifiers", "ctrl+a"], timeout=EVAL_TIMEOUT_SECONDS
+        )
+        _run(
+            [xdotool, "key", "--clearmodifiers", "BackSpace"],
+            timeout=EVAL_TIMEOUT_SECONDS,
+        )
         time.sleep(0.05)
 
     return _cinnamon_eval(
@@ -434,12 +531,15 @@ def _trigger_applet_clipboard_paste(
   const oldAppendSpace = applet.appendSpace;
   const oldAutoPasteWindowTitle = applet.autoPasteWindowTitle;
   const oldClipboardPayloadSnapshotAsync = applet._clipboardPayloadSnapshotAsync;
+  const useRealClipboardSnapshot = {str(use_real_clipboard_snapshot).lower()};
   applet.insertMethod = {json.dumps(insert_method)};
   applet.appendSpace = false;
   applet.autoPasteWindowTitle = {json.dumps(auto_paste_window_title)};
-  applet._clipboardPayloadSnapshotAsync = function(callback) {{
-    callback({{hasNonTextPayload: false}});
-  }};
+  if (!useRealClipboardSnapshot) {{
+    applet._clipboardPayloadSnapshotAsync = function(callback) {{
+      callback({{hasNonTextPayload: false}});
+    }};
+  }}
   let restored = false;
   const restoreSettings = function() {{
     if (restored) return;
@@ -447,7 +547,9 @@ def _trigger_applet_clipboard_paste(
     applet.insertMethod = oldInsertMethod;
     applet.appendSpace = oldAppendSpace;
     applet.autoPasteWindowTitle = oldAutoPasteWindowTitle;
-    applet._clipboardPayloadSnapshotAsync = oldClipboardPayloadSnapshotAsync;
+    if (!useRealClipboardSnapshot) {{
+      applet._clipboardPayloadSnapshotAsync = oldClipboardPayloadSnapshotAsync;
+    }}
   }};
   let inserted = false;
   let autoPasteEnter = false;
@@ -476,7 +578,8 @@ def _trigger_applet_clipboard_paste(
     lastMessage: String(applet.lastMessage || ""),
     targetWindowXid: String(applet.targetWindowXid || ""),
     targetWindowXTitle: String(applet.targetWindowXTitle || ""),
-    targetWindowXClass: String(applet.targetWindowXClass || "")
+    targetWindowXClass: String(applet.targetWindowXClass || ""),
+    dialogPresent: Boolean(applet.clipboardOverwriteDialog)
   }};
 }})()
 """
@@ -491,24 +594,246 @@ class LivePasteEditorTest(unittest.TestCase):
         cls._error_journal_suspended = _suspend_live_error_journal()
         cls.addClassCleanup(_restore_live_error_journal)
         cls._auto_recording_state = _suspend_auto_relisten_for_live_test()
-        cls.addClassCleanup(_restore_auto_relisten_after_live_test, cls._auto_recording_state)
+        cls.addClassCleanup(
+            _restore_auto_relisten_after_live_test, cls._auto_recording_state
+        )
 
     def test_cinnamon_applet_pastes_clipboard_text_into_focused_xed_file(self) -> None:
         self._assert_live_paste_into_xed(simulate_menu_click=False)
 
-    def test_cinnamon_applet_menu_click_path_pastes_into_previously_focused_xed_file(self) -> None:
+    def test_cinnamon_applet_menu_click_path_pastes_into_previously_focused_xed_file(
+        self,
+    ) -> None:
         self._assert_live_paste_into_xed(simulate_menu_click=True)
 
-    def test_cinnamon_applet_pastes_and_submits_into_focused_gnome_terminal(self) -> None:
+    def test_cinnamon_applet_opens_and_cancels_non_text_clipboard_overwrite_popup(
+        self,
+    ) -> None:
+        if not _isolated_acceptance_mode():
+            raise unittest.SkipTest(
+                "clipboard overwrite popup test requires the isolated GUI adapter"
+            )
+        _require_display()
+        xed = _require_tool("xed")
+        xclip = _require_tool("xclip")
+        xdotool = _require_tool("xdotool")
+        _require_cinnamon_applet()
+        _require_unlocked_screensaver()
+        _require_clipboard_target_probe()
+
+        paste_text = f"soc-popup-must-not-paste-{uuid.uuid4().hex}"
+        image_payload = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+        )
+        with tempfile.TemporaryDirectory(prefix="soc-live-popup-") as tmpdir:
+            target_path = Path(tmpdir, "popup-target.txt")
+            target_path.write_text("", encoding="utf-8")
+            known_xed_windows = set(
+                _window_ids_for([xdotool, "search", "--onlyvisible", "--class", "xed"])
+            )
+            editor = subprocess.Popen(
+                [xed, "--standalone", "--new-window", "--wait", str(target_path)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            clipboard_owner: subprocess.Popen[bytes] | None = None
+            window_id = ""
+            try:
+                window_id = _wait_for_xed_window(
+                    target_path.name, editor.pid, known_xed_windows
+                )
+                _activate_window(window_id)
+                clipboard_owner = subprocess.Popen(
+                    [
+                        xclip,
+                        "-selection",
+                        "clipboard",
+                        "-target",
+                        "image/png",
+                        "-in",
+                        "-quiet",
+                    ],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+                if clipboard_owner.stdin is None:
+                    self.fail("xclip did not expose stdin")
+                clipboard_owner.stdin.write(image_payload)
+                clipboard_owner.stdin.close()
+
+                clipboard_deadline = time.monotonic() + EVAL_TIMEOUT_SECONDS
+                observed_payload = b""
+                while time.monotonic() < clipboard_deadline:
+                    if clipboard_owner.poll() is not None:
+                        self.fail("nested non-text clipboard owner exited early")
+                    try:
+                        observed_payload = _read_xclip_target(xclip, "image/png")
+                    except (AssertionError, subprocess.SubprocessError):
+                        time.sleep(0.05)
+                        continue
+                    if observed_payload == image_payload:
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(observed_payload, image_payload)
+
+                result = _trigger_applet_clipboard_paste(
+                    paste_text,
+                    use_real_clipboard_snapshot=True,
+                )
+                self.assertIsInstance(result, dict)
+                self.assertTrue(result.get("ok"), result)
+                self.assertTrue(result.get("remembered"), result)
+
+                dialog_state: object = None
+                dialog_deadline = time.monotonic() + EVAL_TIMEOUT_SECONDS
+                while time.monotonic() < dialog_deadline:
+                    dialog_state = _cinnamon_eval(
+                        f"""
+(() => {{
+  const applet = imports.ui.appletManager.getRunningInstancesForUuid({json.dumps(APPLET_UUID)})[0];
+  const ModalDialog = imports.ui.modalDialog;
+  const dialog = applet && applet.clipboardOverwriteDialog;
+  const buttons = dialog && Array.isArray(dialog._buttons) ? dialog._buttons : [];
+  return {{
+    present: Boolean(dialog),
+    open: Boolean(dialog && (dialog.state === ModalDialog.State.OPENING || dialog.state === ModalDialog.State.OPENED)),
+    visible: Boolean(dialog && dialog._group && dialog._group.visible),
+    buttons: buttons.length,
+    token: Boolean(applet && applet.textInsertToken)
+  }};
+}})()
+"""
+                    )
+                    if (
+                        isinstance(dialog_state, dict)
+                        and dialog_state.get("present") is True
+                        and dialog_state.get("open") is True
+                        and dialog_state.get("visible") is True
+                        and dialog_state.get("buttons", 0) >= 2
+                        and dialog_state.get("token") is True
+                    ):
+                        break
+                    time.sleep(0.05)
+                self.assertIsInstance(dialog_state, dict)
+                self.assertTrue(dialog_state.get("present"), dialog_state)
+                self.assertTrue(dialog_state.get("open"), dialog_state)
+                self.assertTrue(dialog_state.get("visible"), dialog_state)
+                self.assertGreaterEqual(dialog_state.get("buttons", 0), 2, dialog_state)
+                self.assertTrue(dialog_state.get("token"), dialog_state)
+                self.assertEqual(_read_xclip_target(xclip, "image/png"), image_payload)
+
+                cancelled = _cinnamon_eval(
+                    f"""
+(() => {{
+  const applet = imports.ui.appletManager.getRunningInstancesForUuid({json.dumps(APPLET_UUID)})[0];
+  const dialog = applet && applet.clipboardOverwriteDialog;
+  const buttons = dialog && Array.isArray(dialog._buttons) ? dialog._buttons : [];
+  if (!dialog || buttons.length < 2 || typeof buttons[0].emit !== "function") return false;
+  buttons[0].emit("clicked");
+  return true;
+}})()
+"""
+                )
+                self.assertIs(cancelled, True)
+
+                cleanup_state: object = None
+                cleanup_deadline = time.monotonic() + EVAL_TIMEOUT_SECONDS
+                while time.monotonic() < cleanup_deadline:
+                    cleanup_state = _cinnamon_eval(
+                        f"""
+(() => {{
+  const applet = imports.ui.appletManager.getRunningInstancesForUuid({json.dumps(APPLET_UUID)})[0];
+  return {{
+    dialog: Boolean(applet && applet.clipboardOverwriteDialog),
+    token: Boolean(applet && applet.textInsertToken),
+    completed: applet ? applet._socLivePasteCompletionResult : null
+  }};
+}})()
+"""
+                    )
+                    if (
+                        isinstance(cleanup_state, dict)
+                        and cleanup_state.get("dialog") is False
+                        and cleanup_state.get("token") is False
+                        and cleanup_state.get("completed") is False
+                    ):
+                        break
+                    time.sleep(0.05)
+                self.assertEqual(
+                    cleanup_state,
+                    {"dialog": False, "token": False, "completed": False},
+                )
+                self.assertEqual(_read_xclip_target(xclip, "image/png"), image_payload)
+                _activate_window(window_id)
+                _run([xdotool, "key", "--clearmodifiers", "ctrl+s"], timeout=3)
+                self.assertEqual(
+                    target_path.read_text(encoding="utf-8", errors="replace"), ""
+                )
+                _cinnamon_eval(
+                    f"""
+(() => {{
+  const applet = imports.ui.appletManager.getRunningInstancesForUuid({json.dumps(APPLET_UUID)})[0];
+  if (applet) delete applet._socLivePasteCompletionResult;
+  return true;
+}})()
+"""
+                )
+            finally:
+                try:
+                    _cinnamon_eval(
+                        f"""
+(() => {{
+  const applet = imports.ui.appletManager.getRunningInstancesForUuid({json.dumps(APPLET_UUID)})[0];
+  const dialog = applet && applet.clipboardOverwriteDialog;
+  const buttons = dialog && Array.isArray(dialog._buttons) ? dialog._buttons : [];
+  if (dialog && buttons.length > 0 && typeof buttons[0].emit === "function") buttons[0].emit("clicked");
+  return true;
+}})()
+"""
+                    )
+                except (AssertionError, subprocess.SubprocessError):
+                    pass
+                if window_id:
+                    _close_owned_test_window(
+                        window_id, expected_title=target_path.name, expected_class="xed"
+                    )
+                editor.terminate()
+                try:
+                    editor.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    editor.kill()
+                    editor.wait(timeout=3)
+                if clipboard_owner is not None and clipboard_owner.poll() is None:
+                    clipboard_owner.terminate()
+                    try:
+                        clipboard_owner.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        clipboard_owner.kill()
+                        clipboard_owner.wait(timeout=3)
+
+    def test_cinnamon_applet_pastes_and_submits_into_focused_gnome_terminal(
+        self,
+    ) -> None:
         self._assert_live_paste_into_gnome_terminal(simulate_menu_click=False)
 
-    def test_cinnamon_applet_menu_click_path_pastes_and_submits_into_focused_gnome_terminal(self) -> None:
+    def test_cinnamon_applet_menu_click_path_pastes_and_submits_into_focused_gnome_terminal(
+        self,
+    ) -> None:
         self._assert_live_paste_into_gnome_terminal(simulate_menu_click=True)
 
-    def test_cinnamon_applet_pastes_when_terminal_title_changes_after_target_capture(self) -> None:
-        self._assert_live_paste_into_gnome_terminal(simulate_menu_click=False, change_title_after_capture=True)
+    def test_cinnamon_applet_pastes_when_terminal_title_changes_after_target_capture(
+        self,
+    ) -> None:
+        self._assert_live_paste_into_gnome_terminal(
+            simulate_menu_click=False, change_title_after_capture=True
+        )
 
-    def _assert_live_paste_into_gnome_terminal(self, *, simulate_menu_click: bool, change_title_after_capture: bool = False) -> None:
+    def _assert_live_paste_into_gnome_terminal(
+        self, *, simulate_menu_click: bool, change_title_after_capture: bool = False
+    ) -> None:
         _require_display()
         terminal = _require_tool("gnome-terminal")
         xdotool = _require_tool("xdotool")
@@ -522,7 +847,11 @@ class LivePasteEditorTest(unittest.TestCase):
             ready_path = Path(tmpdir, "ready")
             title = f"SoC shell paste {uuid.uuid4().hex}"
             changed_title = f"SoC shell paste changed {uuid.uuid4().hex}"
-            known_terminal_windows = set(_window_ids_for([xdotool, "search", "--onlyvisible", "--class", "Gnome-terminal"]))
+            known_terminal_windows = set(
+                _window_ids_for(
+                    [xdotool, "search", "--onlyvisible", "--class", "Gnome-terminal"]
+                )
+            )
             env = dict(os.environ)
             env["SOC_TERMINAL_CAPTURE_PATH"] = str(capture_path)
             env["SOC_TERMINAL_READY_PATH"] = str(ready_path)
@@ -544,19 +873,25 @@ class LivePasteEditorTest(unittest.TestCase):
             )
             window_id = ""
             try:
-                window_id = _wait_for_terminal_window(title, terminal_proc.pid, known_terminal_windows)
+                window_id = _wait_for_terminal_window(
+                    title, terminal_proc.pid, known_terminal_windows
+                )
                 _activate_window(window_id)
                 ready_deadline = time.monotonic() + EVAL_TIMEOUT_SECONDS
                 while not ready_path.exists() and time.monotonic() < ready_deadline:
                     time.sleep(0.05)
-                self.assertTrue(ready_path.exists(), "terminal shell did not become ready")
+                self.assertTrue(
+                    ready_path.exists(), "terminal shell did not become ready"
+                )
                 result = _trigger_applet_clipboard_paste(
                     paste_text,
                     simulate_menu_click=simulate_menu_click,
                     auto_paste_window_title="Terminal",
                     insert_method="clipboard-paste-submit",
                     retitle_window_id=window_id if change_title_after_capture else "",
-                    retitle_window_name=changed_title if change_title_after_capture else "",
+                    retitle_window_name=(
+                        changed_title if change_title_after_capture else ""
+                    ),
                 )
                 self.assertIsInstance(result, dict)
                 self.assertTrue(result.get("ok"), result)
@@ -570,7 +905,9 @@ class LivePasteEditorTest(unittest.TestCase):
                 captured = ""
                 while time.monotonic() < deadline:
                     if capture_path.exists():
-                        captured = capture_path.read_text(encoding="utf-8", errors="replace").strip()
+                        captured = capture_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        ).strip()
                         if captured == paste_text:
                             _wait_for_applet_text_insert_idle()
                             return
@@ -583,7 +920,9 @@ class LivePasteEditorTest(unittest.TestCase):
                 if window_id:
                     _close_owned_test_window(
                         window_id,
-                        expected_title=changed_title if change_title_after_capture else title,
+                        expected_title=(
+                            changed_title if change_title_after_capture else title
+                        ),
                         expected_class="Gnome-terminal",
                     )
                 terminal_proc.terminate()
@@ -604,7 +943,9 @@ class LivePasteEditorTest(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="soc-live-paste-") as tmpdir:
             target_path = Path(tmpdir, f"{paste_text}.txt")
             target_path.write_text("", encoding="utf-8")
-            known_xed_windows = set(_window_ids_for([xdotool, "search", "--onlyvisible", "--class", "xed"]))
+            known_xed_windows = set(
+                _window_ids_for([xdotool, "search", "--onlyvisible", "--class", "xed"])
+            )
             editor = subprocess.Popen(
                 [xed, "--standalone", "--new-window", "--wait", str(target_path)],
                 stdout=subprocess.DEVNULL,
@@ -613,9 +954,13 @@ class LivePasteEditorTest(unittest.TestCase):
             )
             window_id = ""
             try:
-                window_id = _wait_for_xed_window(target_path.name, editor.pid, known_xed_windows)
+                window_id = _wait_for_xed_window(
+                    target_path.name, editor.pid, known_xed_windows
+                )
                 _activate_window(window_id)
-                result = _trigger_applet_clipboard_paste(paste_text, simulate_menu_click=simulate_menu_click)
+                result = _trigger_applet_clipboard_paste(
+                    paste_text, simulate_menu_click=simulate_menu_click
+                )
                 self.assertIsInstance(result, dict)
                 self.assertTrue(result.get("ok"), result)
                 self.assertTrue(result.get("remembered"), result)
@@ -629,7 +974,9 @@ class LivePasteEditorTest(unittest.TestCase):
                 last_content = ""
                 while time.monotonic() < deadline:
                     _run([xdotool, "key", "--clearmodifiers", "ctrl+s"], timeout=3)
-                    last_content = target_path.read_text(encoding="utf-8", errors="replace")
+                    last_content = target_path.read_text(
+                        encoding="utf-8", errors="replace"
+                    )
                     if paste_text in last_content:
                         return
                     _activate_window(window_id)
@@ -659,7 +1006,9 @@ class LivePasteEditorTest(unittest.TestCase):
                 except (AssertionError, subprocess.SubprocessError):
                     pass
                 if window_id:
-                    _close_owned_test_window(window_id, expected_title=target_path.name, expected_class="xed")
+                    _close_owned_test_window(
+                        window_id, expected_title=target_path.name, expected_class="xed"
+                    )
                 editor.terminate()
                 try:
                     editor.wait(timeout=3)

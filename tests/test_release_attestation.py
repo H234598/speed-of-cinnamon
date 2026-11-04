@@ -44,10 +44,15 @@ class ReleaseAttestationTest(unittest.TestCase):
 
     def _model_entry(self, name: str) -> dict[str, object]:
         spec = next(model for model in CATALOG if model.name == name)
-        hashes = dict(spec.file_sha1s) if spec.file_sha1s else {spec.filename: spec.sha1}
+        hashes = (
+            dict(spec.file_sha1s) if spec.file_sha1s else {spec.filename: spec.sha1}
+        )
         return {
             "backend": spec.backend,
-            "files": [{"name": filename, "sha1": digest} for filename, digest in hashes.items()],
+            "files": [
+                {"name": filename, "sha1": digest}
+                for filename, digest in hashes.items()
+            ],
             "languages": list(spec.languages),
             "model_format": spec.model_format,
             "name": spec.name,
@@ -57,8 +62,13 @@ class ReleaseAttestationTest(unittest.TestCase):
     def _write_bundle(self, *, head: str) -> None:
         source = source_attestation_snapshot(REPO_ROOT)
         created_at = datetime.now(UTC).isoformat().replace("+00:00", "Z")
-        expires_at = (datetime.fromisoformat(created_at.replace("Z", "+00:00")) + timedelta(hours=24)).isoformat().replace(
-            "+00:00", "Z"
+        expires_at = (
+            (
+                datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                + timedelta(hours=24)
+            )
+            .isoformat()
+            .replace("+00:00", "Z")
         )
         (self.bundle / "real-e2e-attestation.json").write_text(
             json.dumps(
@@ -67,7 +77,14 @@ class ReleaseAttestationTest(unittest.TestCase):
                     "created_at": created_at,
                     "expires_at": expires_at,
                     "git_head": head,
-                    "matrix": ["live-applet", "arecord", "pipewire", "openai-compatible", "flex-on", "flex-off"],
+                    "matrix": [
+                        "live-applet",
+                        "arecord",
+                        "pipewire",
+                        "openai-compatible",
+                        "flex-on",
+                        "flex-off",
+                    ],
                     "source": source,
                 }
             )
@@ -94,7 +111,10 @@ class ReleaseAttestationTest(unittest.TestCase):
                         "no-microphone",
                         "no-clipboard",
                     ],
-                    "models": [self._model_entry("base"), self._model_entry("ct2-base")],
+                    "models": [
+                        self._model_entry("base"),
+                        self._model_entry("ct2-base"),
+                    ],
                     "source": source,
                 }
             )
@@ -112,7 +132,9 @@ class ReleaseAttestationTest(unittest.TestCase):
         )
 
     def _load_verifier(self):
-        spec = importlib.util.spec_from_file_location("verify_release_attestation_test", VERIFY)
+        spec = importlib.util.spec_from_file_location(
+            "verify_release_attestation_test", VERIFY
+        )
         self.assertIsNotNone(spec)
         assert spec is not None and spec.loader is not None
         module = importlib.util.module_from_spec(spec)
@@ -124,10 +146,14 @@ class ReleaseAttestationTest(unittest.TestCase):
         path = self.bundle / "real-e2e-attestation.json"
         path.write_text("{}\n", encoding="utf-8")
         with mock.patch.object(module.os, "close", side_effect=OSError("close failed")):
-            with self.assertRaisesRegex(module.AttestationError, "descriptor cleanup failed"):
+            with self.assertRaisesRegex(
+                module.AttestationError, "descriptor cleanup failed"
+            ):
                 module._read_json(path)
 
-    def test_verifier_preserves_primary_error_when_descriptor_cleanup_fails(self) -> None:
+    def test_verifier_preserves_primary_error_when_descriptor_cleanup_fails(
+        self,
+    ) -> None:
         module = self._load_verifier()
         path = self.bundle / "real-e2e-attestation.json"
         path.write_text("{}\n", encoding="utf-8")
@@ -135,9 +161,14 @@ class ReleaseAttestationTest(unittest.TestCase):
             mock.patch.object(module.os, "fstat", side_effect=OSError("fstat failed")),
             mock.patch.object(module.os, "close", side_effect=OSError("close failed")),
         ):
-            with self.assertRaisesRegex(module.AttestationError, "cannot open release attestation") as caught:
+            with self.assertRaisesRegex(
+                module.AttestationError, "cannot open release attestation"
+            ) as caught:
                 module._read_json(path)
-        self.assertIn("release attestation descriptor cleanup failed", getattr(caught.exception, "__notes__", ()))
+        self.assertIn(
+            "release attestation descriptor cleanup failed",
+            getattr(caught.exception, "__notes__", ()),
+        )
 
     def test_source_and_model_bound_bundle_is_accepted(self) -> None:
         head = "a" * 40
@@ -225,7 +256,9 @@ class ReleaseAttestationTest(unittest.TestCase):
         (self.bundle / "unexpected-entry").write_text("reject\n", encoding="utf-8")
 
         with mock.patch.object(verifier, "MAX_BUNDLE_DIRECTORY_ENTRIES", 2):
-            with self.assertRaisesRegex(verifier.AttestationError, "contains too many entries"):
+            with self.assertRaisesRegex(
+                verifier.AttestationError, "contains too many entries"
+            ):
                 verifier.verify_bundle(self.bundle, REPO_ROOT, head)
 
     def test_bundle_rejects_symlinked_bundle_directory(self) -> None:
@@ -249,7 +282,9 @@ class ReleaseAttestationTest(unittest.TestCase):
     def test_bundle_rejects_symlinked_release_root(self) -> None:
         head = "f" * 40
         self._write_bundle(head=head)
-        moved_root = Path(tempfile.mkdtemp(prefix=".release-root-", dir=REPO_ROOT.parent))
+        moved_root = Path(
+            tempfile.mkdtemp(prefix=".release-root-", dir=REPO_ROOT.parent)
+        )
         moved_root.rmdir()
         RELEASE_ROOT.rename(moved_root)
         RELEASE_ROOT.symlink_to(moved_root, target_is_directory=True)

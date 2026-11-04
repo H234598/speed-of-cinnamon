@@ -9,9 +9,15 @@ from pathlib import Path
 import pytest
 
 try:
-    from tests._test_env import ensure_source_path, isolate_user_state as _initialize_test_environment
+    from tests._test_env import (
+        ensure_source_path,
+        isolate_user_state as _initialize_test_environment,
+    )
 except ImportError:
-    from _test_env import ensure_source_path, isolate_user_state as _initialize_test_environment
+    from _test_env import (
+        ensure_source_path,
+        isolate_user_state as _initialize_test_environment,
+    )
 
 
 _TEST_ROOT = Path(_initialize_test_environment())

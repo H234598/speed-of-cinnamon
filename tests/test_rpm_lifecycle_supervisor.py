@@ -125,14 +125,13 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
             try:
                 descriptor = os.open(
                     process_file,
-                    os.O_RDONLY
-                    | os.O_NONBLOCK
-                    | os.O_NOFOLLOW
-                    | os.O_CLOEXEC,
+                    os.O_RDONLY | os.O_NONBLOCK | os.O_NOFOLLOW | os.O_CLOEXEC,
                 )
                 file_stat = os.fstat(descriptor)
                 if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_size > 4096:
-                    raise RuntimeError("test process record is not a bounded regular file")
+                    raise RuntimeError(
+                        "test process record is not a bounded regular file"
+                    )
                 payload = os.read(descriptor, 4097)
                 if len(payload) > 4096:
                     raise RuntimeError("test process record exceeds byte limit")
@@ -267,21 +266,33 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
             except BaseException as error:
                 errors.append(error)
                 return False
-            if current is None or current[:3] != expected[:3] or not parent_is_owned(current):
-                errors.append(RuntimeError(f"test record PID {process_id} changed identity"))
+            if (
+                current is None
+                or current[:3] != expected[:3]
+                or not parent_is_owned(current)
+            ):
+                errors.append(
+                    RuntimeError(f"test record PID {process_id} changed identity")
+                )
                 return False
             pidfd: int | None = None
             try:
                 pidfd = os.pidfd_open(process_id, 0)
                 fdinfo = Path(f"/proc/self/fdinfo/{pidfd}").read_bytes()
-                target_lines = re.findall(
-                    rb"^Pid:\s+([0-9]+)$", fdinfo, re.MULTILINE
-                )
+                target_lines = re.findall(rb"^Pid:\s+([0-9]+)$", fdinfo, re.MULTILINE)
                 if len(target_lines) != 1 or int(target_lines[0]) != process_id:
-                    raise RuntimeError(f"test record PIDFD target mismatch for {process_id}")
+                    raise RuntimeError(
+                        f"test record PIDFD target mismatch for {process_id}"
+                    )
                 current = cls._read_process_identity(process_id)
-                if current is None or current[:3] != expected[:3] or not parent_is_owned(current):
-                    raise RuntimeError(f"test record PID {process_id} changed after PIDFD open")
+                if (
+                    current is None
+                    or current[:3] != expected[:3]
+                    or not parent_is_owned(current)
+                ):
+                    raise RuntimeError(
+                        f"test record PID {process_id} changed after PIDFD open"
+                    )
             except BaseException as error:
                 if pidfd is not None:
                     try:
@@ -479,7 +490,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                             except OSError as close_error:
                                 cleanup_errors.append(close_error)
                 for cleanup_error in cleanup_errors:
-                    timeout_error.add_note(f"test timeout cleanup failed: {cleanup_error}")
+                    timeout_error.add_note(
+                        f"test timeout cleanup failed: {cleanup_error}"
+                    )
                 raise
             except BaseException as primary_error:
                 cleanup_performed = True
@@ -836,11 +849,15 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                 os.kill = original_kill
             self.assertEqual(foreign_kills, [])
             self.assertTrue(cleanup_errors)
-            self.assertTrue(any("foreign test PID" in str(error) for error in cleanup_errors))
+            self.assertTrue(
+                any("foreign test PID" in str(error) for error in cleanup_errors)
+            )
         finally:
             self._cleanup_for_finally([child_pid])
 
-    def test_test_cleanup_retries_waitpid_eintr_before_signalling_owned_child(self) -> None:
+    def test_test_cleanup_retries_waitpid_eintr_before_signalling_owned_child(
+        self,
+    ) -> None:
         child_pid = os.fork()
         if child_pid == 0:
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -865,7 +882,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         self.assertEqual(calls[0], 2)
         self.assertIsNone(self._process_state(child_pid))
 
-    def test_test_cleanup_persistent_waitpid_eintr_reaps_via_authenticated_pidfd(self) -> None:
+    def test_test_cleanup_persistent_waitpid_eintr_reaps_via_authenticated_pidfd(
+        self,
+    ) -> None:
         child_pid = os.fork()
         if child_pid == 0:
             signal.signal(signal.SIGTERM, signal.SIG_IGN)
@@ -898,18 +917,22 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
             with self.subTest(fault=fault):
                 launched: list[subprocess.Popen[str]] = []
 
-                def tracking_popen(*args: object, **kwargs: object) -> subprocess.Popen[str]:
+                def tracking_popen(
+                    *args: object, **kwargs: object
+                ) -> subprocess.Popen[str]:
                     process = original_popen(*args, **kwargs)
                     launched.append(process)
                     return process
 
                 subprocess.Popen = tracking_popen
                 if fault == "identity":
+
                     def fail_identity(_process_id: int) -> tuple[int, int, int, int]:
                         raise OSError(errno.EIO, "injected identity-read failure")
 
                     self._read_process_identity = fail_identity
                 else:
+
                     def fail_communicate(
                         _process: subprocess.Popen[str], *args: object, **kwargs: object
                     ) -> tuple[str, str]:
@@ -960,7 +983,10 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                 self.assertIsNone(foreign.poll())
                 self.assertTrue(errors)
                 self.assertTrue(
-                    any("baseline" in str(error) or "owned descendant" in str(error) for error in errors)
+                    any(
+                        "baseline" in str(error) or "owned descendant" in str(error)
+                        for error in errors
+                    )
                 )
                 self.assertIsNotNone(root.returncode)
             finally:
@@ -1017,6 +1043,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
             process_file = Path(tmp) / "processes"
             baseline: set[int] = set()
             root: subprocess.Popen[str] | None = None
+            leader_pidfd: int | None = None
+            leader_birth_identity: tuple[int, int, int, int] | None = None
+            leader_uid: int | None = None
             child_pid: int | None = None
             child_pidfd: int | None = None
             record_reader: int | None = None
@@ -1025,6 +1054,40 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
             ack_writer: int | None = None
             original_reader = RpmLifecycleSupervisorTest._read_process_identity
             child_reads = [0]
+            if not callable(getattr(os, "pidfd_open", None)) or not callable(
+                getattr(signal, "pidfd_send_signal", None)
+            ):
+                raise RuntimeError("fixture requires PIDFD open and signal support")
+
+            def leader_fd_targets_root() -> bool:
+                if root is None or leader_pidfd is None:
+                    return False
+                fdinfo = Path(f"/proc/self/fdinfo/{leader_pidfd}").read_bytes()
+                targets = re.findall(rb"^Pid:\s+([0-9]+)$", fdinfo, re.MULTILINE)
+                return len(targets) == 1 and int(targets[0]) == root.pid
+
+            def stop_bound_leader() -> None:
+                if root is None or root.poll() is not None:
+                    return
+                if (
+                    leader_pidfd is None
+                    or leader_birth_identity is None
+                    or leader_uid is None
+                    or not leader_fd_targets_root()
+                    or leader_uid != os.geteuid()
+                    or original_reader(root.pid) != leader_birth_identity
+                    or Path(f"/proc/{root.pid}").stat().st_uid != leader_uid
+                ):
+                    raise RuntimeError(
+                        "fixture leader changed identity before PIDFD signal"
+                    )
+                if root.poll() is not None:
+                    return
+                try:
+                    signal.pidfd_send_signal(leader_pidfd, signal.SIGKILL, None, 0)
+                except ProcessLookupError:
+                    pass
+
             self._set_test_subreaper(True)
             try:
                 baseline = self._read_direct_child_ids()
@@ -1061,6 +1124,28 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                     stderr=subprocess.DEVNULL,
                     pass_fds=(record_writer, ack_reader),
                 )
+                leader_birth_identity = original_reader(root.pid)
+                if (
+                    leader_birth_identity is None
+                    or leader_birth_identity[1:3] != (root.pid, root.pid)
+                    or leader_birth_identity[3] != os.getpid()
+                ):
+                    raise RuntimeError("fixture leader is not the owned session child")
+                leader_uid = Path(f"/proc/{root.pid}").stat().st_uid
+                if leader_uid != os.geteuid():
+                    raise RuntimeError(
+                        "fixture leader UID does not match the test process"
+                    )
+                leader_pidfd = os.pidfd_open(root.pid, 0)
+                if (
+                    not leader_fd_targets_root()
+                    or original_reader(root.pid) != leader_birth_identity
+                    or Path(f"/proc/{root.pid}").stat().st_uid != leader_uid
+                    or root.poll() is not None
+                ):
+                    raise RuntimeError(
+                        "fixture leader changed identity after PIDFD open"
+                    )
                 os.close(record_writer)
                 record_writer = None
                 os.close(ack_reader)
@@ -1072,6 +1157,10 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                         deadline=time.monotonic() + 2,
                     )
                 )
+                if root_identity != leader_birth_identity:
+                    raise RuntimeError(
+                        "fixture leader identity changed during child handshake"
+                    )
                 os.close(record_reader)
                 record_reader = None
                 os.write(ack_writer, b"1")
@@ -1079,7 +1168,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                 ack_writer = None
                 process_file.write_text(f"{child_pid}\n", encoding="ascii")
 
-                def change_parent_after_pidfd(process_id: int) -> tuple[int, int, int, int] | None:
+                def change_parent_after_pidfd(
+                    process_id: int,
+                ) -> tuple[int, int, int, int] | None:
                     identity = original_reader(process_id)
                     if identity is not None and process_id == child_pid:
                         child_reads[0] += 1
@@ -1106,7 +1197,12 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                 )
                 primary_error = sys.exc_info()[1]
                 cleanup_errors: list[BaseException] = []
-                for descriptor in (record_reader, record_writer, ack_reader, ack_writer):
+                for descriptor in (
+                    record_reader,
+                    record_writer,
+                    ack_reader,
+                    ack_writer,
+                ):
                     if descriptor is not None:
                         try:
                             os.close(descriptor)
@@ -1118,21 +1214,22 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                             try:
                                 root.wait(timeout=6)
                             except subprocess.TimeoutExpired:
-                                root.send_signal(signal.SIGKILL)
+                                stop_bound_leader()
                                 root.wait(timeout=2)
                                 raise RuntimeError(
                                     "unbound fixture child was not naturally reaped"
                                 )
                         else:
-                            if root.poll() is None:
-                                root.send_signal(signal.SIGKILL)
+                            stop_bound_leader()
                             root.wait(timeout=2)
                 except BaseException as error:
                     cleanup_errors.append(error)
                 try:
                     if child_pidfd is not None:
                         try:
-                            signal.pidfd_send_signal(child_pidfd, signal.SIGKILL, None, 0)
+                            signal.pidfd_send_signal(
+                                child_pidfd, signal.SIGKILL, None, 0
+                            )
                         except ProcessLookupError:
                             pass
                         reap_deadline = time.monotonic() + 2
@@ -1142,7 +1239,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                             )
                             if result is not None and result.si_pid == child_pid:
                                 break
-                            time.sleep(min(0.02, max(0, reap_deadline - time.monotonic())))
+                            time.sleep(
+                                min(0.02, max(0, reap_deadline - time.monotonic()))
+                            )
                         else:
                             raise RuntimeError("bound fixture child was not reaped")
                 except BaseException as error:
@@ -1151,6 +1250,11 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                     if child_pidfd is not None:
                         try:
                             os.close(child_pidfd)
+                        except BaseException as error:
+                            cleanup_errors.append(error)
+                    if leader_pidfd is not None:
+                        try:
+                            os.close(leader_pidfd)
                         except BaseException as error:
                             cleanup_errors.append(error)
                     try:
@@ -1162,9 +1266,13 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                     if primary_error is not None:
                         primary_error.add_note(f"fixture cleanup failed: {detail}")
                     else:
-                        raise AssertionError(f"fixture cleanup failed: {detail}") from cleanup_errors[0]
+                        raise AssertionError(
+                            f"fixture cleanup failed: {detail}"
+                        ) from cleanup_errors[0]
 
-    def test_timeout_cleanup_rejects_incomplete_child_handshake_without_signal(self) -> None:
+    def test_timeout_cleanup_rejects_incomplete_child_handshake_without_signal(
+        self,
+    ) -> None:
         from unittest import mock
 
         for payload in (b"", b"123"):
@@ -1180,7 +1288,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                         mock.patch.object(signal, "pidfd_send_signal") as pidfd_signal,
                         mock.patch.object(os, "kill") as pid_signal,
                         mock.patch.object(os, "killpg") as group_signal,
-                        mock.patch.object(subprocess.Popen, "send_signal") as leader_signal,
+                        mock.patch.object(
+                            subprocess.Popen, "send_signal"
+                        ) as leader_signal,
                     ):
                         with self.assertRaisesRegex(
                             RuntimeError, "fixture child record is incomplete"
@@ -1200,12 +1310,16 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                     if record_writer >= 0:
                         os.close(record_writer)
 
-    def test_test_cleanup_error_does_not_mask_assertion_and_is_visible_alone(self) -> None:
+    def test_test_cleanup_error_does_not_mask_assertion_and_is_visible_alone(
+        self,
+    ) -> None:
         original_waitpid = os.waitpid
         original_kill = os.kill
 
         def fail_waitpid(_process_id: int, _options: int) -> tuple[int, int]:
-            raise PermissionError(errno.EACCES, "injected test cleanup permission failure")
+            raise PermissionError(
+                errno.EACCES, "injected test cleanup permission failure"
+            )
 
         def fail_signal(_process_id: int, _signum: int) -> None:
             raise AssertionError("cleanup signalled after ownership failure")
@@ -1227,7 +1341,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         original_state = RpmLifecycleSupervisorTest._process_state
 
         def fail_state(_process_id: int) -> str:
-            raise PermissionError(errno.EACCES, "injected test state permission failure")
+            raise PermissionError(
+                errno.EACCES, "injected test state permission failure"
+            )
 
         RpmLifecycleSupervisorTest._process_state = staticmethod(fail_state)
         try:
@@ -1245,20 +1361,26 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
 
         os.waitpid = fail_waitpid
         try:
-            with self.assertRaisesRegex(AssertionError, "primary finally assertion") as raised:
+            with self.assertRaisesRegex(
+                AssertionError, "primary finally assertion"
+            ) as raised:
                 try:
                     self.fail("primary finally assertion")
                 finally:
                     self._cleanup_for_finally([os.getpid()])
             self.assertTrue(
-                any("test cleanup failed" in note for note in raised.exception.__notes__)
+                any(
+                    "test cleanup failed" in note for note in raised.exception.__notes__
+                )
             )
             with self.assertRaisesRegex(AssertionError, "test cleanup failed"):
                 self._cleanup_for_finally([os.getpid()])
         finally:
             os.waitpid = original_waitpid
 
-    def test_direct_children_parser_handles_chunk_boundaries_and_rejects_bad_tokens(self) -> None:
+    def test_direct_children_parser_handles_chunk_boundaries_and_rejects_bad_tokens(
+        self,
+    ) -> None:
         module = self._load_supervisor("rpm_lifecycle_supervisor_children_parser")
         payload = b" " * 4093 + b"12345\t\n6  "
         read_fd, write_fd = os.pipe()
@@ -1307,7 +1429,11 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         module.os.read = fail_after_payload
         try:
             with self.assertRaises(module.DirectChildrenReadError) as raised:
-                list(module.iter_direct_child_batches(read_fd, deadline=time.monotonic() + 1))
+                list(
+                    module.iter_direct_child_batches(
+                        read_fd, deadline=time.monotonic() + 1
+                    )
+                )
         finally:
             module.os.read = original_read
             os.close(read_fd)
@@ -1319,7 +1445,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                 module = self._load_supervisor(f"rpm_snapshot_stability_{error_type}")
                 root_pid = os.getpid()
                 root_binding = module.ChildBinding(
-                    module.ProcessIdentity(root_pid, 1, os.getppid(), root_pid, os.getsid(0), "S"),
+                    module.ProcessIdentity(
+                        root_pid, 1, os.getppid(), root_pid, os.getsid(0), "S"
+                    ),
                     -1,
                     owned_direct=True,
                 )
@@ -1360,7 +1488,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         root_pid = os.getpid()
         child_pids = {root_pid + 100001 + index for index in range(301)}
         root_binding = module.ChildBinding(
-            module.ProcessIdentity(root_pid, 1, os.getppid(), root_pid, os.getsid(0), "S"),
+            module.ProcessIdentity(
+                root_pid, 1, os.getppid(), root_pid, os.getsid(0), "S"
+            ),
             -1,
             owned_direct=True,
         )
@@ -1419,7 +1549,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                 root_pid = os.getpid()
                 child_pid = root_pid + 100000
                 root_binding = module.ChildBinding(
-                    module.ProcessIdentity(root_pid, 1, os.getppid(), root_pid, os.getsid(0), "S"),
+                    module.ProcessIdentity(
+                        root_pid, 1, os.getppid(), root_pid, os.getsid(0), "S"
+                    ),
                     -1,
                     owned_direct=True,
                 )
@@ -1460,7 +1592,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         original_verify = module.verify_child
         original_kill = module.os.killpg
         binding = module.ChildBinding(
-            module.ProcessIdentity(os.getpid(), 1, os.getppid(), os.getpgrp(), os.getsid(0), "S"),
+            module.ProcessIdentity(
+                os.getpid(), 1, os.getppid(), os.getpgrp(), os.getsid(0), "S"
+            ),
             -1,
         )
         try:
@@ -1505,7 +1639,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         os.write(handoff_write, b"rpm-lifecycle-test\n")
         os.close(handoff_write)
         try:
-            with self.assertRaisesRegex(RuntimeError, "root group signal failure") as raised:
+            with self.assertRaisesRegex(
+                RuntimeError, "root group signal failure"
+            ) as raised:
                 module.run(
                     [sys.executable, "-c", "raise SystemExit(0)"],
                     timeout=1,
@@ -1527,7 +1663,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
     def test_signal_error_notes_keep_bounded_type_and_message(self) -> None:
         module = self._load_supervisor("rpm_signal_error_note_details")
         primary = RuntimeError("primary failure")
-        signal_errors = [OSError(errno.EIO, f"signal failure {index}") for index in range(10)]
+        signal_errors = [
+            OSError(errno.EIO, f"signal failure {index}") for index in range(10)
+        ]
 
         module.note_signal_errors(primary, signal_errors, prefix="injected signal")
 
@@ -1536,7 +1674,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         self.assertIn("signal failure 0", primary.__notes__[0])
         self.assertNotIn("signal failure 8", "\n".join(primary.__notes__))
 
-    def test_owned_pidfd_fallback_preserves_original_and_followup_signal_errors(self) -> None:
+    def test_owned_pidfd_fallback_preserves_original_and_followup_signal_errors(
+        self,
+    ) -> None:
         module = self._load_supervisor("rpm_owned_pidfd_signal_error_chain")
         binding = module.ChildBinding(
             module.ProcessIdentity(
@@ -1560,7 +1700,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
 
         module.verify_child = fail_verify
         try:
-            with self.assertRaisesRegex(OSError, "injected identity fallback failure") as raised:
+            with self.assertRaisesRegex(
+                OSError, "injected identity fallback failure"
+            ) as raised:
                 module.signal_pidfd(
                     fail_sender,
                     binding,
@@ -1710,10 +1852,14 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         self.assertEqual(calls[0], 3)
         self.assertGreaterEqual(elapsed, 0.08)
 
-    def test_child_process_error_uses_explicit_reap_sentinel_in_both_modes(self) -> None:
+    def test_child_process_error_uses_explicit_reap_sentinel_in_both_modes(
+        self,
+    ) -> None:
         for mode in ("lifecycle", "identity"):
             with self.subTest(mode=mode):
-                module = self._load_supervisor(f"rpm_lifecycle_supervisor_sentinel_{mode}")
+                module = self._load_supervisor(
+                    f"rpm_lifecycle_supervisor_sentinel_{mode}"
+                )
                 original_waitid = module.os.waitid
 
                 def no_wait_status(*_args: object) -> object:
@@ -1905,7 +2051,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                     def fail_sender(*_args: object) -> None:
                         raise RuntimeError("injected validation primary failure")
 
-                    with self.assertRaisesRegex(RuntimeError, "validation primary") as raised:
+                    with self.assertRaisesRegex(
+                        RuntimeError, "validation primary"
+                    ) as raised:
                         module.validate_pidfd_send_signal(fail_sender)
                     self.assertTrue(
                         any(
@@ -1927,7 +2075,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         def run_identity_case(*, primary: bool) -> None:
             opened: list[int] = []
 
-            def tracking_open(path: str, flags: int, *args: object, **kwargs: object) -> int:
+            def tracking_open(
+                path: str, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 descriptor = original_open(path, flags, *args, **kwargs)
                 opened.append(descriptor)
                 return descriptor
@@ -1947,7 +2097,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
             module.os.read = fail_read
             try:
                 if primary:
-                    with self.assertRaisesRegex(OSError, "identity read failure") as raised:
+                    with self.assertRaisesRegex(
+                        OSError, "identity read failure"
+                    ) as raised:
                         module.read_proc_identity(os.getpid())
                     self.assertTrue(
                         any(
@@ -2035,7 +2187,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         module.subprocess.Popen = tracking_popen
         module.os.read = fail_output_read
         try:
-            with self.assertRaisesRegex(RuntimeError, "identity helper pipe failed") as raised:
+            with self.assertRaisesRegex(
+                RuntimeError, "identity helper pipe failed"
+            ) as raised:
                 module.run_bounded_identity(
                     [
                         sys.executable,
@@ -2053,7 +2207,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                     process.kill()
                 process.wait(timeout=2)
         self.assertIsInstance(raised.exception.__cause__, OSError)
-        self.assertIn("injected identity stream read failure", str(raised.exception.__cause__))
+        self.assertIn(
+            "injected identity stream read failure", str(raised.exception.__cause__)
+        )
         self.assertTrue(
             any(
                 "OSError" in note and "injected identity stream read failure" in note
@@ -2084,7 +2240,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         module.subprocess.Popen = tracking_popen
         module.peek_child = injected_peek
         try:
-            with self.assertRaisesRegex(OSError, "injected main peek failure") as raised:
+            with self.assertRaisesRegex(
+                OSError, "injected main peek failure"
+            ) as raised:
                 module.run_bounded_identity(
                     [sys.executable, "-c", "import time; time.sleep(60)"],
                     timeout=1,
@@ -2098,7 +2256,10 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                     process.kill()
                 process.wait(timeout=2)
         self.assertTrue(
-            any("injected finalizer peek failure" in note for note in raised.exception.__notes__)
+            any(
+                "injected finalizer peek failure" in note
+                for note in raised.exception.__notes__
+            )
         )
 
     def test_lifecycle_handoff_close_failure_is_visible_without_primary(self) -> None:
@@ -2141,7 +2302,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
                 os.write(write_fd, b"123\n")
                 os.close(write_fd)
 
-                def injected_open(path: str, flags: int, *args: object, **kwargs: object) -> int:
+                def injected_open(
+                    path: str, flags: int, *args: object, **kwargs: object
+                ) -> int:
                     if os.fspath(path) == children_path:
                         return read_fd
                     return original_open(path, flags, *args, **kwargs)
@@ -2209,7 +2372,11 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
         module.os.read = payload_then_interrupted
         try:
             with self.assertRaises(module.DirectChildrenReadError) as raised:
-                list(module.iter_direct_child_batches(read_fd, deadline=time.monotonic() + 0.1))
+                list(
+                    module.iter_direct_child_batches(
+                        read_fd, deadline=time.monotonic() + 0.1
+                    )
+                )
         finally:
             module.os.read = original_read
             os.close(read_fd)
@@ -2224,7 +2391,9 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
             original_close = os.close
             record_fd: list[int] = []
 
-            def tracking_open(path: object, flags: int, *args: object, **kwargs: object) -> int:
+            def tracking_open(
+                path: object, flags: int, *args: object, **kwargs: object
+            ) -> int:
                 descriptor = original_open(path, flags, *args, **kwargs)
                 if Path(path) == process_file:
                     record_fd.append(descriptor)
@@ -2245,14 +2414,19 @@ class RpmLifecycleSupervisorTest(unittest.TestCase):
             os.read = fail_read
             os.close = close_then_fail
             try:
-                with self.assertRaisesRegex(OSError, "injected record read failure") as raised:
+                with self.assertRaisesRegex(
+                    OSError, "injected record read failure"
+                ) as raised:
                     self._read_known_process_identities(process_file)
             finally:
                 os.open = original_open
                 os.read = original_read
                 os.close = original_close
             self.assertTrue(
-                any("injected record close failure" in str(note) for note in raised.exception.__notes__)
+                any(
+                    "injected record close failure" in str(note)
+                    for note in raised.exception.__notes__
+                )
             )
 
     def test_early_root_exit_kills_and_reaps_process_group(self) -> None:
@@ -2279,9 +2453,13 @@ Path(sys.argv[2]).write_text(f"{os.getpid()} {os.getpgrp()} {child.pid}\\n", enc
             process_ids: list[int] = []
             try:
                 started = time.monotonic()
-                result = self._run_supervisor(root, timeout=2, kill_after=0.2, code=code)
+                result = self._run_supervisor(
+                    root, timeout=2, kill_after=0.2, code=code
+                )
                 elapsed = time.monotonic() - started
-                process_ids = list(map(int, processes.read_text(encoding="ascii").split()))
+                process_ids = list(
+                    map(int, processes.read_text(encoding="ascii").split())
+                )
 
                 root_pid, process_group_id, child_pid = process_ids
                 self.assertEqual(root_pid, process_group_id)
@@ -2324,9 +2502,13 @@ time.sleep(60)
             process_ids: list[int] = []
             try:
                 started = time.monotonic()
-                result = self._run_supervisor(root, timeout=1, kill_after=0.2, code=code)
+                result = self._run_supervisor(
+                    root, timeout=1, kill_after=0.2, code=code
+                )
                 elapsed = time.monotonic() - started
-                process_ids = list(map(int, processes.read_text(encoding="ascii").split()))
+                process_ids = list(
+                    map(int, processes.read_text(encoding="ascii").split())
+                )
 
                 root_pid, process_group_id, child_pid = process_ids
                 self.assertEqual(root_pid, process_group_id)
@@ -2342,7 +2524,9 @@ time.sleep(60)
                         process_ids = []
                 self._cleanup_for_finally(process_ids)
 
-    def test_direct_child_batches_reap_65_children_without_touching_unrelated_group(self) -> None:
+    def test_direct_child_batches_reap_65_children_without_touching_unrelated_group(
+        self,
+    ) -> None:
         unrelated = subprocess.Popen(
             ["sleep", "60"],
             stdin=subprocess.DEVNULL,
@@ -2352,7 +2536,10 @@ time.sleep(60)
         )
         try:
             for separate_group in (False, True):
-                with self.subTest(separate_group=separate_group), tempfile.TemporaryDirectory() as tmp:
+                with (
+                    self.subTest(separate_group=separate_group),
+                    tempfile.TemporaryDirectory() as tmp,
+                ):
                     process_ids: list[int] = []
                     mode = "True" if separate_group else "False"
                     code = f"""
@@ -2398,7 +2585,10 @@ time.sleep(60)
                         if not process_ids:
                             try:
                                 process_ids = list(
-                                    map(int, (Path(tmp) / "processes").read_text().split())
+                                    map(
+                                        int,
+                                        (Path(tmp) / "processes").read_text().split(),
+                                    )
                                 )
                             except (FileNotFoundError, ValueError):
                                 process_ids = []
@@ -2714,7 +2904,9 @@ finally:
                             self.assertEqual(outcome.split("|", 1)[0], "ok:0")
                         else:
                             self.assertTrue(
-                                outcome.split("|", 1)[0].startswith("error:TimeoutError:"),
+                                outcome.split("|", 1)[0].startswith(
+                                    "error:TimeoutError:"
+                                ),
                                 outcome,
                             )
                         process_ids = list(map(int, child_record.read_text().split()))
@@ -2725,7 +2917,9 @@ finally:
                     finally:
                         if not process_ids:
                             try:
-                                process_ids = list(map(int, child_record.read_text().split()))
+                                process_ids = list(
+                                    map(int, child_record.read_text().split())
+                                )
                             except (FileNotFoundError, ValueError):
                                 process_ids = []
                         self._cleanup_for_finally(process_ids)
@@ -2777,7 +2971,9 @@ if len(sys.argv) == 2:
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     time.sleep(60)
 os._exit(0)
-""".replace("CHILD_COUNT", str(child_count))
+""".replace(
+            "CHILD_COUNT", str(child_count)
+        )
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3028,7 +3224,10 @@ time.sleep(60)
 """
         for mode in ("lifecycle", "identity"):
             for fault in ("read", "parse"):
-                with self.subTest(mode=mode, fault=fault), tempfile.TemporaryDirectory() as tmp:
+                with (
+                    self.subTest(mode=mode, fault=fault),
+                    tempfile.TemporaryDirectory() as tmp,
+                ):
                     root = Path(tmp)
                     child_record = root / "processes"
                     hidden_record = root / "hidden"
@@ -3135,7 +3334,12 @@ finally:
                             handoff_read, handoff_write = os.pipe()
                             os.write(handoff_write, b"rpm-lifecycle-test\n")
                             os.close(handoff_write)
-                            arguments = [sys.executable, "-c", wrapper, str(handoff_read)]
+                            arguments = [
+                                sys.executable,
+                                "-c",
+                                wrapper,
+                                str(handoff_read),
+                            ]
                             pass_fds = (handoff_read,)
                         else:
                             arguments = [sys.executable, "-c", wrapper]
@@ -3165,7 +3369,9 @@ finally:
                     finally:
                         if not process_ids:
                             try:
-                                process_ids = list(map(int, child_record.read_text().split()))
+                                process_ids = list(
+                                    map(int, child_record.read_text().split())
+                                )
                             except (FileNotFoundError, ValueError):
                                 process_ids = []
                         self._cleanup_for_finally(process_ids)
@@ -3175,7 +3381,9 @@ finally:
                             except OSError:
                                 pass
 
-    def test_reap_and_emergency_faults_do_not_abort_finalizer_in_both_modes(self) -> None:
+    def test_reap_and_emergency_faults_do_not_abort_finalizer_in_both_modes(
+        self,
+    ) -> None:
         child_code = """
 import os
 import signal
@@ -3271,11 +3479,18 @@ time.sleep(60)
                                 handoff_fd=handoff_read,
                             )
                         self.assertEqual(result, 124)
-                        self.assertIn("injected reap-ready failure", stderr_capture.getvalue())
-                        self.assertIn("injected emergency drain failure", stderr_capture.getvalue())
+                        self.assertIn(
+                            "injected reap-ready failure", stderr_capture.getvalue()
+                        )
+                        self.assertIn(
+                            "injected emergency drain failure",
+                            stderr_capture.getvalue(),
+                        )
                         self.assertTrue(emergency_calls)
                     else:
-                        with self.assertRaisesRegex(OSError, "injected reap-ready failure") as raised:
+                        with self.assertRaisesRegex(
+                            OSError, "injected reap-ready failure"
+                        ) as raised:
                             module.run_bounded_identity(
                                 [
                                     sys.executable,
@@ -3316,7 +3531,9 @@ time.sleep(60)
                 for process_id in set(process_ids):
                     self._assert_reaped(process_id)
 
-    def test_children_read_faults_cleanup_full_and_partial_batches_in_both_modes(self) -> None:
+    def test_children_read_faults_cleanup_full_and_partial_batches_in_both_modes(
+        self,
+    ) -> None:
         unrelated = subprocess.Popen(
             ["sleep", "60"],
             stdin=subprocess.DEVNULL,
@@ -3347,7 +3564,9 @@ time.sleep(60)
                 unrelated.kill()
             unrelated.wait(timeout=2)
 
-    def test_non_foreground_timeout_root_return_drains_adopted_descendants(self) -> None:
+    def test_non_foreground_timeout_root_return_drains_adopted_descendants(
+        self,
+    ) -> None:
         code = """
 import os
 import subprocess
@@ -3384,7 +3603,9 @@ processes.write_text(f"{os.getpid()} {os.getpgrp()} {timeout_process.pid} {timeo
             process_ids: list[int] = []
             nested_pid: int | None = None
             try:
-                result = self._run_supervisor(root, timeout=2, kill_after=0.2, code=code)
+                result = self._run_supervisor(
+                    root, timeout=2, kill_after=0.2, code=code
+                )
                 process_ids = list(map(int, processes.read_text().split()))
                 root_pid, root_group, timeout_pid, timeout_group = process_ids
                 nested_pid = int((root / "nested.pid").read_text())
@@ -3405,7 +3626,9 @@ processes.write_text(f"{os.getpid()} {os.getpgrp()} {timeout_process.pid} {timeo
                     process_ids.append(nested_pid)
                 self._cleanup_for_finally(process_ids)
 
-    def test_non_foreground_timeout_outer_timeout_drains_adopted_descendants(self) -> None:
+    def test_non_foreground_timeout_outer_timeout_drains_adopted_descendants(
+        self,
+    ) -> None:
         code = """
 import os
 import signal
@@ -3445,7 +3668,9 @@ time.sleep(60)
             process_ids: list[int] = []
             nested_pid: int | None = None
             try:
-                result = self._run_supervisor(root, timeout=1, kill_after=0.2, code=code)
+                result = self._run_supervisor(
+                    root, timeout=1, kill_after=0.2, code=code
+                )
                 process_ids = list(map(int, processes.read_text().split()))
                 root_pid, root_group, timeout_pid, timeout_group = process_ids
                 nested_pid = int((root / "nested.pid").read_text())
@@ -3490,7 +3715,9 @@ time.sleep(60)
             unrelated.wait(timeout=2)
 
     def test_unverifiable_group_leader_never_gets_stale_group_signal(self) -> None:
-        spec = importlib.util.spec_from_file_location("rpm_lifecycle_supervisor_stale", SUPERVISOR)
+        spec = importlib.util.spec_from_file_location(
+            "rpm_lifecycle_supervisor_stale", SUPERVISOR
+        )
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
@@ -3503,10 +3730,16 @@ time.sleep(60)
         original_identity = module.verify_child
         original_killpg = module.os.killpg
         called = []
-        module.verify_child = lambda *_args, **_kwargs: (_ for _ in ()).throw(FileNotFoundError())
+        module.verify_child = lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            FileNotFoundError()
+        )
         module.os.killpg = lambda *args: called.append(args)
         try:
-            self.assertFalse(module.signal_verified_group(binding, signal.SIGKILL, expected_parent_pid=os.getpid()))
+            self.assertFalse(
+                module.signal_verified_group(
+                    binding, signal.SIGKILL, expected_parent_pid=os.getpid()
+                )
+            )
         finally:
             module.verify_child = original_identity
             module.os.killpg = original_killpg
@@ -3543,7 +3776,9 @@ time.sleep(60)
                 stderr_capture = io.StringIO()
                 try:
                     if status == 0:
-                        with self.assertRaisesRegex(OSError, "injected root close failure"):
+                        with self.assertRaisesRegex(
+                            OSError, "injected root close failure"
+                        ):
                             module.run(
                                 [sys.executable, "-c", "raise SystemExit(0)"],
                                 timeout=1,
@@ -3559,7 +3794,9 @@ time.sleep(60)
                                 handoff_fd=handoff_read,
                             )
                         self.assertEqual(result, 7)
-                        self.assertIn("injected root close failure", stderr_capture.getvalue())
+                        self.assertIn(
+                            "injected root close failure", stderr_capture.getvalue()
+                        )
                 finally:
                     module.close_binding = original_close
                     try:
@@ -3642,7 +3879,9 @@ time.sleep(60)
         self.assertEqual(result.stdout, "")
         self.assertIn("deadline exceeded", result.stderr)
 
-    def test_harness_timeout_cleans_recorded_detached_term_resistant_child(self) -> None:
+    def test_harness_timeout_cleans_recorded_detached_term_resistant_child(
+        self,
+    ) -> None:
         unrelated = subprocess.Popen(
             ["sleep", "60"],
             stdin=subprocess.DEVNULL,
@@ -3708,7 +3947,9 @@ time.sleep(60)
                     finally:
                         if not process_ids:
                             try:
-                                process_ids = list(map(int, process_file.read_text().split()))
+                                process_ids = list(
+                                    map(int, process_file.read_text().split())
+                                )
                             except (FileNotFoundError, ValueError):
                                 process_ids = []
                         self._cleanup_for_finally(process_ids)
@@ -3739,11 +3980,18 @@ time.sleep(60)
             module.drain_adopted_children = original_drain
         self.assertIn("injected snapshot read", str(raised.exception))
         self.assertTrue(
-            any("injected cleanup timeout" in note for note in raised.exception.__notes__)
+            any(
+                "injected cleanup timeout" in note
+                for note in raised.exception.__notes__
+            )
         )
 
-    def test_lifecycle_snapshot_error_is_primary_and_cleanup_error_is_note(self) -> None:
-        module = self._load_supervisor("rpm_lifecycle_supervisor_lifecycle_snapshot_priority")
+    def test_lifecycle_snapshot_error_is_primary_and_cleanup_error_is_note(
+        self,
+    ) -> None:
+        module = self._load_supervisor(
+            "rpm_lifecycle_supervisor_lifecycle_snapshot_priority"
+        )
         original_drain = module.drain_adopted_children
         handoff_read, handoff_write = os.pipe()
         os.write(handoff_write, b"rpm-lifecycle-test\n")
@@ -3753,7 +4001,9 @@ time.sleep(60)
             snapshot_errors = kwargs["snapshot_errors"]
             assert isinstance(snapshot_errors, list)
             if not snapshot_errors:
-                snapshot_errors.append(OSError(errno.EIO, "injected lifecycle snapshot read"))
+                snapshot_errors.append(
+                    OSError(errno.EIO, "injected lifecycle snapshot read")
+                )
             raise TimeoutError("injected lifecycle cleanup timeout")
 
         module.drain_adopted_children = failing_drain
@@ -3769,7 +4019,10 @@ time.sleep(60)
             module.drain_adopted_children = original_drain
         self.assertIn("injected lifecycle snapshot read", str(raised.exception))
         self.assertTrue(
-            any("injected lifecycle cleanup timeout" in note for note in raised.exception.__notes__)
+            any(
+                "injected lifecycle cleanup timeout" in note
+                for note in raised.exception.__notes__
+            )
         )
 
     def test_valid_token_on_same_uid_foreign_fd_is_accepted(self) -> None:
@@ -3786,7 +4039,9 @@ time.sleep(60)
         self.assertEqual(result.stdout, "valid\n")
 
     def test_subreaper_failure_closes_handoff_fd(self) -> None:
-        spec = importlib.util.spec_from_file_location("rpm_lifecycle_supervisor", SUPERVISOR)
+        spec = importlib.util.spec_from_file_location(
+            "rpm_lifecycle_supervisor", SUPERVISOR
+        )
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
@@ -3810,7 +4065,9 @@ time.sleep(60)
             os.fstat(handoff_read)
 
     def test_kernel_primitive_failure_closes_handoff_fd(self) -> None:
-        spec = importlib.util.spec_from_file_location("rpm_lifecycle_supervisor_primitives", SUPERVISOR)
+        spec = importlib.util.spec_from_file_location(
+            "rpm_lifecycle_supervisor_primitives", SUPERVISOR
+        )
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
@@ -3834,7 +4091,9 @@ time.sleep(60)
             os.fstat(handoff_read)
 
     def test_signal_handlers_restore_after_launch_error(self) -> None:
-        spec = importlib.util.spec_from_file_location("rpm_lifecycle_supervisor_handlers", SUPERVISOR)
+        spec = importlib.util.spec_from_file_location(
+            "rpm_lifecycle_supervisor_handlers", SUPERVISOR
+        )
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
@@ -3860,12 +4119,16 @@ time.sleep(60)
                 )
         finally:
             module.subprocess.Popen = original_popen
-        self.assertEqual(before, {signum: signal.getsignal(signum) for signum in signals})
+        self.assertEqual(
+            before, {signum: signal.getsignal(signum) for signum in signals}
+        )
         with self.assertRaises(OSError):
             os.fstat(handoff_read)
 
     def test_bind_failure_after_launch_kills_exact_unreaped_child(self) -> None:
-        spec = importlib.util.spec_from_file_location("rpm_lifecycle_supervisor_bind", SUPERVISOR)
+        spec = importlib.util.spec_from_file_location(
+            "rpm_lifecycle_supervisor_bind", SUPERVISOR
+        )
         self.assertIsNotNone(spec)
         self.assertIsNotNone(spec.loader)
         module = importlib.util.module_from_spec(spec)
@@ -3915,9 +4178,9 @@ time.sleep(60)
                         str(child_record),
                     ],
                     timeout=2,
-                        kill_after=0.2,
-                        handoff_fd=handoff_read,
-                    )
+                    kill_after=0.2,
+                    handoff_fd=handoff_read,
+                )
             self.assertGreaterEqual(len(launched), 1)
             process_ids = [launched[0], int(child_record.read_text(encoding="ascii"))]
             for process_id in process_ids:
@@ -3939,7 +4202,9 @@ time.sleep(60)
                 pass
             child_record.unlink(missing_ok=True)
 
-    def test_total_pidfd_resource_bind_failure_cleans_root_and_adopted_child_in_both_modes(self) -> None:
+    def test_total_pidfd_resource_bind_failure_cleans_root_and_adopted_child_in_both_modes(
+        self,
+    ) -> None:
         code = (
             "import os,signal,sys,time; "
             "child=os.fork(); "
@@ -3976,12 +4241,12 @@ time.sleep(60)
                 module.bind_child = fail_bind
                 module.bind_child_exact = fail_bind
                 module.bind_owned_child_for_cleanup = fail_bind
-                module.bind_recovered_child = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                    OSError(errno.EMFILE, "injected recovery PIDFD exhaustion")
-                )
-                module.make_verified_owned_child_binding = lambda *_args, **_kwargs: (_ for _ in ()).throw(
-                    RuntimeError("injected finalizer binding failure")
-                )
+                module.bind_recovered_child = lambda *_args, **_kwargs: (
+                    _ for _ in ()
+                ).throw(OSError(errno.EMFILE, "injected recovery PIDFD exhaustion"))
+                module.make_verified_owned_child_binding = lambda *_args, **_kwargs: (
+                    _ for _ in ()
+                ).throw(RuntimeError("injected finalizer binding failure"))
                 handoff_read = None
                 process_ids: list[int] = []
                 try:
@@ -3989,7 +4254,9 @@ time.sleep(60)
                         handoff_read, handoff_write = os.pipe()
                         os.write(handoff_write, b"rpm-lifecycle-test\n")
                         os.close(handoff_write)
-                        with self.assertRaisesRegex(OSError, "injected total PIDFD exhaustion"):
+                        with self.assertRaisesRegex(
+                            OSError, "injected total PIDFD exhaustion"
+                        ):
                             module.run(
                                 [sys.executable, "-c", code, str(child_record)],
                                 timeout=3,
@@ -3997,7 +4264,9 @@ time.sleep(60)
                                 handoff_fd=handoff_read,
                             )
                     else:
-                        with self.assertRaisesRegex(OSError, "injected total PIDFD exhaustion"):
+                        with self.assertRaisesRegex(
+                            OSError, "injected total PIDFD exhaustion"
+                        ):
                             module.run_bounded_identity(
                                 [sys.executable, "-c", code, str(child_record)],
                                 timeout=3,
@@ -4022,7 +4291,9 @@ time.sleep(60)
                     if not process_ids:
                         process_ids.extend(launched)
                         try:
-                            process_ids.append(int(child_record.read_text(encoding="ascii")))
+                            process_ids.append(
+                                int(child_record.read_text(encoding="ascii"))
+                            )
                         except (FileNotFoundError, ValueError):
                             pass
                     self._cleanup_for_finally(process_ids)
@@ -4033,7 +4304,9 @@ time.sleep(60)
                             pass
                     child_record.unlink(missing_ok=True)
 
-    def test_unbound_popen_fallback_reaps_root_and_detached_child_in_both_modes(self) -> None:
+    def test_unbound_popen_fallback_reaps_root_and_detached_child_in_both_modes(
+        self,
+    ) -> None:
         code = (
             "import os,signal,sys,time; "
             "child=os.fork(); "
@@ -4047,7 +4320,9 @@ time.sleep(60)
         for mode in ("lifecycle", "identity"):
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 child_record = Path(tmp) / "child.pid"
-                module = self._load_supervisor(f"rpm_lifecycle_supervisor_unbound_{mode}")
+                module = self._load_supervisor(
+                    f"rpm_lifecycle_supervisor_unbound_{mode}"
+                )
                 original_bind = module.bind_child
                 original_recovered = module.bind_recovered_child
                 original_verified = module.make_verified_owned_child_binding
@@ -4095,7 +4370,9 @@ time.sleep(60)
                         handoff_read, handoff_write = os.pipe()
                         os.write(handoff_write, b"rpm-lifecycle-test\n")
                         os.close(handoff_write)
-                        with self.assertRaisesRegex(OSError, "injected initial PIDFD exhaustion"):
+                        with self.assertRaisesRegex(
+                            OSError, "injected initial PIDFD exhaustion"
+                        ):
                             module.run(
                                 [sys.executable, "-c", code, str(child_record)],
                                 timeout=2,
@@ -4103,7 +4380,9 @@ time.sleep(60)
                                 handoff_fd=handoff_read,
                             )
                     else:
-                        with self.assertRaisesRegex(OSError, "injected initial PIDFD exhaustion"):
+                        with self.assertRaisesRegex(
+                            OSError, "injected initial PIDFD exhaustion"
+                        ):
                             module.run_bounded_identity(
                                 [sys.executable, "-c", code, str(child_record)],
                                 timeout=2,
@@ -4122,7 +4401,9 @@ time.sleep(60)
                     if not process_ids:
                         process_ids.extend(launched)
                         try:
-                            process_ids.append(int(child_record.read_text(encoding="ascii")))
+                            process_ids.append(
+                                int(child_record.read_text(encoding="ascii"))
+                            )
                         except (FileNotFoundError, ValueError):
                             pass
                     self._cleanup_for_finally(process_ids)
@@ -4201,7 +4482,9 @@ time.sleep(60)
         )
         self.assertIsNotNone(process.returncode)
 
-    def test_resource_recovery_rejects_redirected_foreign_pidfd_in_both_modes(self) -> None:
+    def test_resource_recovery_rejects_redirected_foreign_pidfd_in_both_modes(
+        self,
+    ) -> None:
         foreign = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(60)"],
             start_new_session=True,
@@ -4381,7 +4664,9 @@ Path(sys.argv[2]).write_text(outcome + "\\nredirected=%s\\n" % redirected, encod
             with self.subTest(mode=mode), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 child_record = root / "processes"
-                module = self._load_supervisor(f"rpm_lifecycle_supervisor_emfile_{mode}")
+                module = self._load_supervisor(
+                    f"rpm_lifecycle_supervisor_emfile_{mode}"
+                )
                 original_pidfd_open = module.os.pidfd_open
                 original_popen = module.subprocess.Popen
                 pidfd_calls: list[int] = []
@@ -4395,7 +4680,9 @@ Path(sys.argv[2]).write_text(outcome + "\\nredirected=%s\\n" % redirected, encod
                     except (FileNotFoundError, ValueError):
                         recorded = []
                     if len(recorded) >= 2 and process_id == recorded[1]:
-                        raise OSError(errno.EMFILE, "injected adopted-child pidfd exhaustion")
+                        raise OSError(
+                            errno.EMFILE, "injected adopted-child pidfd exhaustion"
+                        )
                     return original_pidfd_open(process_id, flags)
 
                 def tracking_popen(*args: object, **kwargs: object) -> object:
@@ -4479,7 +4766,7 @@ Path(sys.argv[2]).write_text(outcome + "\\nredirected=%s\\n" % redirected, encod
                 code = (
                     "import os,subprocess,sys; "
                     "child=subprocess.Popen([sys.executable, '-c', "
-                    "\"import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)\"], "
+                    '"import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); time.sleep(60)"], '
                     "start_new_session=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
                     "stderr=subprocess.DEVNULL); "
                     "fd=os.open(sys.argv[1], os.O_WRONLY|os.O_CREAT|os.O_TRUNC, 0o600); "
@@ -4530,7 +4817,9 @@ print(result)
                         pass
                     if not process_ids:
                         try:
-                            process_ids = list(map(int, child_record.read_text().split()))
+                            process_ids = list(
+                                map(int, child_record.read_text().split())
+                            )
                         except (FileNotFoundError, ValueError):
                             process_ids = []
                     self._cleanup_for_finally(process_ids)
@@ -4641,9 +4930,7 @@ print(result)
 
         def slow_bind(process_id: int, *, expected_parent_pid: int) -> object:
             time.sleep(1.8)
-            return original_bind(
-                process_id, expected_parent_pid=expected_parent_pid
-            )
+            return original_bind(process_id, expected_parent_pid=expected_parent_pid)
 
         module.subprocess.Popen = tracking_popen
         module.bind_child = slow_bind
@@ -4747,7 +5034,9 @@ print(result)
         module.os.pidfd_open = tracking_pidfd_open
         module.os.close = close_then_fail
         try:
-            with self.assertRaisesRegex(RuntimeError, "injected binding construction failure") as raised:
+            with self.assertRaisesRegex(
+                RuntimeError, "injected binding construction failure"
+            ) as raised:
                 module.bind_owned_child_for_cleanup(
                     process.pid,
                     expected_parent_pid=os.getpid(),
@@ -4850,7 +5139,9 @@ print(result)
                 )
         finally:
             module.subprocess.Popen = original_popen
-        self.assertEqual(before, {signum: signal.getsignal(signum) for signum in signals})
+        self.assertEqual(
+            before, {signum: signal.getsignal(signum) for signum in signals}
+        )
 
     def test_unrelated_fd_is_closed_in_child(self) -> None:
         handoff_read, handoff_write = os.pipe()

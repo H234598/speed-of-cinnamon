@@ -41,7 +41,9 @@ class TranscriberErrorDetailTest(unittest.TestCase):
                 "speed_of_cinnamon.transcriber._open_http_request",
                 return_value=Response(raw.encode("utf-8")),
             ):
-                with self.assertRaisesRegex(TranscriptionError, "returned invalid JSON"):
+                with self.assertRaisesRegex(
+                    TranscriptionError, "returned invalid JSON"
+                ):
                     transcribe_with_openai_compatible_api(
                         audio,
                         "en",

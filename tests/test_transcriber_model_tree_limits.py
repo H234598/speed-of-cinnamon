@@ -24,9 +24,15 @@ class CTranslate2ModelTreeLimitTests(unittest.TestCase):
             (root / "one.bin").write_bytes(b"one")
             (root / "two.bin").write_bytes(b"two")
 
-            with mock.patch.object(transcriber, "MAX_CTRANSLATE2_MODEL_TREE_ENTRIES", 1):
-                with self.assertRaisesRegex(transcriber.TranscriptionError, r"too many entries \(max 1\)"):
-                    transcriber._validate_ctranslate2_model_tree(root, field_name="model")
+            with mock.patch.object(
+                transcriber, "MAX_CTRANSLATE2_MODEL_TREE_ENTRIES", 1
+            ):
+                with self.assertRaisesRegex(
+                    transcriber.TranscriptionError, r"too many entries \(max 1\)"
+                ):
+                    transcriber._validate_ctranslate2_model_tree(
+                        root, field_name="model"
+                    )
 
 
 if __name__ == "__main__":

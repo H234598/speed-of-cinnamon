@@ -110,7 +110,9 @@ def _parse_meminfo(contents: str | None) -> dict[str, int] | None:
 def _parse_psi_avg10(contents: str | None, pressure_kind: str) -> float | None:
     if not isinstance(contents, str) or pressure_kind not in {"some", "full"}:
         return None
-    matches = [line for line in contents.splitlines() if line.startswith(pressure_kind + " ")]
+    matches = [
+        line for line in contents.splitlines() if line.startswith(pressure_kind + " ")
+    ]
     if len(matches) != 1:
         return None
     fields = matches[0].split()
@@ -122,7 +124,9 @@ def _parse_psi_avg10(contents: str | None, pressure_kind: str) -> float | None:
         metrics[key] = value
     if set(metrics) != {"avg10", "avg60", "avg300", "total"}:
         return None
-    if any(_finite_decimal(metrics[key]) is None for key in ("avg10", "avg60", "avg300")):
+    if any(
+        _finite_decimal(metrics[key]) is None for key in ("avg10", "avg60", "avg300")
+    ):
         return None
     if _bounded_uint(metrics["total"]) is None:
         return None
@@ -184,14 +188,12 @@ def _build_payload(*, require_full_online: bool) -> dict[str, object]:
             "affinity_unavailable",
             require_full_online=require_full_online,
         )
-    load = _parse_loadavg(
-        _read_system_file(_LOADAVG, max_bytes=MAX_LOADAVG_BYTES)
-    )
+    load = _parse_loadavg(_read_system_file(_LOADAVG, max_bytes=MAX_LOADAVG_BYTES))
     if load is None:
-        return _defer_payload("load_unavailable", require_full_online=require_full_online)
-    memory = _parse_meminfo(
-        _read_system_file(_MEMINFO, max_bytes=MAX_MEMINFO_BYTES)
-    )
+        return _defer_payload(
+            "load_unavailable", require_full_online=require_full_online
+        )
+    memory = _parse_meminfo(_read_system_file(_MEMINFO, max_bytes=MAX_MEMINFO_BYTES))
     if memory is None:
         return _defer_payload(
             "memory_unavailable",
@@ -212,7 +214,9 @@ def _build_payload(*, require_full_online: bool) -> dict[str, object]:
         ),
     )
     if any(value is None for value in psi_values):
-        return _defer_payload("psi_unavailable", require_full_online=require_full_online)
+        return _defer_payload(
+            "psi_unavailable", require_full_online=require_full_online
+        )
     snapshot = process_priority.current_cgroup_resource_snapshot(
         include_online_cpus=require_full_online
     )
@@ -267,8 +271,7 @@ def _build_payload(*, require_full_online: bool) -> dict[str, object]:
         )
     )
     full_online_ok = (
-        not require_full_online
-        or snapshot.online_cpus == snapshot.effective_cpus
+        not require_full_online or snapshot.online_cpus == snapshot.effective_cpus
     )
     checks = {
         "affinity_matches_cpuset": affinity_ok,
@@ -289,9 +292,7 @@ def _build_payload(*, require_full_online: bool) -> dict[str, object]:
             "affinity_cpus": cpu_count,
             "effective_cpuset_cpus": len(snapshot.effective_cpus),
             "online_cpus": (
-                len(snapshot.online_cpus)
-                if snapshot.online_cpus is not None
-                else None
+                len(snapshot.online_cpus) if snapshot.online_cpus is not None else None
             ),
             "loadavg": {
                 "1m": load[0],
@@ -334,13 +335,16 @@ def _build_payload(*, require_full_online: bool) -> dict[str, object]:
 
 
 def _render_payload(payload: dict[str, object]) -> str:
-    rendered = json.dumps(
-        payload,
-        ensure_ascii=True,
-        sort_keys=True,
-        separators=(",", ":"),
-        allow_nan=False,
-    ) + "\n"
+    rendered = (
+        json.dumps(
+            payload,
+            ensure_ascii=True,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+        + "\n"
+    )
     if len(rendered.encode("ascii")) > MAX_JSON_BYTES:
         raise ValueError("resource gate JSON exceeds bounded output")
     return rendered
@@ -398,7 +402,9 @@ def main(argv: list[str] | None = None, *, stdout: TextIO | None = None) -> int:
     try:
         rendered = _render_payload(payload)
     except (OverflowError, TypeError, ValueError):
-        rendered = '{"error":"internal_invariant","schema_version":1,"status":"error"}\n'
+        rendered = (
+            '{"error":"internal_invariant","schema_version":1,"status":"error"}\n'
+        )
         exit_code = EX_SOFTWARE
     if not _write_payload(output, rendered):
         return EX_IOERR

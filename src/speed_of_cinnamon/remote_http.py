@@ -202,9 +202,13 @@ _OPENAI_POSTPROCESS_REQUEST_PAYLOAD_KEYS = frozenset(
     }
 )
 
-_SUCCESS_RESPONSE_KEYS = frozenset({"nonce", "operation", "result", "schema_version", "status"})
+_SUCCESS_RESPONSE_KEYS = frozenset(
+    {"nonce", "operation", "result", "schema_version", "status"}
+)
 
-_ERROR_RESPONSE_KEYS = frozenset({"error_code", "nonce", "operation", "schema_version", "status"})
+_ERROR_RESPONSE_KEYS = frozenset(
+    {"error_code", "nonce", "operation", "schema_version", "status"}
+)
 _ERROR_RESPONSE_OPTIONAL_KEYS = frozenset({"failure_reason", "provider_status"})
 
 _LISTING_RESULT_KEYS = frozenset({"listing_state", "models"})
@@ -244,6 +248,7 @@ _ESCAPED_CONTROL_RE = re.compile(
 
 _Result = TypeVar("_Result")
 
+
 class RemoteProtocolError(ValueError):
     """Fixed, data-independent protocol failure."""
 
@@ -275,7 +280,9 @@ def validate_failure_metadata(
     *,
     error_code: object | None = None,
 ) -> tuple[str | None, int | None]:
-    if reason is not None and (type(reason) is not str or reason not in FAILURE_REASONS):
+    if reason is not None and (
+        type(reason) is not str or reason not in FAILURE_REASONS
+    ):
         raise ValueError("invalid remote failure reason")
     if status is not None and (type(status) is not int or not 100 <= status <= 599):
         raise ValueError("invalid remote provider status")
@@ -294,7 +301,11 @@ def validate_failure_metadata(
         if error_code != "remote-http-failed" or status != _HTTP_REASON_STATUS[reason]:
             raise ValueError("inconsistent remote HTTP failure metadata")
     elif reason == "http_5xx_provider":
-        if error_code != "remote-http-failed" or status is None or not 500 <= status <= 599:
+        if (
+            error_code != "remote-http-failed"
+            or status is None
+            or not 500 <= status <= 599
+        ):
             raise ValueError("inconsistent remote provider failure metadata")
     elif reason == "http_provider_error":
         if (
@@ -312,29 +323,39 @@ def validate_failure_metadata(
         if error_code != "remote-connect-failed" or status is not None:
             raise ValueError("inconsistent remote connection failure metadata")
     elif reason == "timeout":
-        if error_code not in {"remote-connect-failed", "remote-operation-timeout"} or status is not None:
+        if (
+            error_code not in {"remote-connect-failed", "remote-operation-timeout"}
+            or status is not None
+        ):
             raise ValueError("inconsistent remote timeout metadata")
     elif reason == "worker_startup":
         if error_code != "remote-worker-unavailable" or status is not None:
             raise ValueError("inconsistent remote worker startup metadata")
     elif reason == "worker_protocol":
-        if error_code not in {
-            "remote-operation-failed",
-            "remote-worker-cleanup-unconfirmed",
-            "remote-worker-protocol-invalid",
-        } or status is not None:
+        if (
+            error_code
+            not in {
+                "remote-operation-failed",
+                "remote-worker-cleanup-unconfirmed",
+                "remote-worker-protocol-invalid",
+            }
+            or status is not None
+        ):
             raise ValueError("inconsistent remote worker protocol metadata")
     elif reason == "provider_malformed_payload":
-        if (
-            error_code not in {"remote-response-invalid", "remote-response-too-large"}
-            or (status is not None and not 200 <= status <= 299)
-        ):
+        if error_code not in {
+            "remote-response-invalid",
+            "remote-response-too-large",
+        } or (status is not None and not 200 <= status <= 299):
             raise ValueError("inconsistent malformed provider payload metadata")
     return reason, status
 
 
 def default_error_code_for_failure_reason(reason: str) -> str:
-    if reason in _HTTP_REASON_STATUS or reason in {"http_5xx_provider", "http_provider_error"}:
+    if reason in _HTTP_REASON_STATUS or reason in {
+        "http_5xx_provider",
+        "http_provider_error",
+    }:
         return "remote-http-failed"
     if reason == "network_dns":
         return "remote-dns-failed"
@@ -424,6 +445,7 @@ def classify_openai_error_fields(error: object) -> tuple[bool, bool]:
     )
     return unsupported, unsupported and parameter == "service_tier"
 
+
 def _run(code: str, operation: Callable[[], _Result]) -> _Result:
     try:
         result = operation()
@@ -432,6 +454,7 @@ def _run(code: str, operation: Callable[[], _Result]) -> _Result:
     else:
         return result
     raise failure
+
 
 def _require_exact_keys(value: object, expected: frozenset[str]) -> None:
     if type(value) is not dict:
@@ -444,9 +467,11 @@ def _require_exact_keys(value: object, expected: frozenset[str]) -> None:
     if frozenset(keys) != expected:
         raise ValueError
 
+
 def _reject_surrogates(value: str) -> None:
     if any(0xD800 <= ord(char) <= 0xDFFF for char in value):
         raise ValueError
+
 
 def _validate_text(
     value: object,
@@ -479,11 +504,13 @@ def _validate_text(
     ):
         raise ValueError
 
+
 def _validate_nonce(value: object) -> None:
     if type(value) is not str or len(value) != 32:
         raise ValueError
     if any(char not in "0123456789abcdef" for char in value):
         raise ValueError
+
 
 def _validated_now(monotonic_ns: Callable[[], object] | None) -> int:
     clock = time.monotonic_ns if monotonic_ns is None else monotonic_ns
@@ -493,6 +520,7 @@ def _validated_now(monotonic_ns: Callable[[], object] | None) -> int:
     if type(now) is not int:
         raise ValueError
     return now
+
 
 def _validate_deadline(
     value: object,
@@ -507,6 +535,7 @@ def _validate_deadline(
     if remaining <= 0 or remaining > max_duration_ns:
         raise ValueError
 
+
 def _validate_url(value: object) -> None:
     _validate_text(
         value,
@@ -514,6 +543,7 @@ def _validate_url(value: object) -> None:
         max_bytes=MAX_URL_BYTES,
         require_nonempty=True,
     )
+
 
 def _validate_api_key(value: object) -> str:
     _validate_text(
@@ -530,16 +560,23 @@ def _validate_api_key(value: object) -> str:
     )
     return normalized
 
+
 def _validate_request_envelope(
     value: object,
     monotonic_ns: Callable[[], object] | None,
 ) -> dict[str, object]:
     _require_exact_keys(value, _REQUEST_KEYS)
     assert type(value) is dict
-    if type(value["schema_version"]) is not int or value["schema_version"] != PROTOCOL_SCHEMA_VERSION:
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != PROTOCOL_SCHEMA_VERSION
+    ):
         raise ValueError
     _validate_nonce(value["nonce"])
-    if type(value["operation"]) is not str or value["operation"] not in PROTOCOL_OPERATIONS:
+    if (
+        type(value["operation"]) is not str
+        or value["operation"] not in PROTOCOL_OPERATIONS
+    ):
         raise ValueError
     if value["operation"] not in SUPPORTED_OPERATIONS:
         raise ValueError
@@ -555,6 +592,7 @@ def _validate_request_envelope(
         max_duration_ns=max_duration_ns,
     )
     return value
+
 
 def _validate_postprocess_payload(payload: object) -> dict[str, object]:
     _require_exact_keys(payload, _POSTPROCESS_REQUEST_PAYLOAD_KEYS)
@@ -590,6 +628,7 @@ def _validate_postprocess_payload(payload: object) -> dict[str, object]:
     normalize_vocabulary(payload["vocabulary"])
     return payload
 
+
 def _validate_openai_postprocess_payload(payload: object) -> dict[str, object]:
     _require_exact_keys(payload, _OPENAI_POSTPROCESS_REQUEST_PAYLOAD_KEYS)
     assert type(payload) is dict
@@ -615,7 +654,9 @@ def _validate_openai_postprocess_payload(payload: object) -> dict[str, object]:
         field_name="openai-compatible model",
         max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
     ).strip()
-    if not model_name or not _openai_compatible_model_supports_text_polishing(model_name):
+    if not model_name or not _openai_compatible_model_supports_text_polishing(
+        model_name
+    ):
         raise ValueError
     _safe_prompt_language(payload["language"])
     normalize_context(payload["personal_context"])
@@ -631,19 +672,26 @@ def _validate_openai_postprocess_payload(payload: object) -> dict[str, object]:
     normalized["api_key"] = api_key
     return normalized
 
+
 def _validate_request_payload(value: dict[str, object]) -> dict[str, object]:
     payload = value["payload"]
     operation = value.get("operation")
     expected_keys = (
         _OPENAI_REQUEST_PAYLOAD_KEYS
         if operation == LIST_OPENAI_COMPATIBLE_MODELS_OPERATION
-        else _REQUEST_PAYLOAD_KEYS
-        if operation == LIST_OLLAMA_MODELS_OPERATION
-        else _POSTPROCESS_REQUEST_PAYLOAD_KEYS
-        if operation == POSTPROCESS_OLLAMA_OPERATION
-        else _OPENAI_POSTPROCESS_REQUEST_PAYLOAD_KEYS
-        if operation == POSTPROCESS_OPENAI_COMPATIBLE_OPERATION
-        else None
+        else (
+            _REQUEST_PAYLOAD_KEYS
+            if operation == LIST_OLLAMA_MODELS_OPERATION
+            else (
+                _POSTPROCESS_REQUEST_PAYLOAD_KEYS
+                if operation == POSTPROCESS_OLLAMA_OPERATION
+                else (
+                    _OPENAI_POSTPROCESS_REQUEST_PAYLOAD_KEYS
+                    if operation == POSTPROCESS_OPENAI_COMPATIBLE_OPERATION
+                    else None
+                )
+            )
+        )
     )
     if expected_keys is None:
         raise ValueError
@@ -671,8 +719,12 @@ def _validate_request_payload(value: dict[str, object]) -> dict[str, object]:
     normalized["payload"] = normalized_payload
     return normalized
 
-def _validate_request(value: object, monotonic_ns: Callable[[], object] | None) -> dict[str, object]:
+
+def _validate_request(
+    value: object, monotonic_ns: Callable[[], object] | None
+) -> dict[str, object]:
     return _validate_request_payload(_validate_request_envelope(value, monotonic_ns))
+
 
 def _validate_model(value: object) -> str:
     _require_exact_keys(value, _MODEL_KEYS)
@@ -712,7 +764,9 @@ def _validate_model(value: object) -> str:
         require_trimmed=True,
     )
     expected_description = " ".join(
-        part for part in (value["family"], value["parameter_size"], value["quantization"]) if part
+        part
+        for part in (value["family"], value["parameter_size"], value["quantization"])
+        if part
     )
     if description != expected_description:
         raise ValueError
@@ -721,6 +775,7 @@ def _validate_model(value: object) -> str:
     if value["size"] > 0 and value["size_label"] == "":
         raise ValueError
     return name
+
 
 def _validate_openai_model(value: object) -> str:
     _require_exact_keys(value, _OPENAI_MODEL_KEYS)
@@ -738,6 +793,7 @@ def _validate_openai_model(value: object) -> str:
     if name != model_name:
         raise ValueError
     return name
+
 
 def _validate_listing_result(
     value: object,
@@ -766,6 +822,7 @@ def _validate_listing_result(
             raise ValueError
         names.add(name)
 
+
 def _validate_postprocess_result(value: object) -> None:
     _require_exact_keys(value, _POSTPROCESS_RESULT_KEYS)
     assert type(value) is dict
@@ -776,6 +833,7 @@ def _validate_postprocess_result(value: object) -> None:
     )
     if not value["text"]:
         raise ValueError
+
 
 def _reject_secret_tree(value: object, secret: str, depth: int = 0) -> None:
     if not secret:
@@ -796,6 +854,7 @@ def _reject_secret_tree(value: object, secret: str, depth: int = 0) -> None:
         for item in value:
             _reject_secret_tree(item, secret, depth + 1)
 
+
 def _validate_response(
     value: object,
     expected_nonce: str | None = None,
@@ -811,7 +870,11 @@ def _validate_response(
     if type(value.get("status")) is not str:
         raise ValueError
     status = value["status"]
-    expected_keys = _SUCCESS_RESPONSE_KEYS if status == "ok" else _ERROR_RESPONSE_KEYS if status == "error" else None
+    expected_keys = (
+        _SUCCESS_RESPONSE_KEYS
+        if status == "ok"
+        else _ERROR_RESPONSE_KEYS if status == "error" else None
+    )
     if expected_keys is None:
         raise ValueError
     if status == "ok":
@@ -823,7 +886,10 @@ def _validate_response(
         ):
             raise ValueError
     assert type(value) is dict
-    if type(value["schema_version"]) is not int or value["schema_version"] != PROTOCOL_SCHEMA_VERSION:
+    if (
+        type(value["schema_version"]) is not int
+        or value["schema_version"] != PROTOCOL_SCHEMA_VERSION
+    ):
         raise ValueError
     if type(value["operation"]) is not str or value["operation"] != operation:
         raise ValueError
@@ -853,6 +919,7 @@ def _validate_response(
         )
     return value
 
+
 def _object_pairs(pairs: list[tuple[object, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
     for key, item in pairs:
@@ -861,14 +928,17 @@ def _object_pairs(pairs: list[tuple[object, object]]) -> dict[str, object]:
         result[key] = item
     return result
 
+
 def _parse_constant(_value: str) -> object:
     raise ValueError
+
 
 def _parse_float(value: str) -> float:
     parsed = float(value)
     if not math.isfinite(parsed):
         raise ValueError
     return parsed
+
 
 def _validate_json_tree(value: object) -> None:
     value_type = type(value)
@@ -894,6 +964,7 @@ def _validate_json_tree(value: object) -> None:
         return
     raise ValueError
 
+
 def _canonical_json(value: object) -> bytes:
     rendered = json.dumps(
         value,
@@ -903,6 +974,7 @@ def _canonical_json(value: object) -> bytes:
         allow_nan=False,
     )
     return rendered.encode("ascii")
+
 
 def _decode_json(body: bytes) -> object:
     if type(body) is not bytes:
@@ -919,6 +991,7 @@ def _decode_json(body: bytes) -> object:
         raise ValueError
     return value
 
+
 def _decode_frame(frame: object, *, max_frame_bytes: int) -> object:
     if type(frame) is not bytes or len(frame) < FRAME_PREFIX_BYTES:
         raise ValueError
@@ -928,12 +1001,14 @@ def _decode_frame(frame: object, *, max_frame_bytes: int) -> object:
         raise ValueError
     return _decode_json(frame[FRAME_PREFIX_BYTES:])
 
+
 def _encode_frame(value: object, *, max_frame_bytes: int) -> bytes:
     body = _canonical_json(value)
     frame_length = FRAME_PREFIX_BYTES + len(body)
     if frame_length > max_frame_bytes:
         raise ValueError
     return len(body).to_bytes(FRAME_PREFIX_BYTES, "big", signed=False) + body
+
 
 def encode_request(
     request: object,
@@ -948,6 +1023,7 @@ def encode_request(
 
     return _run("remote-request-invalid", operation)
 
+
 def decode_request(
     frame: object,
     *,
@@ -960,6 +1036,7 @@ def decode_request(
         return _validate_request(value, monotonic_ns)
 
     return _run("remote-request-invalid", operation)
+
 
 def encode_response(
     response: object,
@@ -976,10 +1053,15 @@ def encode_response(
             raise ValueError
         wire_response["operation"] = operation
         value = _validate_response(wire_response, operation=operation)
-        max_frame_bytes = MAX_ERROR_FRAME_BYTES if value["status"] == "error" else MAX_RESPONSE_FRAME_BYTES
+        max_frame_bytes = (
+            MAX_ERROR_FRAME_BYTES
+            if value["status"] == "error"
+            else MAX_RESPONSE_FRAME_BYTES
+        )
         return _encode_frame(value, max_frame_bytes=max_frame_bytes)
 
     return _run("remote-worker-protocol-invalid", run_operation)
+
 
 def decode_response(
     frame: object,
@@ -1006,9 +1088,11 @@ def decode_response(
 
     return _run("remote-worker-protocol-invalid", run_operation)
 
+
 _CONTROL_RELEASE_TAG = b"RHV1"
 
 _CONTROL_RELEASE_BYTES = len(_CONTROL_RELEASE_TAG) + 32 + hashlib.sha256().digest_size
+
 
 def _encode_control_release(nonce: str, response_frame: bytes) -> bytes:
     if type(nonce) is not str or type(response_frame) is not bytes:
@@ -1021,6 +1105,7 @@ def _encode_control_release(nonce: str, response_frame: bytes) -> bytes:
         + hashlib.sha256(response_frame).digest()
     )
 
+
 def _validate_control_release(
     release_frame: bytes,
     expected_nonce: str,
@@ -1030,10 +1115,15 @@ def _validate_control_release(
         expected = _encode_control_release(expected_nonce, response_frame)
     except (UnicodeError, ValueError):
         return False
-    return type(release_frame) is bytes and len(release_frame) == _CONTROL_RELEASE_BYTES and hmac.compare_digest(
-        release_frame,
-        expected,
+    return (
+        type(release_frame) is bytes
+        and len(release_frame) == _CONTROL_RELEASE_BYTES
+        and hmac.compare_digest(
+            release_frame,
+            expected,
+        )
     )
+
 
 def _request_nonce_from_frame(frame: bytes) -> str | None:
     try:
@@ -1043,78 +1133,6 @@ def _request_nonce_from_frame(frame: bytes) -> str | None:
     if type(value) is not dict or type(value.get("nonce")) is not str:
         return None
     return value["nonce"]
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 class _SupervisorFailure(Exception):
@@ -1178,12 +1196,6 @@ def _supervisor_error(nonce: str, code: str) -> dict[str, object]:
         validate_failure_metadata(reason, None, error_code=code)
         result["failure_reason"] = reason
     return result
-
-
-
-
-
-
 
 
 def _clock_ns(monotonic_ns: Callable[[], object] | None) -> Callable[[], object]:
@@ -1510,7 +1522,9 @@ def _identity_present(pid: int, expected_start_time: str) -> bool | None:
     return True
 
 
-def _send_pidfd_signal(pidfd: int, pid: int, expected_start_time: str, signal_number: int) -> bool:
+def _send_pidfd_signal(
+    pidfd: int, pid: int, expected_start_time: str, signal_number: int
+) -> bool:
     if _identity_present(pid, expected_start_time) is not True:
         return False
     sender = getattr(signal, "pidfd_send_signal", None)
@@ -1525,7 +1539,9 @@ def _send_pidfd_signal(pidfd: int, pid: int, expected_start_time: str, signal_nu
     return True
 
 
-def _send_descendant_signal(pid: int, expected_start_time: str, signal_number: int) -> bool:
+def _send_descendant_signal(
+    pid: int, expected_start_time: str, signal_number: int
+) -> bool:
     present = _identity_present(pid, expected_start_time)
     if present is False:
         return True
@@ -1548,7 +1564,9 @@ def _send_descendant_signal(pid: int, expected_start_time: str, signal_number: i
         except OSError:
             signal_ok = False
         else:
-            signal_ok = _send_pidfd_signal(pidfd, pid, expected_start_time, signal_number)
+            signal_ok = _send_pidfd_signal(
+                pidfd, pid, expected_start_time, signal_number
+            )
     finally:
         close_ok = _close_fd(pidfd)
     return signal_ok and close_ok
@@ -1579,7 +1597,9 @@ def _send_worker_tree_signal(
 
     check_deadline()
     if include_root:
-        if not _send_pidfd_signal(handle.pidfd, handle.pid, handle.start_time, signal_number):
+        if not _send_pidfd_signal(
+            handle.pidfd, handle.pid, handle.start_time, signal_number
+        ):
             if handle.process.poll() is None:
                 return False
         check_deadline()
@@ -1737,7 +1757,10 @@ def _drain_worker_output(
     output_fds: list[int] = []
     output_streams: dict[int, object] = {}
     try:
-        for stream in (getattr(handle.process, "stdout", None), getattr(handle.process, "stderr", None)):
+        for stream in (
+            getattr(handle.process, "stdout", None),
+            getattr(handle.process, "stderr", None),
+        ):
             if stream is None:
                 if reject_output:
                     return False
@@ -1833,7 +1856,9 @@ def _cleanup_worker_body(
         _check_cleanup_deadline(lifecycle_deadline_ns, clock)
         if not _close_stream(getattr(handle.process, "stdin", None)):
             cleanup_ok = False
-        observed, deadline_hit = _observe_descendants(handle, lifecycle_deadline_ns, clock)
+        observed, deadline_hit = _observe_descendants(
+            handle, lifecycle_deadline_ns, clock
+        )
         if deadline_hit:
             return False
         descendants.update(handle.descendants)
@@ -1909,12 +1934,16 @@ def _cleanup_worker_body(
             kill_drain_ok = _drain_worker_output(handle, lifecycle_deadline_ns, clock)
             cleanup_ok = cleanup_ok and kill_drain_ok
             _check_cleanup_deadline(lifecycle_deadline_ns, clock)
-            if not _wait_for_descendants_exit(descendants, lifecycle_deadline_ns, clock):
+            if not _wait_for_descendants_exit(
+                descendants, lifecycle_deadline_ns, clock
+            ):
                 cleanup_ok = False
         if handle.process.poll() is None:
             try:
                 _check_cleanup_deadline(lifecycle_deadline_ns, clock)
-                remaining = max(0.0, (lifecycle_deadline_ns - _now_ns(clock)) / 1_000_000_000)
+                remaining = max(
+                    0.0, (lifecycle_deadline_ns - _now_ns(clock)) / 1_000_000_000
+                )
                 handle.process.wait(timeout=remaining)
             except (subprocess.TimeoutExpired, OSError, ValueError):
                 cleanup_ok = False
@@ -1928,7 +1957,9 @@ def _cleanup_worker_body(
         ):
             cleanup_ok = False
         if observation_allowed:
-            observed, deadline_hit = _observe_descendants(handle, lifecycle_deadline_ns, clock)
+            observed, deadline_hit = _observe_descendants(
+                handle, lifecycle_deadline_ns, clock
+            )
             if deadline_hit:
                 return False
             descendants.update(handle.descendants)
@@ -2061,7 +2092,9 @@ def _cleanup_released_worker_body(
     released = False
     try:
         _check_cleanup_deadline(lifecycle_deadline_ns, clock)
-        observed, deadline_hit = _observe_descendants(handle, lifecycle_deadline_ns, clock)
+        observed, deadline_hit = _observe_descendants(
+            handle, lifecycle_deadline_ns, clock
+        )
         if deadline_hit:
             return False
         descendants.update(handle.descendants)
@@ -2199,7 +2232,9 @@ def _cleanup_released_worker_body(
         ):
             cleanup_ok = False
         if observation_allowed:
-            observed, deadline_hit = _observe_descendants(handle, lifecycle_deadline_ns, clock)
+            observed, deadline_hit = _observe_descendants(
+                handle, lifecycle_deadline_ns, clock
+            )
             if deadline_hit:
                 return False
             descendants.update(handle.descendants)
@@ -2259,7 +2294,10 @@ def _package_bootstrap_snapshot() -> tuple[str, str]:
     import json
     from pathlib import Path
 
-    from .path_safety import assert_no_symlink_ancestors, open_file_without_following_symlinks
+    from .path_safety import (
+        assert_no_symlink_ancestors,
+        open_file_without_following_symlinks,
+    )
 
     package = sys.modules.get("speed_of_cinnamon")
     controller = sys.modules.get("speed_of_cinnamon.remote_http")
@@ -2358,13 +2396,21 @@ def _package_bootstrap_snapshot() -> tuple[str, str]:
                     if len(data) > 4 * 1024 * 1024:
                         raise _SupervisorFailure("remote-worker-unavailable")
                 after = os.fstat(fd)
-                if (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns) != (
+                if (
+                    info.st_dev,
+                    info.st_ino,
+                    info.st_size,
+                    info.st_mtime_ns,
+                    info.st_ctime_ns,
+                ) != (
                     after.st_dev,
                     after.st_ino,
                     after.st_size,
                     after.st_mtime_ns,
                     after.st_ctime_ns,
-                ) or len(data) != after.st_size:
+                ) or len(
+                    data
+                ) != after.st_size:
                     raise _SupervisorFailure("remote-worker-unavailable")
                 file_rows[name] = [
                     str(path),
@@ -2414,11 +2460,18 @@ def _package_bootstrap_snapshot() -> tuple[str, str]:
         return str(root), json.dumps(snapshot, sort_keys=True, separators=(",", ":"))
     except _SupervisorFailure:
         raise
-    except (OSError, RuntimeError, TypeError, ValueError, UnicodeDecodeError, SyntaxError):
+    except (
+        OSError,
+        RuntimeError,
+        TypeError,
+        ValueError,
+        UnicodeDecodeError,
+        SyntaxError,
+    ):
         raise _SupervisorFailure("remote-worker-unavailable")
 
 
-_WORKER_BOOTSTRAP = r'''import ast, hashlib, importlib.util, json, os, stat, sys, types
+_WORKER_BOOTSTRAP = r"""import ast, hashlib, importlib.util, json, os, stat, sys, types
 try:
     root_arg, encoded = sys.argv[1:3]
     snapshot = json.loads(encoded)
@@ -2587,7 +2640,7 @@ try:
     worker_spec.loader.exec_module(worker)
 except BaseException:
     os._exit(65)
-'''
+"""
 
 
 def _abandon_spawned_worker(
@@ -2655,9 +2708,15 @@ def _spawn_worker(request_frame: bytes) -> _WorkerHandle:
     control_child: socket.socket | None = None
     process: subprocess.Popen[bytes] | None = None
     try:
-        stdout_parent, stdout_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-        stderr_parent, stderr_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
-        control_parent, control_child = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+        stdout_parent, stdout_child = socket.socketpair(
+            socket.AF_UNIX, socket.SOCK_STREAM
+        )
+        stderr_parent, stderr_child = socket.socketpair(
+            socket.AF_UNIX, socket.SOCK_STREAM
+        )
+        control_parent, control_child = socket.socketpair(
+            socket.AF_UNIX, socket.SOCK_STREAM
+        )
         required_socket_features = (
             getattr(socket, "SO_PASSCRED", None),
             getattr(socket, "SCM_CREDENTIALS", None),
@@ -2780,7 +2839,11 @@ def _pump_worker(
     registered: set[int] = set()
     output_streams: dict[int, object] = {}
     try:
-        if handle.process.stdin is None or handle.process.stdout is None or handle.process.stderr is None:
+        if (
+            handle.process.stdin is None
+            or handle.process.stdout is None
+            or handle.process.stderr is None
+        ):
             raise _SupervisorFailure("remote-worker-protocol-invalid")
         if not isinstance(handle.process.stdin, socket.socket):
             raise _SupervisorFailure("remote-worker-protocol-invalid")
@@ -2804,7 +2867,9 @@ def _pump_worker(
         output_streams[stderr_fd] = handle.process.stderr
         if handle.request_nonce is None:
             handle.request_nonce = _request_nonce_from_frame(request_frame)
-        observed, deadline_hit = _observe_descendants(handle, network_deadline_ns, clock)
+        observed, deadline_hit = _observe_descendants(
+            handle, network_deadline_ns, clock
+        )
         if deadline_hit:
             raise _SupervisorFailure("remote-operation-timeout")
         if not observed:
@@ -2855,7 +2920,9 @@ def _pump_worker(
             try:
                 timeout = (network_deadline_ns - now) / 1_000_000_000
                 if request_complete:
-                    timeout = min(timeout, max(0.0, (next_snapshot_ns - now) / 1_000_000_000))
+                    timeout = min(
+                        timeout, max(0.0, (next_snapshot_ns - now) / 1_000_000_000)
+                    )
                 _check_cleanup_deadline(network_deadline_ns, clock)
                 events = selector.select(timeout)
             except _CleanupDeadline:
@@ -2924,7 +2991,9 @@ def _pump_worker(
                         if deadline_hit:
                             raise _SupervisorFailure("remote-operation-timeout")
                         if not observed:
-                            raise _SupervisorFailure("remote-worker-cleanup-unconfirmed")
+                            raise _SupervisorFailure(
+                                "remote-worker-cleanup-unconfirmed"
+                            )
                         next_snapshot_ns = _now_ns(clock) + _DESCENDANT_SCAN_INTERVAL_NS
                     continue
                 try:
@@ -2957,9 +3026,14 @@ def _pump_worker(
                     raise _SupervisorFailure("remote-worker-protocol-invalid")
                 response.extend(chunk)
                 if len(response) >= FRAME_PREFIX_BYTES:
-                    declared_length = int.from_bytes(response[:FRAME_PREFIX_BYTES], "big", signed=False)
+                    declared_length = int.from_bytes(
+                        response[:FRAME_PREFIX_BYTES], "big", signed=False
+                    )
                     frame_length = FRAME_PREFIX_BYTES + declared_length
-                    if frame_length > MAX_RESPONSE_FRAME_BYTES or len(response) > frame_length:
+                    if (
+                        frame_length > MAX_RESPONSE_FRAME_BYTES
+                        or len(response) > frame_length
+                    ):
                         raise _SupervisorFailure("remote-worker-protocol-invalid")
                     if len(response) == frame_length:
                         stdout_complete = True
@@ -2986,10 +3060,14 @@ def _run_operation(
         raise RemoteProtocolError("remote-request-invalid")
     secret = ""
     payload = request.get("payload")
-    if operation in {
-        LIST_OPENAI_COMPATIBLE_MODELS_OPERATION,
-        POSTPROCESS_OPENAI_COMPATIBLE_OPERATION,
-    } and type(payload) is dict:
+    if (
+        operation
+        in {
+            LIST_OPENAI_COMPATIBLE_MODELS_OPERATION,
+            POSTPROCESS_OPENAI_COMPATIBLE_OPERATION,
+        }
+        and type(payload) is dict
+    ):
         api_key = payload.get("api_key")
         if type(api_key) is str:
             secret = api_key.strip()
@@ -3002,7 +3080,9 @@ def _run_operation(
             if _cancel_requested(cancel):
                 raise _SupervisorFailure("remote-worker-cancelled")
             handle = _spawn_worker(request_frame)
-            response_frame = _pump_worker(handle, request_frame, deadline, clock, cancel)
+            response_frame = _pump_worker(
+                handle, request_frame, deadline, clock, cancel
+            )
             candidate_response = decode_response(
                 response_frame,
                 expected_nonce=nonce,
@@ -3021,7 +3101,10 @@ def _run_operation(
             return_code = handle.process.poll()
             if candidate_response["status"] == "ok" and return_code == 0:
                 result = candidate_response
-            elif candidate_response["status"] == "error" and return_code == WORKER_EXIT_CODE:
+            elif (
+                candidate_response["status"] == "error"
+                and return_code == WORKER_EXIT_CODE
+            ):
                 result = candidate_response
             else:
                 result = _supervisor_error(nonce, "remote-worker-protocol-invalid")

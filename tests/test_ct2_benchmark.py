@@ -68,9 +68,11 @@ class Ctranslate2BenchmarkProtocolTests(unittest.TestCase):
         if stdout is None:
             stdout = self._encoded(self._success_payload())
         low_qos = mock.Mock(
-            side_effect=low_qos_effect
-            if low_qos_effect is not None
-            else lambda argv: ["/low/scope", *argv]
+            side_effect=(
+                low_qos_effect
+                if low_qos_effect is not None
+                else lambda argv: ["/low/scope", *argv]
+            )
         )
         runner = mock.Mock()
         if runner_effect is not None:
@@ -163,7 +165,10 @@ class Ctranslate2BenchmarkProtocolTests(unittest.TestCase):
         cases: tuple[tuple[str, dict[str, object]], ...] = (
             ("result-missing", {"stdout": b""}),
             ("auxiliary-output", {"stderr": b"private stderr"}),
-            ("result-oversized", {"stdout": b"x" * (ct2_benchmark.MAX_RESULT_BYTES + 1)}),
+            (
+                "result-oversized",
+                {"stdout": b"x" * (ct2_benchmark.MAX_RESULT_BYTES + 1)},
+            ),
             *(("result-invalid", {"stdout": value}) for value in malformed),
             ("runner-failed", {"stdout": "not-bytes"}),
             ("runner-failed", {"stderr": "not-bytes"}),
@@ -448,9 +453,7 @@ class Ctranslate2BenchmarkPlanTests(unittest.TestCase):
                         for phase in measurements
                     )
                 )
-                first_runtimes = [
-                    phase.pair.runtime_order[0] for phase in measurements
-                ]
+                first_runtimes = [phase.pair.runtime_order[0] for phase in measurements]
                 self.assertEqual(first_runtimes.count("runtime-a"), 3)
                 self.assertEqual(first_runtimes.count("runtime-b"), 2)
                 for phase in block.phases:
@@ -460,8 +463,7 @@ class Ctranslate2BenchmarkPlanTests(unittest.TestCase):
         different_order = ct2_benchmark.build_run_plan(manifest, seed=8)
         self.assertNotEqual(
             tuple(
-                phase.pair.runtime_order
-                for phase in first.model_blocks[0].phases[1:]
+                phase.pair.runtime_order for phase in first.model_blocks[0].phases[1:]
             ),
             tuple(
                 phase.pair.runtime_order
@@ -548,9 +550,7 @@ class Ctranslate2BenchmarkPlanTests(unittest.TestCase):
         duplicate_runtime_hash = self._manifest_payload()
         duplicate_runtime_hash["runtimes"]["b"]["manifest_sha256"] = self._HASH_A
         duplicate_model_hash = self._manifest_payload()
-        duplicate_model_hash["models"][1]["manifest_sha256"] = (
-            self._HASH_MODEL_ONE
-        )
+        duplicate_model_hash["models"][1]["manifest_sha256"] = self._HASH_MODEL_ONE
 
         for payload in (duplicate_runtime_hash, duplicate_model_hash):
             with self.subTest(payload=payload):
@@ -580,9 +580,9 @@ class Ctranslate2BenchmarkPlanTests(unittest.TestCase):
         block = wire["model_blocks"][0]
         self.assertEqual(set(block), {"model", "phases"})
         phases = block["phases"]
-        self.assertEqual([phase["kind"] for phase in phases], ["cold"] + [
-            "measurement"
-        ] * 5)
+        self.assertEqual(
+            [phase["kind"] for phase in phases], ["cold"] + ["measurement"] * 5
+        )
         for index, phase in enumerate(phases):
             with self.subTest(index=index):
                 self.assertEqual(
@@ -648,7 +648,9 @@ class Ctranslate2BenchmarkPlanTests(unittest.TestCase):
     def test_plan_preflight_does_not_open_or_execute(self) -> None:
         manifest = self._encoded(self._manifest_payload())
         with (
-            mock.patch("builtins.open", side_effect=AssertionError("file open")) as fopen,
+            mock.patch(
+                "builtins.open", side_effect=AssertionError("file open")
+            ) as fopen,
             mock.patch.object(
                 ct2_benchmark.os,
                 "open",
@@ -753,7 +755,9 @@ class Ctranslate2ArtifactManifestTests(unittest.TestCase):
         data = self._encoded(self._payload())
         reference = self._reference(data)
         with (
-            mock.patch("builtins.open", side_effect=AssertionError("file open")) as fopen,
+            mock.patch(
+                "builtins.open", side_effect=AssertionError("file open")
+            ) as fopen,
             mock.patch.object(
                 ct2_benchmark.os,
                 "open",
@@ -1154,9 +1158,7 @@ class Ctranslate2ArtifactManifestTests(unittest.TestCase):
         return result, low_qos, runner
 
     def test_attestation_delegates_exact_request_to_low_qos_worker(self) -> None:
-        manifest = self._manifest_for_contents(
-            {"payload.bin": (b"payload", False)}
-        )
+        manifest = self._manifest_for_contents({"payload.bin": (b"payload", False)})
 
         result, low_qos, runner = self._run_mocked_attestation(manifest)
 
@@ -1199,9 +1201,7 @@ class Ctranslate2ArtifactManifestTests(unittest.TestCase):
         self.assertEqual(kwargs["input_bytes"], self._encoded(request))
 
     def test_attestation_invalid_root_fails_before_worker_launch(self) -> None:
-        manifest = self._manifest_for_contents(
-            {"payload.bin": (b"payload", False)}
-        )
+        manifest = self._manifest_for_contents({"payload.bin": (b"payload", False)})
         low_qos = mock.Mock()
         runner = mock.Mock()
         with (
@@ -1215,19 +1215,13 @@ class Ctranslate2ArtifactManifestTests(unittest.TestCase):
         runner.assert_not_called()
 
     def test_attestation_protocol_failures_use_only_public_codes(self) -> None:
-        manifest = self._manifest_for_contents(
-            {"payload.bin": (b"payload", False)}
-        )
+        manifest = self._manifest_for_contents({"payload.bin": (b"payload", False)})
         valid = json.loads(self._attestation_payload(manifest))
         cases: tuple[tuple[str, dict[str, object]], ...] = (
             ("artifact-attestation-failed", {"runner_effect": TimeoutError("private")}),
             (
                 "artifact-attestation-failed",
-                {
-                    "worker_path_effect": ct2_benchmark.RuntimeProbeError(
-                        "invalid-spec"
-                    )
-                },
+                {"worker_path_effect": ct2_benchmark.RuntimeProbeError("invalid-spec")},
             ),
             ("artifact-attestation-failed", {"stderr": b"private"}),
             ("artifact-attestation-failed", {"response": b"not-json"}),
@@ -1287,9 +1281,7 @@ class Ctranslate2ArtifactManifestTests(unittest.TestCase):
     def test_attestation_dependency_system_exit_is_redacted_and_interrupt_passes(
         self,
     ) -> None:
-        manifest = self._manifest_for_contents(
-            {"payload.bin": (b"payload", False)}
-        )
+        manifest = self._manifest_for_contents({"payload.bin": (b"payload", False)})
         for dependency in ("low", "runner"):
             with self.subTest(dependency=dependency):
                 arguments = (
@@ -1506,7 +1498,9 @@ class Ctranslate2ArtifactSetTests(unittest.TestCase):
         self.assertEqual(raised.exception.code, "artifact-set-invalid")
         attester.assert_not_called()
 
-    def test_cross_category_duplicate_reference_hash_isolated_from_binding(self) -> None:
+    def test_cross_category_duplicate_reference_hash_isolated_from_binding(
+        self,
+    ) -> None:
         plan, artifacts = self._fixture()
         duplicate_reference = replace(
             plan.clips,
@@ -1758,12 +1752,17 @@ class Ctranslate2ArtifactSetTests(unittest.TestCase):
         )
         for invalid in invalid_results:
             with (
-                self.subTest(field_types=tuple(type(value).__name__ for value in (
-                    invalid.artifact_id,
-                    invalid.manifest_sha256,
-                    invalid.file_count,
-                    invalid.total_bytes,
-                ))),
+                self.subTest(
+                    field_types=tuple(
+                        type(value).__name__
+                        for value in (
+                            invalid.artifact_id,
+                            invalid.manifest_sha256,
+                            invalid.file_count,
+                            invalid.total_bytes,
+                        )
+                    )
+                ),
                 mock.patch.object(
                     ct2_benchmark,
                     "attest_artifact_root",
@@ -2191,7 +2190,9 @@ class Ctranslate2BenchmarkPairRequestTests(unittest.TestCase):
             wraps=ct2_benchmark._validated_spec,
         ) as validator:
             self._build(runtime_specs=specs)
-        self.assertEqual(validator.call_args_list, [mock.call(specs[0]), mock.call(specs[1])])
+        self.assertEqual(
+            validator.call_args_list, [mock.call(specs[0]), mock.call(specs[1])]
+        )
 
         class TupleSubclass(tuple):
             pass
@@ -2269,9 +2270,7 @@ class Ctranslate2BenchmarkPairRequestTests(unittest.TestCase):
             str(artifacts[3][0] / "bin" / "python"),
         )
         for interpreter in overlapping:
-            candidate = tuple(
-                replace(spec, interpreter=interpreter) for spec in specs
-            )
+            candidate = tuple(replace(spec, interpreter=interpreter) for spec in specs)
             with (
                 self.subTest(interpreter=interpreter),
                 self.assertRaises(ct2_benchmark.RuntimeProbeError) as raised,
@@ -2415,9 +2414,7 @@ class Ctranslate2BenchmarkPairRequestTests(unittest.TestCase):
             def __fspath__(self) -> str:
                 self.calls += 1
                 return (
-                    "/artifacts/runtime-a"
-                    if self.calls == 1
-                    else "/artifacts/changed"
+                    "/artifacts/runtime-a" if self.calls == 1 else "/artifacts/changed"
                 )
 
         root = AlternatingPath()
@@ -2909,11 +2906,7 @@ class Ctranslate2BenchmarkPairRequestTests(unittest.TestCase):
 
             def __fspath__(self) -> str:
                 self.calls += 1
-                return (
-                    str(artifacts[0][0])
-                    if self.calls == 1
-                    else "/artifacts/changed"
-                )
+                return str(artifacts[0][0]) if self.calls == 1 else "/artifacts/changed"
 
         root = AlternatingPath()
         candidate_artifacts = ((root, artifacts[0][1]), *artifacts[1:])
@@ -3196,9 +3189,7 @@ class Ctranslate2BenchmarkSyntheticProcessTests(unittest.TestCase):
                             "local_model_command",
                             side_effect=lambda argv: list(argv),
                         ),
-                        self.assertRaises(
-                            ct2_benchmark.RuntimeProbeError
-                        ) as raised,
+                        self.assertRaises(ct2_benchmark.RuntimeProbeError) as raised,
                     ):
                         ct2_benchmark.observe_runtime(self._spec(site_packages))
                 self.assertEqual(raised.exception.code, expected_code)

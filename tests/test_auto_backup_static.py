@@ -11,7 +11,9 @@ APPLET_DIR = REPO_ROOT / "files" / "speed-of-cinnamon@H234598"
 
 class AutoBackupStaticTest(unittest.TestCase):
     def test_schema_exposes_nonblocking_backup_controls(self) -> None:
-        schema = json.loads((APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8"))
+        schema = json.loads(
+            (APPLET_DIR / "settings-schema.json").read_text(encoding="utf-8")
+        )
         sections = schema["layout"]["main-page"]["sections"]
         self.assertIn("backup-section", sections)
         backup_keys = schema["layout"]["backup-section"]["keys"]
@@ -36,8 +38,12 @@ class AutoBackupStaticTest(unittest.TestCase):
         self.assertEqual(schema["auto-backup-retry-count"]["default"], 3)
         self.assertEqual(schema["auto-backup-retry-delay-seconds"]["default"], 30)
         self.assertIn("asynchronously", schema["auto-backup-enabled"]["tooltip"])
-        self.assertIn("never blocks clipboard", schema["auto-backup-enabled"]["tooltip"])
-        self.assertIn("non-overwriting restore", schema["auto-backup-help"]["description"])
+        self.assertIn(
+            "never blocks clipboard", schema["auto-backup-enabled"]["tooltip"]
+        )
+        self.assertIn(
+            "non-overwriting restore", schema["auto-backup-help"]["description"]
+        )
         self.assertIn("backup restore", schema["auto-backup-help"]["tooltip"])
 
     def test_applet_exports_and_runs_backup_outside_transcript_flow(self) -> None:
@@ -58,31 +64,52 @@ class AutoBackupStaticTest(unittest.TestCase):
         ):
             self.assertIn('"%s"' % setting, source)
         self.assertIn('"auto-backup-directory": "auto backup directory"', source)
-        self.assertIn("_autoBackupArgs: function()", source)
-        self.assertIn('this._cliCommand(), "backup", "create", "--directory", directory', source)
-        self.assertIn('"--settings-json-stdin", "--json"', source)
-        self.assertIn("_maybeStartAutoBackup: function(payload)", source)
-        self.assertIn("_runAutoBackup: function(payload, attempt)", source)
+        self.assertIn("_autoBackupArgs: function ()", source)
+        self.assertIn(
+            'this._cliCommand(),\n      "backup",\n      "create",\n      "--directory",\n      directory,',
+            source,
+        )
+        self.assertIn('args.push("--settings-json-stdin", "--json");', source)
+        self.assertIn("_maybeStartAutoBackup: function (payload)", source)
+        self.assertIn("_runAutoBackup: function (payload, attempt)", source)
         self.assertIn('resourceGroup: "backup"', source)
-        self.assertIn("this._settingsSnapshotInputOptionOrNull(false, undefined, true)", source)
+        self.assertIn(
+            "this._settingsSnapshotInputOptionOrNull(\n      false,\n      undefined,\n      true,\n    )",
+            source,
+        )
         self.assertIn("autoBackupConfigDebounceSeconds", source)
         self.assertIn("autoBackupRetryCount", source)
         self.assertIn("autoBackupRetryDelaySeconds", source)
-        self.assertIn('this._scheduleTrackedTimer("auto-backup-debounce"', source)
-        self.assertIn('this._scheduleTrackedTimer("auto-backup-retry"', source)
-        self.assertIn('this._clearTrackedTimer("auto-backup-debounce", "autoBackupTimerId")', source)
-        self.assertIn('this._clearTrackedTimer("auto-backup-retry", "autoBackupRetryTimerId")', source)
+        self.assertIn(
+            'this._scheduleTrackedTimer(\n        "auto-backup-debounce"', source
+        )
+        self.assertIn(
+            'this._scheduleTrackedTimer(\n              "auto-backup-retry"', source
+        )
+        self.assertIn(
+            'this._clearTrackedTimer("auto-backup-debounce", "autoBackupTimerId")',
+            source,
+        )
+        self.assertIn(
+            'this._clearTrackedTimer("auto-backup-retry", "autoBackupRetryTimerId")',
+            source,
+        )
         self.assertNotIn("GLib.timeout_add_seconds", source)
         self.assertIn("let backupCallbackCompleted = false;", source)
         self.assertIn("let backupStartToken = {};", source)
         self.assertIn("this.autoBackupToken = backupStartToken;", source)
         self.assertIn("} else if (!backupCallbackCompleted) {", source)
-        self.assertIn('this._recordLifecycleError("auto-backup-spawn"', source)
+        self.assertIn(
+            'this._recordLifecycleError(\n          "auto-backup-spawn"', source
+        )
         self.assertIn('_("Could not start automatic backup")', source)
         self.assertIn("this._maybeStartAutoBackup(payload);", source)
         self.assertIn('result && result.status === "skipped"', source)
         self.assertIn("this._finishAppletTextInsert(payload);", source)
-        self.assertLess(source.index("this._maybeStartAutoBackup(payload);"), source.index("this._finishAppletTextInsert(payload);"))
+        self.assertLess(
+            source.index("this._maybeStartAutoBackup(payload);"),
+            source.index("this._finishAppletTextInsert(payload);"),
+        )
 
 
 if __name__ == "__main__":

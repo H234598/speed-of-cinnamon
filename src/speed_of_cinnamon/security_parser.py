@@ -31,14 +31,20 @@ _MATCH_IGNORE_CATEGORIES = frozenset({"Mn", "Mc", "Me", "Cf"})
 _NORMALIZED_CARD_CANDIDATE_RE = re.compile(r"(?<!\d)(?:\d[\d\s-]{11,40}\d)(?!\d)")
 
 
-def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+def _note_lock_cleanup_failure(
+    primary: BaseException, cleanup_error: BaseException
+) -> None:
     primary.add_note("blacklist lock cleanup failed")
 
 
-def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
+def _flock_retry(
+    fd: int, operation: int, *, timeout_seconds: float | None = None
+) -> None:
     if timeout_seconds is None:
         raise RuntimeError("blacklist lock timeout is required")
-    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+    if isinstance(timeout_seconds, bool) or not isinstance(
+        timeout_seconds, (int, float)
+    ):
         raise RuntimeError("blacklist lock timeout is invalid")
     try:
         timeout = float(timeout_seconds)
@@ -94,7 +100,9 @@ def _extract_blacklist_entry(line: str) -> str | None:
     else:
         return None
 
-    if prefix_end < len(candidate) and (candidate[prefix_end].isalnum() or candidate[prefix_end] == "_"):
+    if prefix_end < len(candidate) and (
+        candidate[prefix_end].isalnum() or candidate[prefix_end] == "_"
+    ):
         return None
     separator_end = prefix_end
     while separator_end < len(candidate) and (
@@ -103,6 +111,7 @@ def _extract_blacklist_entry(line: str) -> str | None:
         separator_end += 1
     entry = candidate[separator_end:].strip()
     return entry or None
+
 
 _EMAIL_RE = re.compile(
     r"\b[A-Za-z0-9._%+-]{1,64}@[A-Za-z0-9.-]{1,253}\.[A-Za-z]{2,63}\b"
@@ -127,12 +136,8 @@ _TOKEN_RE = re.compile(
     r"(?i)\b(?:token|api[_-]?key|api\s+key|secret|apikey|bearer)\b\s*(?::|=)\s*"
     + _SECRET_VALUE_PATTERN
 )
-_SPOKEN_SENSITIVE_VALUE_PATTERN = (
-    _SECRET_VALUE_PATTERN
-)
-_SPOKEN_NAME_VALUE_PATTERN = (
-    rf"(?:(?!\s+(?:und|and)\b)(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,10000}}"
-)
+_SPOKEN_SENSITIVE_VALUE_PATTERN = _SECRET_VALUE_PATTERN
+_SPOKEN_NAME_VALUE_PATTERN = rf"(?:(?!\s+(?:und|and)\b)(?!\s+(?:(?:und|and)\s+)?(?:meine|my\s+)?{_SPOKEN_SENSITIVE_LABEL_PATTERN}\b)[^,;\n.?!]){{1,10000}}"
 _BARE_SENSITIVE_STATUS_WORD_PATTERN = (
     r"(?:ist|is|war|was|are|were|missing|invalid|required|too|contains?|fehlt|leer|ung[üu]ltig|"
     r"muss|darf|soll|active|aktiv|gesetzt|set|needed|erforderlich|not|nicht|kein|keine|keinen|und|and)"
@@ -161,8 +166,7 @@ _BARE_TOKEN_WORD_RE = re.compile(
     + _BARE_SENSITIVE_WORD_VALUE_PATTERN
 )
 _PASSWORD_RE = re.compile(
-    r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s*[:=]\s*"
-    + _SECRET_VALUE_PATTERN
+    r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s*[:=]\s*" + _SECRET_VALUE_PATTERN
 )
 _VERBAL_PASSWORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s+"
@@ -175,14 +179,15 @@ _BARE_PASSWORD_WORD_RE = re.compile(
     r"(?i)\b(?:password|passwort|kennwort|passcode)\b\s+"
     + _BARE_SENSITIVE_WORD_VALUE_PATTERN
 )
-_ACCESS_TOKEN_RE = re.compile(r"(?i)\b(?:sk|sess|ghp|gho|xox[pb]-|hf|pat)[A-Za-z0-9_\-]{12,}\b")
+_ACCESS_TOKEN_RE = re.compile(
+    r"(?i)\b(?:sk|sess|ghp|gho|xox[pb]-|hf|pat)[A-Za-z0-9_\-]{12,}\b"
+)
 # Kept as the ordering marker in _SENSITIVE_PATTERNS; matching uses the linear
 # _apply_url_credential_redaction scanner below instead of regex finditer().
 _URL_CRED_RE = re.compile(r"[a-z][a-z0-9+.-]{0,255}+://[^\s/@]+@")
 _CREDIT_CARD_RE = re.compile(r"\b(?:\d[ -]*?){13,19}\b")
 _LABELED_NAME_RE = re.compile(
-    r"(?i)\b(?:name|voller\s+name|full\s+name)\b\s*[:=]\s*"
-    + _SPOKEN_NAME_VALUE_PATTERN
+    r"(?i)\b(?:name|voller\s+name|full\s+name)\b\s*[:=]\s*" + _SPOKEN_NAME_VALUE_PATTERN
 )
 _NAME_RE = re.compile(
     r"(?i)\b(?:(?:mein\s+)?name\s+(?:ist|is|lautet|heißt|heisst|heist|heisse|heise)|"
@@ -324,7 +329,9 @@ def _compile_blacklist_pattern_cached(
     return re.compile(rf"(?i)(?<!\w)(?:{escaped})(?!\w)")
 
 
-def _validate_blacklist_entries(entries: object, *, field_name: str = "blacklist") -> list[str] | tuple[object, ...]:
+def _validate_blacklist_entries(
+    entries: object, *, field_name: str = "blacklist"
+) -> list[str] | tuple[object, ...]:
     if not isinstance(entries, (list, tuple)):
         raise ValueError(f"{field_name} must be a list or tuple")
     return entries
@@ -375,7 +382,10 @@ def _contains_escaped_null(value: str) -> bool:
 
 
 def _contains_forbidden_control(value: str) -> bool:
-    return bool(_FORBIDDEN_CONTROL_CHAR_RE.search(value) or _ESCAPED_FORBIDDEN_CONTROL_RE.search(value))
+    return bool(
+        _FORBIDDEN_CONTROL_CHAR_RE.search(value)
+        or _ESCAPED_FORBIDDEN_CONTROL_RE.search(value)
+    )
 
 
 def _safe_utf8_length(value: str, *, field_name: str) -> int:
@@ -392,10 +402,13 @@ def _assert_security_text(value: str) -> str:
         raise ValueError("transcript contains invalid null byte")
     if _contains_forbidden_control(value):
         raise ValueError("transcript contains invalid control character")
-    if len(value) > _MAX_SECURITY_TEXT_CHARS or _safe_utf8_length(
-        value, field_name="transcript"
-    ) > _MAX_SECURITY_TEXT_CHARS:
-        raise ValueError(f"transcript is too large (max {_MAX_SECURITY_TEXT_CHARS} bytes)")
+    if (
+        len(value) > _MAX_SECURITY_TEXT_CHARS
+        or _safe_utf8_length(value, field_name="transcript") > _MAX_SECURITY_TEXT_CHARS
+    ):
+        raise ValueError(
+            f"transcript is too large (max {_MAX_SECURITY_TEXT_CHARS} bytes)"
+        )
     return value
 
 
@@ -431,7 +444,9 @@ def _sub_with_normalized_projection(
 
         def _replace_ascii(match: re.Match[str]) -> str:
             nonlocal redactions
-            replacement_value = replacement(match) if callable(replacement) else replacement
+            replacement_value = (
+                replacement(match) if callable(replacement) else replacement
+            )
             if replacement_value is None:
                 return match.group(0)
             redactions += 1
@@ -460,7 +475,9 @@ def _sub_with_normalized_projection(
             continue
         if original_start < cursor:
             original_start = cursor
-        while original_start > cursor and _is_match_ignorable_char(text[original_start - 1]):
+        while original_start > cursor and _is_match_ignorable_char(
+            text[original_start - 1]
+        ):
             original_start -= 1
         while original_end < len(text) and _is_match_ignorable_char(text[original_end]):
             original_end += 1
@@ -494,10 +511,16 @@ def _url_credential_ranges(normalized_text: str) -> list[tuple[int, int]]:
 
         scheme_boundary = normalized_text.rfind(":", 0, delimiter_start) + 1
         scheme_start = delimiter_start - 1
-        while scheme_start >= scheme_boundary and normalized_text[scheme_start] in _URL_SCHEME_CHARS:
+        while (
+            scheme_start >= scheme_boundary
+            and normalized_text[scheme_start] in _URL_SCHEME_CHARS
+        ):
             scheme_start -= 1
         scheme_start += 1
-        while scheme_start < delimiter_start and normalized_text[scheme_start] not in _URL_SCHEME_LETTERS:
+        while (
+            scheme_start < delimiter_start
+            and normalized_text[scheme_start] not in _URL_SCHEME_LETTERS
+        ):
             scheme_start += 1
         if scheme_start >= delimiter_start:
             search_start = delimiter_start + 3
@@ -538,7 +561,9 @@ def _apply_url_credential_redaction(text: str) -> tuple[str, int]:
             continue
         if original_start < cursor:
             original_start = cursor
-        while original_start > cursor and _is_match_ignorable_char(text[original_start - 1]):
+        while original_start > cursor and _is_match_ignorable_char(
+            text[original_start - 1]
+        ):
             original_start -= 1
         while original_end < len(text) and _is_match_ignorable_char(text[original_end]):
             original_end += 1
@@ -640,7 +665,9 @@ def _write_blacklist(path: Path, entries: list[str]) -> None:
         raise ValueError("blacklist file path is not safe") from exc
     rendered = "\n".join(entries) + "\n" if entries else ""
     try:
-        write_text_atomically_without_following_symlinks(path, rendered, field_name="blacklist file")
+        write_text_atomically_without_following_symlinks(
+            path, rendered, field_name="blacklist file"
+        )
     except (OSError, RuntimeError) as exc:
         raise ValueError("failed to write blacklist file") from exc
 
@@ -654,11 +681,17 @@ def _acquire_blacklist_lock(path: Path) -> int:
     except (MemoryError, RecursionError, RuntimeError) as exc:
         raise ValueError("blacklist lock file path is not safe") from exc
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
         raise ValueError("secure blacklist lock open is not supported on this platform")
     cloexec_flag = getattr(os, "O_CLOEXEC", 0)
     try:
-        parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="blacklist lock directory")
+        parent_fd = ensure_directory_without_following_symlinks(
+            lock_path.parent, field_name="blacklist lock directory"
+        )
     except (MemoryError, RecursionError, OSError, RuntimeError) as exc:
         raise ValueError("blacklist lock file path is not safe") from exc
     try:
@@ -690,13 +723,17 @@ def _acquire_blacklist_lock(path: Path) -> int:
         raise
     primary_error: BaseException | None = None
     try:
-        assert_fd_is_regular_private_file(fd, field_name="blacklist lock file", require_private_mode=True)
+        assert_fd_is_regular_private_file(
+            fd, field_name="blacklist lock file", require_private_mode=True
+        )
         try:
             os.fchmod(fd, 0o600)
         except OSError:
             pass
         _flock_retry(fd, fcntl.LOCK_EX, timeout_seconds=_BLACKLIST_LOCK_TIMEOUT_SECONDS)
-        assert_fd_is_regular_private_file(fd, field_name="blacklist lock file", require_private_mode=True)
+        assert_fd_is_regular_private_file(
+            fd, field_name="blacklist lock file", require_private_mode=True
+        )
     except (MemoryError, RecursionError) as exc:
         error = ValueError("failed to lock blacklist file")
         primary_error = error
@@ -731,7 +768,9 @@ def _acquire_blacklist_lock(path: Path) -> int:
                     os.close(fd)
                 except BaseException as fd_cleanup_error:
                     _note_lock_cleanup_failure(cleanup_error, fd_cleanup_error)
-                raise OSError("blacklist lock directory could not be closed") from cleanup_error
+                raise OSError(
+                    "blacklist lock directory could not be closed"
+                ) from cleanup_error
         except OSError as cleanup_error:
             if primary_error is not None:
                 _note_lock_cleanup_failure(primary_error, cleanup_error)
@@ -816,7 +855,14 @@ def _placeholder_for_sensitive_label(label: str) -> str:
         return "[redacted password]"
     if normalized == "iban":
         return "[redacted iban]"
-    if normalized in {"name", "full name", "voller name", "adresse", "anschrift", "address"}:
+    if normalized in {
+        "name",
+        "full name",
+        "voller name",
+        "adresse",
+        "anschrift",
+        "address",
+    }:
         if normalized in {"name", "full name", "voller name"}:
             return "[redacted name]"
         return "[redacted address]"
@@ -855,7 +901,7 @@ def _apply_pattern_around_redaction_placeholders(
     redactions = 0
     for placeholder_match in _REDACTION_PLACEHOLDER_RE.finditer(text):
         segment, count = _sub_with_normalized_projection(
-            text[cursor:placeholder_match.start()],
+            text[cursor : placeholder_match.start()],
             pattern,
             replacement,
         )
@@ -863,7 +909,9 @@ def _apply_pattern_around_redaction_placeholders(
         pieces.append(placeholder_match.group(0))
         redactions += count
         cursor = placeholder_match.end()
-    segment, count = _sub_with_normalized_projection(text[cursor:], pattern, replacement)
+    segment, count = _sub_with_normalized_projection(
+        text[cursor:], pattern, replacement
+    )
     pieces.append(segment)
     redactions += count
     return "".join(pieces), redactions
@@ -898,11 +946,15 @@ def _apply_normalized_card_redaction(text: str) -> tuple[str, int]:
             return "[redacted card]"
         return None
 
-    return _sub_with_normalized_projection(text, _NORMALIZED_CARD_CANDIDATE_RE, _mask_if_valid_card)
+    return _sub_with_normalized_projection(
+        text, _NORMALIZED_CARD_CANDIDATE_RE, _mask_if_valid_card
+    )
 
 
 def _apply_name_redaction(text: str) -> tuple[str, int]:
-    return _apply_pattern_around_redaction_placeholders(text, _NAME_RE, "[redacted name]")
+    return _apply_pattern_around_redaction_placeholders(
+        text, _NAME_RE, "[redacted name]"
+    )
 
 
 def _apply_blacklist_around_redaction_placeholders(
@@ -926,9 +978,13 @@ def parse_security_directives(text: str) -> SecurityParserResult:
     for line in lines:
         directive_line = _normalized_directive_line(line)
         raw_entry = _extract_blacklist_entry(line)
-        normalized_entry = _extract_blacklist_entry(directive_line) if raw_entry is None else None
+        normalized_entry = (
+            _extract_blacklist_entry(directive_line) if raw_entry is None else None
+        )
         if raw_entry is not None or normalized_entry is not None:
-            entry = _normalize_blacklist_entry(raw_entry if raw_entry is not None else normalized_entry or "")
+            entry = _normalize_blacklist_entry(
+                raw_entry if raw_entry is not None else normalized_entry or ""
+            )
             entry_key = entry.casefold()
             if entry and entry_key not in added_keys:
                 if len(added) >= _MAX_BLACKLIST_ENTRIES:
@@ -941,7 +997,11 @@ def parse_security_directives(text: str) -> SecurityParserResult:
             continue
         kept.append(line)
 
-    return SecurityParserResult(text="\n".join(kept).strip(), added_blacklist=added, show_blacklist=show_blacklist)
+    return SecurityParserResult(
+        text="\n".join(kept).strip(),
+        added_blacklist=added,
+        show_blacklist=show_blacklist,
+    )
 
 
 def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
@@ -949,9 +1009,13 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
 
     clean = text
     redactions = 0
-    blacklist_pattern = _compile_blacklist_pattern(blacklist, preserve_sensitive_labels=True)
+    blacklist_pattern = _compile_blacklist_pattern(
+        blacklist, preserve_sensitive_labels=True
+    )
     if blacklist_pattern is not None:
-        clean, count = _apply_blacklist_around_redaction_placeholders(clean, blacklist_pattern)
+        clean, count = _apply_blacklist_around_redaction_placeholders(
+            clean, blacklist_pattern
+        )
         redactions += count
     clean, count = _apply_multiline_sensitive_redaction(clean)
     redactions += count
@@ -963,14 +1027,18 @@ def apply_security_mode(text: str, blacklist: list[str]) -> tuple[str, int]:
         if pattern is _URL_CRED_RE:
             clean, count = _apply_url_credential_redaction(clean)
         else:
-            clean, count = _apply_pattern_around_redaction_placeholders(clean, pattern, placeholder)
+            clean, count = _apply_pattern_around_redaction_placeholders(
+                clean, pattern, placeholder
+            )
         if count:
             redactions += count
     clean, count = _apply_name_redaction(clean)
     redactions += count
     final_blacklist_pattern = _compile_blacklist_pattern(blacklist)
     if final_blacklist_pattern is not None:
-        clean, count = _apply_blacklist_around_redaction_placeholders(clean, final_blacklist_pattern)
+        clean, count = _apply_blacklist_around_redaction_placeholders(
+            clean, final_blacklist_pattern
+        )
         redactions += count
 
     return clean.strip(), redactions

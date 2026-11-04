@@ -22,7 +22,12 @@ from .http_safety import (
     is_loopback_hostname,
     resolve_url_host,
 )
-from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
+from .personalization import (
+    build_personalization_prompt,
+    normalize_context,
+    normalize_vocabulary,
+)
+
 
 class PostProcessError(RuntimeError):
     __slots__ = ("error_code", "reason", "status")
@@ -203,10 +208,14 @@ def _allowlisted_internal_postprocess_message(message: object) -> str | None:
         " must not contain query or fragment",
         " must use http:// or https://",
     )
-    if any(message == field + suffix for field in field_names for suffix in fixed_suffixes):
+    if any(
+        message == field + suffix for field in field_names for suffix in fixed_suffixes
+    ):
         return message
     bounded_patterns = (
-        r"(?:" + "|".join(re.escape(field) for field in field_names) + r") is too large \(max [0-9]{1,12} (?:characters|bytes)\)",
+        r"(?:"
+        + "|".join(re.escape(field) for field in field_names)
+        + r") is too large \(max [0-9]{1,12} (?:characters|bytes)\)",
         r"(?:request timeout|response timeout|timeout) must not exceed [0-9]{1,12}",
         r"remote response is too large \(max [0-9]{1,12} bytes\)",
     )
@@ -276,10 +285,13 @@ def _sanitize_boundary_base_exception(
             contains_cancellation = contains_cancellation or is_cancellation
         if not contains_cancellation:
             return _fixed_boundary_failure(remote=remote), False
-        return BaseExceptionGroup(
-            _BOUNDARY_GROUP_MESSAGE,
-            sanitized_members,
-        ), True
+        return (
+            BaseExceptionGroup(
+                _BOUNDARY_GROUP_MESSAGE,
+                sanitized_members,
+            ),
+            True,
+        )
     if error_type is PostProcessError:
         return _detached_postprocess_failure(error, remote=remote), False
     return _fixed_boundary_failure(remote=remote), False
@@ -389,7 +401,10 @@ def _fixed_response_read_postprocess_error(error: PostProcessError) -> PostProce
             return _fixed_remote_postprocess_error(error_code, reason)
     args = error.args
     message = args[0] if type(args) is tuple and len(args) == 1 else None
-    if message == "remote response read timed out" or _postprocess_network_reason(error) == "timeout":
+    if (
+        message == "remote response read timed out"
+        or _postprocess_network_reason(error) == "timeout"
+    ):
         return _fixed_remote_postprocess_error("remote-connect-failed", "timeout")
     too_large_prefix = "remote response is too large (max "
     too_large_suffix = " bytes)"
@@ -415,11 +430,15 @@ def _sanitized_request_postprocess_error(error: PostProcessError) -> PostProcess
         "OpenAI-compatible request could not be rendered",
     }
     if type(message) is str and len(message) <= 256:
-        safe_local_error = safe_local_error or re.fullmatch(
-            r"openai-compatible API key (?:contains invalid (?:null byte|control character)|"
-            r"is too large \(max [0-9]+ (?:characters|bytes)\))",
-            message,
-        ) is not None
+        safe_local_error = (
+            safe_local_error
+            or re.fullmatch(
+                r"openai-compatible API key (?:contains invalid (?:null byte|control character)|"
+                r"is too large \(max [0-9]+ (?:characters|bytes)\))",
+                message,
+            )
+            is not None
+        )
     if safe_local_error:
         return PostProcessError(message)
     return _fixed_response_read_postprocess_error(error)
@@ -476,7 +495,8 @@ def _command_chain_module():
         from . import command_chain
 
         if (
-            command_chain.DEFAULT_COMMAND_TIMEOUT_SECONDS != DEFAULT_COMMAND_TIMEOUT_SECONDS
+            command_chain.DEFAULT_COMMAND_TIMEOUT_SECONDS
+            != DEFAULT_COMMAND_TIMEOUT_SECONDS
             or command_chain.MAX_COMMAND_OUTPUT_CHARS != 1_000_000
             or command_chain.MAX_COMMAND_LENGTH_CHARS != 8_192
             or command_chain.MAX_COMMAND_INPUT_CHARS != 1_000_000
@@ -587,7 +607,10 @@ _ESCAPED_CONTROL_RE = re.compile(
     r"u00(?:0[0-9a-f]|1[0-9a-f]|7f|8[0-9a-f]|9[0-9a-f]))"
 )
 
-def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = None) -> str:
+
+def _assert_text_length(
+    value: str, *, field_name: str, max_chars: int | None = None
+) -> str:
     if not isinstance(value, str) or isinstance(value, bool):
         raise PostProcessError(f"{field_name} must be text")
     if max_chars is None:
@@ -597,7 +620,9 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
     if _contains_escaped_null(value):
         raise PostProcessError(f"{field_name} contains invalid null byte")
     if len(value) > max_chars:
-        raise PostProcessError(f"{field_name} is too large (max {max_chars} characters)")
+        raise PostProcessError(
+            f"{field_name} is too large (max {max_chars} characters)"
+        )
     try:
         encoded_length = len(value.encode("utf-8"))
     except UnicodeEncodeError as exc:
@@ -605,6 +630,7 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
     if encoded_length > max_chars:
         raise PostProcessError(f"{field_name} is too large (max {max_chars} bytes)")
     return value
+
 
 def _assert_clean_url(url: str, *, field_name: str) -> str:
     if not isinstance(url, str) or isinstance(url, bool):
@@ -617,9 +643,14 @@ def _assert_clean_url(url: str, *, field_name: str) -> str:
     normalized = raw.strip()
     if not normalized:
         raise PostProcessError(f"{field_name} is required")
-    return _assert_text_length(normalized, field_name=field_name, max_chars=MAX_POSTPROCESS_URL_CHARS)
+    return _assert_text_length(
+        normalized, field_name=field_name, max_chars=MAX_POSTPROCESS_URL_CHARS
+    )
 
-def _validate_http_url(url: str, *, field_name: str, allow_query_fragment: bool = False) -> str:
+
+def _validate_http_url(
+    url: str, *, field_name: str, allow_query_fragment: bool = False
+) -> str:
     if not isinstance(url, str) or isinstance(url, bool):
         raise PostProcessError(f"{field_name} must be text")
     normalized = _assert_clean_url(url, field_name=field_name)
@@ -637,11 +668,16 @@ def _validate_http_url(url: str, *, field_name: str, allow_query_fragment: bool 
         parsed.port
     except ValueError as exc:
         raise PostProcessError(f"{field_name} has invalid port") from exc
-    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
+    if (
+        "@" in parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise PostProcessError(f"{field_name} must not contain userinfo")
     if not allow_query_fragment and (parsed.query or parsed.fragment):
         raise PostProcessError(f"{field_name} must not contain query or fragment")
     return normalized
+
 
 def _effective_url_port(parsed: urllib.parse.ParseResult) -> int | None:
     with suppress(ValueError):
@@ -653,19 +689,26 @@ def _effective_url_port(parsed: urllib.parse.ParseResult) -> int | None:
         return 443
     return None
 
+
 def _url_origin(url: str, *, field_name: str) -> tuple[str, str, int | None]:
-    normalized = _validate_http_url(url, field_name=field_name, allow_query_fragment=True)
+    normalized = _validate_http_url(
+        url, field_name=field_name, allow_query_fragment=True
+    )
     parsed = urllib.parse.urlparse(normalized)
     hostname = parsed.hostname
     if not hostname:
         raise PostProcessError(f"{field_name} is missing hostname")
     return parsed.scheme, hostname.lower(), _effective_url_port(parsed)
 
-def _validate_same_origin_redirect(source_url: str, redirect_url: str, *, field_name: str) -> None:
+
+def _validate_same_origin_redirect(
+    source_url: str, redirect_url: str, *, field_name: str
+) -> None:
     source_origin = _url_origin(source_url, field_name=field_name)
     redirect_origin = _url_origin(redirect_url, field_name=f"{field_name} redirect")
     if redirect_origin != source_origin:
         raise PostProcessError(f"{field_name} redirect target changes origin")
+
 
 def _validated_request_deadline(deadline: object) -> float:
     if isinstance(deadline, bool) or not isinstance(deadline, (int, float)):
@@ -680,11 +723,13 @@ def _validated_request_deadline(deadline: object) -> float:
         raise PostProcessError("request deadline must be finite")
     return deadline_value
 
+
 def _contains_escaped_null(value: str) -> bool:
     if not isinstance(value, str) or isinstance(value, bool):
         raise PostProcessError("value must be text")
     lowered = (value or "").lower()
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
+
 
 def _contains_http_header_control_chars(value: str) -> bool:
     if not isinstance(value, str) or isinstance(value, bool):
@@ -697,6 +742,7 @@ def _contains_http_header_control_chars(value: str) -> bool:
         if codepoint < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F:
             return True
     return False
+
 
 def _set_response_socket_timeout(response: object, timeout: float) -> None:
     def _layer(value: object | None, attribute: str) -> object | None:
@@ -736,6 +782,7 @@ def _set_response_socket_timeout(response: object, timeout: float) -> None:
         except Exception:
             continue
 
+
 def _assert_openai_compatible_text(
     value: str,
     *,
@@ -747,6 +794,7 @@ def _assert_openai_compatible_text(
     if _contains_http_header_control_chars(value):
         raise PostProcessError(f"{field_name} contains invalid control character")
     return _assert_text_length(value, field_name=field_name, max_chars=max_chars)
+
 
 def _read_response_text(
     response: object,
@@ -764,7 +812,11 @@ def _read_response_text(
     if deadline is None:
         if timeout is None:
             timeout = POSTPROCESS_REQUEST_TIMEOUT_SECONDS
-        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+        if (
+            isinstance(timeout, bool)
+            or not isinstance(timeout, (int, float))
+            or timeout <= 0
+        ):
             raise PostProcessError("response timeout must be positive")
         try:
             finite_timeout = math.isfinite(timeout)
@@ -791,7 +843,9 @@ def _read_response_text(
         except TimeoutError as exc:
             raise PostProcessError("remote response read timed out") from exc
         except (MemoryError, RecursionError) as exc:
-            raise PostProcessError("remote response could not be buffered safely") from exc
+            raise PostProcessError(
+                "remote response could not be buffered safely"
+            ) from exc
         if time.monotonic() >= response_deadline:
             raise PostProcessError("remote response read timed out")
         if not isinstance(chunk, bytes):
@@ -800,11 +854,15 @@ def _read_response_text(
             break
         total += len(chunk)
         if total > max_bytes:
-            raise PostProcessError(f"remote response is too large (max {max_bytes} bytes)")
+            raise PostProcessError(
+                f"remote response is too large (max {max_bytes} bytes)"
+            )
         try:
             chunks.append(chunk)
         except (MemoryError, RecursionError) as exc:
-            raise PostProcessError("remote response could not be buffered safely") from exc
+            raise PostProcessError(
+                "remote response could not be buffered safely"
+            ) from exc
     try:
         raw = b"".join(chunks)
     except MemoryError as exc:
@@ -817,6 +875,7 @@ def _read_response_text(
         raise PostProcessError("remote response contains invalid null byte")
     return text
 
+
 def _transcript_data_block(text: str) -> str:
     for _ in range(8):
         marker = f"transcript_data_{secrets.token_hex(16)}"
@@ -826,6 +885,7 @@ def _transcript_data_block(text: str) -> str:
                 f"<{marker}>\n{text}\n</{marker}>"
             )
     raise PostProcessError("could not create a safe transcript data boundary")
+
 
 def build_ollama_prompt(
     text: str,
@@ -844,7 +904,9 @@ def build_ollama_prompt(
         raise PostProcessError("vocabulary must be text")
     if not isinstance(instruction, str) or isinstance(instruction, bool):
         raise PostProcessError("instruction must be text")
-    instruction = _assert_text_length(instruction, field_name="instruction", max_chars=MAX_POSTPROCESS_PROMPT_CHARS)
+    instruction = _assert_text_length(
+        instruction, field_name="instruction", max_chars=MAX_POSTPROCESS_PROMPT_CHARS
+    )
     try:
         personalization = build_personalization_prompt(personal_context, vocabulary)
     except ValueError as exc:
@@ -859,6 +921,7 @@ def build_ollama_prompt(
         sections.append(personalization)
     sections.append(_transcript_data_block(text))
     return "\n\n".join(section for section in sections if section)
+
 
 def _safe_prompt_language(language: str) -> str:
     if not isinstance(language, str) or isinstance(language, bool):
@@ -877,21 +940,30 @@ def _safe_prompt_language(language: str) -> str:
             raise PostProcessError("language must be a simple language code")
     return value
 
+
 def _ollama_endpoint(url: str, path: str) -> str:
     base = _validate_http_url(url, field_name="ollama url").rstrip("/")
     parsed = urllib.parse.urlparse(base)
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
-        raise PostProcessError("ollama url must use https:// unless host is local loopback")
+        raise PostProcessError(
+            "ollama url must use https:// unless host is local loopback"
+        )
     return base + "/" + path.lstrip("/")
+
 
 def _openai_compatible_endpoint(url: str, path: str) -> str:
     base = _validate_openai_compatible_http_url(url).rstrip("/")
     normalized_path = "/" + path.strip("/")
     base_parts = [part for part in urllib.parse.urlparse(base).path.split("/") if part]
     target_parts = [part for part in normalized_path.split("/") if part]
-    if target_parts and len(base_parts) >= len(target_parts) and base_parts[-len(target_parts):] == target_parts:
+    if (
+        target_parts
+        and len(base_parts) >= len(target_parts)
+        and base_parts[-len(target_parts) :] == target_parts
+    ):
         return base
     return base + normalized_path
+
 
 def _is_openai_api_endpoint(endpoint: str) -> bool:
     try:
@@ -900,11 +972,15 @@ def _is_openai_api_endpoint(endpoint: str) -> bool:
         return False
     return (parsed.hostname or "").lower() == "api.openai.com"
 
+
 def _is_flex_service_tier_rejected(detail: object) -> bool:
     if not isinstance(detail, str):
         return False
     normalized = detail.lower()
-    if not any(marker in normalized for marker in ("service_tier", "service tier", "service-tier")):
+    if not any(
+        marker in normalized
+        for marker in ("service_tier", "service tier", "service-tier")
+    ):
         return False
     rejected_terms = (
         "bad",
@@ -921,24 +997,29 @@ def _is_flex_service_tier_rejected(detail: object) -> bool:
     )
     return any(term in normalized for term in rejected_terms)
 
+
 def _is_temperature_zero_rejected(detail: object) -> bool:
     if not isinstance(detail, str):
         return False
     normalized = detail.lower()
-    return (
-        "temperature" in normalized
-        and ("does not support 0" in normalized or "only the default" in normalized)
+    return "temperature" in normalized and (
+        "does not support 0" in normalized or "only the default" in normalized
     )
+
 
 def _validate_openai_compatible_http_url(url: str) -> str:
     normalized = _validate_http_url(url, field_name="openai-compatible url")
     parsed = urllib.parse.urlparse(normalized)
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
-        raise PostProcessError("openai-compatible url must use https:// unless host is local loopback")
+        raise PostProcessError(
+            "openai-compatible url must use https:// unless host is local loopback"
+        )
     return normalized
+
 
 def _reject_non_finite_json_number(value: str) -> object:
     raise ValueError(f"non-finite JSON number is not allowed: {value}")
+
 
 def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result: dict[str, object] = {}
@@ -947,6 +1028,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, ob
             raise ValueError("duplicate JSON object key is not allowed")
         result[key] = value
     return result
+
 
 def _format_model_size(size: object) -> str:
     if isinstance(size, bool):
@@ -971,18 +1053,28 @@ def _format_model_size(size: object) -> str:
         if amount < 1024 or unit == units[-1]:
             break
         amount /= 1024
-    return f"{amount:.1f} {unit}" if amount < 10 and unit != "B" else f"{amount:.0f} {unit}"
+    return (
+        f"{amount:.1f} {unit}"
+        if amount < 10 and unit != "B"
+        else f"{amount:.0f} {unit}"
+    )
 
-def _safe_model_listing_text(value: object, *, max_chars: int = MAX_OPENAI_COMPATIBLE_MODEL_CHARS) -> str:
+
+def _safe_model_listing_text(
+    value: object, *, max_chars: int = MAX_OPENAI_COMPATIBLE_MODEL_CHARS
+) -> str:
     text = str(value or "").strip()
     if not text:
         return ""
     if _contains_escaped_null(text) or _contains_http_header_control_chars(text):
         return ""
     try:
-        return _assert_text_length(text, field_name="model listing text", max_chars=max_chars).strip()
+        return _assert_text_length(
+            text, field_name="model listing text", max_chars=max_chars
+        ).strip()
     except PostProcessError:
         return ""
+
 
 def _safe_model_listing_size(value: object) -> int:
     if isinstance(value, bool) or isinstance(value, float):
@@ -1000,6 +1092,7 @@ def _safe_model_listing_size(value: object) -> int:
         return 0
     return size
 
+
 def _normalize_ollama_model(model: object) -> dict[str, object] | None:
     if not isinstance(model, dict):
         return None
@@ -1014,7 +1107,9 @@ def _normalize_ollama_model(model: object) -> dict[str, object] | None:
     if _contains_escaped_null(name) or _contains_http_header_control_chars(name):
         return None
     try:
-        name = _assert_text_length(name, field_name="ollama model", max_chars=MAX_OLLAMA_MODEL_CHARS).strip()
+        name = _assert_text_length(
+            name, field_name="ollama model", max_chars=MAX_OLLAMA_MODEL_CHARS
+        ).strip()
     except PostProcessError:
         return None
     details = model.get("details") if isinstance(model.get("details"), dict) else {}
@@ -1031,8 +1126,11 @@ def _normalize_ollama_model(model: object) -> dict[str, object] | None:
         "family": family,
         "parameter_size": parameter_size,
         "quantization": quantization,
-        "description": " ".join(part for part in (family, parameter_size, quantization) if part),
+        "description": " ".join(
+            part for part in (family, parameter_size, quantization) if part
+        ),
     }
+
 
 def _openai_compatible_model_supports_text_polishing(name: str) -> bool:
     raw = str(name or "")
@@ -1043,7 +1141,10 @@ def _openai_compatible_model_supports_text_polishing(name: str) -> bool:
         return False
     if normalized.startswith(OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_PREFIXES):
         return False
-    return not any(term in normalized for term in OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_TERMS)
+    return not any(
+        term in normalized for term in OPENAI_COMPATIBLE_TEXT_MODEL_EXCLUDED_TERMS
+    )
+
 
 def build_openai_compatible_messages(
     text: str,
@@ -1058,7 +1159,9 @@ def build_openai_compatible_messages(
     language = _safe_prompt_language(language)
     if not isinstance(instruction, str) or isinstance(instruction, bool):
         raise PostProcessError("instruction must be text")
-    instruction = _assert_text_length(instruction, field_name="instruction", max_chars=MAX_POSTPROCESS_PROMPT_CHARS)
+    instruction = _assert_text_length(
+        instruction, field_name="instruction", max_chars=MAX_POSTPROCESS_PROMPT_CHARS
+    )
     try:
         personalization = build_personalization_prompt(personal_context, vocabulary)
     except ValueError as exc:
@@ -1072,12 +1175,16 @@ def build_openai_compatible_messages(
     if personalization:
         system_sections.append(personalization)
     return [
-        {"role": "system", "content": "\n\n".join(section for section in system_sections if section)},
+        {
+            "role": "system",
+            "content": "\n\n".join(section for section in system_sections if section),
+        },
         {
             "role": "user",
             "content": _transcript_data_block(text),
         },
     ]
+
 
 def _choice_text(choice: object) -> str:
     if not isinstance(choice, dict):
@@ -1101,6 +1208,7 @@ def _choice_text(choice: object) -> str:
     text = choice.get("text")
     return text if isinstance(text, str) else ""
 
+
 def _transcript_prompt_label_count(text: str) -> int:
     count = 0
     value = text.strip()
@@ -1108,46 +1216,49 @@ def _transcript_prompt_label_count(text: str) -> int:
         folded = value.casefold()
         if folded.startswith("transcript:"):
             count += 1
-            value = value[len("Transcript:"):].lstrip()
+            value = value[len("Transcript:") :].lstrip()
             continue
         if folded.startswith("transkript:"):
             count += 1
-            value = value[len("Transkript:"):].lstrip()
+            value = value[len("Transkript:") :].lstrip()
             continue
         break
     return count
 
+
 def _strip_transcript_prompt_label(text: str, source_text: str = "") -> str:
     value = text.strip()
     source_value = source_text.strip()
-    source_label_count = _transcript_prompt_label_count(source_value) if source_value else 0
+    source_label_count = (
+        _transcript_prompt_label_count(source_value) if source_value else 0
+    )
     if source_value and not source_label_count:
         candidate = value
         for _ in range(3):
             folded = candidate.casefold()
             if folded.startswith("transcript:"):
-                candidate = candidate[len("Transcript:"):].lstrip()
+                candidate = candidate[len("Transcript:") :].lstrip()
                 continue
             if folded.startswith("transkript:"):
-                candidate = candidate[len("Transkript:"):].lstrip()
+                candidate = candidate[len("Transkript:") :].lstrip()
                 continue
             break
         return candidate if candidate != value and candidate == source_value else value
     for _ in range(3):
         folded = value.casefold()
-        if source_label_count and _transcript_prompt_label_count(value) <= source_label_count:
+        if (
+            source_label_count
+            and _transcript_prompt_label_count(value) <= source_label_count
+        ):
             break
         if folded.startswith("transcript:"):
-            value = value[len("Transcript:"):].lstrip()
+            value = value[len("Transcript:") :].lstrip()
             continue
         if folded.startswith("transkript:"):
-            value = value[len("Transkript:"):].lstrip()
+            value = value[len("Transkript:") :].lstrip()
             continue
         break
     return value
-
-
-
 
 
 REDACTED_LOCAL_COMMAND_ERROR = "post-process command failed: command output redacted"
@@ -1155,7 +1266,9 @@ DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_OPENAI_COMPATIBLE_URL = "https://api.openai.com/v1"
 DEFAULT_OPENAI_COMPATIBLE_MODEL = "gpt-transcribe"
 DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL = "gpt-5.6-luna"
-POSTPROCESS_TEMPLATE_PLACEHOLDER_RE = re.compile(r"\{(text|language|context|vocabulary|prompt)\}")
+POSTPROCESS_TEMPLATE_PLACEHOLDER_RE = re.compile(
+    r"\{(text|language|context|vocabulary|prompt)\}"
+)
 MAX_OPENAI_COMPATIBLE_API_KEY_CHARS = 4_096
 
 
@@ -1163,12 +1276,6 @@ def _quote(value: str) -> str:
     if not isinstance(value, str) or isinstance(value, bool):
         raise PostProcessError("value must be text")
     return shlex.quote(value)
-
-
-
-
-
-
 
 
 def _safe_url_display(url: str, *, field_name: str) -> str:
@@ -1193,15 +1300,11 @@ def _validate_http_request(request: urllib.request.Request, *, field_name: str) 
     _validate_http_url(url, field_name=field_name)
 
 
-
-
-
-
-
-
 class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        _validate_same_origin_redirect(req.get_full_url(), newurl, field_name="remote post-process request")
+        _validate_same_origin_redirect(
+            req.get_full_url(), newurl, field_name="remote post-process request"
+        )
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -1221,11 +1324,11 @@ def _request_deadline(timeout: int | float) -> float:
     return time.monotonic() + float(timeout)
 
 
-
-
 def _raise_redacted_url_validation_error() -> None:
     try:
-        raise PostProcessError("remote request URL could not be validated safely") from None
+        raise PostProcessError(
+            "remote request URL could not be validated safely"
+        ) from None
     except PostProcessError as error:
         error.__cause__ = None
         error.__context__ = None
@@ -1272,16 +1375,6 @@ def _open_http_request(
     if remaining_timeout <= 0 or not math.isfinite(remaining_timeout):
         raise PostProcessError(f"{field_name} request timed out")
     return opener.open(request, timeout=remaining_timeout)  # nosec B310
-
-
-
-
-
-
-
-
-
-
 
 
 def _read_http_error_text(
@@ -1362,14 +1455,18 @@ def render_postprocess_template(
 ) -> str:
     if not isinstance(template, str) or isinstance(template, bool):
         raise PostProcessError("template must be text")
-    _assert_text_length(template, field_name="template", max_chars=MAX_COMMAND_LENGTH_CHARS)
+    _assert_text_length(
+        template, field_name="template", max_chars=MAX_COMMAND_LENGTH_CHARS
+    )
     try:
         values = {
             "text": _quote(text),
             "language": _quote(language),
             "context": _quote(normalize_context(personal_context)),
             "vocabulary": _quote(normalize_vocabulary(vocabulary)),
-            "prompt": _quote(build_personalization_prompt(personal_context, vocabulary)),
+            "prompt": _quote(
+                build_personalization_prompt(personal_context, vocabulary)
+            ),
         }
     except ValueError as exc:
         raise PostProcessError(str(exc)) from exc
@@ -1381,8 +1478,13 @@ def render_postprocess_template(
         literal = template[last_end : match.start()]
         replacement = values[match.group(1)]
         rendered_chars += len(literal) + len(replacement)
-        rendered_bytes += len(literal.encode("utf-8")) + len(replacement.encode("utf-8"))
-        if rendered_chars > MAX_COMMAND_LENGTH_CHARS or rendered_bytes > MAX_COMMAND_LENGTH_CHARS:
+        rendered_bytes += len(literal.encode("utf-8")) + len(
+            replacement.encode("utf-8")
+        )
+        if (
+            rendered_chars > MAX_COMMAND_LENGTH_CHARS
+            or rendered_bytes > MAX_COMMAND_LENGTH_CHARS
+        ):
             raise PostProcessError(
                 f"rendered command is too large (max {MAX_COMMAND_LENGTH_CHARS} characters/bytes)"
             )
@@ -1390,21 +1492,16 @@ def render_postprocess_template(
     tail = template[last_end:]
     rendered_chars += len(tail)
     rendered_bytes += len(tail.encode("utf-8"))
-    if rendered_chars > MAX_COMMAND_LENGTH_CHARS or rendered_bytes > MAX_COMMAND_LENGTH_CHARS:
+    if (
+        rendered_chars > MAX_COMMAND_LENGTH_CHARS
+        or rendered_bytes > MAX_COMMAND_LENGTH_CHARS
+    ):
         raise PostProcessError(
             f"rendered command is too large (max {MAX_COMMAND_LENGTH_CHARS} characters/bytes)"
         )
-    return POSTPROCESS_TEMPLATE_PLACEHOLDER_RE.sub(lambda match: values[match.group(1)], template)
-
-
-
-
-
-
-
-
-
-
+    return POSTPROCESS_TEMPLATE_PLACEHOLDER_RE.sub(
+        lambda match: values[match.group(1)], template
+    )
 
 
 def _coerce_environment_text(name: str) -> str:
@@ -1419,18 +1516,6 @@ def _coerce_environment_text(name: str) -> str:
     if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
         return ""
     return value
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _read_json(
@@ -1475,7 +1560,9 @@ def _read_json(
             parse_constant=_reject_non_finite_json_number,
         )
     except (RecursionError, MemoryError, ValueError) as exc:
-        raise json.JSONDecodeError("JSON response is too deeply nested or too large", raw, 0) from exc
+        raise json.JSONDecodeError(
+            "JSON response is too deeply nested or too large", raw, 0
+        ) from exc
 
 
 def _openai_compatible_error_detail(raw: str) -> str:
@@ -1493,22 +1580,21 @@ def _openai_compatible_error_detail(raw: str) -> str:
         return str(payload)
     error = payload.get("error")
     if isinstance(error, dict):
-        parts = [str(error.get("message") or "").strip(), str(error.get("type") or "").strip(), str(error.get("code") or "").strip()]
+        parts = [
+            str(error.get("message") or "").strip(),
+            str(error.get("param") or "").strip(),
+            str(error.get("type") or "").strip(),
+            str(error.get("code") or "").strip(),
+        ]
         return "; ".join(part for part in parts if part)
     if error:
         return str(error)
     return str(payload)
 
 
-
-
-
-
-
-
-
-
-def _list_ollama_models_impl(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[str, object]:
+def _list_ollama_models_impl(
+    url: str = DEFAULT_OLLAMA_URL, timeout: int = 5
+) -> dict[str, object]:
     endpoint = _ollama_endpoint(url, "/api/tags")
     request = urllib.request.Request(endpoint, method="GET")
     try:
@@ -1578,7 +1664,9 @@ def _list_ollama_models_impl(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) ->
     }
 
 
-def list_ollama_models(url: str = DEFAULT_OLLAMA_URL, timeout: int = 5) -> dict[str, object]:
+def list_ollama_models(
+    url: str = DEFAULT_OLLAMA_URL, timeout: int = 5
+) -> dict[str, object]:
     failure: BaseException | None = None
     try:
         return _list_ollama_models_impl(url, timeout)
@@ -1618,8 +1706,6 @@ def _normalize_openai_compatible_model(model: object) -> dict[str, object] | Non
         "owned_by": owned_by,
         "description": owned_by,
     }
-
-
 
 
 def _sanitize_remote_error_detail(value: object) -> str:
@@ -1701,7 +1787,11 @@ def _list_openai_compatible_models_impl(
     return {
         "available": True,
         "models": models,
-        "message": "OpenAI-compatible models loaded" if models else "No OpenAI-compatible text models found",
+        "message": (
+            "OpenAI-compatible models loaded"
+            if models
+            else "No OpenAI-compatible text models found"
+        ),
     }
 
 
@@ -1735,19 +1825,25 @@ def _post_process_with_ollama_impl(
         raise PostProcessError("ollama model must be text")
     if not isinstance(prompt, str) or isinstance(prompt, bool):
         raise PostProcessError("prompt must be text")
-    prompt = _assert_text_length(prompt, field_name="prompt", max_chars=MAX_POSTPROCESS_PROMPT_CHARS)
+    prompt = _assert_text_length(
+        prompt, field_name="prompt", max_chars=MAX_POSTPROCESS_PROMPT_CHARS
+    )
     if _contains_escaped_null(model):
         raise PostProcessError("ollama model contains invalid null byte")
     if _contains_http_header_control_chars(model):
         raise PostProcessError("ollama model contains invalid control character")
-    model_name = _assert_text_length(model or "", field_name="ollama model", max_chars=MAX_OLLAMA_MODEL_CHARS).strip()
+    model_name = _assert_text_length(
+        model or "", field_name="ollama model", max_chars=MAX_OLLAMA_MODEL_CHARS
+    ).strip()
     if not model_name:
         raise PostProcessError("Ollama model is required")
     _assert_text_length(text, field_name="input text")
     endpoint = _ollama_endpoint(url, "/api/generate")
     payload = {
         "model": model_name,
-        "prompt": build_ollama_prompt(text, language, personal_context, vocabulary, prompt),
+        "prompt": build_ollama_prompt(
+            text, language, personal_context, vocabulary, prompt
+        ),
         "stream": False,
     }
     render_error: PostProcessError | None = None
@@ -1863,38 +1959,39 @@ def post_process_with_ollama(
     _raise_no_secret(failure)
 
 
-def _openai_compatible_headers(api_key: str = "", *, request_endpoint: str | None = None) -> dict[str, str]:
+def _openai_compatible_headers(
+    api_key: str = "", *, request_endpoint: str | None = None
+) -> dict[str, str]:
     headers = {"Content-Type": "application/json"}
-    allow_environment_key = request_endpoint is None or _is_openai_api_endpoint(request_endpoint)
+    allow_environment_key = request_endpoint is None or _is_openai_api_endpoint(
+        request_endpoint
+    )
     if not api_key and allow_environment_key:
-        api_key = (
-            _coerce_environment_text("OPENAI_COMPATIBLE_API_KEY")
-            or _coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY")
-        )
+        api_key = _coerce_environment_text(
+            "OPENAI_COMPATIBLE_API_KEY"
+        ) or _coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY")
     if not isinstance(api_key, str) or isinstance(api_key, bool):
         raise PostProcessError("openai-compatible API key must be text")
     if _contains_escaped_null(api_key):
         raise PostProcessError("openai-compatible API key contains invalid null byte")
     if _contains_http_header_control_chars(api_key):
-        raise PostProcessError("openai-compatible API key contains invalid control character")
+        raise PostProcessError(
+            "openai-compatible API key contains invalid control character"
+        )
     api_key = api_key.strip()
     if not api_key and allow_environment_key:
         api_key = (
             _coerce_environment_text("OPENAI_COMPATIBLE_API_KEY")
             or _coerce_environment_text("SPEED_OF_CINNAMON_OPENAI_COMPATIBLE_API_KEY")
         ).strip()
-    api_key = _assert_openai_compatible_text(api_key, field_name="openai-compatible API key", max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS)
+    api_key = _assert_openai_compatible_text(
+        api_key,
+        field_name="openai-compatible API key",
+        max_chars=MAX_OPENAI_COMPATIBLE_API_KEY_CHARS,
+    )
     if api_key:
         headers["Authorization"] = f"Bearer {api_key}"
     return headers
-
-
-
-
-
-
-
-
 
 
 def _post_process_with_openai_compatible_impl(
@@ -1913,13 +2010,17 @@ def _post_process_with_openai_compatible_impl(
         raise PostProcessError("openai-compatible model must be text")
     if not isinstance(prompt, str) or isinstance(prompt, bool):
         raise PostProcessError("prompt must be text")
-    prompt = _assert_text_length(prompt, field_name="prompt", max_chars=MAX_POSTPROCESS_PROMPT_CHARS)
+    prompt = _assert_text_length(
+        prompt, field_name="prompt", max_chars=MAX_POSTPROCESS_PROMPT_CHARS
+    )
     if not isinstance(api_key, str) or isinstance(api_key, bool):
         raise PostProcessError("api key must be text")
     if not isinstance(flex_processing, bool):
         raise PostProcessError("OpenAI-compatible flex processing must be a boolean")
     if not isinstance(openai_compatible_service_tier_fallback, bool):
-        raise PostProcessError("OpenAI-compatible service tier fallback must be a boolean")
+        raise PostProcessError(
+            "OpenAI-compatible service tier fallback must be a boolean"
+        )
     model_name = _assert_openai_compatible_text(
         str(model or ""),
         field_name="openai-compatible model",
@@ -1928,18 +2029,24 @@ def _post_process_with_openai_compatible_impl(
     if not model_name:
         raise PostProcessError("OpenAI-compatible model is required")
     if not _openai_compatible_model_supports_text_polishing(model_name):
-        raise PostProcessError("OpenAI-compatible model is not allowed for text polishing")
+        raise PostProcessError(
+            "OpenAI-compatible model is not allowed for text polishing"
+        )
     _assert_text_length(text, field_name="input text")
     endpoint = _openai_compatible_endpoint(url, "/chat/completions")
     payload = {
         "model": model_name,
-        "messages": build_openai_compatible_messages(text, language, personal_context, vocabulary, prompt),
+        "messages": build_openai_compatible_messages(
+            text, language, personal_context, vocabulary, prompt
+        ),
         "stream": False,
     }
     use_flex_processing = flex_processing and _is_openai_api_endpoint(endpoint)
     if use_flex_processing:
         payload["service_tier"] = "flex"
-    allow_service_tier_fallback = use_flex_processing and openai_compatible_service_tier_fallback
+    allow_service_tier_fallback = (
+        use_flex_processing and openai_compatible_service_tier_fallback
+    )
     request_deadline = _request_deadline(POSTPROCESS_REQUEST_TIMEOUT_SECONDS)
 
     def _request_chat_completion(request_payload: dict[str, object]) -> str:
@@ -1947,7 +2054,9 @@ def _post_process_with_openai_compatible_impl(
         try:
             request_data = json.dumps(request_payload).encode("utf-8")
         except (MemoryError, RecursionError):
-            render_error = PostProcessError("OpenAI-compatible request could not be rendered")
+            render_error = PostProcessError(
+                "OpenAI-compatible request could not be rendered"
+            )
         if render_error is not None:
             raise render_error
         request = urllib.request.Request(
@@ -1992,9 +2101,13 @@ def _post_process_with_openai_compatible_impl(
                             deadline=request_deadline,
                         )
                     except PostProcessError as read_error:
-                        request_error = _fixed_response_read_postprocess_error(read_error)
+                        request_error = _fixed_response_read_postprocess_error(
+                            read_error
+                        )
                     else:
-                        fallback_unsupported, _fallback_flex = _openai_error_flags(raw_error)
+                        fallback_unsupported, _fallback_flex = _openai_error_flags(
+                            raw_error
+                        )
                         request_error = _fixed_http_postprocess_error(
                             fallback_exc.code,
                             unsupported_parameter=fallback_unsupported,
@@ -2152,7 +2265,11 @@ def _fixed_command_chain_postprocess_error(error: BaseException) -> PostProcessE
     for fixed_message in fixed_limit_messages:
         if message.startswith(fixed_message.rsplit(" configured limit", 1)[0]):
             return PostProcessError(fixed_message)
-    if "must be positive" in message or "must be non-negative" in message or "must not exceed" in message:
+    if (
+        "must be positive" in message
+        or "must be non-negative" in message
+        or "must not exceed" in message
+    ):
         return PostProcessError("post-process command limits are invalid")
     if "exceeded" in message:
         return PostProcessError("post-process command limit exceeded")
@@ -2189,14 +2306,20 @@ def _post_process_text_impl(
         raise PostProcessError("backend must be text")
     if not isinstance(ollama_url, str) or isinstance(ollama_url, bool):
         raise PostProcessError("ollama url must be text")
-    if not isinstance(openai_compatible_url, str) or isinstance(openai_compatible_url, bool):
+    if not isinstance(openai_compatible_url, str) or isinstance(
+        openai_compatible_url, bool
+    ):
         raise PostProcessError("openai-compatible url must be text")
-    if not isinstance(openai_compatible_api_key, str) or isinstance(openai_compatible_api_key, bool):
+    if not isinstance(openai_compatible_api_key, str) or isinstance(
+        openai_compatible_api_key, bool
+    ):
         raise PostProcessError("openai-compatible API key must be text")
     if not isinstance(openai_compatible_flex_processing, bool):
         raise PostProcessError("OpenAI-compatible flex processing must be a boolean")
     if not isinstance(openai_compatible_service_tier_fallback, bool):
-        raise PostProcessError("OpenAI-compatible service tier fallback must be a boolean")
+        raise PostProcessError(
+            "OpenAI-compatible service tier fallback must be a boolean"
+        )
     raw_backend = backend or "command"
     if _contains_escaped_null(raw_backend):
         raise PostProcessError("backend contains invalid null byte")
@@ -2236,14 +2359,20 @@ def _post_process_text_impl(
         )
     if normalized_backend not in {"command", "custom"}:
         raise PostProcessError("unknown post-process backend")
-    _assert_text_length(command_template, field_name="command template", max_chars=MAX_COMMAND_LENGTH_CHARS)
+    _assert_text_length(
+        command_template,
+        field_name="command template",
+        max_chars=MAX_COMMAND_LENGTH_CHARS,
+    )
     template = command_template.strip()
     if not template:
         return text
 
     if "{language}" in template:
         language = _safe_prompt_language(language)
-    command = render_postprocess_template(template, text, language, personal_context, vocabulary)
+    command = render_postprocess_template(
+        template, text, language, personal_context, vocabulary
+    )
     command_chain = _command_chain_module()
     command_error: PostProcessError | None = None
     try:
@@ -2285,11 +2414,9 @@ def post_process_text(
     openai_compatible_flex_processing: bool = True,
     openai_compatible_service_tier_fallback: bool = False,
 ) -> str:
-    remote_backend = (
-        type(backend) is str
-        and backend.strip().lower().replace("_", "-")
-        in {"ollama", "openai-compatible", "openai", "local-openai"}
-    )
+    remote_backend = type(backend) is str and backend.strip().lower().replace(
+        "_", "-"
+    ) in {"ollama", "openai-compatible", "openai", "local-openai"}
     failure: BaseException | None = None
     try:
         return _post_process_text_impl(

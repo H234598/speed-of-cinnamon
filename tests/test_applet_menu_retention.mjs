@@ -8,17 +8,28 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appletSource = fs.readFileSync(
   path.join(root, "files/speed-of-cinnamon@H234598/applet.js"),
-  "utf8"
+  "utf8",
 );
 
 let constructors = 0;
 
 class Actor {
-  constructor() { this.visible = true; this.focusGrabCount = 0; }
-  show() { this.visible = true; }
-  hide() { this.visible = false; }
-  is_finalized() { return false; }
-  contains(actor) { return actor === this; }
+  constructor() {
+    this.visible = true;
+    this.focusGrabCount = 0;
+  }
+  show() {
+    this.visible = true;
+  }
+  hide() {
+    this.visible = false;
+  }
+  is_finalized() {
+    return false;
+  }
+  contains(actor) {
+    return actor === this;
+  }
   grab_key_focus() {
     this.focusGrabCount += 1;
     methodContext.global.stage.keyFocus = this;
@@ -33,9 +44,17 @@ class Menu {
     this.isOpen = false;
     this.removeAllCount = 0;
   }
-  addMenuItem(item) { this.items.push(item); }
-  removeAll() { this.removeAllCount += 1; this.items = []; }
-  connect(signal, callback) { this.handlers.push({ signal, callback }); return this.handlers.length; }
+  addMenuItem(item) {
+    this.items.push(item);
+  }
+  removeAll() {
+    this.removeAllCount += 1;
+    this.items = [];
+  }
+  connect(signal, callback) {
+    this.handlers.push({ signal, callback });
+    return this.handlers.length;
+  }
   open() {
     this.isOpen = true;
     this.actor.show();
@@ -45,16 +64,19 @@ class Menu {
   }
   close() {
     this.isOpen = false;
-    if (this._activeMenuItem && this._activeMenuItem.setActive) {
+    if (this._activeMenuItem?.setActive) {
       this._activeMenuItem.setActive(false);
     }
     this._activeMenuItem = null;
     this.actor.hide();
     for (const handler of this.handlers) {
-      if (handler.signal === "open-state-changed") handler.callback(this, false);
+      if (handler.signal === "open-state-changed")
+        handler.callback(this, false);
     }
   }
-  _getMenuItems() { return this.items; }
+  _getMenuItems() {
+    return this.items;
+  }
 }
 
 class PopupMenuItem {
@@ -66,18 +88,28 @@ class PopupMenuItem {
     this.active = false;
     this.handlers = [];
   }
-  connect(signal, callback) { this.handlers.push({ signal, callback }); return this.handlers.length; }
+  connect(signal, callback) {
+    this.handlers.push({ signal, callback });
+    return this.handlers.length;
+  }
   activate() {
     for (const handler of this.handlers) {
       if (handler.signal === "activate") handler.callback(this);
     }
   }
-  setSensitive(value) { this.sensitive = Boolean(value); }
-  setActive(value) { this.active = Boolean(value); }
+  setSensitive(value) {
+    this.sensitive = Boolean(value);
+  }
+  setActive(value) {
+    this.active = Boolean(value);
+  }
 }
 
 class PopupSubMenuMenuItem extends PopupMenuItem {
-  constructor(label = "") { super(label); this.menu = new Menu(); }
+  constructor(label = "") {
+    super(label);
+    this.menu = new Menu();
+  }
 }
 
 class PopupIconMenuItem extends PopupMenuItem {
@@ -97,20 +129,32 @@ const methodContext = {
   MAX_VOICE_MODEL_MENU_ENTRIES: 128,
   MODEL_MENU_REFRESH_TTL_MS: 5000,
   TEXT_POLISHING_PRESETS: ["default", "clean", "code"],
-  PopupMenu: { PopupMenuItem, PopupSubMenuMenuItem, PopupIconMenuItem, PopupSeparatorMenuItem },
+  PopupMenu: {
+    PopupMenuItem,
+    PopupSubMenuMenuItem,
+    PopupIconMenuItem,
+    PopupSeparatorMenuItem,
+  },
   St: { IconType: { SYMBOLIC: 1 } },
-  GLib: { build_filenamev: (parts) => parts.join("/"), get_user_data_dir: () => "/data" },
+  GLib: {
+    build_filenamev: (parts) => parts.join("/"),
+    get_user_data_dir: () => "/data",
+  },
   global: {
     stage: {
       keyFocus: null,
-      get_key_focus() { return this.keyFocus; },
+      get_key_focus() {
+        return this.keyFocus;
+      },
     },
   },
   _: (value) => value,
 };
 
 function loadMethod(name, nextName) {
-  const start = appletSource.indexOf(`  ${name}: function(`);
+  const start = appletSource.search(
+    new RegExp(`^  ${name}: function\\s*\\(`, "m"),
+  );
   const end = appletSource.indexOf(`\n  ${nextName}:`, start);
   assert.notEqual(start, -1, `${name} exists`);
   assert.notEqual(end, -1, `${nextName} follows ${name}`);
@@ -121,20 +165,51 @@ function loadMethod(name, nextName) {
 function commonState() {
   return {
     _canMutateMenu: () => true,
-    _connectSafe(target, signal, callback) { target.connect(signal, callback); return 1; },
+    _connectSafe(target, signal, callback) {
+      target.connect(signal, callback);
+      return 1;
+    },
     _recordLifecycleError() {},
     _safeLogError() {},
-    _selectionInfoItem(label) { const item = new PopupMenuItem(label); item.setSensitive(false); return item; },
-    _selectionMenuItem(label) { return new PopupMenuItem(label); },
-    _setMenuItemLabelSafely(item, text) { item.label.text = text; return true; },
-    _setMenuItemSensitiveSafely(item, value) { item.setSensitive(value); return true; },
-    _setPooledMenuItemVisible: loadMethod("_setPooledMenuItemVisible", "_ensureAlarmMenuPool"),
-    _closeNestedMenusSafely: loadMethod("_closeNestedMenusSafely", "_closeMenuSafely"),
+    _processCleanupStatus: loadMethod(
+      "_processCleanupStatus",
+      "_processCleanupSucceeded",
+    ),
+    _selectionInfoItem(label) {
+      const item = new PopupMenuItem(label);
+      item.setSensitive(false);
+      return item;
+    },
+    _selectionMenuItem(label) {
+      return new PopupMenuItem(label);
+    },
+    _setMenuItemLabelSafely(item, text) {
+      item.label.text = text;
+      return true;
+    },
+    _setMenuItemSensitiveSafely(item, value) {
+      item.setSensitive(value);
+      return true;
+    },
+    _setPooledMenuItemVisible: loadMethod(
+      "_setPooledMenuItemVisible",
+      "_ensureAlarmMenuPool",
+    ),
+    _closeNestedMenusSafely: loadMethod(
+      "_closeNestedMenusSafely",
+      "_closeMenuSafely",
+    ),
     _closeMenuSafely: loadMethod("_closeMenuSafely", "_clearMenuItems"),
-    _styleMenuItemLabel(item) { return item; },
+    _styleMenuItemLabel(item) {
+      return item;
+    },
     _styleSelectionSubmenu() {},
-    _shortMenuText(value, limit) { return String(value).slice(0, limit); },
-    _uiMessageText(value) { return String(value); },
+    _shortMenuText(value, limit) {
+      return String(value).slice(0, limit);
+    },
+    _uiMessageText(value) {
+      return String(value);
+    },
   };
 }
 
@@ -148,18 +223,37 @@ test("alarm menu reuses parent rows and current row data", () => {
     _checkAlarms() {},
     _copyAlarmCommands() {},
     _openFolder() {},
-    _setAlarmEnabled(id, enabled) { state.alarmToggle = { id, enabled }; },
-    _removeAlarm(id) { state.removedAlarm = id; },
-    _ensureAlarmMenuPool: loadMethod("_ensureAlarmMenuPool", "_hydrateAlarmMenuPoolRow"),
-    _hydrateAlarmMenuPoolRow: loadMethod("_hydrateAlarmMenuPoolRow", "_populateAlarmMenu"),
+    _setAlarmEnabled(id, enabled) {
+      state.alarmToggle = { id, enabled };
+    },
+    _removeAlarm(id) {
+      state.removedAlarm = id;
+    },
+    _ensureAlarmMenuPool: loadMethod(
+      "_ensureAlarmMenuPool",
+      "_hydrateAlarmMenuPoolRow",
+    ),
+    _hydrateAlarmMenuPoolRow: loadMethod(
+      "_hydrateAlarmMenuPoolRow",
+      "_populateAlarmMenu",
+    ),
     _populateAlarmMenu: loadMethod("_populateAlarmMenu", "_addAlarmMenuEntry"),
-    _coerceCliTextArg(value) { return String(value); },
+    _coerceCliTextArg(value) {
+      return String(value);
+    },
   };
-  const alarms = Array.from({ length: 20 }, (_unused, index) => ({ id: `alarm-${index}`, label: `Alarm ${index}`, enabled: false }));
+  const alarms = Array.from({ length: 20 }, (_unused, index) => ({
+    id: `alarm-${index}`,
+    label: `Alarm ${index}`,
+    enabled: false,
+  }));
   state._populateAlarmMenu(alarms, "summary");
   const afterWarmup = constructors;
   for (let index = 0; index < 1000; index += 1) {
-    state._populateAlarmMenu(alarms.map((alarm) => ({ ...alarm, label: `${alarm.label}-${index}` })), "summary");
+    state._populateAlarmMenu(
+      alarms.map((alarm) => ({ ...alarm, label: `${alarm.label}-${index}` })),
+      "summary",
+    );
   }
   assert.equal(constructors, afterWarmup);
   assert.equal(state.alarmItem.menu.removeAllCount, 0);
@@ -182,12 +276,23 @@ test("hiding a pooled submenu closes it and hands focus to the applet", () => {
     _openFolder() {},
     _setAlarmEnabled() {},
     _removeAlarm() {},
-    _ensureAlarmMenuPool: loadMethod("_ensureAlarmMenuPool", "_hydrateAlarmMenuPoolRow"),
-    _hydrateAlarmMenuPoolRow: loadMethod("_hydrateAlarmMenuPoolRow", "_populateAlarmMenu"),
+    _ensureAlarmMenuPool: loadMethod(
+      "_ensureAlarmMenuPool",
+      "_hydrateAlarmMenuPoolRow",
+    ),
+    _hydrateAlarmMenuPoolRow: loadMethod(
+      "_hydrateAlarmMenuPoolRow",
+      "_populateAlarmMenu",
+    ),
     _populateAlarmMenu: loadMethod("_populateAlarmMenu", "_addAlarmMenuEntry"),
-    _coerceCliTextArg(value) { return String(value); },
+    _coerceCliTextArg(value) {
+      return String(value);
+    },
   };
-  state._populateAlarmMenu([{ id: "alarm-1", label: "Alarm", enabled: true }], "summary");
+  state._populateAlarmMenu(
+    [{ id: "alarm-1", label: "Alarm", enabled: true }],
+    "summary",
+  );
   const row = state._alarmMenuPool.rows[0];
   row.menu.open();
   row.setActive(true);
@@ -212,23 +317,38 @@ test("failed pooled submenu close preserves row data and fingerprint", () => {
     _alarmMenuFingerprint: null,
     _alarmMenuPool: null,
     lifecycleErrors: [],
-    _recordLifecycleError(channel, error) { this.lifecycleErrors.push({ channel, error }); },
+    _recordLifecycleError(channel, error) {
+      this.lifecycleErrors.push({ channel, error });
+    },
     _checkAlarms() {},
     _copyAlarmCommands() {},
     _openFolder() {},
     _setAlarmEnabled() {},
     _removeAlarm() {},
-    _ensureAlarmMenuPool: loadMethod("_ensureAlarmMenuPool", "_hydrateAlarmMenuPoolRow"),
-    _hydrateAlarmMenuPoolRow: loadMethod("_hydrateAlarmMenuPoolRow", "_populateAlarmMenu"),
+    _ensureAlarmMenuPool: loadMethod(
+      "_ensureAlarmMenuPool",
+      "_hydrateAlarmMenuPoolRow",
+    ),
+    _hydrateAlarmMenuPoolRow: loadMethod(
+      "_hydrateAlarmMenuPoolRow",
+      "_populateAlarmMenu",
+    ),
     _populateAlarmMenu: loadMethod("_populateAlarmMenu", "_addAlarmMenuEntry"),
-    _coerceCliTextArg(value) { return String(value); },
+    _coerceCliTextArg(value) {
+      return String(value);
+    },
   };
-  state._populateAlarmMenu([{ id: "alarm-1", label: "Alarm", enabled: true }], "summary");
+  state._populateAlarmMenu(
+    [{ id: "alarm-1", label: "Alarm", enabled: true }],
+    "summary",
+  );
   const row = state._alarmMenuPool.rows[0];
   const previousData = row._socData;
   const previousFingerprint = state._alarmMenuFingerprint;
   row.menu.open();
-  row.menu.close = () => { throw new Error("injected close failure"); };
+  row.menu.close = () => {
+    throw new Error("injected close failure");
+  };
 
   state._populateAlarmMenu([], "", "refresh failed");
 
@@ -248,16 +368,31 @@ test("input source menu reuses rows and actions read current data", () => {
     inputSourceItem: { actor: new Actor(), menu: new Menu() },
     _inputSourceMenuFingerprint: null,
     _inputSourceMenuPool: null,
-    _ensureInputSourceMenuPool: loadMethod("_ensureInputSourceMenuPool", "_populateInputSourceMenu"),
-    _populateInputSourceMenu: loadMethod("_populateInputSourceMenu", "_selectInputSource"),
-    _coerceCliTextArg(value) { return String(value); },
-    _selectInputSource(name, label) { state.selected = { name, label }; },
+    _ensureInputSourceMenuPool: loadMethod(
+      "_ensureInputSourceMenuPool",
+      "_populateInputSourceMenu",
+    ),
+    _populateInputSourceMenu: loadMethod(
+      "_populateInputSourceMenu",
+      "_selectInputSource",
+    ),
+    _coerceCliTextArg(value) {
+      return String(value);
+    },
+    _selectInputSource(name, label) {
+      state.selected = { name, label };
+    },
   };
-  const sources = Array.from({ length: 20 }, (_unused, index) => ({ name: `source-${index}`, description: `Mic ${index}` }));
+  const sources = Array.from({ length: 20 }, (_unused, index) => ({
+    name: `source-${index}`,
+    description: `Mic ${index}`,
+  }));
   state._populateInputSourceMenu(sources);
   const afterWarmup = constructors;
   for (let index = 0; index < 1000; index += 1) {
-    state._populateInputSourceMenu(sources.map((source) => ({ ...source, description: `Mic ${index}` })));
+    state._populateInputSourceMenu(
+      sources.map((source) => ({ ...source, description: `Mic ${index}` })),
+    );
   }
   assert.equal(constructors, afterWarmup);
   assert.equal(state.inputSourceItem.menu.removeAllCount, 0);
@@ -273,19 +408,41 @@ test("history menu reuses lazy rows and current transcript text", () => {
     historyItem: { actor: new Actor(), menu: new Menu() },
     _historyMenuFingerprint: null,
     _historyMenuPool: null,
-    _ensureHistoryMenuPool: loadMethod("_ensureHistoryMenuPool", "_hydrateHistoryMenuPoolRow"),
-    _hydrateHistoryMenuPoolRow: loadMethod("_hydrateHistoryMenuPoolRow", "_populateHistoryMenu"),
-    _populateHistoryMenu: loadMethod("_populateHistoryMenu", "_copyHistoryTranscript"),
+    _ensureHistoryMenuPool: loadMethod(
+      "_ensureHistoryMenuPool",
+      "_hydrateHistoryMenuPoolRow",
+    ),
+    _hydrateHistoryMenuPoolRow: loadMethod(
+      "_hydrateHistoryMenuPoolRow",
+      "_populateHistoryMenu",
+    ),
+    _populateHistoryMenu: loadMethod(
+      "_populateHistoryMenu",
+      "_copyHistoryTranscript",
+    ),
     _isEmptyTranscriptText: (text) => String(text).trim() === "",
-    _insertHistoryTranscript(text) { state.inserted = text; },
-    _copyHistoryTranscript(text) { state.copied = text; },
+    _insertHistoryTranscript(text) {
+      state.inserted = text;
+    },
+    _copyHistoryTranscript(text) {
+      state.copied = text;
+    },
   };
-  const transcripts = Array.from({ length: 20 }, (_unused, index) => ({ preview: `Preview ${index}`, text: `text-${index}` }));
+  const transcripts = Array.from({ length: 20 }, (_unused, index) => ({
+    preview: `Preview ${index}`,
+    text: `text-${index}`,
+  }));
   state._populateHistoryMenu(transcripts);
-  assert.equal(state._historyMenuPool.rows[0].menu.items.length, 0, "deep history actions stay lazy");
+  assert.equal(
+    state._historyMenuPool.rows[0].menu.items.length,
+    0,
+    "deep history actions stay lazy",
+  );
   const afterWarmup = constructors;
   for (let index = 0; index < 1000; index += 1) {
-    state._populateHistoryMenu(transcripts.map((entry) => ({ ...entry, text: `current-${index}` })));
+    state._populateHistoryMenu(
+      transcripts.map((entry) => ({ ...entry, text: `current-${index}` })),
+    );
   }
   assert.equal(constructors, afterWarmup);
   assert.equal(state.historyItem.menu.removeAllCount, 0);
@@ -308,9 +465,18 @@ test("voice model menu reuses lazy catalog rows and current model data", () => {
     openaiCompatibleModel: "voice-api",
     openaiCompatibleUrl: "http://localhost",
     lastTranscript: "",
-    _ensureModelMenuPool: loadMethod("_ensureModelMenuPool", "_hydrateModelMenuPoolRow"),
-    _hydrateModelMenuPoolRow: loadMethod("_hydrateModelMenuPoolRow", "_populateModelMenu"),
-    _populateModelMenu: loadMethod("_populateModelMenu", "_populateExternalApiVoiceMenu"),
+    _ensureModelMenuPool: loadMethod(
+      "_ensureModelMenuPool",
+      "_hydrateModelMenuPoolRow",
+    ),
+    _hydrateModelMenuPoolRow: loadMethod(
+      "_hydrateModelMenuPoolRow",
+      "_populateModelMenu",
+    ),
+    _populateModelMenu: loadMethod(
+      "_populateModelMenu",
+      "_populateExternalApiVoiceMenu",
+    ),
     _voiceModelLanguage: () => "de",
     _activeVoiceModelSummary: () => "automatic",
     _starterVoiceModelName: () => "starter",
@@ -324,9 +490,15 @@ test("voice model menu reuses lazy catalog rows and current model data", () => {
     _downloadStarterModel() {},
     _openFolder() {},
     _openExternalApiEnvEditor() {},
-    _selectVoiceModel(model) { state.selectedVoice = model.name; },
-    _removeVoiceModel(model) { state.removedVoice = model.name; },
-    _downloadVoiceModel(model) { state.downloadedVoice = model.name; },
+    _selectVoiceModel(model) {
+      state.selectedVoice = model.name;
+    },
+    _removeVoiceModel(model) {
+      state.removedVoice = model.name;
+    },
+    _downloadVoiceModel(model) {
+      state.downloadedVoice = model.name;
+    },
   };
   const models = Array.from({ length: 20 }, (_unused, index) => ({
     name: `voice-${index}`,
@@ -339,7 +511,9 @@ test("voice model menu reuses lazy catalog rows and current model data", () => {
   state._populateModelMenu(models);
   const afterWarmup = constructors;
   for (let index = 0; index < 1000; index += 1) {
-    state._populateModelMenu(models.map((model) => ({ ...model, name: `${model.name}-${index}` })));
+    state._populateModelMenu(
+      models.map((model) => ({ ...model, name: `${model.name}-${index}` })),
+    );
   }
   assert.equal(constructors, afterWarmup);
   assert.equal(state.modelItem.menu.removeAllCount, 0);
@@ -354,7 +528,10 @@ test("voice model refresh skips recent CLI work but refreshes after TTL", () => 
   let now = 1000;
   methodContext.Date = { now: () => now };
   try {
-    const refreshModelMenu = loadMethod("_refreshModelMenu", "_populateModelMenu");
+    const refreshModelMenu = loadMethod(
+      "_refreshModelMenu",
+      "_populateModelMenu",
+    );
     let spawned = 0;
     const state = {
       ...commonState(),
@@ -369,7 +546,10 @@ test("voice model refresh skips recent CLI work but refreshes after TTL", () => 
       _hasLocalProcessingWorkflow: () => false,
       _terminateProcessesByGroup: () => true,
       _modelsArgs: () => ["speed-of-cinnamon", "models"],
-      _spawnJson: () => { spawned += 1; return {}; },
+      _spawnJson: () => {
+        spawned += 1;
+        return {};
+      },
     };
 
     refreshModelMenu.call(state);
@@ -405,9 +585,17 @@ test("text model menu reuses rows and current provider data", () => {
     postProcessNeverAddContent: true,
     postProcessMaskSensitiveData: false,
     lastTranscript: "",
-    _ensureTextModelMenuPool: loadMethod("_ensureTextModelMenuPool", "_populateTextModelMenu"),
-    _populateTextModelMenu: loadMethod("_populateTextModelMenu", "_canMutateMenu"),
-    _selectTextModelBackend(provider, name) { state.selectedText = { provider, name }; },
+    _ensureTextModelMenuPool: loadMethod(
+      "_ensureTextModelMenuPool",
+      "_populateTextModelMenu",
+    ),
+    _populateTextModelMenu: loadMethod(
+      "_populateTextModelMenu",
+      "_canMutateMenu",
+    ),
+    _selectTextModelBackend(provider, name) {
+      state.selectedText = { provider, name };
+    },
     _activateOllamaTextModelFlow() {},
     _openExternalApiEnvEditor() {},
     _openAppletSettings() {},
@@ -419,14 +607,24 @@ test("text model menu reuses rows and current provider data", () => {
     _toggleTextPolishingSafetyFlag() {},
     _resetTextPolishingDefaults() {},
   };
-  const models = Array.from({ length: 20 }, (_unused, index) => ({ name: `text-${index}`, description: `Text ${index}` }));
+  const models = Array.from({ length: 20 }, (_unused, index) => ({
+    name: `text-${index}`,
+    description: `Text ${index}`,
+  }));
   state._populateTextModelMenu(models, "", "ollama");
   const afterWarmup = constructors;
   for (let index = 0; index < 1000; index += 1) {
-    state._populateTextModelMenu(models.map((model) => ({ ...model, name: `${model.name}-${index}` })), "", "ollama");
+    state._populateTextModelMenu(
+      models.map((model) => ({ ...model, name: `${model.name}-${index}` })),
+      "",
+      "ollama",
+    );
   }
   assert.equal(constructors, afterWarmup);
   assert.equal(state.textModelItem.menu.removeAllCount, 0);
   state._textModelMenuPool.rows[0].activate();
-  assert.deepEqual(state.selectedText, { provider: "ollama", name: "text-0-999" });
+  assert.deepEqual(state.selectedText, {
+    provider: "ollama",
+    name: "text-0-999",
+  });
 });

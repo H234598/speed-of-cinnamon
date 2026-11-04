@@ -10,6 +10,7 @@ import subprocess  # nosec B404
 import stat
 import time
 from pathlib import Path
+
 try:
     import tomllib
 except ModuleNotFoundError:
@@ -164,11 +165,13 @@ def normalize_tag(tag: str) -> str:
         raise UserInputError("tag must be a non-empty string")
     return tag_for_version(parse_version(tag))
 
+
 def to_version(major: int, minor: int, patch: int) -> str:
     major = _assert_non_negative_int("major", major)
     minor = _assert_non_negative_int("minor", minor)
     patch = _assert_non_negative_int("patch", patch)
     return f"{major}.{minor}.{patch}"
+
 
 def commits_since_ref(ref: str) -> int:
     if not isinstance(ref, str):
@@ -187,17 +190,24 @@ def commits_since_ref(ref: str) -> int:
         raise GitEnvironmentError("git command not available") from exc
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
-        raise GitEnvironmentError(f"failed to compute commits since {ref}: {stderr}") from exc
+        raise GitEnvironmentError(
+            f"failed to compute commits since {ref}: {stderr}"
+        ) from exc
     try:
         value_text = result.stdout.strip()
         if value_text == "":
-            raise GitEnvironmentError(f"invalid git commit-count output: {result.stdout!r}")
+            raise GitEnvironmentError(
+                f"invalid git commit-count output: {result.stdout!r}"
+            )
         value = int(value_text)
     except ValueError as exc:
-        raise GitEnvironmentError(f"invalid git commit-count output: {result.stdout!r}") from exc
+        raise GitEnvironmentError(
+            f"invalid git commit-count output: {result.stdout!r}"
+        ) from exc
     if value < 0:
         raise GitEnvironmentError(f"invalid git commit-count output: {value}")
     return value
+
 
 def commits_since_tag(tag: str) -> int:
     return commits_since_ref(normalize_tag(tag))
@@ -209,7 +219,8 @@ def implicit_commits_since_tag(tag: str) -> int:
         return 0
     return commits_since_tag(tag)
 
-def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int]:
+
+def add_patches(base: tuple[int, int, int], patch_steps: int) -> tuple[int, int, int]:
     major, minor, patch = _assert_version_tuple(base)
     patch_steps = _assert_non_negative_int("patch_steps", patch_steps)
     patch_steps = patch_steps // COMMITS_PER_PATCH
@@ -223,7 +234,8 @@ def add_patches(base: tuple[int,int,int], patch_steps: int) -> tuple[int,int,int
     minor %= MINORS_PER_MAJOR
     return major, minor, patch
 
-def apply_feature_increase(major:int, minor:int, patch:int) -> tuple[int,int,int]:
+
+def apply_feature_increase(major: int, minor: int, patch: int) -> tuple[int, int, int]:
     major = _assert_non_negative_int("major", major)
     minor = _assert_non_negative_int("minor", minor)
     patch = _assert_non_negative_int("patch", patch)
@@ -233,11 +245,12 @@ def apply_feature_increase(major:int, minor:int, patch:int) -> tuple[int,int,int
         major += 1
     return major, minor, patch
 
-def apply_breaking_change(major:int, minor:int, patch:int) -> tuple[int,int,int]:
+
+def apply_breaking_change(major: int, minor: int, patch: int) -> tuple[int, int, int]:
     major = _assert_non_negative_int("major", major)
     minor = _assert_non_negative_int("minor", minor)
     patch = _assert_non_negative_int("patch", patch)
-    return major+1, 0, 0
+    return major + 1, 0, 0
 
 
 def _read_project_metadata(path: Path) -> str:
@@ -247,24 +260,30 @@ def _read_project_metadata(path: Path) -> str:
     fd = os.open(path, os.O_RDONLY | no_follow | getattr(os, "O_CLOEXEC", 0))
     try:
         before = os.fstat(fd)
-        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > MAX_PROJECT_METADATA_BYTES:
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_nlink != 1
+            or before.st_size > MAX_PROJECT_METADATA_BYTES
+        ):
             raise ValueError("project metadata file is unsafe or too large")
         raw = os.read(fd, MAX_PROJECT_METADATA_BYTES + 1)
         after = os.fstat(fd)
     finally:
         os.close(fd)
-    if (
-        len(raw) > MAX_PROJECT_METADATA_BYTES
-        or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-        != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-    ):
+    if len(raw) > MAX_PROJECT_METADATA_BYTES or (
+        before.st_dev,
+        before.st_ino,
+        before.st_size,
+        before.st_mtime_ns,
+    ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
         raise ValueError("project metadata changed while reading")
     try:
         return raw.decode("utf-8")
     except UnicodeDecodeError as exc:
         raise ValueError("project metadata is not UTF-8") from exc
 
-def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int,int,int]:
+
+def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int, int, int]:
     if not isinstance(path, Path):
         raise UserInputError("path must be a pathlib.Path")
     if str(path) == "":
@@ -286,8 +305,10 @@ def read_current_version(path: Path = Path("pyproject.toml")) -> tuple[int,int,i
         raise UserInputError("project.version is not a string")
     return parse_version(val)
 
-def tag_for_version(version: tuple[int,int,int]) -> str:
+
+def tag_for_version(version: tuple[int, int, int]) -> str:
     return f"v{to_version(*_assert_version_tuple(version))}"
+
 
 def tag_exists(tag: str) -> bool:
     if not isinstance(tag, str):
@@ -300,14 +321,19 @@ def tag_exists(tag: str) -> bool:
         raise GitEnvironmentError("git command not available") from exc
     except subprocess.CalledProcessError as exc:
         stderr = (exc.stderr or "").strip()
-        if "not a git repository" in stderr.lower():
+        if (
+            "not a git repository" in stderr.lower()
+            or "kein git-repository" in stderr.lower()
+        ):
             return False
         raise GitEnvironmentError(f"failed to inspect git tags: {stderr}") from exc
     return tag in (rc.stdout or "").splitlines()
 
+
 def ensure_tag_exists(tag: str) -> None:
     if not tag_exists(tag):
         raise UserInputError(f"release tag {tag} does not exist")
+
 
 def parse_args() -> argparse.Namespace:
     def non_negative_int(value: str) -> int:
@@ -322,12 +348,20 @@ def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser()
     p.add_argument("--base", default=None)
     increments = p.add_mutually_exclusive_group()
-    increments.add_argument("--from-tag", default=None, help="Version tag to derive commit count from")
-    increments.add_argument("--add-commits", type=non_negative_int, default=None, help="Explicit commit count")
+    increments.add_argument(
+        "--from-tag", default=None, help="Version tag to derive commit count from"
+    )
+    increments.add_argument(
+        "--add-commits",
+        type=non_negative_int,
+        default=None,
+        help="Explicit commit count",
+    )
     kind = p.add_mutually_exclusive_group()
     kind.add_argument("--feature", action="store_true")
     kind.add_argument("--breaking", action="store_true")
     return p.parse_args()
+
 
 def main() -> int:
     a = parse_args()
@@ -348,7 +382,10 @@ def main() -> int:
         normalized_from_tag = normalize_tag(from_tag_raw)
         if tag_exists(normalized_from_tag):
             commits = commits_since_tag(normalized_from_tag)
-        elif not str(from_tag_raw).lower().startswith("v") and base == read_current_version():
+        elif (
+            not str(from_tag_raw).lower().startswith("v")
+            and base == read_current_version()
+        ):
             commits = 0
         else:
             raise UserInputError(f"release tag {normalized_from_tag} does not exist")
@@ -377,6 +414,7 @@ def main() -> int:
     print(to_version(major, minor, patch))
     return 0
 
+
 def run() -> int:
     try:
         return main()
@@ -392,5 +430,6 @@ def run() -> int:
         print(f"error: unexpected error: {exc}", file=sys.stderr)
         return 1
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     raise SystemExit(run())

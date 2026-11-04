@@ -392,6 +392,7 @@ def __getattr__(name: str) -> object:
 
 def _install_deadline(deadline_ns: int) -> None:
     _ensure_runtime()
+
     def alarm_handler(_signum: int, _frame: object) -> None:
         raise _WorkerDeadline
 
@@ -541,7 +542,10 @@ def _read_request_frame(
                         if frame_length > remote_http.MAX_REQUEST_FRAME_BYTES:
                             raise _WorkerFailure("remote-request-invalid")
                 if chunk:
-                    if frame_length is None or len(response) + len(chunk) > frame_length:
+                    if (
+                        frame_length is None
+                        or len(response) + len(chunk) > frame_length
+                    ):
                         raise _WorkerFailure("remote-request-invalid")
                     response.extend(chunk)
                 if frame_length is not None and len(response) == frame_length:
@@ -762,9 +766,7 @@ def _response_read_failure(
         and message[len(too_large_prefix) : -len(too_large_suffix)].isdigit()
     )
     code = "remote-response-too-large" if too_large else "remote-response-invalid"
-    provider_status = (
-        status if type(status) is int and 200 <= status <= 299 else None
-    )
+    provider_status = status if type(status) is int and 200 <= status <= 299 else None
     return _WorkerFailure(code, "provider_malformed_payload", provider_status)
 
 
@@ -790,7 +792,11 @@ def _resolve_addresses(url: str, deadline_ns: int) -> tuple[str, ...]:
     try:
         parsed = urllib.parse.urlparse(url)
         hostname = parsed.hostname
-        port = parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80)
+        port = (
+            parsed.port
+            if parsed.port is not None
+            else (443 if parsed.scheme == "https" else 80)
+        )
     except ValueError:
         raise _WorkerFailure("remote-url-unsafe")
     if not hostname:
@@ -839,7 +845,9 @@ def _close_http_resources(
     _ensure_runtime()
     primary = sys.exc_info()[1]
     primary_is_semantic = primary is not None and (
-        isinstance(primary, (_WorkerDeadline, _WorkerFailure, KeyboardInterrupt, SystemExit))
+        isinstance(
+            primary, (_WorkerDeadline, _WorkerFailure, KeyboardInterrupt, SystemExit)
+        )
         or not isinstance(primary, Exception)
     )
     close_failed = False
@@ -847,9 +855,9 @@ def _close_http_resources(
 
     def record_close_failure(error: BaseException) -> None:
         nonlocal close_abort, close_failed
-        if isinstance(error, (_WorkerDeadline, KeyboardInterrupt, SystemExit)) or not isinstance(
-            error, Exception
-        ):
+        if isinstance(
+            error, (_WorkerDeadline, KeyboardInterrupt, SystemExit)
+        ) or not isinstance(error, Exception):
             if close_abort is None:
                 close_abort = error
         else:
@@ -887,7 +895,11 @@ def _open_connection(
     parsed = urllib.parse.urlparse(url)
     timeout = _remaining_seconds(deadline_ns)
     kwargs: dict[str, object] = {
-        "port": parsed.port if parsed.port is not None else (443 if parsed.scheme == "https" else 80),
+        "port": (
+            parsed.port
+            if parsed.port is not None
+            else (443 if parsed.scheme == "https" else 80)
+        ),
         "timeout": timeout,
         "pinned_addresses": addresses,
     }
@@ -945,7 +957,9 @@ def _read_listing(url: str, deadline_ns: int) -> dict[str, object]:
                         field_name="ollama url",
                     )
                     redirect_parsed = urllib.parse.urlparse(redirect_url)
-                    if redirect_parsed.scheme == "http" and not is_loopback_hostname(redirect_parsed.hostname):
+                    if redirect_parsed.scheme == "http" and not is_loopback_hostname(
+                        redirect_parsed.hostname
+                    ):
                         raise PostProcessError("unsafe redirect")
                 except (PostProcessError, ValueError):
                     raise _WorkerFailure("remote-url-unsafe")
@@ -1177,7 +1191,9 @@ def _read_openai_listing(url: str, api_key: str, deadline_ns: int) -> dict[str, 
                         field_name="openai-compatible url",
                     )
                     redirect_parsed = urllib.parse.urlparse(redirect_url)
-                    if redirect_parsed.scheme == "http" and not is_loopback_hostname(redirect_parsed.hostname):
+                    if redirect_parsed.scheme == "http" and not is_loopback_hostname(
+                        redirect_parsed.hostname
+                    ):
                         raise PostProcessError("unsafe redirect")
                 except (PostProcessError, ValueError):
                     raise _WorkerFailure("remote-url-unsafe")
@@ -1280,7 +1296,9 @@ def _openai_postprocess_payload(
             field_name="openai-compatible model",
             max_chars=MAX_OPENAI_COMPATIBLE_MODEL_CHARS,
         ).strip()
-        if not model_name or not _openai_compatible_model_supports_text_polishing(model_name):
+        if not model_name or not _openai_compatible_model_supports_text_polishing(
+            model_name
+        ):
             raise ValueError
         if type(flex_processing) is not bool or type(service_tier_fallback) is not bool:
             raise ValueError
@@ -1471,8 +1489,9 @@ def _read_openai_postprocess(
                             field_name="openai-compatible post-process url",
                         )
                         redirect_parsed = urllib.parse.urlparse(redirect_url)
-                        if redirect_parsed.scheme == "http" and not is_loopback_hostname(
-                            redirect_parsed.hostname
+                        if (
+                            redirect_parsed.scheme == "http"
+                            and not is_loopback_hostname(redirect_parsed.hostname)
                         ):
                             raise PostProcessError("unsafe redirect")
                     except (PostProcessError, ValueError):
@@ -1488,9 +1507,11 @@ def _read_openai_postprocess(
                         deadline=deadline_ns / 1_000_000_000,
                     )
                     try:
-                        unsupported_parameter, flex_rejected = _decode_openai_http_error(
-                            raw_error,
-                            api_key,
+                        unsupported_parameter, flex_rejected = (
+                            _decode_openai_http_error(
+                                raw_error,
+                                api_key,
+                            )
                         )
                     except _WorkerFailure:
                         raise _http_failure(response.status) from None

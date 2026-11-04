@@ -58,7 +58,9 @@ class AlarmTest(unittest.TestCase):
             alarm_module._flock_retry(1, fcntl.LOCK_EX, timeout_seconds=float("inf"))
 
     def test_alarm_lock_rejects_oversized_timeout(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "alarm lock timeout exceeds safe limit"):
+        with self.assertRaisesRegex(
+            RuntimeError, "alarm lock timeout exceeds safe limit"
+        ):
             alarm_module._flock_retry(
                 1,
                 fcntl.LOCK_EX,
@@ -75,13 +77,19 @@ class AlarmTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            with mock.patch.object(alarm_module.fcntl, "flock", side_effect=interrupt_first_lock):
+            with mock.patch.object(
+                alarm_module.fcntl, "flock", side_effect=interrupt_first_lock
+            ):
                 with alarm_module._locked_alarm_store(path):
                     pass
 
         self.assertEqual(
             operations,
-            [fcntl.LOCK_EX | fcntl.LOCK_NB, fcntl.LOCK_EX | fcntl.LOCK_NB, fcntl.LOCK_UN],
+            [
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                fcntl.LOCK_UN,
+            ],
         )
 
     def test_alarm_store_lock_times_out_when_exclusive_lock_is_busy(self) -> None:
@@ -94,7 +102,9 @@ class AlarmTest(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as tmp,
             mock.patch.object(alarm_module.fcntl, "flock", side_effect=busy_lock),
-            mock.patch.object(alarm_module.time_module, "monotonic", side_effect=(0.0, 6.0)),
+            mock.patch.object(
+                alarm_module.time_module, "monotonic", side_effect=(0.0, 6.0)
+            ),
             mock.patch.object(alarm_module.time_module, "sleep"),
             self.assertRaisesRegex(RuntimeError, "lock acquisition timed out"),
         ):
@@ -197,10 +207,14 @@ class AlarmTest(unittest.TestCase):
         self.assertNotIn(str(path), message)
         self.assertNotIn("secret path", message)
 
-    def test_load_alarm_store_rejects_store_replaced_by_broken_symlink_after_path_check(self) -> None:
+    def test_load_alarm_store_rejects_store_replaced_by_broken_symlink_after_path_check(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            path.write_text('{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+            path.write_text(
+                '{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8"
+            )
             original_assert = alarm_module._assert_clean_path
             replaced = False
 
@@ -212,14 +226,21 @@ class AlarmTest(unittest.TestCase):
                     path.unlink()
                     path.symlink_to(Path(tmp) / "missing-alarms.json")
 
-            with mock.patch("speed_of_cinnamon.alarms._assert_clean_path", side_effect=replace_after_assert):
-                with self.assertRaisesRegex(RuntimeError, "alarm store could not be read"):
+            with mock.patch(
+                "speed_of_cinnamon.alarms._assert_clean_path",
+                side_effect=replace_after_assert,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "alarm store could not be read"
+                ):
                     load_alarm_store(path)
 
     def test_load_alarm_store_rejects_file_that_grows_after_size_check(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            path.write_text('{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+            path.write_text(
+                '{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8"
+            )
             path.chmod(0o600)
 
             with mock.patch(
@@ -237,7 +258,9 @@ class AlarmTest(unittest.TestCase):
             expected_stat=mock.ANY,
         )
 
-    def test_load_alarm_store_rejects_regular_file_swap_before_secure_read(self) -> None:
+    def test_load_alarm_store_rejects_regular_file_swap_before_secure_read(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             payload = '{"version":1,"alarms":[],"last_checked_at":""}'
@@ -251,15 +274,25 @@ class AlarmTest(unittest.TestCase):
                 path.chmod(0o600)
                 return real_read(*args, **kwargs)
 
-            with mock.patch.object(alarm_module, "read_text_without_following_symlinks", side_effect=read_and_swap):
-                with self.assertRaisesRegex(RuntimeError, "alarm store could not be read"):
+            with mock.patch.object(
+                alarm_module,
+                "read_text_without_following_symlinks",
+                side_effect=read_and_swap,
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "alarm store could not be read"
+                ):
                     load_alarm_store(path)
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
-    def test_load_alarm_store_uses_secure_open_flags(self, mocked_open: mock.Mock) -> None:
+    def test_load_alarm_store_uses_secure_open_flags(
+        self, mocked_open: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            path.write_text('{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+            path.write_text(
+                '{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8"
+            )
             path.chmod(0o600)
             payload = load_alarm_store(path)
         self.assertEqual(payload["version"], 1)
@@ -277,15 +310,22 @@ class AlarmTest(unittest.TestCase):
     def test_load_alarm_store_rejects_world_readable_file(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            path.write_text('{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+            path.write_text(
+                '{"version":1,"alarms":[],"last_checked_at":""}', encoding="utf-8"
+            )
             path.chmod(0o644)
 
             with self.assertRaisesRegex(RuntimeError, "alarm store could not be read"):
                 load_alarm_store(path)
 
     def test_repeat_day_parser_supports_common_groups(self) -> None:
-        self.assertEqual(parse_repeat_days("daily"), ["mon", "tue", "wed", "thu", "fri", "sat", "sun"])
-        self.assertEqual(parse_repeat_days("weekdays"), ["mon", "tue", "wed", "thu", "fri"])
+        self.assertEqual(
+            parse_repeat_days("daily"),
+            ["mon", "tue", "wed", "thu", "fri", "sat", "sun"],
+        )
+        self.assertEqual(
+            parse_repeat_days("weekdays"), ["mon", "tue", "wed", "thu", "fri"]
+        )
         self.assertEqual(parse_repeat_days("weekends"), ["sat", "sun"])
         self.assertEqual(parse_repeat_days("mon,wed,fri"), ["mon", "wed", "fri"])
 
@@ -295,28 +335,42 @@ class AlarmTest(unittest.TestCase):
 
     def test_normalize_alarm_rejects_non_exact_weekday_tokens(self) -> None:
         with self.assertRaisesRegex(ValueError, "unknown alarm day: monday"):
-            normalize_alarm({"name": "Morning", "hour": 9, "minute": 0, "days": ["monday"]})
+            normalize_alarm(
+                {"name": "Morning", "hour": 9, "minute": 0, "days": ["monday"]}
+            )
 
     def test_normalize_alarm_canonicalizes_last_triggered_at_to_minute(self) -> None:
-        normalized = normalize_alarm({
-            "name": "Morning",
-            "hour": 9,
-            "minute": 0,
-            "last_triggered_at": "2026-06-01T09:00:30",
-        })
+        normalized = normalize_alarm(
+            {
+                "name": "Morning",
+                "hour": 9,
+                "minute": 0,
+                "last_triggered_at": "2026-06-01T09:00:30",
+            }
+        )
         self.assertEqual(normalized["last_triggered_at"], "2026-06-01T09:00")
 
     def test_alarm_days_defaults_to_daily_only_when_days_are_missing(self) -> None:
         self.assertEqual(alarm_module.alarm_days({}), list(alarm_module.DAY_CODES))
         self.assertEqual(alarm_module.alarm_days({"days": []}), [])
 
-    def test_alarm_days_rejects_invalid_present_days_without_falling_back_to_daily(self) -> None:
+    def test_alarm_days_rejects_invalid_present_days_without_falling_back_to_daily(
+        self,
+    ) -> None:
         self.assertEqual(alarm_module.alarm_days({"days": ["noday"]}), [])
-        self.assertIsNone(alarm_occurrence({"hour": 9, "minute": 0, "days": ["noday"]}, date(2026, 6, 1)))
+        self.assertIsNone(
+            alarm_occurrence(
+                {"hour": 9, "minute": 0, "days": ["noday"]}, date(2026, 6, 1)
+            )
+        )
 
     def test_alarm_days_rejects_non_exact_weekday_tokens(self) -> None:
         self.assertEqual(alarm_module.alarm_days({"days": ["monday"]}), [])
-        self.assertIsNone(alarm_occurrence({"hour": 9, "minute": 0, "days": ["monday"]}, date(2026, 6, 1)))
+        self.assertIsNone(
+            alarm_occurrence(
+                {"hour": 9, "minute": 0, "days": ["monday"]}, date(2026, 6, 1)
+            )
+        )
 
     def test_iter_dates_returns_empty_for_reversed_range(self) -> None:
         self.assertEqual(
@@ -325,11 +379,15 @@ class AlarmTest(unittest.TestCase):
         )
 
     def test_repeat_day_parser_rejects_null_byte(self) -> None:
-        with self.assertRaisesRegex(ValueError, "alarm days contains invalid null byte"):
+        with self.assertRaisesRegex(
+            ValueError, "alarm days contains invalid null byte"
+        ):
             parse_repeat_days("mon\x00,fri")
 
     def test_parse_alarm_time_rejects_null_byte(self) -> None:
-        with self.assertRaisesRegex(ValueError, "alarm time contains invalid null byte"):
+        with self.assertRaisesRegex(
+            ValueError, "alarm time contains invalid null byte"
+        ):
             parse_alarm_time("09:00\x00")
 
     def test_parse_alarm_time_rejects_oversized_input(self) -> None:
@@ -382,7 +440,9 @@ class AlarmTest(unittest.TestCase):
             },
         ]
 
-        self.assertEqual(format_alarm_overview(alarms, now), "1 active alarm - next Standup at 08:30")
+        self.assertEqual(
+            format_alarm_overview(alarms, now), "1 active alarm - next Standup at 08:30"
+        )
 
     def test_due_check_marks_alarm_and_prevents_duplicate_notifications(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -391,7 +451,9 @@ class AlarmTest(unittest.TestCase):
             due_at = datetime(2026, 6, 1, 9, 0)
 
             first = check_due_alarms(path=path, now=due_at, mark=True)
-            second = check_due_alarms(path=path, now=due_at + timedelta(seconds=30), mark=True)
+            second = check_due_alarms(
+                path=path, now=due_at + timedelta(seconds=30), mark=True
+            )
 
         self.assertEqual(first["count"], 1)
         self.assertEqual(first["due"][0]["label"], "Morning")
@@ -402,7 +464,12 @@ class AlarmTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             add_alarm("09:00", name="Morning", days="mon", path=path)
-            payload = check_due_alarms(path=path, now=datetime(2026, 6, 1, 9, 10), mark=True, catch_up_minutes=15)
+            payload = check_due_alarms(
+                path=path,
+                now=datetime(2026, 6, 1, 9, 10),
+                mark=True,
+                catch_up_minutes=15,
+            )
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["due"][0]["scheduled_at"], "2026-06-01T09:00")
@@ -468,7 +535,12 @@ class AlarmTest(unittest.TestCase):
                 },
                 path,
             )
-            payload = check_due_alarms(path=path, now=datetime(2026, 6, 1, 9, 10), mark=True, catch_up_minutes=15)
+            payload = check_due_alarms(
+                path=path,
+                now=datetime(2026, 6, 1, 9, 10),
+                mark=True,
+                catch_up_minutes=15,
+            )
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(payload["due"][0]["scheduled_at"], "2026-06-01T09:00")
@@ -483,7 +555,9 @@ class AlarmTest(unittest.TestCase):
                 },
                 path,
             )
-            payload = check_due_alarms(path=path, now=datetime(2026, 6, 1, 9, 10), mark=False)
+            payload = check_due_alarms(
+                path=path, now=datetime(2026, 6, 1, 9, 10), mark=False
+            )
 
         self.assertEqual(payload["count"], 0)
 
@@ -492,22 +566,36 @@ class AlarmTest(unittest.TestCase):
             path = Path(tmp) / "alarms.json"
             save_alarm_store({"alarms": [], "last_checked_at": ""}, path)
 
-            with mock.patch.object(alarm_module, "_locked_alarm_store", wraps=alarm_module._locked_alarm_store) as mocked_lock:
+            with mock.patch.object(
+                alarm_module,
+                "_locked_alarm_store",
+                wraps=alarm_module._locked_alarm_store,
+            ) as mocked_lock:
                 list_alarm_payload(path)
             mocked_lock.assert_called_once_with(path)
 
-            with mock.patch.object(alarm_module, "_locked_alarm_store", wraps=alarm_module._locked_alarm_store) as mocked_lock:
+            with mock.patch.object(
+                alarm_module,
+                "_locked_alarm_store",
+                wraps=alarm_module._locked_alarm_store,
+            ) as mocked_lock:
                 check_due_alarms(path=path, now=datetime(2026, 6, 1, 9, 10), mark=False)
             mocked_lock.assert_called_once_with(path)
 
     def test_save_alarm_store_locks_store(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            with mock.patch.object(alarm_module, "_locked_alarm_store", wraps=alarm_module._locked_alarm_store) as mocked_lock:
+            with mock.patch.object(
+                alarm_module,
+                "_locked_alarm_store",
+                wraps=alarm_module._locked_alarm_store,
+            ) as mocked_lock:
                 save_alarm_store({"alarms": [], "last_checked_at": ""}, path)
             mocked_lock.assert_called_once_with(path)
 
-    def test_add_alarm_rejects_full_store_without_dropping_existing_alarms(self) -> None:
+    def test_add_alarm_rejects_full_store_without_dropping_existing_alarms(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             save_alarm_store(
@@ -529,7 +617,9 @@ class AlarmTest(unittest.TestCase):
                 path,
             )
 
-            with self.assertRaisesRegex(ValueError, f"cannot add more than {MAX_ALARM_COUNT} alarms"):
+            with self.assertRaisesRegex(
+                ValueError, f"cannot add more than {MAX_ALARM_COUNT} alarms"
+            ):
                 add_alarm("23:59", name="Overflow", path=path)
 
             self.assertEqual(len(load_alarm_store(path)["alarms"]), MAX_ALARM_COUNT)
@@ -546,7 +636,9 @@ class AlarmTest(unittest.TestCase):
                 days=day,
                 path=path,
             )
-            payload = check_due_alarms(path=path, now=aware_now, mark=True, catch_up_minutes=0)
+            payload = check_due_alarms(
+                path=path, now=aware_now, mark=True, catch_up_minutes=0
+            )
 
         self.assertEqual(payload["count"], 1)
         self.assertEqual(
@@ -621,11 +713,15 @@ class AlarmTest(unittest.TestCase):
                         path,
                     )
 
-            with mock.patch("speed_of_cinnamon.alarms.fcntl.flock", side_effect=fake_flock):
+            with mock.patch(
+                "speed_of_cinnamon.alarms.fcntl.flock", side_effect=fake_flock
+            ):
                 add_alarm("09:00", name="Morning", days="mon", path=path)
             payload = load_alarm_store(path)
 
-        self.assertEqual([alarm["name"] for alarm in payload["alarms"]], ["Concurrent", "Morning"])
+        self.assertEqual(
+            [alarm["name"] for alarm in payload["alarms"]], ["Concurrent", "Morning"]
+        )
 
     def test_alarm_store_lock_rejects_hardlinked_existing_lock(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -649,13 +745,17 @@ class AlarmTest(unittest.TestCase):
             os.chmod(tmp, 0o777)
             path = Path(tmp) / "alarms.json"
 
-            with self.assertRaisesRegex(RuntimeError, "alarm store lock directory must be private"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store lock directory must be private"
+            ):
                 add_alarm("09:00", name="Morning", days="mon", path=path)
 
     def test_alarm_store_lock_cleanup_note_does_not_leak_error_details(self) -> None:
         primary = RuntimeError("primary failure")
 
-        alarm_module._note_lock_cleanup_failure(primary, OSError("secret path and descriptor details"))
+        alarm_module._note_lock_cleanup_failure(
+            primary, OSError("secret path and descriptor details")
+        )
 
         self.assertEqual(primary.__notes__, ["alarm store lock cleanup failed"])
 
@@ -669,7 +769,11 @@ class AlarmTest(unittest.TestCase):
 
         with (
             mock.patch.object(alarm_module, "_assert_clean_path"),
-            mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                alarm_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(alarm_module, "assert_fd_is_private_directory"),
             mock.patch.object(alarm_module, "assert_fd_is_regular_private_file"),
             mock.patch.object(alarm_module.os, "open", return_value=123),
@@ -677,7 +781,9 @@ class AlarmTest(unittest.TestCase):
             mock.patch.object(alarm_module.fcntl, "flock"),
         ):
             with self.assertRaisesRegex(OSError, "lock close failed"):
-                with alarm_module._locked_alarm_store(Path("/probe/alarms.json")) as store_path:
+                with alarm_module._locked_alarm_store(
+                    Path("/probe/alarms.json")
+                ) as store_path:
                     self.assertEqual(store_path, Path("/probe/alarms.json"))
 
         self.assertEqual(closed_fds, [123, 456])
@@ -699,7 +805,9 @@ class AlarmTest(unittest.TestCase):
             )
         )
 
-    def test_alarm_store_lock_continues_cleanup_when_unlock_is_interrupted(self) -> None:
+    def test_alarm_store_lock_continues_cleanup_when_unlock_is_interrupted(
+        self,
+    ) -> None:
         closed_fds: list[int] = []
 
         def interrupt_unlock(_fd: int, operation: int) -> None:
@@ -708,12 +816,18 @@ class AlarmTest(unittest.TestCase):
 
         with (
             mock.patch.object(alarm_module, "_assert_clean_path"),
-            mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                alarm_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(alarm_module, "assert_fd_is_private_directory"),
             mock.patch.object(alarm_module, "assert_fd_is_regular_private_file"),
             mock.patch.object(alarm_module.os, "open", return_value=123),
             mock.patch.object(alarm_module.os, "close", side_effect=closed_fds.append),
-            mock.patch.object(alarm_module.fcntl, "flock", side_effect=interrupt_unlock),
+            mock.patch.object(
+                alarm_module.fcntl, "flock", side_effect=interrupt_unlock
+            ),
         ):
             with self.assertRaises(KeyboardInterrupt):
                 with alarm_module._locked_alarm_store(Path("/probe/alarms.json")):
@@ -721,24 +835,42 @@ class AlarmTest(unittest.TestCase):
 
         self.assertEqual(closed_fds, [123, 456])
 
-    def test_alarm_store_lock_preserves_open_error_when_parent_close_fails(self) -> None:
+    def test_alarm_store_lock_preserves_open_error_when_parent_close_fails(
+        self,
+    ) -> None:
         with (
             mock.patch.object(alarm_module, "_assert_clean_path"),
-            mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                alarm_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(alarm_module, "assert_fd_is_private_directory"),
-            mock.patch.object(alarm_module.os, "open", side_effect=OSError("lock open failed")),
-            mock.patch.object(alarm_module.os, "close", side_effect=OSError("parent close failed")),
+            mock.patch.object(
+                alarm_module.os, "open", side_effect=OSError("lock open failed")
+            ),
+            mock.patch.object(
+                alarm_module.os, "close", side_effect=OSError("parent close failed")
+            ),
         ):
-            with self.assertRaisesRegex(RuntimeError, "failed to open alarm store lock file") as caught:
+            with self.assertRaisesRegex(
+                RuntimeError, "failed to open alarm store lock file"
+            ) as caught:
                 with alarm_module._locked_alarm_store(Path("/probe/alarms.json")):
                     pass
 
-        self.assertIn("alarm store lock cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn(
+            "alarm store lock cleanup failed", "\n".join(caught.exception.__notes__)
+        )
 
     def test_alarm_store_lock_closes_parent_when_lock_open_is_interrupted(self) -> None:
         with (
             mock.patch.object(alarm_module, "_assert_clean_path"),
-            mock.patch.object(alarm_module, "ensure_directory_without_following_symlinks", return_value=456),
+            mock.patch.object(
+                alarm_module,
+                "ensure_directory_without_following_symlinks",
+                return_value=456,
+            ),
             mock.patch.object(alarm_module, "assert_fd_is_private_directory"),
             mock.patch.object(alarm_module.os, "open", side_effect=KeyboardInterrupt),
             mock.patch.object(alarm_module.os, "close") as mocked_close,
@@ -754,8 +886,12 @@ class AlarmTest(unittest.TestCase):
             path = Path(tmp) / "alarms.json"
             path.write_text("{}", encoding="utf-8")
             path.chmod(0o600)
-            with mock.patch.object(alarm_module.json, "loads", side_effect=RecursionError("too deep")):
-                with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
+            with mock.patch.object(
+                alarm_module.json, "loads", side_effect=RecursionError("too deep")
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "alarm store could not be parsed"
+                ):
                     load_alarm_store(path)
 
     def test_load_alarm_store_wraps_json_memory_error(self) -> None:
@@ -763,15 +899,24 @@ class AlarmTest(unittest.TestCase):
             path = Path(tmp) / "alarms.json"
             path.write_text("{}", encoding="utf-8")
             path.chmod(0o600)
-            with mock.patch.object(alarm_module.json, "loads", side_effect=MemoryError("too large")):
-                with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
+            with mock.patch.object(
+                alarm_module.json, "loads", side_effect=MemoryError("too large")
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "alarm store could not be parsed"
+                ):
                     load_alarm_store(path)
 
     def test_due_check_with_zero_catch_up_skips_past_alarm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             add_alarm("09:00", name="Morning", days="mon", path=path)
-            payload = check_due_alarms(path=path, now=datetime(2026, 6, 1, 9, 10), mark=True, catch_up_minutes=0)
+            payload = check_due_alarms(
+                path=path,
+                now=datetime(2026, 6, 1, 9, 10),
+                mark=True,
+                catch_up_minutes=0,
+            )
 
         self.assertEqual(payload["count"], 0)
         self.assertEqual(payload["due"], [])
@@ -779,28 +924,39 @@ class AlarmTest(unittest.TestCase):
     def test_cli_adds_lists_checks_and_removes_alarm(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
-            with mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
-                code = cli.run([
-                    "alarms",
-                    "add",
-                    "--time",
-                    "09:00",
-                    "--name",
-                    "Standup",
-                    "--days",
-                    "weekdays",
-                    "--json",
-                ])
+            with (
+                mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
+                code = cli.run(
+                    [
+                        "alarms",
+                        "add",
+                        "--time",
+                        "09:00",
+                        "--name",
+                        "Standup",
+                        "--days",
+                        "weekdays",
+                        "--json",
+                    ]
+                )
             added = json.loads(stdout.getvalue())
 
             stdout = io.StringIO()
-            with mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+            with (
+                mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
                 list_code = cli.run(["alarms", "list", "--json"])
             listed = json.loads(stdout.getvalue())
 
             alarm_id = added["alarm"]["id"]
             stdout = io.StringIO()
-            with mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp}), redirect_stdout(stdout):
+            with (
+                mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp}),
+                redirect_stdout(stdout),
+            ):
                 remove_code = cli.run(["alarms", "remove", alarm_id, "--json"])
             removed = json.loads(stdout.getvalue())
 
@@ -808,15 +964,24 @@ class AlarmTest(unittest.TestCase):
         self.assertEqual(list_code, 0)
         self.assertEqual(remove_code, 0)
         self.assertEqual(added["alarm"]["label"], "Standup")
-        self.assertEqual(listed["alarms"][0]["days"], ["mon", "tue", "wed", "thu", "fri"])
+        self.assertEqual(
+            listed["alarms"][0]["days"], ["mon", "tue", "wed", "thu", "fri"]
+        )
         self.assertTrue(removed["removed"])
 
     def test_cli_alarm_import_rejects_non_finite_json_numbers(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
             with (
-                mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp, "XDG_STATE_HOME": tmp}),
-                mock.patch("sys.stdin", io.StringIO('{"version":1,"alarms":[],"last_checked_at":"", "marker":NaN}')),
+                mock.patch.dict(
+                    "os.environ", {"XDG_DATA_HOME": tmp, "XDG_STATE_HOME": tmp}
+                ),
+                mock.patch(
+                    "sys.stdin",
+                    io.StringIO(
+                        '{"version":1,"alarms":[],"last_checked_at":"", "marker":NaN}'
+                    ),
+                ),
                 redirect_stdout(stdout),
             ):
                 code = cli.run(["alarms-import", "--json"])
@@ -848,8 +1013,15 @@ class AlarmTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             stdout = io.StringIO()
             with (
-                mock.patch.dict("os.environ", {"XDG_DATA_HOME": tmp, "XDG_STATE_HOME": tmp}),
-                mock.patch("sys.stdin", io.StringIO('{"version":1,"version":1,"alarms":[],"last_checked_at":""}')),
+                mock.patch.dict(
+                    "os.environ", {"XDG_DATA_HOME": tmp, "XDG_STATE_HOME": tmp}
+                ),
+                mock.patch(
+                    "sys.stdin",
+                    io.StringIO(
+                        '{"version":1,"version":1,"alarms":[],"last_checked_at":""}'
+                    ),
+                ),
                 redirect_stdout(stdout),
             ):
                 code = cli.run(["alarms-import", "--json"])
@@ -867,22 +1039,30 @@ class AlarmTest(unittest.TestCase):
                 encoding="utf-8",
             )
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store could not be parsed"
+            ):
                 load_alarm_store(path)
 
     def test_list_payload_uses_empty_store_when_no_alarms_exist(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            payload = list_alarm_payload(Path(tmp) / "missing.json", datetime(2026, 6, 1, 9, 0))
+            payload = list_alarm_payload(
+                Path(tmp) / "missing.json", datetime(2026, 6, 1, 9, 0)
+            )
 
         self.assertEqual(payload["alarms"], [])
         self.assertEqual(payload["summary"], "No alarms configured")
 
     def test_normalize_alarm_rejects_null_byte_name(self) -> None:
-        with self.assertRaisesRegex(ValueError, "alarm name contains invalid null byte"):
+        with self.assertRaisesRegex(
+            ValueError, "alarm name contains invalid null byte"
+        ):
             normalize_alarm({"name": "Morning\x00", "hour": 9, "minute": 0})
 
     def test_normalize_alarm_rejects_control_char_name(self) -> None:
-        with self.assertRaisesRegex(ValueError, "alarm name contains invalid control character"):
+        with self.assertRaisesRegex(
+            ValueError, "alarm name contains invalid control character"
+        ):
             normalize_alarm({"name": "Morning\nInjected", "hour": 9, "minute": 0})
 
     def test_normalize_alarm_rejects_null_byte_id(self) -> None:
@@ -891,11 +1071,15 @@ class AlarmTest(unittest.TestCase):
 
     def test_normalize_alarm_rejects_oversized_name(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm name is too large"):
-            normalize_alarm({"name": "A" * (MAX_ALARM_NAME_CHARS + 10), "hour": 9, "minute": 0})
+            normalize_alarm(
+                {"name": "A" * (MAX_ALARM_NAME_CHARS + 10), "hour": 9, "minute": 0}
+            )
 
     def test_normalize_alarm_rejects_oversized_id(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm id is too large"):
-            normalize_alarm({"id": "X" * (MAX_ALARM_ID_CHARS + 25), "hour": 9, "minute": 0})
+            normalize_alarm(
+                {"id": "X" * (MAX_ALARM_ID_CHARS + 25), "hour": 9, "minute": 0}
+            )
 
     def test_normalize_alarm_rejects_hour_out_of_range(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm hour must be between"):
@@ -907,7 +1091,9 @@ class AlarmTest(unittest.TestCase):
 
     def test_normalize_alarm_rejects_invalid_urgency(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm urgency must be one of"):
-            normalize_alarm({"name": "Morning", "hour": 9, "minute": 0, "urgency": "urgent"})
+            normalize_alarm(
+                {"name": "Morning", "hour": 9, "minute": 0, "urgency": "urgent"}
+            )
 
     def test_normalize_alarm_rejects_non_dict(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm must be a dictionary"):
@@ -921,7 +1107,9 @@ class AlarmTest(unittest.TestCase):
                 encoding="utf-8",
             )
             path.chmod(0o600)
-            with self.assertRaisesRegex(ValueError, "catch-up minutes must be at least"):
+            with self.assertRaisesRegex(
+                ValueError, "catch-up minutes must be at least"
+            ):
                 check_due_alarms(path=path, catch_up_minutes=-1)
 
     def test_check_due_alarms_rejects_excessive_catch_up_minutes(self) -> None:
@@ -943,7 +1131,9 @@ class AlarmTest(unittest.TestCase):
                 encoding="utf-8",
             )
             path.chmod(0o600)
-            with self.assertRaisesRegex(ValueError, "catch-up minutes must be an integer"):
+            with self.assertRaisesRegex(
+                ValueError, "catch-up minutes must be an integer"
+            ):
                 check_due_alarms(path=path, catch_up_minutes="5")  # type: ignore[arg-type]
 
     def test_check_due_alarms_rejects_non_boolean_mark(self) -> None:
@@ -958,63 +1148,79 @@ class AlarmTest(unittest.TestCase):
                 check_due_alarms(path=path, mark="true")  # type: ignore[arg-type]
 
     def test_normalize_alarm_rejects_null_byte_last_triggered_at(self) -> None:
-        with self.assertRaisesRegex(ValueError, "last_triggered_at contains invalid null byte"):
-            normalize_alarm({
-                "name": "Morning",
-                "hour": 9,
-                "minute": 0,
-                "last_triggered_at": "2026-06-01T09:00\x00",
-            })
+        with self.assertRaisesRegex(
+            ValueError, "last_triggered_at contains invalid null byte"
+        ):
+            normalize_alarm(
+                {
+                    "name": "Morning",
+                    "hour": 9,
+                    "minute": 0,
+                    "last_triggered_at": "2026-06-01T09:00\x00",
+                }
+            )
 
     def test_normalize_alarm_rejects_boolean_hour(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm hour must be an integer"):
-            normalize_alarm({
-                "name": "Morning",
-                "hour": True,
-                "minute": 30,
-            })
+            normalize_alarm(
+                {
+                    "name": "Morning",
+                    "hour": True,
+                    "minute": 30,
+                }
+            )
 
     def test_normalize_alarm_rejects_boolean_minute(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm minute must be an integer"):
-            normalize_alarm({
-                "name": "Morning",
-                "hour": 9,
-                "minute": False,
-            })
+            normalize_alarm(
+                {
+                    "name": "Morning",
+                    "hour": 9,
+                    "minute": False,
+                }
+            )
 
     def test_normalize_alarm_rejects_float_hour(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm hour must be an integer"):
-            normalize_alarm({
-                "name": "Morning",
-                "hour": 9.5,  # type: ignore[arg-type]
-                "minute": 30,
-            })
+            normalize_alarm(
+                {
+                    "name": "Morning",
+                    "hour": 9.5,  # type: ignore[arg-type]
+                    "minute": 30,
+                }
+            )
 
     def test_normalize_alarm_rejects_float_minute(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm minute must be an integer"):
-            normalize_alarm({
-                "name": "Morning",
-                "hour": 9,
-                "minute": 30.0,  # type: ignore[arg-type]
-            })
+            normalize_alarm(
+                {
+                    "name": "Morning",
+                    "hour": 9,
+                    "minute": 30.0,  # type: ignore[arg-type]
+                }
+            )
 
     def test_normalize_alarm_rejects_non_boolean_enabled(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm enabled must be a boolean"):
-            normalize_alarm({
-                "name": "Morning",
-                "hour": 9,
-                "minute": 30,
-                "enabled": "nope",
-            })
+            normalize_alarm(
+                {
+                    "name": "Morning",
+                    "hour": 9,
+                    "minute": 30,
+                    "enabled": "nope",
+                }
+            )
 
     def test_normalize_alarm_rejects_invalid_enabled_integer(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm enabled must be a boolean"):
-            normalize_alarm({
-                "name": "Morning",
-                "hour": 9,
-                "minute": 30,
-                "enabled": 2,  # type: ignore[arg-type]
-            })
+            normalize_alarm(
+                {
+                    "name": "Morning",
+                    "hour": 9,
+                    "minute": 30,
+                    "enabled": 2,  # type: ignore[arg-type]
+                }
+            )
 
     def test_alarm_occurrence_rejects_boolean_hour(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm hour must be an integer"):
@@ -1034,12 +1240,14 @@ class AlarmTest(unittest.TestCase):
 
     def test_normalize_alarm_rejects_oversized_last_triggered_at(self) -> None:
         with self.assertRaisesRegex(ValueError, "last_triggered_at is too large"):
-            normalize_alarm({
-                "name": "Morning",
-                "hour": 9,
-                "minute": 0,
-                "last_triggered_at": "x" * (MAX_ALARM_TRIGGER_CHARS + 10),
-            })
+            normalize_alarm(
+                {
+                    "name": "Morning",
+                    "hour": 9,
+                    "minute": 0,
+                    "last_triggered_at": "x" * (MAX_ALARM_TRIGGER_CHARS + 10),
+                }
+            )
 
     def test_remove_alarm_rejects_empty_id(self) -> None:
         with self.assertRaisesRegex(ValueError, "alarm id is required"):
@@ -1101,11 +1309,15 @@ class AlarmTest(unittest.TestCase):
             add_alarm("09:00", name="\ud800")
 
     def test_add_alarm_rejects_control_character_urgency(self) -> None:
-        with self.assertRaisesRegex(ValueError, "urgency contains invalid control character"):
+        with self.assertRaisesRegex(
+            ValueError, "urgency contains invalid control character"
+        ):
             add_alarm("09:00", urgency="\x85normal")
 
     def test_add_alarm_rejects_escaped_control_character_urgency(self) -> None:
-        with self.assertRaisesRegex(ValueError, "urgency contains invalid control character"):
+        with self.assertRaisesRegex(
+            ValueError, "urgency contains invalid control character"
+        ):
             add_alarm("09:00", urgency="\\x85normal")
 
     def test_parse_repeat_days_rejects_non_string_input(self) -> None:
@@ -1117,7 +1329,9 @@ class AlarmTest(unittest.TestCase):
             path = Path(tmp) / "alarms.json"
             path.write_text("{invalid}", encoding="utf-8")
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store could not be parsed"
+            ):
                 load_alarm_store(path)
 
     def test_load_alarm_store_rejects_non_finite_json_numbers(self) -> None:
@@ -1128,7 +1342,9 @@ class AlarmTest(unittest.TestCase):
                 encoding="utf-8",
             )
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store could not be parsed"
+            ):
                 load_alarm_store(path)
 
     def test_load_alarm_store_rejects_null_byte_last_checked_at(self) -> None:
@@ -1139,7 +1355,9 @@ class AlarmTest(unittest.TestCase):
                 encoding="utf-8",
             )
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store contains invalid null byte"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store contains invalid null byte"
+            ):
                 load_alarm_store(path)
 
     def test_load_alarm_store_rejects_escaped_x00_last_checked_at(self) -> None:
@@ -1161,7 +1379,9 @@ class AlarmTest(unittest.TestCase):
                 encoding="utf-8",
             )
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "contains invalid control character"):
+            with self.assertRaisesRegex(
+                RuntimeError, "contains invalid control character"
+            ):
                 load_alarm_store(path)
 
     def test_load_alarm_store_rejects_non_object_root(self) -> None:
@@ -1169,13 +1389,17 @@ class AlarmTest(unittest.TestCase):
             path = Path(tmp) / "alarms.json"
             path.write_text("[1, 2, 3]", encoding="utf-8")
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store must be a JSON object"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store must be a JSON object"
+            ):
                 load_alarm_store(path)
 
     def test_load_alarm_store_rejects_unsupported_version(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            path.write_text('{"version":2,"alarms":[],"last_checked_at":""}', encoding="utf-8")
+            path.write_text(
+                '{"version":2,"alarms":[],"last_checked_at":""}', encoding="utf-8"
+            )
             path.chmod(0o600)
             with self.assertRaisesRegex(RuntimeError, "version is unsupported"):
                 load_alarm_store(path)
@@ -1196,7 +1420,9 @@ class AlarmTest(unittest.TestCase):
             path = Path(tmp) / "alarms.json"
             path.write_bytes(b"\xff")
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store could not be parsed"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store could not be parsed"
+            ):
                 load_alarm_store(path)
 
     def test_load_alarm_store_rejects_non_list_alarms(self) -> None:
@@ -1207,7 +1433,9 @@ class AlarmTest(unittest.TestCase):
                 encoding="utf-8",
             )
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store contains invalid alarms"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store contains invalid alarms"
+            ):
                 load_alarm_store(path)
 
     def test_load_alarm_store_rejects_oversized_last_checked_at(self) -> None:
@@ -1220,21 +1448,30 @@ class AlarmTest(unittest.TestCase):
             )
             path.write_text(payload, encoding="utf-8")
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store last_checked_at is too large"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store last_checked_at is too large"
+            ):
                 load_alarm_store(path)
 
     def test_load_alarm_store_rejects_invalid_last_checked_at(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            path.write_text('{"version":1,"alarms":[],"last_checked_at":"not-a-date"}', encoding="utf-8")
+            path.write_text(
+                '{"version":1,"alarms":[],"last_checked_at":"not-a-date"}',
+                encoding="utf-8",
+            )
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store last_checked_at is invalid"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store last_checked_at is invalid"
+            ):
                 load_alarm_store(path)
 
     def test_save_alarm_store_rejects_invalid_last_checked_at(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            with self.assertRaisesRegex(ValueError, "alarm store last_checked_at is invalid"):
+            with self.assertRaisesRegex(
+                ValueError, "alarm store last_checked_at is invalid"
+            ):
                 save_alarm_store({"alarms": [], "last_checked_at": "not-a-date"}, path)
 
     def test_load_alarm_store_rejects_invalid_alarm_entry(self) -> None:
@@ -1246,16 +1483,37 @@ class AlarmTest(unittest.TestCase):
                         "version": 1,
                         "last_checked_at": "",
                         "alarms": [
-                            {"id": "good", "hour": 9, "minute": 0, "days": ["mon"], "name": "Good"},
-                            {"id": "bad", "hour": "not-a-number", "minute": 0, "days": ["mon"], "name": "Bad"},
-                            {"id": "bad-enabled", "hour": 9, "minute": 0, "days": ["mon"], "name": "Bad Enabled", "enabled": "yes"},
+                            {
+                                "id": "good",
+                                "hour": 9,
+                                "minute": 0,
+                                "days": ["mon"],
+                                "name": "Good",
+                            },
+                            {
+                                "id": "bad",
+                                "hour": "not-a-number",
+                                "minute": 0,
+                                "days": ["mon"],
+                                "name": "Bad",
+                            },
+                            {
+                                "id": "bad-enabled",
+                                "hour": 9,
+                                "minute": 0,
+                                "days": ["mon"],
+                                "name": "Bad Enabled",
+                                "enabled": "yes",
+                            },
                         ],
                     },
                 ),
                 encoding="utf-8",
             )
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store contains invalid alarms"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store contains invalid alarms"
+            ):
                 load_alarm_store(path)
 
     def test_load_alarm_store_rejects_alarm_with_invalid_repeat_day(self) -> None:
@@ -1267,15 +1525,29 @@ class AlarmTest(unittest.TestCase):
                         "version": 1,
                         "last_checked_at": "",
                         "alarms": [
-                            {"id": "good", "hour": 9, "minute": 0, "days": ["mon"], "name": "Good"},
-                            {"id": "bad-days", "hour": 9, "minute": 0, "days": ["noday"], "name": "Bad days"},
+                            {
+                                "id": "good",
+                                "hour": 9,
+                                "minute": 0,
+                                "days": ["mon"],
+                                "name": "Good",
+                            },
+                            {
+                                "id": "bad-days",
+                                "hour": 9,
+                                "minute": 0,
+                                "days": ["noday"],
+                                "name": "Bad days",
+                            },
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store contains invalid alarms"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store contains invalid alarms"
+            ):
                 load_alarm_store(path)
 
     def test_load_alarm_store_rejects_alarm_with_invalid_urgency(self) -> None:
@@ -1287,15 +1559,31 @@ class AlarmTest(unittest.TestCase):
                         "version": 1,
                         "last_checked_at": "",
                         "alarms": [
-                            {"id": "good", "hour": 9, "minute": 0, "days": ["mon"], "name": "Good", "urgency": "normal"},
-                            {"id": "bad", "hour": 9, "minute": 0, "days": ["mon"], "name": "Bad", "urgency": "urgent"},
+                            {
+                                "id": "good",
+                                "hour": 9,
+                                "minute": 0,
+                                "days": ["mon"],
+                                "name": "Good",
+                                "urgency": "normal",
+                            },
+                            {
+                                "id": "bad",
+                                "hour": 9,
+                                "minute": 0,
+                                "days": ["mon"],
+                                "name": "Bad",
+                                "urgency": "urgent",
+                            },
                         ],
                     }
                 ),
                 encoding="utf-8",
             )
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store contains invalid alarms"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store contains invalid alarms"
+            ):
                 load_alarm_store(path)
 
     def test_load_and_save_alarm_store_assign_unique_ids(self) -> None:
@@ -1306,16 +1594,37 @@ class AlarmTest(unittest.TestCase):
                     "version": 1,
                     "last_checked_at": "",
                     "alarms": [
-                        {"id": "custom", "hour": 9, "minute": 0, "days": ["mon"], "name": "First"},
-                        {"id": "", "hour": 9, "minute": 0, "days": ["mon"], "name": "Second"},
-                        {"id": "custom", "hour": 10, "minute": 0, "days": ["mon"], "name": "Third"},
+                        {
+                            "id": "custom",
+                            "hour": 9,
+                            "minute": 0,
+                            "days": ["mon"],
+                            "name": "First",
+                        },
+                        {
+                            "id": "",
+                            "hour": 9,
+                            "minute": 0,
+                            "days": ["mon"],
+                            "name": "Second",
+                        },
+                        {
+                            "id": "custom",
+                            "hour": 10,
+                            "minute": 0,
+                            "days": ["mon"],
+                            "name": "Third",
+                        },
                     ],
                 },
                 path,
             )
             payload = load_alarm_store(path)
 
-        self.assertEqual([alarm["id"] for alarm in payload["alarms"]], ["custom", "alarm-0900", "custom-2"])
+        self.assertEqual(
+            [alarm["id"] for alarm in payload["alarms"]],
+            ["custom", "alarm-0900", "custom-2"],
+        )
         self.assertEqual(payload["alarms"][0]["name"], "First")
         self.assertEqual(payload["alarms"][1]["name"], "Second")
         self.assertEqual(payload["alarms"][2]["name"], "Third")
@@ -1348,13 +1657,21 @@ class AlarmTest(unittest.TestCase):
                 "version": 1,
                 "last_checked_at": "",
                 "alarms": [
-                    {"id": f"alarm-{index}", "hour": 9, "minute": index % 60, "days": ["mon"], "name": "name"}
+                    {
+                        "id": f"alarm-{index}",
+                        "hour": 9,
+                        "minute": index % 60,
+                        "days": ["mon"],
+                        "name": "name",
+                    }
                     for index in range(MAX_ALARM_COUNT + 5)
                 ],
             }
             path.write_text(json.dumps(payload), encoding="utf-8")
             path.chmod(0o600)
-            with self.assertRaisesRegex(RuntimeError, "alarm store contains invalid alarms"):
+            with self.assertRaisesRegex(
+                RuntimeError, "alarm store contains invalid alarms"
+            ):
                 load_alarm_store(path)
 
     def test_save_alarm_store_rejects_oversized_last_checked_at(self) -> None:
@@ -1369,8 +1686,13 @@ class AlarmTest(unittest.TestCase):
                     path,
                 )
 
-    @mock.patch("speed_of_cinnamon.path_safety._rename_without_replacing", side_effect=OSError("disk full"))
-    def test_save_alarm_store_raises_runtime_error_when_atomic_activation_fails(self, mocked_rename: mock.Mock) -> None:
+    @mock.patch(
+        "speed_of_cinnamon.path_safety._rename_without_replacing",
+        side_effect=OSError("disk full"),
+    )
+    def test_save_alarm_store_raises_runtime_error_when_atomic_activation_fails(
+        self, mocked_rename: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             with self.assertRaisesRegex(RuntimeError, "failed to persist alarm store"):
@@ -1395,29 +1717,43 @@ class AlarmTest(unittest.TestCase):
         self.assertNotIn("secret path", message)
 
     @mock.patch("speed_of_cinnamon.alarms.json.dumps")
-    def test_save_alarm_store_rejects_unencodable_rendered_payload(self, mocked_dumps: mock.Mock) -> None:
+    def test_save_alarm_store_rejects_unencodable_rendered_payload(
+        self, mocked_dumps: mock.Mock
+    ) -> None:
         mocked_dumps.return_value = "\ud800"
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            with self.assertRaisesRegex(ValueError, "alarm store contains invalid unicode"):
+            with self.assertRaisesRegex(
+                ValueError, "alarm store contains invalid unicode"
+            ):
                 save_alarm_store({}, path)
 
     def test_save_alarm_store_wraps_json_memory_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            with mock.patch.object(alarm_module.json, "dumps", side_effect=MemoryError("too large")):
-                with self.assertRaisesRegex(RuntimeError, "alarm store could not be rendered"):
+            with mock.patch.object(
+                alarm_module.json, "dumps", side_effect=MemoryError("too large")
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "alarm store could not be rendered"
+                ):
                     save_alarm_store({}, path)
 
     def test_save_alarm_store_wraps_json_recursion_error(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            with mock.patch.object(alarm_module.json, "dumps", side_effect=RecursionError("too deep")):
-                with self.assertRaisesRegex(RuntimeError, "alarm store could not be rendered"):
+            with mock.patch.object(
+                alarm_module.json, "dumps", side_effect=RecursionError("too deep")
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "alarm store could not be rendered"
+                ):
                     save_alarm_store({}, path)
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
-    def test_save_alarm_store_uses_secure_directory_relative_replace(self, mocked_open: mock.Mock) -> None:
+    def test_save_alarm_store_uses_secure_directory_relative_replace(
+        self, mocked_open: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             save_alarm_store({}, path)
@@ -1434,7 +1770,9 @@ class AlarmTest(unittest.TestCase):
         )
 
     @mock.patch("speed_of_cinnamon.path_safety.os.chmod")
-    def test_save_alarm_store_does_not_chmod_target_path_after_replace(self, mocked_chmod: mock.Mock) -> None:
+    def test_save_alarm_store_does_not_chmod_target_path_after_replace(
+        self, mocked_chmod: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
             save_alarm_store({}, path)
@@ -1451,7 +1789,9 @@ class AlarmTest(unittest.TestCase):
     def test_save_alarm_store_rejects_null_byte_last_checked_at(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "alarms.json"
-            with self.assertRaisesRegex(ValueError, "alarm store last_checked_at contains invalid null byte"):
+            with self.assertRaisesRegex(
+                ValueError, "alarm store last_checked_at contains invalid null byte"
+            ):
                 save_alarm_store(
                     {
                         "alarms": [],
@@ -1467,8 +1807,20 @@ class AlarmTest(unittest.TestCase):
                 save_alarm_store(
                     {
                         "alarms": [
-                            {"id": "good", "hour": 9, "minute": 0, "days": ["mon"], "name": "Good"},
-                            {"id": "bad", "hour": "not-a-number", "minute": 0, "days": ["mon"], "name": "Bad"},
+                            {
+                                "id": "good",
+                                "hour": 9,
+                                "minute": 0,
+                                "days": ["mon"],
+                                "name": "Good",
+                            },
+                            {
+                                "id": "bad",
+                                "hour": "not-a-number",
+                                "minute": 0,
+                                "days": ["mon"],
+                                "name": "Bad",
+                            },
                         ],
                         "last_checked_at": "2026-06-01T09:00",
                     },
@@ -1484,7 +1836,13 @@ class AlarmTest(unittest.TestCase):
                     save_alarm_store(
                         {
                             "alarms": [
-                                {"id": "x" * 100, "hour": 9, "minute": 0, "days": ["mon"], "name": "y" * 100}
+                                {
+                                    "id": "x" * 100,
+                                    "hour": 9,
+                                    "minute": 0,
+                                    "days": ["mon"],
+                                    "name": "y" * 100,
+                                }
                                 for _ in range(20)
                             ],
                             "last_checked_at": "2026-06-01T09:00",

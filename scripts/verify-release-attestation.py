@@ -29,7 +29,14 @@ LOCAL_ATTESTATION_FIELDS = COMMON_ATTESTATION_FIELDS | {
     "ct2_case_count",
     "models",
 }
-REAL_MATRIX = {"live-applet", "arecord", "pipewire", "openai-compatible", "flex-on", "flex-off"}
+REAL_MATRIX = {
+    "live-applet",
+    "arecord",
+    "pipewire",
+    "openai-compatible",
+    "flex-on",
+    "flex-off",
+}
 LOCAL_MATRIX = {
     "local-models",
     "generated-audio",
@@ -83,14 +90,19 @@ def _read_json(path: Path) -> dict[str, object]:
         with os.fdopen(fd, "rb", closefd=False) as handle:
             raw = handle.read(MAX_ATTESTATION_BYTES + 1)
         after = os.fstat(fd)
-        if (
-            len(raw) > MAX_ATTESTATION_BYTES
-            or (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns)
-            != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns)
-        ):
-            raise AttestationError(f"release attestation changed while reading: {path.name}")
+        if len(raw) > MAX_ATTESTATION_BYTES or (
+            before.st_dev,
+            before.st_ino,
+            before.st_size,
+            before.st_mtime_ns,
+        ) != (after.st_dev, after.st_ino, after.st_size, after.st_mtime_ns):
+            raise AttestationError(
+                f"release attestation changed while reading: {path.name}"
+            )
     except OSError as exc:
-        primary_error = AttestationError(f"cannot open release attestation: {path.name}")
+        primary_error = AttestationError(
+            f"cannot open release attestation: {path.name}"
+        )
         raise primary_error from exc
     except BaseException as exc:
         primary_error = exc
@@ -101,17 +113,30 @@ def _read_json(path: Path) -> dict[str, object]:
                 os.close(fd)
             except BaseException as cleanup_error:
                 if primary_error is not None:
-                    primary_error.add_note("release attestation descriptor cleanup failed")
+                    primary_error.add_note(
+                        "release attestation descriptor cleanup failed"
+                    )
                 else:
-                    raise AttestationError("release attestation descriptor cleanup failed") from cleanup_error
+                    raise AttestationError(
+                        "release attestation descriptor cleanup failed"
+                    ) from cleanup_error
     try:
         value = json.loads(
             raw.decode("utf-8"),
             object_pairs_hook=_unique_object,
             parse_constant=_reject_constant,
         )
-    except (MemoryError, UnicodeDecodeError, json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
-        raise AttestationError(f"invalid release attestation JSON: {path.name}") from exc
+    except (
+        MemoryError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        raise AttestationError(
+            f"invalid release attestation JSON: {path.name}"
+        ) from exc
     if not isinstance(value, dict):
         raise AttestationError(f"release attestation must be an object: {path.name}")
     return value
@@ -123,7 +148,9 @@ def _require_string(value: object, field: str) -> str:
     return value
 
 
-def _reject_unexpected_fields(data: dict[str, object], *, name: str, allowed: frozenset[str]) -> None:
+def _reject_unexpected_fields(
+    data: dict[str, object], *, name: str, allowed: frozenset[str]
+) -> None:
     if set(data) - allowed:
         raise AttestationError(f"{name} attestation contains unexpected fields")
 
@@ -150,9 +177,13 @@ def _validate_common(
         created = datetime.fromisoformat(created_text.replace("Z", "+00:00"))
         expires = datetime.fromisoformat(expires_text.replace("Z", "+00:00"))
     except ValueError as exc:
-        raise AttestationError(f"{name} attestation timestamp or expiry is invalid") from exc
+        raise AttestationError(
+            f"{name} attestation timestamp or expiry is invalid"
+        ) from exc
     if created.tzinfo is None or expires.tzinfo is None:
-        raise AttestationError(f"{name} attestation timestamp or expiry has no timezone")
+        raise AttestationError(
+            f"{name} attestation timestamp or expiry has no timezone"
+        )
     if expires - created != ATTESTATION_TTL:
         raise AttestationError(f"{name} attestation expiry contract is invalid")
     now = datetime.now(UTC)
@@ -161,12 +192,21 @@ def _validate_common(
         raise AttestationError(f"{name} attestation is outside the allowed age window")
     source = data.get("source")
     if not isinstance(source, list) or not source or source != current_source:
-        raise AttestationError(f"{name} attestation source snapshot does not match release source")
+        raise AttestationError(
+            f"{name} attestation source snapshot does not match release source"
+        )
 
 
-def _validate_real(data: dict[str, object], *, current_source: list[dict[str, str]], expected_head: str) -> None:
+def _validate_real(
+    data: dict[str, object], *, current_source: list[dict[str, str]], expected_head: str
+) -> None:
     _reject_unexpected_fields(data, name="real-e2e", allowed=REAL_ATTESTATION_FIELDS)
-    _validate_common(data, name="real-e2e", expected_head=expected_head, current_source=current_source)
+    _validate_common(
+        data,
+        name="real-e2e",
+        expected_head=expected_head,
+        current_source=current_source,
+    )
     matrix = data.get("matrix")
     if (
         not isinstance(matrix, list)
@@ -177,9 +217,18 @@ def _validate_real(data: dict[str, object], *, current_source: list[dict[str, st
         raise AttestationError("real-e2e attestation matrix is incomplete")
 
 
-def _validate_local(data: dict[str, object], *, current_source: list[dict[str, str]], expected_head: str) -> None:
-    _reject_unexpected_fields(data, name="local-model-e2e", allowed=LOCAL_ATTESTATION_FIELDS)
-    _validate_common(data, name="local-model-e2e", expected_head=expected_head, current_source=current_source)
+def _validate_local(
+    data: dict[str, object], *, current_source: list[dict[str, str]], expected_head: str
+) -> None:
+    _reject_unexpected_fields(
+        data, name="local-model-e2e", allowed=LOCAL_ATTESTATION_FIELDS
+    )
+    _validate_common(
+        data,
+        name="local-model-e2e",
+        expected_head=expected_head,
+        current_source=current_source,
+    )
     matrix = data.get("matrix")
     if (
         not isinstance(matrix, list)
@@ -188,8 +237,13 @@ def _validate_local(data: dict[str, object], *, current_source: list[dict[str, s
         or not LOCAL_MATRIX.issubset(matrix)
     ):
         raise AttestationError("local-model-e2e attestation matrix is incomplete")
-    counts = [data.get(key) for key in ("case_count", "ggml_case_count", "ct2_case_count")]
-    if not all(isinstance(value, int) and not isinstance(value, bool) and value > 0 for value in counts):
+    counts = [
+        data.get(key) for key in ("case_count", "ggml_case_count", "ct2_case_count")
+    ]
+    if not all(
+        isinstance(value, int) and not isinstance(value, bool) and value > 0
+        for value in counts
+    ):
         raise AttestationError("local-model-e2e attestation counts are invalid")
     total, ggml, ct2 = counts
     if total != ggml + ct2:
@@ -202,14 +256,23 @@ def _validate_local(data: dict[str, object], *, current_source: list[dict[str, s
     formats: set[str] = set()
     for entry in models:
         if not isinstance(entry, dict):
-            raise AttestationError("local-model-e2e attestation model snapshot is invalid")
+            raise AttestationError(
+                "local-model-e2e attestation model snapshot is invalid"
+            )
         name = _require_string(entry.get("name"), "models[].name")
         if name in seen_names or name not in catalog:
-            raise AttestationError(f"local-model-e2e attestation contains unknown model: {name}")
+            raise AttestationError(
+                f"local-model-e2e attestation contains unknown model: {name}"
+            )
         seen_names.add(name)
         spec = catalog[name]
-        if entry.get("backend") != spec.backend or entry.get("model_format") != spec.model_format:
-            raise AttestationError(f"local-model-e2e attestation model metadata mismatch: {name}")
+        if (
+            entry.get("backend") != spec.backend
+            or entry.get("model_format") != spec.model_format
+        ):
+            raise AttestationError(
+                f"local-model-e2e attestation model metadata mismatch: {name}"
+            )
         languages = entry.get("languages")
         tested_languages = entry.get("tested_languages")
         if (
@@ -220,29 +283,51 @@ def _validate_local(data: dict[str, object], *, current_source: list[dict[str, s
             or not all(isinstance(language, str) for language in tested_languages)
             or len(tested_languages) != len(set(tested_languages))
         ):
-            raise AttestationError(f"local-model-e2e attestation model languages are invalid: {name}")
+            raise AttestationError(
+                f"local-model-e2e attestation model languages are invalid: {name}"
+            )
         if spec.languages and not set(tested_languages).issubset(spec.languages):
-            raise AttestationError(f"local-model-e2e attestation tested unsupported language: {name}")
+            raise AttestationError(
+                f"local-model-e2e attestation tested unsupported language: {name}"
+            )
         expected_files = set(spec.files or (spec.filename,))
-        file_hashes = dict(spec.file_sha1s) if spec.file_sha1s else {spec.filename: spec.sha1}
+        file_hashes = (
+            dict(spec.file_sha1s) if spec.file_sha1s else {spec.filename: spec.sha1}
+        )
         files = entry.get("files")
         if not isinstance(files, list):
-            raise AttestationError(f"local-model-e2e attestation model files are invalid: {name}")
+            raise AttestationError(
+                f"local-model-e2e attestation model files are invalid: {name}"
+            )
         file_names: list[str] = []
         for item in files:
             if not isinstance(item, dict) or not isinstance(item.get("name"), str):
-                raise AttestationError(f"local-model-e2e attestation model files are invalid: {name}")
+                raise AttestationError(
+                    f"local-model-e2e attestation model files are invalid: {name}"
+                )
             file_names.append(item["name"])
         if len(file_names) != len(set(file_names)) or set(file_names) != expected_files:
-            raise AttestationError(f"local-model-e2e attestation model files are invalid: {name}")
+            raise AttestationError(
+                f"local-model-e2e attestation model files are invalid: {name}"
+            )
         for item in files:
-            if not isinstance(item, dict) or not isinstance(item.get("name"), str) or not SHA1.fullmatch(str(item.get("sha1", ""))):
-                raise AttestationError(f"local-model-e2e attestation model hashes are invalid: {name}")
+            if (
+                not isinstance(item, dict)
+                or not isinstance(item.get("name"), str)
+                or not SHA1.fullmatch(str(item.get("sha1", "")))
+            ):
+                raise AttestationError(
+                    f"local-model-e2e attestation model hashes are invalid: {name}"
+                )
             if file_hashes.get(item["name"]) != item["sha1"]:
-                raise AttestationError(f"local-model-e2e attestation model hash mismatch: {name}")
+                raise AttestationError(
+                    f"local-model-e2e attestation model hash mismatch: {name}"
+                )
         formats.add(spec.model_format)
     if formats != {"ggml", "ctranslate2"}:
-        raise AttestationError("local-model-e2e attestation lacks a complete GGML/CT2 matrix")
+        raise AttestationError(
+            "local-model-e2e attestation lacks a complete GGML/CT2 matrix"
+        )
 
 
 def verify_bundle(bundle_dir: Path, repo_root: Path, expected_head: str) -> None:
@@ -252,34 +337,56 @@ def verify_bundle(bundle_dir: Path, repo_root: Path, expected_head: str) -> None
         repo = repo_root.resolve(strict=True)
         release_root_path = repo / "release-attestations"
         release_root_stat = os.lstat(release_root_path)
-        if stat.S_ISLNK(release_root_stat.st_mode) or not stat.S_ISDIR(release_root_stat.st_mode):
+        if stat.S_ISLNK(release_root_stat.st_mode) or not stat.S_ISDIR(
+            release_root_stat.st_mode
+        ):
             raise AttestationError("release attestation root directory is unsafe")
         bundle_path_stat = os.lstat(bundle_dir)
-        if stat.S_ISLNK(bundle_path_stat.st_mode) or not stat.S_ISDIR(bundle_path_stat.st_mode):
+        if stat.S_ISLNK(bundle_path_stat.st_mode) or not stat.S_ISDIR(
+            bundle_path_stat.st_mode
+        ):
             raise AttestationError("release attestation bundle directory is unsafe")
         bundle = bundle_dir.resolve(strict=True)
         release_root = release_root_path.resolve(strict=True)
     except OSError as exc:
-        raise AttestationError("release attestation bundle or repository path is missing") from exc
-    if not repo.is_dir() or not bundle.is_dir() or bundle.parent != release_root.resolve(strict=True):
-        raise AttestationError("release attestation bundle is outside the allowed directory")
+        raise AttestationError(
+            "release attestation bundle or repository path is missing"
+        ) from exc
+    if (
+        not repo.is_dir()
+        or not bundle.is_dir()
+        or bundle.parent != release_root.resolve(strict=True)
+    ):
+        raise AttestationError(
+            "release attestation bundle is outside the allowed directory"
+        )
     bundle_stat = os.lstat(bundle)
-    if stat.S_ISLNK(bundle_stat.st_mode) or not stat.S_ISDIR(bundle_stat.st_mode) or bundle_stat.st_mode & 0o022:
+    if (
+        stat.S_ISLNK(bundle_stat.st_mode)
+        or not stat.S_ISDIR(bundle_stat.st_mode)
+        or bundle_stat.st_mode & 0o022
+    ):
         raise AttestationError("release attestation bundle directory is unsafe")
     entries: list[str] = []
     try:
         with os.scandir(bundle) as bundle_entries:
             for bundle_entry in bundle_entries:
                 if len(entries) >= MAX_BUNDLE_DIRECTORY_ENTRIES:
-                    raise AttestationError("release attestation bundle contains too many entries")
+                    raise AttestationError(
+                        "release attestation bundle contains too many entries"
+                    )
                 name = bundle_entry.name
                 if not isinstance(name, str):
-                    raise AttestationError("release attestation bundle entry name is invalid")
+                    raise AttestationError(
+                        "release attestation bundle entry name is invalid"
+                    )
                 entries.append(name)
     except AttestationError:
         raise
     except OSError as exc:
-        raise AttestationError("release attestation bundle could not be scanned") from exc
+        raise AttestationError(
+            "release attestation bundle could not be scanned"
+        ) from exc
     entries.sort()
     if entries != sorted(EXPECTED_FILES):
         raise AttestationError("release attestation bundle contains unexpected files")
@@ -287,8 +394,16 @@ def verify_bundle(bundle_dir: Path, repo_root: Path, expected_head: str) -> None
         current_source = source_attestation_snapshot(repo)
     except (ModelError, OSError, RuntimeError, TypeError, ValueError) as exc:
         raise AttestationError("current release source is not attestable") from exc
-    _validate_real(_read_json(bundle / "real-e2e-attestation.json"), current_source=current_source, expected_head=expected_head)
-    _validate_local(_read_json(bundle / "local-model-e2e-attestation.json"), current_source=current_source, expected_head=expected_head)
+    _validate_real(
+        _read_json(bundle / "real-e2e-attestation.json"),
+        current_source=current_source,
+        expected_head=expected_head,
+    )
+    _validate_local(
+        _read_json(bundle / "local-model-e2e-attestation.json"),
+        current_source=current_source,
+        expected_head=expected_head,
+    )
 
 
 def main(argv: list[str]) -> int:

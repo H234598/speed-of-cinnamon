@@ -65,17 +65,26 @@ class ExpectedTarget:
                     or max_digest_bytes < 0
                 ):
                     raise TypeError("max_digest_bytes must be a non-negative integer")
-                if type(self.content_digest) is not bytes or len(self.content_digest) != 32:
-                    raise TypeError("version-bound expected target requires a SHA-256 digest")
+                if (
+                    type(self.content_digest) is not bytes
+                    or len(self.content_digest) != 32
+                ):
+                    raise TypeError(
+                        "version-bound expected target requires a SHA-256 digest"
+                    )
             elif self.content_digest is not None or self.max_digest_bytes is not None:
-                raise ValueError("identity-only expected target must not contain version evidence")
+                raise ValueError(
+                    "identity-only expected target must not contain version evidence"
+                )
         elif (
             self.snapshot is not None
             or self.require_same_version
             or self.content_digest is not None
             or self.max_digest_bytes is not None
         ):
-            raise ValueError("non-captured expected target must not contain a snapshot or version requirement")
+            raise ValueError(
+                "non-captured expected target must not contain a snapshot or version requirement"
+            )
 
     @classmethod
     def missing(cls) -> ExpectedTarget:
@@ -163,7 +172,13 @@ def _resolve_renameat2(*, field_name: str):
             errno.ENOTSUP,
             f"{field_name} no-clobber activation is not supported on this platform",
         ) from exc
-    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
+    renameat2.argtypes = [
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_int,
+        ctypes.c_char_p,
+        ctypes.c_uint,
+    ]
     renameat2.restype = ctypes.c_int
     return renameat2
 
@@ -194,7 +209,9 @@ def _rename_without_replacing(
             )
             source_name_stat = os.fstat(source_name_fd)
         except FileNotFoundError:
-            source_name_error = _TargetChangedError(f"{field_name} changed before cleanup")
+            source_name_error = _TargetChangedError(
+                f"{field_name} changed before cleanup"
+            )
             raise source_name_error from None
         except BaseException as exc:
             source_name_error = exc
@@ -207,11 +224,15 @@ def _rename_without_replacing(
                     primary_error=source_name_error,
                     committed=False,
                 )
-        if expected_source_stat is not None and not _same_claim_snapshot(source_fd_stat, expected_source_stat):
+        if expected_source_stat is not None and not _same_claim_snapshot(
+            source_fd_stat, expected_source_stat
+        ):
             raise _TargetChangedError(f"{field_name} changed before cleanup")
         if not _same_claim_snapshot(source_name_stat, source_fd_stat):
             raise _TargetChangedError(f"{field_name} changed before cleanup")
-    elif expected_source_stat is not None and not stat.S_ISLNK(expected_source_stat.st_mode):
+    elif expected_source_stat is not None and not stat.S_ISLNK(
+        expected_source_stat.st_mode
+    ):
         source_fd: int | None = None
         source_error: BaseException | None = None
         try:
@@ -226,7 +247,9 @@ def _rename_without_replacing(
                 )
                 source_stat = os.fstat(source_fd)
             except FileNotFoundError:
-                source_error = _TargetChangedError(f"{field_name} changed before cleanup")
+                source_error = _TargetChangedError(
+                    f"{field_name} changed before cleanup"
+                )
                 raise source_error from None
         except BaseException as exc:
             source_error = exc
@@ -257,7 +280,9 @@ def _rename_without_replacing(
             expected_source_stat.st_ctime_ns,
         ):
             raise _TargetChangedError(f"{field_name} changed before cleanup")
-    destination_fd = directory_fd if target_directory_fd is None else target_directory_fd
+    destination_fd = (
+        directory_fd if target_directory_fd is None else target_directory_fd
+    )
     result = renameat2(
         directory_fd,
         os.fsencode(source_name),
@@ -281,7 +306,9 @@ def _rename_exchange(
     field_name: str,
 ) -> None:
     renameat2 = _resolve_renameat2(field_name=field_name)
-    destination_fd = directory_fd if target_directory_fd is None else target_directory_fd
+    destination_fd = (
+        directory_fd if target_directory_fd is None else target_directory_fd
+    )
     result = renameat2(
         directory_fd,
         os.fsencode(source_name),
@@ -292,7 +319,9 @@ def _rename_exchange(
     if result != 0:
         error_number = ctypes.get_errno()
         if error_number == errno.ENOENT:
-            raise FileNotFoundError(errno.ENOENT, "secure exchange source or target missing")
+            raise FileNotFoundError(
+                errno.ENOENT, "secure exchange source or target missing"
+            )
         raise OSError("secure exchange failed")
 
 
@@ -319,7 +348,9 @@ def _same_claim_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
 _CONTROL_FLOW_CLOSE_ERRORS = (KeyboardInterrupt, SystemExit, GeneratorExit)
 
 
-def _sanitized_close_error(close_error: BaseException, *, committed: bool) -> BaseException:
+def _sanitized_close_error(
+    close_error: BaseException, *, committed: bool
+) -> BaseException:
     if isinstance(close_error, _CONTROL_FLOW_CLOSE_ERRORS):
         message = (
             "secure postcommit cleanup interrupted"
@@ -406,7 +437,9 @@ def _unlink_verified_leaf(
     except FileNotFoundError:
         raise OSError(f"{field_name} changed before cleanup") from None
     fd_stat = os.fstat(leaf_fd)
-    if not _same_claim_snapshot(current_stat, expected_stat) or not _same_claim_snapshot(fd_stat, expected_stat):
+    if not _same_claim_snapshot(
+        current_stat, expected_stat
+    ) or not _same_claim_snapshot(fd_stat, expected_stat):
         raise OSError(f"{field_name} changed before cleanup")
     if type(secure_wipe) is not bool:
         raise TypeError(f"{field_name} secure wipe flag is invalid")
@@ -447,7 +480,11 @@ def _safe_path_parts(path: Path, *, field_name: str) -> tuple[str, ...]:
 
 def _resolve_no_follow_flag(*, field_name: str) -> int:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
         raise OSError(f"secure no-follow flag is invalid for {field_name}")
     return nofollow_flag
 
@@ -462,7 +499,10 @@ def _target_snapshot(file_stat: os.stat_result, *, field_name: str) -> _TargetSn
         "st_mtime_ns": file_stat.st_mtime_ns,
         "st_ctime_ns": file_stat.st_ctime_ns,
     }
-    if any(type(value) is not int for value in required_values.values()) or file_stat.st_size < 0:
+    if (
+        any(type(value) is not int for value in required_values.values())
+        or file_stat.st_size < 0
+    ):
         raise ValueError(f"{field_name} has invalid identity fields")
     if not stat.S_ISREG(file_stat.st_mode):
         raise ValueError(f"{field_name} must identify a regular file")
@@ -502,12 +542,19 @@ def _capture_fd_evidence(
     digest: bytes | None = None
     if include_digest:
         effective_max_digest_bytes = (
-            DEFAULT_MAX_TEXT_READ_BYTES if max_digest_bytes is None else max_digest_bytes
+            DEFAULT_MAX_TEXT_READ_BYTES
+            if max_digest_bytes is None
+            else max_digest_bytes
         )
         if before.size > effective_max_digest_bytes:
-            raise OSError(errno.EFBIG, f"{field_name} is too large for secure version capture")
+            raise OSError(
+                errno.EFBIG, f"{field_name} is too large for secure version capture"
+            )
         if not hasattr(os, "pread"):
-            raise OSError(errno.ENOTSUP, f"{field_name} cannot be securely versioned on this platform")
+            raise OSError(
+                errno.ENOTSUP,
+                f"{field_name} cannot be securely versioned on this platform",
+            )
         hasher = hashlib.sha256()
         offset = 0
         while offset < before.size:
@@ -527,7 +574,10 @@ def _capture_fd_evidence(
 
 
 def _verify_expected_target_strict(fd: int, expected_target: ExpectedTarget) -> bool:
-    if expected_target.kind is not ExpectedTargetKind.CAPTURED or expected_target.snapshot is None:
+    if (
+        expected_target.kind is not ExpectedTargetKind.CAPTURED
+        or expected_target.snapshot is None
+    ):
         return False
     current, content_digest = _capture_fd_evidence(
         fd,
@@ -549,7 +599,10 @@ def _verify_expected_target_strict(fd: int, expected_target: ExpectedTarget) -> 
     )
     if not identity_matches or not expected_target.require_same_version:
         return identity_matches
-    return current.size == expected.size and content_digest == expected_target.content_digest
+    return (
+        current.size == expected.size
+        and content_digest == expected_target.content_digest
+    )
 
 
 def _matches_expected_target(fd: int, expected_target: ExpectedTarget) -> bool:
@@ -613,14 +666,19 @@ def open_file_without_following_symlinks(
 
     parts = _safe_path_parts(path, field_name=field_name)
     start_path = path.anchor if path.is_absolute() else "."
-    directory_fd = os.open(start_path, os.O_RDONLY | directory_flag | getattr(os, "O_CLOEXEC", 0))
+    directory_fd = os.open(
+        start_path, os.O_RDONLY | directory_flag | getattr(os, "O_CLOEXEC", 0)
+    )
     result_fd: int | None = None
     primary_error: BaseException | None = None
     try:
         for component in parts[:-1]:
             next_fd = os.open(
                 component,
-                os.O_RDONLY | directory_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+                os.O_RDONLY
+                | directory_flag
+                | nofollow_flag
+                | getattr(os, "O_CLOEXEC", 0),
                 dir_fd=directory_fd,
             )
             try:
@@ -673,7 +731,9 @@ def open_file_without_following_symlinks(
                     raise
 
 
-def open_directory_without_following_symlinks(path: Path, *, field_name: str = "path") -> int:
+def open_directory_without_following_symlinks(
+    path: Path, *, field_name: str = "path"
+) -> int:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
     nofollow_flag = _resolve_no_follow_flag(field_name=field_name)
@@ -690,7 +750,9 @@ def open_directory_without_following_symlinks(path: Path, *, field_name: str = "
             str(path),
             os.O_RDONLY | directory_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
         )
-    return open_file_without_following_symlinks(path, os.O_RDONLY | directory_flag, field_name=field_name)
+    return open_file_without_following_symlinks(
+        path, os.O_RDONLY | directory_flag, field_name=field_name
+    )
 
 
 def assert_fd_is_regular_private_file(
@@ -726,7 +788,9 @@ def assert_fd_is_private_directory(fd: int, *, field_name: str = "path") -> None
         raise RuntimeError(f"{field_name} must be private")
 
 
-def ensure_directory_without_following_symlinks(path: Path, *, field_name: str = "path") -> int:
+def ensure_directory_without_following_symlinks(
+    path: Path, *, field_name: str = "path"
+) -> int:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
     nofollow_flag = _resolve_no_follow_flag(field_name=field_name)
@@ -746,13 +810,18 @@ def ensure_directory_without_following_symlinks(path: Path, *, field_name: str =
 
     parts = _safe_path_parts(path, field_name=field_name)
     start_path = path.anchor if path.is_absolute() else "."
-    directory_fd = os.open(start_path, os.O_RDONLY | directory_flag | getattr(os, "O_CLOEXEC", 0))
+    directory_fd = os.open(
+        start_path, os.O_RDONLY | directory_flag | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
         for component in parts:
             try:
                 next_fd = os.open(
                     component,
-                    os.O_RDONLY | directory_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+                    os.O_RDONLY
+                    | directory_flag
+                    | nofollow_flag
+                    | getattr(os, "O_CLOEXEC", 0),
                     dir_fd=directory_fd,
                 )
             except FileNotFoundError:
@@ -762,7 +831,10 @@ def ensure_directory_without_following_symlinks(path: Path, *, field_name: str =
                     pass
                 next_fd = os.open(
                     component,
-                    os.O_RDONLY | directory_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+                    os.O_RDONLY
+                    | directory_flag
+                    | nofollow_flag
+                    | getattr(os, "O_CLOEXEC", 0),
                     dir_fd=directory_fd,
                 )
             try:
@@ -805,12 +877,18 @@ def read_text_without_following_symlinks(
 ) -> str:
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")
-    if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0):
+    if max_bytes is not None and (
+        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0
+    ):
         raise RuntimeError("max_bytes must be a non-negative integer")
-    effective_max_bytes = DEFAULT_MAX_TEXT_READ_BYTES if max_bytes is None else max_bytes
+    effective_max_bytes = (
+        DEFAULT_MAX_TEXT_READ_BYTES if max_bytes is None else max_bytes
+    )
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     try:
-        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
+        fd = open_file_without_following_symlinks(
+            path, os.O_RDONLY | nonblock_flag, field_name=field_name
+        )
     except (MemoryError, RecursionError) as exc:
         raise OSError(f"{field_name} could not be opened") from exc
     except OSError:
@@ -832,7 +910,8 @@ def read_text_without_following_symlinks(
                 or opened_stat.st_ino != expected_stat.st_ino
                 or opened_stat.st_mode != expected_stat.st_mode
                 or opened_stat.st_size != expected_stat.st_size
-                or getattr(opened_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+                or getattr(opened_stat, "st_nlink", 1)
+                != getattr(expected_stat, "st_nlink", 1)
                 or opened_stat.st_mtime_ns != expected_stat.st_mtime_ns
                 or opened_stat.st_ctime_ns != expected_stat.st_ctime_ns
             ):
@@ -883,7 +962,8 @@ def read_text_without_following_symlinks(
                 or final_stat.st_ino != opened_stat.st_ino
                 or final_stat.st_mode != opened_stat.st_mode
                 or final_stat.st_size != opened_stat.st_size
-                or getattr(final_stat, "st_nlink", 1) != getattr(opened_stat, "st_nlink", 1)
+                or getattr(final_stat, "st_nlink", 1)
+                != getattr(opened_stat, "st_nlink", 1)
                 or final_stat.st_mtime_ns != opened_stat.st_mtime_ns
                 or final_stat.st_ctime_ns != opened_stat.st_ctime_ns
             ):
@@ -934,7 +1014,9 @@ def _write_atomically_without_following_symlinks(
         raise RuntimeError(f"{field_name} must be a path")
     assert_safe_path_components(path, field_name=field_name)
     nofollow_flag = _resolve_no_follow_flag(field_name=field_name)
-    parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+    parent_fd = ensure_directory_without_following_symlinks(
+        path.parent, field_name=f"{field_name} directory"
+    )
     temp_name = ""
     backup_name = ""
     backup_moved = False
@@ -982,7 +1064,11 @@ def _write_atomically_without_following_symlinks(
         )
 
     def _same_leaf_inode(first: os.stat_result, second: os.stat_result) -> bool:
-        return (first.st_dev, first.st_ino, first.st_mode) == (second.st_dev, second.st_ino, second.st_mode)
+        return (first.st_dev, first.st_ino, first.st_mode) == (
+            second.st_dev,
+            second.st_ino,
+            second.st_mode,
+        )
 
     def _unlink_leaf_safely(
         leaf_name: str,
@@ -1033,10 +1119,14 @@ def _write_atomically_without_following_symlinks(
                 claimed_matches = False
                 try:
                     if stat.S_ISLNK(expected_stat.st_mode):
-                        claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                        claimed_stat = os.stat(
+                            cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                        )
                     else:
                         if claimed_fd is None:
-                            raise OSError(f"{field_name} cleanup claim FD is unavailable")
+                            raise OSError(
+                                f"{field_name} cleanup claim FD is unavailable"
+                            )
                         claimed_stat = os.fstat(claimed_fd)
                     if not _same_leaf_identity(claimed_stat, expected_stat):
                         raise OSError(f"{field_name} changed before cleanup")
@@ -1057,15 +1147,25 @@ def _write_atomically_without_following_symlinks(
                     quarantine_error = exc
                     if claimed_matches and claimed_fd is not None:
                         try:
-                            current_cleanup_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                            current_cleanup_stat = os.stat(
+                                cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                            )
                             claimed_fd_stat = os.fstat(claimed_fd)
-                            if _same_leaf_identity(current_cleanup_stat, claimed_fd_stat):
+                            if _same_leaf_identity(
+                                current_cleanup_stat, claimed_fd_stat
+                            ):
                                 try:
-                                    os.stat(leaf_name, dir_fd=parent_fd, follow_symlinks=False)
+                                    os.stat(
+                                        leaf_name,
+                                        dir_fd=parent_fd,
+                                        follow_symlinks=False,
+                                    )
                                 except FileNotFoundError:
                                     pass
                                 else:
-                                    raise OSError(f"{field_name} restore target already exists")
+                                    raise OSError(
+                                        f"{field_name} restore target already exists"
+                                    )
                                 _rename_without_replacing(
                                     cleanup_name,
                                     leaf_name,
@@ -1075,11 +1175,17 @@ def _write_atomically_without_following_symlinks(
                                     field_name=f"{field_name} restore",
                                 )
                                 _fsync_fd(parent_fd)
-                                restored_stat = os.stat(leaf_name, dir_fd=parent_fd, follow_symlinks=False)
-                                if not _same_claim_snapshot(restored_stat, os.fstat(claimed_fd)):
+                                restored_stat = os.stat(
+                                    leaf_name, dir_fd=parent_fd, follow_symlinks=False
+                                )
+                                if not _same_claim_snapshot(
+                                    restored_stat, os.fstat(claimed_fd)
+                                ):
                                     raise OSError(f"{field_name} changed after restore")
                             else:
-                                _add_exception_note(exc, "quarantine replacement was retained")
+                                _add_exception_note(
+                                    exc, "quarantine replacement was retained"
+                                )
                         except BaseException as restore_error:
                             _note_cleanup_failure(exc, restore_error)
                     else:
@@ -1108,7 +1214,13 @@ def _write_atomically_without_following_symlinks(
                 )
 
     try:
-        flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag | getattr(os, "O_CLOEXEC", 0)
+        flags = (
+            os.O_WRONLY
+            | os.O_CREAT
+            | os.O_EXCL
+            | nofollow_flag
+            | getattr(os, "O_CLOEXEC", 0)
+        )
         try:
             target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
@@ -1133,7 +1245,9 @@ def _write_atomically_without_following_symlinks(
                         primary_error=exc,
                         committed=False,
                     )
-                    raise OSError(f"{field_name} temporary file identity is unavailable") from exc
+                    raise OSError(
+                        f"{field_name} temporary file identity is unavailable"
+                    ) from exc
                 except BaseException as exc:
                     owned_fd, fd = fd, None
                     _close_fd_preserving_primary(
@@ -1182,7 +1296,9 @@ def _write_atomically_without_following_symlinks(
             try:
                 os.fchmod(handle.fileno(), 0o600)
             except OSError as exc:
-                raise OSError(f"{field_name} temporary file could not be made private") from exc
+                raise OSError(
+                    f"{field_name} temporary file could not be made private"
+                ) from exc
             handle.write(payload)
             handle.flush()
             _fsync_fd(handle.fileno())
@@ -1192,7 +1308,9 @@ def _write_atomically_without_following_symlinks(
                 temporary_stat = os.fstat(handle.fileno())
             except BaseException as stat_error:
                 _note_cleanup_failure(exc, stat_error)
-            handle_primary_error = OSError(f"{field_name} temporary file could not be written")
+            handle_primary_error = OSError(
+                f"{field_name} temporary file could not be written"
+            )
             raise handle_primary_error from exc
         except BaseException as exc:
             try:
@@ -1210,18 +1328,25 @@ def _write_atomically_without_following_symlinks(
             )
 
         try:
-            current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+            current_target_stat = os.stat(
+                path.name, dir_fd=parent_fd, follow_symlinks=False
+            )
         except FileNotFoundError:
             current_target_stat = None
         if target_stat is None:
             if current_target_stat is not None:
                 raise OSError(f"{field_name} changed before activation")
-        elif current_target_stat is None or not _same_leaf_snapshot(current_target_stat, target_stat):
+        elif current_target_stat is None or not _same_leaf_snapshot(
+            current_target_stat, target_stat
+        ):
             raise OSError(f"{field_name} changed before activation")
         if temporary_stat is None:
             raise OSError(f"{field_name} temporary file identity is unavailable")
         staged_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
-        if not stat.S_ISREG(staged_stat.st_mode) or getattr(staged_stat, "st_nlink", 1) != 1:
+        if (
+            not stat.S_ISREG(staged_stat.st_mode)
+            or getattr(staged_stat, "st_nlink", 1) != 1
+        ):
             raise OSError(f"{field_name} temporary file is not safe")
         if not _same_leaf_snapshot(staged_stat, temporary_stat):
             raise OSError(f"{field_name} temporary file changed before activation")
@@ -1239,14 +1364,20 @@ def _write_atomically_without_following_symlinks(
                         follow_symlinks=False,
                     )
                 except FileNotFoundError:
-                    raise OSError(f"{field_name} path disappeared before backup activation") from None
+                    raise OSError(
+                        f"{field_name} path disappeared before backup activation"
+                    ) from None
                 except FileExistsError:
                     continue
                 candidate_stat_at_creation: os.stat_result | None = None
                 try:
-                    candidate_stat_at_creation = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                    candidate_stat_at_creation = os.stat(
+                        candidate_name, dir_fd=parent_fd, follow_symlinks=False
+                    )
                     backup_stat = candidate_stat_at_creation
-                    current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                    current_target_stat = os.stat(
+                        path.name, dir_fd=parent_fd, follow_symlinks=False
+                    )
                     if (
                         not stat.S_ISREG(backup_stat.st_mode)
                         or getattr(backup_stat, "st_nlink", 1) < 2
@@ -1254,7 +1385,9 @@ def _write_atomically_without_following_symlinks(
                         or not stat.S_ISREG(current_target_stat.st_mode)
                         or not _same_leaf_inode(current_target_stat, target_stat)
                     ):
-                        raise OSError(f"{field_name} path changed during backup activation")
+                        raise OSError(
+                            f"{field_name} path changed during backup activation"
+                        )
                     if not _unlink_leaf_safely(
                         path.name,
                         current_target_stat,
@@ -1268,13 +1401,21 @@ def _write_atomically_without_following_symlinks(
                 except BaseException as exc:
                     if not backup_moved:
                         try:
-                            candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                            candidate_stat = os.stat(
+                                candidate_name, dir_fd=parent_fd, follow_symlinks=False
+                            )
                             if (
                                 candidate_stat_at_creation is not None
-                                and _same_leaf_inode(candidate_stat, candidate_stat_at_creation)
+                                and _same_leaf_inode(
+                                    candidate_stat, candidate_stat_at_creation
+                                )
                             ):
                                 try:
-                                    os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                                    os.stat(
+                                        path.name,
+                                        dir_fd=parent_fd,
+                                        follow_symlinks=False,
+                                    )
                                 except FileNotFoundError:
                                     backup_name = candidate_name
                                     backup_moved = True
@@ -1304,15 +1445,21 @@ def _write_atomically_without_following_symlinks(
         try:
             activated_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except OSError as stat_error:
-            raise OSError(f"{field_name} could not be inspected after activation") from stat_error
-        if temporary_stat is None or not _same_leaf_identity(activated_stat, temporary_stat):
+            raise OSError(
+                f"{field_name} could not be inspected after activation"
+            ) from stat_error
+        if temporary_stat is None or not _same_leaf_identity(
+            activated_stat, temporary_stat
+        ):
             raise OSError(f"{field_name} changed after activation")
         activation_stat = activated_stat
         _fsync_fd(parent_fd)
         transaction_active = False
         if backup_moved:
             try:
-                backup_stat = os.stat(backup_name, dir_fd=parent_fd, follow_symlinks=False)
+                backup_stat = os.stat(
+                    backup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if (
                     stat.S_ISREG(backup_stat.st_mode)
                     and getattr(backup_stat, "st_nlink", 1) == 1
@@ -1333,7 +1480,9 @@ def _write_atomically_without_following_symlinks(
                         except OSError:
                             break
                         try:
-                            claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                            claimed_stat = os.stat(
+                                cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                            )
                             if (
                                 stat.S_ISREG(claimed_stat.st_mode)
                                 and getattr(claimed_stat, "st_nlink", 1) == 1
@@ -1345,7 +1494,9 @@ def _write_atomically_without_following_symlinks(
                                     claimed_stat,
                                     field_name=f"{field_name} recovery backup cleanup",
                                 ):
-                                    raise OSError(f"{field_name} recovery backup disappeared during cleanup")
+                                    raise OSError(
+                                        f"{field_name} recovery backup disappeared during cleanup"
+                                    )
                                 _fsync_fd(parent_fd)
                             else:
                                 _rename_without_replacing(
@@ -1378,7 +1529,9 @@ def _write_atomically_without_following_symlinks(
                 if activation_attempted:
                     expected_activation_stat = activation_stat or temporary_stat
                     try:
-                        current_target_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                        current_target_stat = os.stat(
+                            path.name, dir_fd=parent_fd, follow_symlinks=False
+                        )
                     except FileNotFoundError:
                         current_target_stat = None
                     if current_target_stat is not None:
@@ -1388,8 +1541,12 @@ def _write_atomically_without_following_symlinks(
                             same_activation = _same_leaf_identity
                         else:
                             same_activation = _same_leaf_identity
-                        if expected_activation_stat is None or not same_activation(current_target_stat, expected_activation_stat):
-                            raise OSError(f"{field_name} target changed during rollback")
+                        if expected_activation_stat is None or not same_activation(
+                            current_target_stat, expected_activation_stat
+                        ):
+                            raise OSError(
+                                f"{field_name} target changed during rollback"
+                            )
                         if not _unlink_leaf_safely(
                             path.name,
                             current_target_stat,
@@ -1416,7 +1573,9 @@ def _write_atomically_without_following_symlinks(
         if temp_name:
             try:
                 if temporary_stat is None:
-                    raise OSError(f"{field_name} temporary file identity is unavailable")
+                    raise OSError(
+                        f"{field_name} temporary file identity is unavailable"
+                    )
                 if _unlink_leaf_safely(
                     temp_name,
                     temporary_stat,
@@ -1494,7 +1653,11 @@ def _create_private_transaction_directory(
 ) -> tuple[str, int]:
     nofollow_flag = _resolve_no_follow_flag(field_name=field_name)
     directory_flag = getattr(os, "O_DIRECTORY", None)
-    if not isinstance(directory_flag, int) or isinstance(directory_flag, bool) or directory_flag <= 0:
+    if (
+        not isinstance(directory_flag, int)
+        or isinstance(directory_flag, bool)
+        or directory_flag <= 0
+    ):
         raise OSError(f"secure transaction directory is not supported for {field_name}")
     for _ in range(100):
         transaction_name = f".{leaf_name}.{secrets.token_hex(16)}.txn"
@@ -1506,18 +1669,31 @@ def _create_private_transaction_directory(
         try:
             transaction_fd = os.open(
                 transaction_name,
-                os.O_RDONLY | directory_flag | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+                os.O_RDONLY
+                | directory_flag
+                | nofollow_flag
+                | getattr(os, "O_CLOEXEC", 0),
                 dir_fd=parent_fd,
             )
-            assert_fd_is_private_directory(transaction_fd, field_name=f"{field_name} transaction directory")
-            named_stat = os.stat(transaction_name, dir_fd=parent_fd, follow_symlinks=False)
+            assert_fd_is_private_directory(
+                transaction_fd, field_name=f"{field_name} transaction directory"
+            )
+            named_stat = os.stat(
+                transaction_name, dir_fd=parent_fd, follow_symlinks=False
+            )
             opened_stat = os.fstat(transaction_fd)
-            if (named_stat.st_dev, named_stat.st_ino, stat.S_IFMT(named_stat.st_mode)) != (
+            if (
+                named_stat.st_dev,
+                named_stat.st_ino,
+                stat.S_IFMT(named_stat.st_mode),
+            ) != (
                 opened_stat.st_dev,
                 opened_stat.st_ino,
                 stat.S_IFMT(opened_stat.st_mode),
             ):
-                raise OSError(f"{field_name} transaction directory changed during creation")
+                raise OSError(
+                    f"{field_name} transaction directory changed during creation"
+                )
             return transaction_name, transaction_fd
         except BaseException as exc:
             if transaction_fd is not None:
@@ -1542,7 +1718,9 @@ def _stage_private_bytes(
     field_name: str,
 ) -> ExpectedTarget:
     nofollow_flag = _resolve_no_follow_flag(field_name=field_name)
-    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | nofollow_flag | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_RDWR | os.O_CREAT | os.O_EXCL | nofollow_flag | getattr(os, "O_CLOEXEC", 0)
+    )
     fd = os.open("staged", flags, 0o600, dir_fd=transaction_fd)
 
     def remove_staged_after_failure(primary_error: BaseException) -> None:
@@ -1675,7 +1853,10 @@ def _conditional_namespace_operation(
     postcommit_cleanup_error: BaseException | None = None
     try:
         assert_fd_is_private_directory(parent_fd, field_name=f"{field_name} directory")
-        if expected_target.kind is ExpectedTargetKind.MISSING and replacement_data is None:
+        if (
+            expected_target.kind is ExpectedTargetKind.MISSING
+            and replacement_data is None
+        ):
             try:
                 os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
             except FileNotFoundError:
@@ -1689,7 +1870,9 @@ def _conditional_namespace_operation(
         )
         staged_expected: ExpectedTarget | None = None
         if replacement_data is not None:
-            staged_expected = _stage_private_bytes(transaction_fd, replacement_data, field_name=field_name)
+            staged_expected = _stage_private_bytes(
+                transaction_fd, replacement_data, field_name=field_name
+            )
             staged_present = True
 
         def remove_activated_target_for_rollback() -> None:
@@ -1711,7 +1894,9 @@ def _conditional_namespace_operation(
                     staged_expected,
                     field_name=f"{field_name} rollback activation",
                 ):
-                    raise OSError(f"{field_name} rollback target does not match activation")
+                    raise OSError(
+                        f"{field_name} rollback target does not match activation"
+                    )
                 _unlink_verified_leaf(
                     path.name,
                     directory_fd=parent_fd,
@@ -1893,10 +2078,13 @@ def _conditional_namespace_operation(
                 dir_fd=parent_fd,
             )
             activated_stat = os.fstat(activated_fd)
-            activation_matches = staged_expected is not None and _verify_expected_target_with_retry(
-                activated_fd,
-                staged_expected,
-                field_name=f"{field_name} activation",
+            activation_matches = (
+                staged_expected is not None
+                and _verify_expected_target_with_retry(
+                    activated_fd,
+                    staged_expected,
+                    field_name=f"{field_name} activation",
+                )
             )
             if not activation_matches:
                 try:
@@ -1937,7 +2125,12 @@ def _conditional_namespace_operation(
         return None
     except BaseException as exc:
         primary_error = exc
-        if claim_present and transaction_fd is not None and not committed and claim_verified:
+        if (
+            claim_present
+            and transaction_fd is not None
+            and not committed
+            and claim_verified
+        ):
             if not staged_present and staged_expected is not None:
                 try:
                     # claim_present is set only after helper definition above.
@@ -1962,7 +2155,10 @@ def _conditional_namespace_operation(
                     claim_present = False
         elif claim_present and not claim_verified:
             if claim_verification_failed:
-                _add_exception_note(primary_error, "claim verification failed; unverified claim retained")
+                _add_exception_note(
+                    primary_error,
+                    "claim verification failed; unverified claim retained",
+                )
             else:
                 _add_exception_note(primary_error, "unverified claim retained")
         if staged_present and transaction_fd is not None:
@@ -1989,7 +2185,9 @@ def _conditional_namespace_operation(
         if transaction_name and not claim_present and not staged_present:
             try:
                 if transaction_fd is None:
-                    raise OSError(f"{field_name} transaction directory FD is unavailable")
+                    raise OSError(
+                        f"{field_name} transaction directory FD is unavailable"
+                    )
                 transaction_fd_stat = os.fstat(transaction_fd)
                 transaction_name_stat = os.stat(
                     transaction_name,
@@ -2005,7 +2203,9 @@ def _conditional_namespace_operation(
                     transaction_fd_stat.st_ino,
                     stat.S_IFMT(transaction_fd_stat.st_mode),
                 ):
-                    raise OSError(f"{field_name} transaction directory changed before cleanup")
+                    raise OSError(
+                        f"{field_name} transaction directory changed before cleanup"
+                    )
                 os.rmdir(transaction_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
             except BaseException as cleanup_error:
@@ -2078,13 +2278,20 @@ def unlink_file_if_identity(
     return bool(result)
 
 
-def normalize_backup_archive_path(value: object, *, field_name: str = "backup archive path") -> str:
+def normalize_backup_archive_path(
+    value: object, *, field_name: str = "backup archive path"
+) -> str:
     """Return a canonical, relative POSIX archive path or reject it."""
     if isinstance(value, bool) or not isinstance(value, str):
         raise RuntimeError(f"{field_name} must be text")
     if not value or len(value) > 4096:
         raise RuntimeError(f"{field_name} is invalid")
-    if "\x00" in value or "\\" in value or value.startswith("/") or value.startswith("//"):
+    if (
+        "\x00" in value
+        or "\\" in value
+        or value.startswith("/")
+        or value.startswith("//")
+    ):
         raise RuntimeError(f"{field_name} is not a safe relative path")
     if len(value) >= 2 and value[1] == ":":
         raise RuntimeError(f"{field_name} is not a safe relative path")
@@ -2099,7 +2306,9 @@ def normalize_backup_archive_path(value: object, *, field_name: str = "backup ar
     return "/".join(normalized_parts)
 
 
-def assert_backup_source_regular_file(path: Path, *, field_name: str = "backup source") -> os.stat_result:
+def assert_backup_source_regular_file(
+    path: Path, *, field_name: str = "backup source"
+) -> os.stat_result:
     """Validate a user-owned, unlinked regular source file and return its lstat."""
     if not isinstance(path, Path):
         raise RuntimeError(f"{field_name} must be a path")

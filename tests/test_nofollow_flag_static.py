@@ -9,7 +9,7 @@ class NoFollowFlagStaticTests(unittest.TestCase):
         source_root = Path(__file__).resolve().parents[1] / "src" / "speed_of_cinnamon"
         forbidden_fragments = (
             'getattr(os, "O_NOFOLLOW", 0)',
-            'if nofollow_flag is None:',
+            "if nofollow_flag is None:",
             'if getattr(os, "O_NOFOLLOW", None) is None:',
         )
         for source_path in sorted(source_root.glob("*.py")):

@@ -26,7 +26,9 @@ _ISOLATION_VARIABLES = (
 )
 
 
-def _file_signature(path: Path) -> tuple[int, int, int, int, int, int, int, int, str] | None:
+def _file_signature(
+    path: Path,
+) -> tuple[int, int, int, int, int, int, int, int, str] | None:
     try:
         current = path.stat()
     except FileNotFoundError:
@@ -72,7 +74,9 @@ def _run_python(
 
 
 class TestDefaultIsolation(unittest.TestCase):
-    def test_automatic_root_uses_exact_tmp_despite_repo_tmpdir_and_stale_cache(self) -> None:
+    def test_automatic_root_uses_exact_tmp_despite_repo_tmpdir_and_stale_cache(
+        self,
+    ) -> None:
         environment = _subprocess_environment()
         environment["TMPDIR"] = os.fspath(_REPO_ROOT)
         result = _run_python(
@@ -91,7 +95,9 @@ class TestDefaultIsolation(unittest.TestCase):
         self.assertEqual(Path(payload["tempdir"]), root / "tmp")
         self.assertFalse(root.exists())
 
-    def test_test_root_requires_explicit_mode_and_private_non_symlink_root(self) -> None:
+    def test_test_root_requires_explicit_mode_and_private_non_symlink_root(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             safe_root = base / "safe"
@@ -287,7 +293,9 @@ print(json.dumps({
             payloads.append(json.loads(stdout))
         roots = [Path(str(payload["root"])) for payload in payloads]
         self.assertEqual(len(set(roots)), len(roots))
-        self.assertTrue(all(payload["before"] == payload["after"] for payload in payloads))
+        self.assertTrue(
+            all(payload["before"] == payload["after"] for payload in payloads)
+        )
         self.assertTrue(all(not root.exists() for root in roots))
 
     def test_cleanup_refuses_replaced_root_inode(self) -> None:
@@ -428,7 +436,9 @@ print(json.dumps({'preserved': preserved, 'root': str(root), 'moved': str(moved)
                 _file_signature(path)
                 for path in (isolated_error_log, isolated_error_markdown)
             )
-            self.assertTrue(all(signature is not None for signature in isolated_signatures))
+            self.assertTrue(
+                all(signature is not None for signature in isolated_signatures)
+            )
             error_records = tuple(
                 json.loads(line)
                 for line in isolated_error_log.read_text(encoding="utf-8").splitlines()
@@ -439,8 +449,7 @@ print(json.dumps({'preserved': preserved, 'root': str(root), 'moved': str(moved)
                     record.get("level") == "error"
                     and record.get("event") == "command_exception"
                     and record.get("error_type") == "RuntimeError"
-                    and record.get("error_message")
-                    == "alarm JSON could not be parsed"
+                    and record.get("error_message") == "alarm JSON could not be parsed"
                     for record in error_records
                 )
             )

@@ -30,7 +30,9 @@ class AutoBackupGateTest(unittest.TestCase):
             )
         )
 
-    def test_inline_audio_backup_forces_audio_selection_and_uses_settings_override(self) -> None:
+    def test_inline_audio_backup_forces_audio_selection_and_uses_settings_override(
+        self,
+    ) -> None:
         settings = {
             "auto-backup-enabled": True,
             "auto-backup-on-success": True,
@@ -63,9 +65,18 @@ class AutoBackupGateTest(unittest.TestCase):
 
     def test_source_orders_inline_backup_before_cleanup(self) -> None:
         source = Path(cli.__file__).read_text(encoding="utf-8")
-        self.assertIn("write_export(settings_path, settings, alarm_store, include_created_at=False)", source)
-        backup_index = source.index("automatic_backup_result = _run_inline_auto_backup(args, automatic_backup_settings)")
-        cleanup_index = source.index("cleanup_failures: list[tuple[str, str, str]] = []", backup_index)
+        self.assertIn(
+            "write_export(settings_path, settings, alarm_store, include_created_at=False)",
+            source,
+        )
+        cleanup_index = source.index(
+            "cleanup_failures: list[tuple[str, str, str]] = []"
+        )
+        backup_index = source.rindex(
+            "automatic_backup_result = _run_inline_auto_backup(",
+            0,
+            cleanup_index,
+        )
         self.assertLess(backup_index, cleanup_index)
 
 

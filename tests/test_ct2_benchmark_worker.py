@@ -76,9 +76,7 @@ class Ctranslate2BenchmarkWorkerTests(unittest.TestCase):
             output.extend(data)
             return len(data)
 
-        writer = mock.Mock(
-            side_effect=write if write_effect is None else write_effect
-        )
+        writer = mock.Mock(side_effect=write if write_effect is None else write_effect)
         stdout = io.StringIO()
         stderr = io.StringIO()
         with (
@@ -112,7 +110,14 @@ class Ctranslate2BenchmarkWorkerTests(unittest.TestCase):
             contextlib.redirect_stderr(stderr),
         ):
             result = ct2_benchmark_worker.main(self._ARGV if argv is None else argv)
-        return result, bytes(output), imports, stdout.getvalue(), stderr.getvalue(), writer
+        return (
+            result,
+            bytes(output),
+            imports,
+            stdout.getvalue(),
+            stderr.getvalue(),
+            writer,
+        )
 
     def test_cli_and_isolation_precede_third_party_imports(self) -> None:
         invalid = (
@@ -141,9 +146,7 @@ class Ctranslate2BenchmarkWorkerTests(unittest.TestCase):
                 self.assertEqual((stdout, stderr), ("", ""))
                 writer.assert_not_called()
 
-        result, output, imports, stdout, stderr, writer = self._run_main(
-            isolated=False
-        )
+        result, output, imports, stdout, stderr, writer = self._run_main(isolated=False)
         self.assertEqual(result, 65)
         self.assertEqual(imports, [])
         self.assertEqual((stdout, stderr), ("", ""))
@@ -176,9 +179,7 @@ class Ctranslate2BenchmarkWorkerTests(unittest.TestCase):
                     types.SimpleNamespace(**flags),
                 ),
             ):
-                self.assertFalse(
-                    ct2_benchmark_worker._isolated_python_start_is_valid()
-                )
+                self.assertFalse(ct2_benchmark_worker._isolated_python_start_is_valid())
 
     def test_success_writes_one_canonical_observation_to_stdout(self) -> None:
         original_path = list(sys.path)
@@ -295,7 +296,9 @@ class Ctranslate2BenchmarkWorkerTests(unittest.TestCase):
         self.assertEqual(output, b"")
         self.assertEqual((stdout, stderr), ("", ""))
 
-    def test_worker_direct_surface_has_no_socket_metadata_model_or_subprocess(self) -> None:
+    def test_worker_direct_surface_has_no_socket_metadata_model_or_subprocess(
+        self,
+    ) -> None:
         namespace = ct2_benchmark_worker.__dict__
         for forbidden in (
             "importlib_metadata",
@@ -460,7 +463,10 @@ class Ctranslate2BenchmarkAttestationWorkerTests(unittest.TestCase):
             ("executable", 0o710, "artifact-tree-mismatch"),
         )
         for mutation, mode, expected in mutations:
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                 root = Path(temporary) / "artifact"
                 selected = (
                     {"payload/run.bin": (b"payload", True)}
@@ -501,9 +507,7 @@ class Ctranslate2BenchmarkAttestationWorkerTests(unittest.TestCase):
                 "_artifact_file_digest",
                 side_effect=mutate_between_walks,
             ):
-                returncode, output, _writer = self._run(
-                    self._request(root, contents)
-                )
+                returncode, output, _writer = self._run(self._request(root, contents))
 
         self.assertEqual(returncode, 65)
         self.assertEqual(json.loads(output)["error_code"], "artifact-tree-changed")
@@ -512,7 +516,10 @@ class Ctranslate2BenchmarkAttestationWorkerTests(unittest.TestCase):
         contents = {"payload/data.bin": (b"payload", False)}
         mutations = ("missing", "extra", "root-symlink", "leaf-symlink", "hardlink")
         for mutation in mutations:
-            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+            with (
+                self.subTest(mutation=mutation),
+                tempfile.TemporaryDirectory() as temporary,
+            ):
                 base = Path(temporary)
                 root = base / "artifact"
                 self._write_root(root, contents)
@@ -572,9 +579,7 @@ class Ctranslate2BenchmarkAttestationWorkerTests(unittest.TestCase):
                 "_open_bound_root",
                 side_effect=replace_before_rebind,
             ):
-                returncode, output, _writer = self._run(
-                    self._request(root, contents)
-                )
+                returncode, output, _writer = self._run(self._request(root, contents))
 
         self.assertEqual(returncode, 65)
         self.assertEqual(json.loads(output)["error_code"], "artifact-tree-changed")
@@ -655,9 +660,7 @@ class Ctranslate2BenchmarkAttestationWorkerTests(unittest.TestCase):
                 "_attest_artifact",
                 side_effect=SystemExit("private"),
             ):
-                returncode, output, _writer = self._run(
-                    self._request(root, contents)
-                )
+                returncode, output, _writer = self._run(self._request(root, contents))
         self.assertEqual(returncode, 65)
         self.assertEqual(
             json.loads(output)["error_code"],
@@ -717,9 +720,7 @@ class Ctranslate2BenchmarkAttestationWorkerTests(unittest.TestCase):
             os.fstat(root_descriptor)
 
     def test_attestation_rejects_total_over_one_gib_before_tree_open(self) -> None:
-        payload = json.loads(
-            self._request(Path("/not-opened"), {"a": (b"", False)})
-        )
+        payload = json.loads(self._request(Path("/not-opened"), {"a": (b"", False)}))
         payload["manifest"]["files"] = [
             {
                 "executable": False,
@@ -801,9 +802,7 @@ class Ctranslate2BenchmarkAttestationWorkerTests(unittest.TestCase):
             "changed_ns": 1,
         }
         for field, value in (("user_id", 1001), ("device", 8)):
-            snapshot = ct2_benchmark_worker._StatSnapshot(
-                **{**baseline, field: value}
-            )
+            snapshot = ct2_benchmark_worker._StatSnapshot(**{**baseline, field: value})
             with (
                 self.subTest(field=field),
                 mock.patch.object(
@@ -900,7 +899,9 @@ class Ctranslate2BenchmarkAttestationWorkerTests(unittest.TestCase):
                 with self.subTest(candidate_length=len(candidate)):
                     returncode, output, _writer = self._run(candidate)
                     self.assertEqual(returncode, 65)
-                    self.assertEqual(json.loads(output)["error_code"], "artifact-attestation-failed")
+                    self.assertEqual(
+                        json.loads(output)["error_code"], "artifact-attestation-failed"
+                    )
                     self.assertNotIn(str(root), output.decode("ascii"))
 
 
@@ -1171,8 +1172,7 @@ class Ctranslate2BenchmarkArmRequestParserTests(unittest.TestCase):
     ) -> None:
         phases = self.plan.model_blocks[0].phases
         first_by_runtime = {
-            phase.pair.runtime_order[0]: index
-            for index, phase in enumerate(phases)
+            phase.pair.runtime_order[0]: index for index, phase in enumerate(phases)
         }
         self.assertEqual(set(first_by_runtime), {"runtime-a", "runtime-b"})
         for compute_type in ("int8", "float32"):
@@ -1309,9 +1309,7 @@ class Ctranslate2BenchmarkArmRequestParserTests(unittest.TestCase):
             ),
             (
                 "pair",
-                lambda value: value["run_plan"]["model_blocks"][0]["phases"][0][
-                    "pair"
-                ],
+                lambda value: value["run_plan"]["model_blocks"][0]["phases"][0]["pair"],
                 "run_plan",
                 "runtime_order",
             ),
@@ -1361,7 +1359,11 @@ class Ctranslate2BenchmarkArmRequestParserTests(unittest.TestCase):
         ):
             with self.subTest(domain=domain):
                 payload = self._payload()
-                owner = payload if domain in {"run_plan", "decode_profile"} else payload[domain]
+                owner = (
+                    payload
+                    if domain in {"run_plan", "decode_profile"}
+                    else payload[domain]
+                )
                 owner[hash_key] = "f" * 64
                 self.assertInvalid(self._encoded(payload))
         self.assertInvalid(self.requests[0], nonce="3" * 64)
@@ -1513,9 +1515,7 @@ class Ctranslate2BenchmarkArmRequestParserTests(unittest.TestCase):
             "clip_order_seed": 1,
             "runtime_order": ["runtime-a", "runtime-b"],
         }
-        parsed_pair = ct2_benchmark_worker._benchmark_run_pair_from_payload(
-            valid_pair
-        )
+        parsed_pair = ct2_benchmark_worker._benchmark_run_pair_from_payload(valid_pair)
         self.assertEqual(parsed_pair.clip_order_seed, 1)
         bool_seed = copy.deepcopy(valid_pair)
         self.assertEqual(bool_seed["clip_order_seed"], True)
@@ -1546,9 +1546,9 @@ class Ctranslate2BenchmarkArmRequestParserTests(unittest.TestCase):
         for field in ("id", "manifest_sha256"):
             with self.subTest(duplicate=field):
                 payload = self._payload()
-                payload["run_plan"]["clips"][field] = payload["run_plan"][
-                    "runtimes"
-                ]["a"][field]
+                payload["run_plan"]["clips"][field] = payload["run_plan"]["runtimes"][
+                    "a"
+                ][field]
                 self._rehash(payload, "run_plan")
                 self.assertInvalid(self._encoded(payload))
 
@@ -1702,12 +1702,34 @@ class Ctranslate2BenchmarkArmRequestParserTests(unittest.TestCase):
         self.assertEqual(parsed.clips.manifest.files[1].path, "sprache/clip-\u00e4.raw")
 
         mutations = (
-            ("runtime-unicode", lambda value: value["runtime"].__setitem__("root", "/srv/r\u00fcntime")),
-            ("runtime-double-slash", lambda value: value["runtime"].__setitem__("root", "//srv/runtime")),
-            ("model-double-slash", lambda value: value["model"].__setitem__("root", "//srv/model")),
-            ("clips-double-slash", lambda value: value["clips"].__setitem__("root", "//srv/clips")),
-            ("interpreter-double-slash", lambda value: value["runtime_layout"].__setitem__("interpreter", "//usr/bin/python3")),
-            ("interpreter-under-root", lambda value: value["runtime_layout"].__setitem__("interpreter", f"{value['model']['root']}/python")),
+            (
+                "runtime-unicode",
+                lambda value: value["runtime"].__setitem__("root", "/srv/r\u00fcntime"),
+            ),
+            (
+                "runtime-double-slash",
+                lambda value: value["runtime"].__setitem__("root", "//srv/runtime"),
+            ),
+            (
+                "model-double-slash",
+                lambda value: value["model"].__setitem__("root", "//srv/model"),
+            ),
+            (
+                "clips-double-slash",
+                lambda value: value["clips"].__setitem__("root", "//srv/clips"),
+            ),
+            (
+                "interpreter-double-slash",
+                lambda value: value["runtime_layout"].__setitem__(
+                    "interpreter", "//usr/bin/python3"
+                ),
+            ),
+            (
+                "interpreter-under-root",
+                lambda value: value["runtime_layout"].__setitem__(
+                    "interpreter", f"{value['model']['root']}/python"
+                ),
+            ),
         )
         for name, mutate in mutations:
             with self.subTest(name=name):
@@ -2004,9 +2026,7 @@ class Ctranslate2BenchmarkArmBundleTests(unittest.TestCase):
         *,
         duplicate_audio_hash: bool = False,
     ) -> tuple[tuple[str, bytes, bool], ...]:
-        files: list[tuple[str, bytes, bool]] = [
-            ("corpus-v1.json", corpus_data, False)
-        ]
+        files: list[tuple[str, bytes, bool]] = [("corpus-v1.json", corpus_data, False)]
         for index, clip in enumerate(clips):
             contents = (
                 b"duplicate-audio"
@@ -2026,14 +2046,8 @@ class Ctranslate2BenchmarkArmBundleTests(unittest.TestCase):
         seed: int = 17,
         phase_index: int = 0,
     ) -> tuple[tuple[bytes, bytes], bytes]:
-        payload = (
-            self._corpus_payload()
-            if corpus_payload is None
-            else corpus_payload
-        )
-        encoded_corpus = (
-            self._encoded(payload) if corpus_data is None else corpus_data
-        )
+        payload = self._corpus_payload() if corpus_payload is None else corpus_payload
+        encoded_corpus = self._encoded(payload) if corpus_data is None else corpus_data
         files = (
             self._manifest_files(encoded_corpus, payload["clips"])
             if manifest_files is None
@@ -2168,12 +2182,9 @@ class Ctranslate2BenchmarkArmBundleTests(unittest.TestCase):
             payload = self._corpus_payload(count)
             if count == 20:
                 payload["clips"][0]["audio_path"] = "audio/clip-00.flac"
-            requests, corpus_data = self._build_case(
-                corpus_payload=payload
-            )
+            requests, corpus_data = self._build_case(corpus_payload=payload)
             bundles = tuple(
-                self._parse(requests[arm], corpus_data, arm=arm)
-                for arm in range(2)
+                self._parse(requests[arm], corpus_data, arm=arm) for arm in range(2)
             )
             with self.subTest(count=count):
                 self.assertEqual(len(bundles[0].corpus.clips), count)
@@ -2624,9 +2635,7 @@ class Ctranslate2BenchmarkArmBundleTests(unittest.TestCase):
             self._encoded(executable_corpus["clips"]["manifest"])
         ).hexdigest()
         executable_corpus["clips"]["manifest_sha256"] = manifest_sha256
-        executable_corpus["run_plan"]["clips"][
-            "manifest_sha256"
-        ] = manifest_sha256
+        executable_corpus["run_plan"]["clips"]["manifest_sha256"] = manifest_sha256
         executable_corpus["run_plan_sha256"] = hashlib.sha256(
             self._encoded(executable_corpus["run_plan"])
         ).hexdigest()
@@ -2638,7 +2647,9 @@ class Ctranslate2BenchmarkArmBundleTests(unittest.TestCase):
         requests, corpus_data = self._build_case(seed=17, phase_index=1)
         parsed = self._parse(requests[0], corpus_data)
         phases = parsed.request.run_plan.model_blocks[0].phases
-        selected_seed = phases[parsed.request.selection.phase_index].pair.clip_order_seed
+        selected_seed = phases[
+            parsed.request.selection.phase_index
+        ].pair.clip_order_seed
         adjacent_seed = phases[0].pair.clip_order_seed
         ids = tuple(value["id"] for value in self._corpus_payload()["clips"])
         domain = b"SOC-CT2-CORPUS-ORDER-V1\x00"
@@ -2713,10 +2724,7 @@ class Ctranslate2BenchmarkArmBundleTests(unittest.TestCase):
                 )
                 self.assertIn(
                     audio_path,
-                    {
-                        value.path
-                        for value in parsed_request.clips.manifest.files
-                    },
+                    {value.path for value in parsed_request.clips.manifest.files},
                 )
                 self._assert_corpus_invalid(requests[0], corpus_data)
 
@@ -2837,10 +2845,7 @@ class Ctranslate2BenchmarkArmBundleTests(unittest.TestCase):
                 self.assertEqual(tuple(value.id for value in ordered), expected)
                 self.assertEqual(
                     hashlib.sha256(
-                        domain
-                        + seed.to_bytes(8, "big")
-                        + b"\x00"
-                        + b"clip-00"
+                        domain + seed.to_bytes(8, "big") + b"\x00" + b"clip-00"
                     ).hexdigest(),
                     clip_zero_digest,
                 )
@@ -2854,14 +2859,21 @@ class Ctranslate2BenchmarkArmBundleTests(unittest.TestCase):
                 tuple(reversed(clips)),
                 seed=0,
             )
-        self.assertEqual(tuple(value.id for value in tied), tuple(sorted(v.id for v in clips)))
+        self.assertEqual(
+            tuple(value.id for value in tied), tuple(sorted(v.id for v in clips))
+        )
 
     def test_bundle_values_are_deeply_immutable_and_repr_is_redacted(self) -> None:
         requests, corpus_data = self._build_case()
         parsed = self._parse(requests[0], corpus_data)
         self.assertIs(type(parsed.corpus.clips), tuple)
         self.assertIs(type(parsed.corpus.execution_clips), tuple)
-        self.assertTrue(all(type(value) is ct2_benchmark_worker._CorpusClip for value in parsed.corpus.clips))
+        self.assertTrue(
+            all(
+                type(value) is ct2_benchmark_worker._CorpusClip
+                for value in parsed.corpus.clips
+            )
+        )
         with self.assertRaises(dataclasses.FrozenInstanceError):
             parsed.corpus.language = "en"
         with self.assertRaises(dataclasses.FrozenInstanceError):
@@ -2896,9 +2908,7 @@ class Ctranslate2BenchmarkArmBundleTests(unittest.TestCase):
             self.assertIsNot(error, original)
             self.assertNotIn("private", str(error))
 
-        request_error = ct2_benchmark_worker.WorkerFailure(
-            "benchmark-request-invalid"
-        )
+        request_error = ct2_benchmark_worker.WorkerFailure("benchmark-request-invalid")
         with (
             mock.patch.object(
                 ct2_benchmark_worker,
@@ -3128,8 +3138,7 @@ class Ctranslate2BenchmarkAudioReadTests(unittest.TestCase):
                     mode=mode,
                 )
                 selected_total = sum(
-                    value.audio_size
-                    for value in bundle.corpus.execution_clips
+                    value.audio_size for value in bundle.corpus.execution_clips
                 )
                 with (
                     self.subTest(mode=mode, boundary="file-exact"),
@@ -3776,9 +3785,8 @@ class Ctranslate2BenchmarkAudioReadTests(unittest.TestCase):
                 if value.path == unselected.audio_path
             )
             different_hash = (
-                ("0" if unselected_declaration.sha256[0] != "0" else "1")
-                + unselected_declaration.sha256[1:]
-            )
+                "0" if unselected_declaration.sha256[0] != "0" else "1"
+            ) + unselected_declaration.sha256[1:]
             mismatched_declaration = dataclasses.replace(
                 unselected_declaration,
                 sha256=different_hash,
@@ -3786,9 +3794,7 @@ class Ctranslate2BenchmarkAudioReadTests(unittest.TestCase):
             mismatched_manifest = dataclasses.replace(
                 quick_bundle.request.clips.manifest,
                 files=tuple(
-                    mismatched_declaration
-                    if value is unselected_declaration
-                    else value
+                    mismatched_declaration if value is unselected_declaration else value
                     for value in quick_bundle.request.clips.manifest.files
                 ),
             )
@@ -3817,9 +3823,7 @@ class Ctranslate2BenchmarkAudioReadTests(unittest.TestCase):
             oversized_manifest = dataclasses.replace(
                 quick_bundle.request.clips.manifest,
                 files=tuple(
-                    oversized_declaration
-                    if value is unselected_declaration
-                    else value
+                    oversized_declaration if value is unselected_declaration else value
                     for value in quick_bundle.request.clips.manifest.files
                 ),
             )
@@ -3861,9 +3865,7 @@ class Ctranslate2BenchmarkAudioReadTests(unittest.TestCase):
                 wrong_shape = clips[:3] if mode == "full" else clips
                 reordered_clips = (clips[1], clips[0], *clips[2:])
                 reordered_execution = (
-                    reordered_clips
-                    if mode == "full"
-                    else reordered_clips[:3]
+                    reordered_clips if mode == "full" else reordered_clips[:3]
                 )
                 cases = (
                     dataclasses.replace(
@@ -3884,7 +3886,9 @@ class Ctranslate2BenchmarkAudioReadTests(unittest.TestCase):
                 )
                 for candidate in cases:
                     with (
-                        self.subTest(mode=mode, shape=len(candidate.corpus.execution_clips)),
+                        self.subTest(
+                            mode=mode, shape=len(candidate.corpus.execution_clips)
+                        ),
                         mock.patch.object(
                             ct2_benchmark_worker,
                             "_open_bound_root",
@@ -3969,9 +3973,7 @@ class Ctranslate2BenchmarkAudioReadTests(unittest.TestCase):
                 def append(self, _value: object) -> None:
                     raise AssertionError("descriptor append")
 
-            slot_count = (
-                len(bundle.corpus.execution_clips[0].audio_path.split("/")) + 1
-            )
+            slot_count = len(bundle.corpus.execution_clips[0].audio_path.split("/")) + 1
             with mock.patch.object(
                 ct2_benchmark_worker,
                 "_new_audio_descriptor_slots",

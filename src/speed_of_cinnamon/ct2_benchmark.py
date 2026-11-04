@@ -525,11 +525,7 @@ def _parse_artifact_manifest_checked(
 ) -> ArtifactManifest:
     if not _reference_is_valid(reference):
         raise RuntimeProbeError("artifact-reference-invalid")
-    if (
-        type(data) is not bytes
-        or not data
-        or len(data) > MAX_ARTIFACT_MANIFEST_BYTES
-    ):
+    if type(data) is not bytes or not data or len(data) > MAX_ARTIFACT_MANIFEST_BYTES:
         raise RuntimeProbeError("artifact-manifest-invalid")
     digest = hashlib.sha256(data).hexdigest()
     if not secrets.compare_digest(digest, reference.manifest_sha256):
@@ -544,10 +540,7 @@ def _parse_artifact_manifest_checked(
     artifact_id = payload.get("artifact_id")
     kind = payload.get("kind")
     schema_version = payload.get("schema_version")
-    if (
-        type(artifact_id) is not str
-        or _ARTIFACT_ID_RE.fullmatch(artifact_id) is None
-    ):
+    if type(artifact_id) is not str or _ARTIFACT_ID_RE.fullmatch(artifact_id) is None:
         raise RuntimeProbeError("artifact-manifest-invalid")
     if not secrets.compare_digest(artifact_id, reference.artifact_id):
         raise RuntimeProbeError("artifact-reference-mismatch")
@@ -559,10 +552,7 @@ def _parse_artifact_manifest_checked(
     ):
         raise RuntimeProbeError("artifact-manifest-invalid")
     files_value = payload.get("files")
-    if (
-        type(files_value) is not list
-        or not 1 <= len(files_value) <= MAX_ARTIFACT_FILES
-    ):
+    if type(files_value) is not list or not 1 <= len(files_value) <= MAX_ARTIFACT_FILES:
         raise RuntimeProbeError("artifact-manifest-invalid")
     files = tuple(_artifact_file_declaration(value) for value in files_value)
     if not _artifact_files_are_valid(files):
@@ -812,11 +802,7 @@ def _manifest_reference(value: object) -> ArtifactManifestReference:
 
 
 def _parse_experiment_manifest_checked(data: bytes) -> ExperimentManifest:
-    if (
-        type(data) is not bytes
-        or not data
-        or len(data) > MAX_EXPERIMENT_MANIFEST_BYTES
-    ):
+    if type(data) is not bytes or not data or len(data) > MAX_EXPERIMENT_MANIFEST_BYTES:
         raise RuntimeProbeError("manifest-invalid")
     payload = _decode_result(data)
     if set(payload) != {
@@ -837,8 +823,7 @@ def _parse_experiment_manifest_checked(data: bytes) -> ExperimentManifest:
         or type(mode) is not str
         or mode not in {"full", "quick"}
         or type(pair_count) is not int
-        or pair_count
-        != (FULL_PAIR_COUNT if mode == "full" else QUICK_PAIR_COUNT)
+        or pair_count != (FULL_PAIR_COUNT if mode == "full" else QUICK_PAIR_COUNT)
     ):
         raise RuntimeProbeError("manifest-invalid")
 
@@ -865,9 +850,8 @@ def _parse_experiment_manifest_checked(data: bytes) -> ExperimentManifest:
     models = tuple(_manifest_reference(value) for value in models_value)
     model_ids = tuple(model.artifact_id for model in models)
     model_hashes = tuple(model.manifest_sha256 for model in models)
-    if (
-        len(set(model_ids)) != len(model_ids)
-        or len(set(model_hashes)) != len(model_hashes)
+    if len(set(model_ids)) != len(model_ids) or len(set(model_hashes)) != len(
+        model_hashes
     ):
         raise RuntimeProbeError("manifest-invalid")
     return ExperimentManifest(
@@ -908,7 +892,9 @@ def _run_pair(
     first_runtime: str,
     clip_order_seed: int,
 ) -> RunPair:
-    other_runtime = runtime_ids[1] if first_runtime == runtime_ids[0] else runtime_ids[0]
+    other_runtime = (
+        runtime_ids[1] if first_runtime == runtime_ids[0] else runtime_ids[0]
+    )
     return RunPair(
         runtime_order=(first_runtime, other_runtime),
         clip_order_seed=clip_order_seed,
@@ -1055,9 +1041,8 @@ def _run_plan_is_valid(plan: object) -> bool:
         return False
     model_ids = tuple(block.model.artifact_id for block in plan.model_blocks)
     model_hashes = tuple(block.model.manifest_sha256 for block in plan.model_blocks)
-    if (
-        len(set(model_ids)) != len(model_ids)
-        or len(set(model_hashes)) != len(model_hashes)
+    if len(set(model_ids)) != len(model_ids) or len(set(model_hashes)) != len(
+        model_hashes
     ):
         return False
     runtime_ids = tuple(reference.artifact_id for reference in plan.runtimes)
@@ -1179,10 +1164,7 @@ def _validated_run_plan_artifacts(
             raise
         except (Exception, SystemExit):
             raise RuntimeProbeError("artifact-manifest-invalid") from None
-        if (
-            manifest.kind != expected_kind
-            or manifest.reference != expected_reference
-        ):
+        if manifest.kind != expected_kind or manifest.reference != expected_reference:
             raise RuntimeProbeError("artifact-set-invalid")
         try:
             root_name = os.fspath(root_value)
@@ -1230,8 +1212,7 @@ def attest_run_plan_artifacts(
                 or type(attestation.artifact_id) is not str
                 or attestation.artifact_id != manifest.reference.artifact_id
                 or type(attestation.manifest_sha256) is not str
-                or attestation.manifest_sha256
-                != manifest.reference.manifest_sha256
+                or attestation.manifest_sha256 != manifest.reference.manifest_sha256
                 or type(attestation.file_count) is not int
                 or attestation.file_count != len(manifest.files)
                 or type(attestation.total_bytes) is not int
@@ -1393,9 +1374,7 @@ def build_benchmark_pair_requests(
         if (
             len(corpus_members) != 1
             or corpus_members[0].executable
-            or not 1
-            <= corpus_members[0].size
-            <= MAX_CORPUS_BYTES
+            or not 1 <= corpus_members[0].size <= MAX_CORPUS_BYTES
         ):
             raise RuntimeProbeError("benchmark-request-invalid")
 

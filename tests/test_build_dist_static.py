@@ -54,7 +54,9 @@ class BuildDistStaticTest(unittest.TestCase):
         checksum = stage.with_name(f"{stage.name}.sha256")
         checksum.touch(mode=0o600)
         checksum_stat = checksum.stat()
-        checksum_identity = f"{checksum_stat.st_dev}:{checksum_stat.st_ino}:{checksum_stat.st_mode}"
+        checksum_identity = (
+            f"{checksum_stat.st_dev}:{checksum_stat.st_ino}:{checksum_stat.st_mode}"
+        )
         script = (
             "set -euo pipefail\n"
             f"DIST_BUILD_TIMEOUT_SECONDS={timeout}\n"
@@ -112,9 +114,21 @@ class BuildDistStaticTest(unittest.TestCase):
     ) -> str:
         source = BUILD_DIST.read_text(encoding="utf-8")
         top = source[: source.index("\nrepo_dir=")]
-        top = top.replace("DIST_BUILD_TIMEOUT_SECONDS=3600", f"DIST_BUILD_TIMEOUT_SECONDS={timeout_seconds}", 1)
-        top = top.replace("DIST_BUILD_KILL_AFTER_SECONDS=2", f"DIST_BUILD_KILL_AFTER_SECONDS={kill_after_seconds}", 1)
-        top = top.replace("DIST_BUILD_STARTUP_RESERVE_NS=3000000000", f"DIST_BUILD_STARTUP_RESERVE_NS={reserve_ns}", 1)
+        top = top.replace(
+            "DIST_BUILD_TIMEOUT_SECONDS=3600",
+            f"DIST_BUILD_TIMEOUT_SECONDS={timeout_seconds}",
+            1,
+        )
+        top = top.replace(
+            "DIST_BUILD_KILL_AFTER_SECONDS=2",
+            f"DIST_BUILD_KILL_AFTER_SECONDS={kill_after_seconds}",
+            1,
+        )
+        top = top.replace(
+            "DIST_BUILD_STARTUP_RESERVE_NS=3000000000",
+            f"DIST_BUILD_STARTUP_RESERVE_NS={reserve_ns}",
+            1,
+        )
         if probe_timeout_seconds is not None:
             top = top.replace(
                 "DIST_BUILD_INITIAL_PROBE_TIMEOUT_SECONDS=0.25",
@@ -126,10 +140,7 @@ class BuildDistStaticTest(unittest.TestCase):
     def _write_startup_fd_launcher(self, path: Path) -> None:
         self._write_executable(
             path,
-            "#!/usr/bin/env bash\n"
-            "exec 198<&3\n"
-            "exec 3<&-\n"
-            "exec \"$@\"\n",
+            "#!/usr/bin/env bash\n" "exec 198<&3\n" "exec 3<&-\n" 'exec "$@"\n',
         )
 
     def _start_valid_handoff(
@@ -156,8 +167,8 @@ class BuildDistStaticTest(unittest.TestCase):
         )
         nonce = "b" * 64
         requested_deadline = deadline or time.monotonic_ns() + 10**18
-        payload = (
-            f"{nonce}\n{requested_deadline}\n{handoff_identity}\n{os.getpid()}\n".encode("ascii")
+        payload = f"{nonce}\n{requested_deadline}\n{handoff_identity}\n{os.getpid()}\n".encode(
+            "ascii"
         )
         view = memoryview(payload)
         while view:
@@ -214,7 +225,9 @@ class BuildDistStaticTest(unittest.TestCase):
             stage_path = Path(stage)
             checksum_stage_path = Path(checksum_stage)
             if stage_path.is_file() and checksum_stage_path.is_file():
-                expected_metadata = self._file_metadata(stage_path) + self._file_metadata(checksum_stage_path)
+                expected_metadata = self._file_metadata(
+                    stage_path
+                ) + self._file_metadata(checksum_stage_path)
         if expected_metadata is None:
             expected_metadata = ("", "", "", "", "", "")
         return subprocess.run(
@@ -287,7 +300,9 @@ class BuildDistStaticTest(unittest.TestCase):
             timeout=10,
         )
 
-    def _write_pair(self, archive: Path, checksum: Path, payload: bytes, name: str) -> None:
+    def _write_pair(
+        self, archive: Path, checksum: Path, payload: bytes, name: str
+    ) -> None:
         archive.write_bytes(payload)
         checksum.write_text(
             f"{hashlib.sha256(payload).hexdigest()}  {name}\n",
@@ -316,12 +331,12 @@ class BuildDistStaticTest(unittest.TestCase):
     def _workspace_sweep_program(self) -> str:
         source = BUILD_DIST.read_text(encoding="utf-8")
         marker = (
-            'if ! timeout --signal=TERM --kill-after='
+            "if ! timeout --signal=TERM --kill-after="
             '"${DIST_STARTUP_SWEEP_KILL_AFTER_SECONDS}s"'
         )
         marker_start = source.index(marker)
-        start = source.index("<<'PY'\n", marker_start) + len("<<'PY'\n")
-        end = source.index("\nPY\nthen", start)
+        start = source.index("<<'PY'; then\n", marker_start) + len("<<'PY'; then\n")
+        end = source.index("\nPY\n\tprintf 'failed to sweep build-dist workspaces safely.", start)
         return source[start:end]
 
     def _run_workspace_sweep(
@@ -362,7 +377,9 @@ class BuildDistStaticTest(unittest.TestCase):
         end = source.index("\n}\n\nwork_root=", start) + 2
         return source[start:end]
 
-    def _run_tmp_validation(self, program: str, root: Path) -> subprocess.CompletedProcess[str]:
+    def _run_tmp_validation(
+        self, program: str, root: Path
+    ) -> subprocess.CompletedProcess[str]:
         script = (
             "set -u\n"
             'repo_dir="$1"\n'
@@ -383,16 +400,16 @@ class BuildDistStaticTest(unittest.TestCase):
         path.write_text(
             "#!/usr/bin/env bash\n"
             "set -u\n"
-            "if [[ \"${1:-}\" == remove-leaf ]]; then\n"
-            "    target=\"$3\"\n"
-            "    replacement=\"${target}.replacement\"\n"
+            'if [[ "${1:-}" == remove-leaf ]]; then\n'
+            '    target="$3"\n'
+            '    replacement="${target}.replacement"\n'
             "    printf 'replacement\\n' > \"${replacement}\"\n"
-            "    python3 - \"${target}\" \"${replacement}\" <<'PY'\n"
+            '    python3 - "${target}" "${replacement}" <<\'PY\'\n'
             "import os, sys\n"
             "os.replace(sys.argv[2], sys.argv[1])\n"
             "PY\n"
             "fi\n"
-            f"exec python3 {str(real)!r} \"$@\"\n",
+            f'exec python3 {str(real)!r} "$@"\n',
             encoding="utf-8",
         )
         path.chmod(0o700)
@@ -407,7 +424,9 @@ class BuildDistStaticTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def _write_delayed_safe_fs_wrapper(self, path: Path, *, real: Path, delay: float) -> None:
+    def _write_delayed_safe_fs_wrapper(
+        self, path: Path, *, real: Path, delay: float
+    ) -> None:
         path.write_text(
             "import os, sys, time\n"
             f"time.sleep({delay!r})\n"
@@ -415,7 +434,9 @@ class BuildDistStaticTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def _write_no_external_stage_rename_wrapper(self, path: Path, *, real: Path) -> None:
+    def _write_no_external_stage_rename_wrapper(
+        self, path: Path, *, real: Path
+    ) -> None:
         path.write_text(
             "import os, sys\n"
             "args = sys.argv[1:]\n"
@@ -443,11 +464,14 @@ class BuildDistStaticTest(unittest.TestCase):
         identities: tuple[str, str, str, str] | None = None,
         env: dict[str, str] | None = None,
     ) -> subprocess.CompletedProcess[str]:
-        tarball_identity, checksum_identity, staging_dir_identity, work_dir_identity = identities or (
-            "tarball-id",
-            "checksum-id",
-            "staging-dir-id",
-            "work-dir-id",
+        tarball_identity, checksum_identity, staging_dir_identity, work_dir_identity = (
+            identities
+            or (
+                "tarball-id",
+                "checksum-id",
+                "staging-dir-id",
+                "work-dir-id",
+            )
         )
         script = (
             "set -u\n"
@@ -490,7 +514,9 @@ class BuildDistStaticTest(unittest.TestCase):
             timeout=10,
         )
 
-    def _prepare_transaction(self, dist: Path, name: str = "archive.tar.gz") -> tuple[Path, Path, Path]:
+    def _prepare_transaction(
+        self, dist: Path, name: str = "archive.tar.gz"
+    ) -> tuple[Path, Path, Path]:
         transaction = dist / ".build-dist-transaction-archive-123456"
         transaction.mkdir(mode=0o700)
         stage = transaction / "stage.tar.gz"
@@ -511,14 +537,18 @@ class BuildDistStaticTest(unittest.TestCase):
             checksum_final = dist / "archive.tar.gz.sha256"
             _, stage, checksum_stage = self._prepare_transaction(dist)
 
-            first = self._run_finalizer(program, safe_fs, lock, stage, final, checksum_stage, checksum_final)
+            first = self._run_finalizer(
+                program, safe_fs, lock, stage, final, checksum_stage, checksum_final
+            )
 
             self.assertEqual(first.returncode, 0, first.stderr)
             self._assert_pair(final, checksum_final)
             self.assertEqual(list(dist.glob(".build-dist-transaction-*")), [])
 
             _, stage, checksum_stage = self._prepare_transaction(dist)
-            second = self._run_finalizer(program, safe_fs, lock, stage, final, checksum_stage, checksum_final)
+            second = self._run_finalizer(
+                program, safe_fs, lock, stage, final, checksum_stage, checksum_final
+            )
 
             self.assertEqual(second.returncode, 0, second.stderr)
             self._assert_pair(final, checksum_final)
@@ -529,14 +559,18 @@ class BuildDistStaticTest(unittest.TestCase):
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         if not Path("/dev/shm").is_dir():
             self.skipTest("cross-filesystem temporary root unavailable")
-        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory(dir="/dev/shm") as cross_fs_tmp:
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory(
+            dir="/dev/shm"
+        ) as cross_fs_tmp:
             root = Path(tmp)
             dist = root / "dist"
             dist.mkdir(mode=0o700)
             external = Path(cross_fs_tmp)
             stage = external / "stage.tar.gz"
             checksum_stage = external / "stage.tar.gz.sha256"
-            self._write_pair(stage, checksum_stage, b"cross-fs archive\n", "archive.tar.gz")
+            self._write_pair(
+                stage, checksum_stage, b"cross-fs archive\n", "archive.tar.gz"
+            )
             if stage.stat().st_dev == dist.stat().st_dev:
                 self.skipTest("temporary roots are on one filesystem")
             final = dist / "archive.tar.gz"
@@ -569,8 +603,12 @@ class BuildDistStaticTest(unittest.TestCase):
             dist.mkdir(mode=0o700)
             stage = root / "stage.tar.gz"
             checksum_stage = root / "stage.tar.gz.sha256"
-            self._write_pair(stage, checksum_stage, b"producer archive\n", "archive.tar.gz")
-            expected_metadata = self._file_metadata(stage) + self._file_metadata(checksum_stage)
+            self._write_pair(
+                stage, checksum_stage, b"producer archive\n", "archive.tar.gz"
+            )
+            expected_metadata = self._file_metadata(stage) + self._file_metadata(
+                checksum_stage
+            )
             replacement = root / "replacement.tar.gz"
             replacement.write_bytes(b"replaced archive\n")
             replacement.replace(stage)
@@ -591,7 +629,9 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertTrue(stage.exists())
             self.assertEqual(stage.read_bytes(), b"replaced archive\n")
 
-    def test_dist_external_checksum_replacement_after_producer_fails_closed(self) -> None:
+    def test_dist_external_checksum_replacement_after_producer_fails_closed(
+        self,
+    ) -> None:
         program = self._finalizer_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -600,8 +640,12 @@ class BuildDistStaticTest(unittest.TestCase):
             dist.mkdir(mode=0o700)
             stage = root / "stage.tar.gz"
             checksum_stage = root / "stage.tar.gz.sha256"
-            self._write_pair(stage, checksum_stage, b"producer archive\n", "archive.tar.gz")
-            expected_metadata = self._file_metadata(stage) + self._file_metadata(checksum_stage)
+            self._write_pair(
+                stage, checksum_stage, b"producer archive\n", "archive.tar.gz"
+            )
+            expected_metadata = self._file_metadata(stage) + self._file_metadata(
+                checksum_stage
+            )
             replacement = root / "replacement.sha256"
             replacement.write_bytes(b"replaced checksum\n")
             replacement.replace(checksum_stage)
@@ -622,7 +666,9 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertTrue(stage.exists())
             self.assertEqual(checksum_stage.read_bytes(), b"replaced checksum\n")
 
-    def test_dist_external_stage_replacement_after_fd_processing_fails_closed(self) -> None:
+    def test_dist_external_stage_replacement_after_fd_processing_fails_closed(
+        self,
+    ) -> None:
         program = self._finalizer_program()
         marker = "        source_after = os.fstat(source_fd)\n"
         self.assertEqual(program.count(marker), 1)
@@ -633,8 +679,12 @@ class BuildDistStaticTest(unittest.TestCase):
             dist.mkdir(mode=0o700)
             stage = root / "stage.tar.gz"
             checksum_stage = root / "stage.tar.gz.sha256"
-            self._write_pair(stage, checksum_stage, b"producer archive\n", "archive.tar.gz")
-            expected_metadata = self._file_metadata(stage) + self._file_metadata(checksum_stage)
+            self._write_pair(
+                stage, checksum_stage, b"producer archive\n", "archive.tar.gz"
+            )
+            expected_metadata = self._file_metadata(stage) + self._file_metadata(
+                checksum_stage
+            )
             replacement = root / "stage.tar.gz.replacement"
             replacement.write_bytes(b"post-open replacement\n")
             program = program.replace(
@@ -675,7 +725,9 @@ class BuildDistStaticTest(unittest.TestCase):
             stage = root / "stage.tar.gz"
             checksum_stage = root / "stage.tar.gz.sha256"
             self._write_pair(stage, checksum_stage, b"a" * 1024, "archive.tar.gz")
-            expected_metadata = self._file_metadata(stage) + self._file_metadata(checksum_stage)
+            expected_metadata = self._file_metadata(stage) + self._file_metadata(
+                checksum_stage
+            )
             program = program.replace(
                 marker,
                 marker
@@ -712,7 +764,15 @@ class BuildDistStaticTest(unittest.TestCase):
             stage = root / "stage.tar.gz"
             stage.touch(mode=0o600)
             identity = subprocess.run(
-                [sys.executable, str(safe_fs), "identity", "build-dist", str(stage), "--kind", "file"],
+                [
+                    sys.executable,
+                    str(safe_fs),
+                    "identity",
+                    "build-dist",
+                    str(stage),
+                    "--kind",
+                    "file",
+                ],
                 capture_output=True,
                 text=True,
                 check=True,
@@ -736,7 +796,11 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertEqual(normal.returncode, 0, normal.stderr)
             metadata = tuple(normal.stdout.strip().split("\t"))
             self.assertEqual(len(metadata), 6)
-            self.assertEqual(metadata, self._file_metadata(stage) + self._file_metadata(stage.with_name("stage.tar.gz.sha256")))
+            self.assertEqual(
+                metadata,
+                self._file_metadata(stage)
+                + self._file_metadata(stage.with_name("stage.tar.gz.sha256")),
+            )
             self.assertEqual(stage.read_bytes(), b"tar output\n")
 
             fault_programs = {
@@ -844,7 +908,9 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertLess(len(result.stderr), 10000)
             self.assertIn("tar stderr truncated", result.stderr)
 
-    def test_dist_partial_final_pair_is_replaced_as_one_recoverable_transaction(self) -> None:
+    def test_dist_partial_final_pair_is_replaced_as_one_recoverable_transaction(
+        self,
+    ) -> None:
         program = self._finalizer_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -857,7 +923,9 @@ class BuildDistStaticTest(unittest.TestCase):
             checksum_final = dist / "archive.tar.gz.sha256"
             _, stage, checksum_stage = self._prepare_transaction(dist)
 
-            result = self._run_finalizer(program, safe_fs, lock, stage, final, checksum_stage, checksum_final)
+            result = self._run_finalizer(
+                program, safe_fs, lock, stage, final, checksum_stage, checksum_final
+            )
 
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertEqual(final.read_bytes(), b"new archive\n")
@@ -878,11 +946,16 @@ class BuildDistStaticTest(unittest.TestCase):
             checksum_final.write_text("0" * 64 + "  archive.tar.gz\n", encoding="ascii")
             transaction, stage, checksum_stage = self._prepare_transaction(dist)
 
-            result = self._run_finalizer(program, safe_fs, lock, stage, final, checksum_stage, checksum_final)
+            result = self._run_finalizer(
+                program, safe_fs, lock, stage, final, checksum_stage, checksum_final
+            )
 
             self.assertNotEqual(result.returncode, 0)
             self.assertEqual(final.read_bytes(), old)
-            self.assertEqual(checksum_final.read_text(encoding="ascii"), "0" * 64 + "  archive.tar.gz\n")
+            self.assertEqual(
+                checksum_final.read_text(encoding="ascii"),
+                "0" * 64 + "  archive.tar.gz\n",
+            )
             self.assertTrue(transaction.exists())
             self.assertFalse((transaction / "journal").exists())
 
@@ -920,7 +993,9 @@ class BuildDistStaticTest(unittest.TestCase):
 
     def test_dist_recovery_pair_replacement_after_read_fails_closed(self) -> None:
         program = self._finalizer_program()
-        marker = '        try:\n            checksum_text = checksum_data.decode("ascii")\n'
+        marker = (
+            '        try:\n            checksum_text = checksum_data.decode("ascii")\n'
+        )
         self.assertEqual(program.count(marker), 1)
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -967,7 +1042,9 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertEqual(final.read_bytes(), b"same-uid replacement\n")
             self._assert_pair(final, checksum_final)
 
-    def test_dist_finalizer_uses_one_absolute_deadline_for_multiple_safe_fs_calls(self) -> None:
+    def test_dist_finalizer_uses_one_absolute_deadline_for_multiple_safe_fs_calls(
+        self,
+    ) -> None:
         program = self._finalizer_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -990,7 +1067,9 @@ class BuildDistStaticTest(unittest.TestCase):
                 encoding="utf-8",
             )
             delayed_safe_fs = root / "safe-fs-delayed.py"
-            self._write_delayed_safe_fs_wrapper(delayed_safe_fs, real=safe_fs, delay=0.6)
+            self._write_delayed_safe_fs_wrapper(
+                delayed_safe_fs, real=safe_fs, delay=0.6
+            )
 
             started = time.monotonic()
             result = self._run_finalizer(
@@ -1015,7 +1094,9 @@ class BuildDistStaticTest(unittest.TestCase):
             root = Path(tmp)
             fake_bin = root / "bin"
             fake_bin.mkdir(mode=0o700)
-            self._write_executable(fake_bin / "python3", "#!/bin/sh\nexec /bin/sleep 10\n")
+            self._write_executable(
+                fake_bin / "python3", "#!/bin/sh\nexec /bin/sleep 10\n"
+            )
             script = (
                 "set -u\n"
                 "DIST_FINALIZE_TIMEOUT_SECONDS=3\n"
@@ -1040,7 +1121,9 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertLess(elapsed, 5, result.stderr)
 
-    def test_dist_exit_cleanup_reports_failure_and_preserves_primary_status(self) -> None:
+    def test_dist_exit_cleanup_reports_failure_and_preserves_primary_status(
+        self,
+    ) -> None:
         cleanup_function = self._cleanup_program()
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -1070,11 +1153,15 @@ class BuildDistStaticTest(unittest.TestCase):
                 self.assertEqual(result.returncode, expected_status, result.stderr)
                 self.assertIn("stub cleanup failure", result.stderr)
                 if primary_status == 0:
-                    self.assertIn("final output status changed to failure", result.stderr)
+                    self.assertIn(
+                        "final output status changed to failure", result.stderr
+                    )
                 else:
                     self.assertIn("preserving primary exit status: 7", result.stderr)
 
-    def test_dist_exit_cleanup_preserves_workspace_after_leaf_identity_change(self) -> None:
+    def test_dist_exit_cleanup_preserves_workspace_after_leaf_identity_change(
+        self,
+    ) -> None:
         cleanup_function = self._cleanup_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -1086,13 +1173,23 @@ class BuildDistStaticTest(unittest.TestCase):
             checksum = staging_dir / "stage.tar.gz.sha256"
             tarball.write_bytes(b"stage\n")
             checksum.write_text("checksum\n", encoding="ascii")
+
             def identity(path: Path, kind: str) -> str:
                 return subprocess.run(
-                    [sys.executable, str(safe_fs), "identity", "build-dist", str(path), "--kind", kind],
+                    [
+                        sys.executable,
+                        str(safe_fs),
+                        "identity",
+                        "build-dist",
+                        str(path),
+                        "--kind",
+                        kind,
+                    ],
                     capture_output=True,
                     text=True,
                     check=True,
                 ).stdout.strip()
+
             identities = (
                 identity(tarball, "file"),
                 identity(checksum, "file"),
@@ -1230,7 +1327,9 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse((dist / "archive.tar.gz").exists())
 
-    def test_dist_finalization_directory_fd_flock_survives_lockfile_rename_recreate(self) -> None:
+    def test_dist_finalization_directory_fd_flock_survives_lockfile_rename_recreate(
+        self,
+    ) -> None:
         program = self._finalizer_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -1337,7 +1436,11 @@ class BuildDistStaticTest(unittest.TestCase):
 
                 recovered = self._run_recovery(program, safe_fs, lock)
                 self.assertEqual(recovered.returncode, 0, recovered.stderr)
-                expected = b"new archive\n" if phase in {"pair-activated", "committed"} else b"old archive\n"
+                expected = (
+                    b"new archive\n"
+                    if phase in {"pair-activated", "committed"}
+                    else b"old archive\n"
+                )
                 self.assertEqual(final.read_bytes(), expected)
                 self._assert_pair(final, checksum_final)
                 self.assertFalse(transaction.exists())
@@ -1355,7 +1458,9 @@ class BuildDistStaticTest(unittest.TestCase):
                 final = dist / "archive.tar.gz"
                 checksum_final = dist / "archive.tar.gz.sha256"
                 self._write_pair(final, checksum_final, b"old archive\n", final.name)
-                metadata = self._file_metadata(stage) + self._file_metadata(checksum_stage)
+                metadata = self._file_metadata(stage) + self._file_metadata(
+                    checksum_stage
+                )
 
                 killed = self._run_finalizer_shell(
                     function,
@@ -1372,9 +1477,13 @@ class BuildDistStaticTest(unittest.TestCase):
                 self.assertNotEqual(killed.returncode, 0, killed.stderr)
                 self.assertIn("status=", killed.stdout)
                 self.assertTrue((transaction / "journal").is_file())
-                recovered = self._run_recovery(program, safe_fs, dist / ".finalize.lock")
+                recovered = self._run_recovery(
+                    program, safe_fs, dist / ".finalize.lock"
+                )
                 self.assertEqual(recovered.returncode, 0, recovered.stderr)
-                expected = b"new archive\n" if phase == "committed" else b"old archive\n"
+                expected = (
+                    b"new archive\n" if phase == "committed" else b"old archive\n"
+                )
                 self.assertEqual(final.read_bytes(), expected)
                 self._assert_pair(final, checksum_final)
                 self.assertFalse(transaction.exists())
@@ -1385,7 +1494,9 @@ class BuildDistStaticTest(unittest.TestCase):
             "MAX_ARCHIVE_BYTES = 1024",
             1,
         )
-        marker = "        digest, total_bytes = _hash_fd(file_fd, name, label, max_bytes)\n"
+        marker = (
+            "        digest, total_bytes = _hash_fd(file_fd, name, label, max_bytes)\n"
+        )
         self.assertEqual(program.count(marker), 1)
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -1415,8 +1526,7 @@ class BuildDistStaticTest(unittest.TestCase):
                 marker,
                 f"        if name == 'stage.tar.gz':\n"
                 f"            with open({str(stage)!r}, 'ab') as growth:\n"
-                f"                growth.write(b'x')\n"
-                + marker,
+                f"                growth.write(b'x')\n" + marker,
                 1,
             )
             recovered = self._run_recovery(recovery_program, safe_fs, lock)
@@ -1459,7 +1569,9 @@ class BuildDistStaticTest(unittest.TestCase):
 
             self.assertNotEqual(recovered.returncode, 0)
             self.assertTrue(transaction.exists())
-            self.assertEqual((transaction / "backup.tar.gz").read_bytes(), b"tampered archive\n")
+            self.assertEqual(
+                (transaction / "backup.tar.gz").read_bytes(), b"tampered archive\n"
+            )
             self.assertFalse(final.exists())
             self.assertEqual(
                 checksum_final.read_text(encoding="ascii"),
@@ -1470,7 +1582,9 @@ class BuildDistStaticTest(unittest.TestCase):
         program = self._finalizer_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         for invalid_schema in (True, 1.0):
-            with self.subTest(schema=repr(invalid_schema)), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(
+                schema=repr(invalid_schema)
+            ), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 dist = root / "dist"
                 dist.mkdir(mode=0o700)
@@ -1494,7 +1608,10 @@ class BuildDistStaticTest(unittest.TestCase):
                 journal = transaction / "journal"
                 record = json.loads(journal.read_text(encoding="ascii"))
                 record["schema"] = invalid_schema
-                journal.write_text(json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n", encoding="ascii")
+                journal.write_text(
+                    json.dumps(record, sort_keys=True, separators=(",", ":")) + "\n",
+                    encoding="ascii",
+                )
 
                 recovered = self._run_recovery(program, safe_fs, lock)
 
@@ -1597,7 +1714,9 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertFalse(stale.exists())
             self.assertEqual(foreign.read_bytes(), b"keep\n")
 
-    def test_dist_workspace_sweep_preserves_recent_and_nonempty_tombstones(self) -> None:
+    def test_dist_workspace_sweep_preserves_recent_and_nonempty_tombstones(
+        self,
+    ) -> None:
         program = self._workspace_sweep_program()
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
@@ -1660,7 +1779,9 @@ class BuildDistStaticTest(unittest.TestCase):
             root = Path(tmp)
             workspace_base = root / "speed-of-cinnamon-build-dist-999"
             workspace_base.mkdir(mode=0o700)
-            lock_fd = os.open(workspace_base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            lock_fd = os.open(
+                workspace_base, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+            )
             try:
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 result = self._run_workspace_sweep(
@@ -1688,12 +1809,22 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("workspace sweep exceeds max 2", result.stderr)
 
-    def test_dist_outer_watchdog_kills_blocking_shell_within_global_budget(self) -> None:
+    def test_dist_outer_watchdog_kills_blocking_shell_within_global_budget(
+        self,
+    ) -> None:
         source = BUILD_DIST.read_text(encoding="utf-8")
         top = source[: source.index("\nrepo_dir=")]
-        top = top.replace("DIST_BUILD_TIMEOUT_SECONDS=3600", "DIST_BUILD_TIMEOUT_SECONDS=2", 1)
-        top = top.replace("DIST_BUILD_KILL_AFTER_SECONDS=2", "DIST_BUILD_KILL_AFTER_SECONDS=1", 1)
-        top = top.replace("DIST_BUILD_STARTUP_RESERVE_NS=3000000000", "DIST_BUILD_STARTUP_RESERVE_NS=500000000", 1)
+        top = top.replace(
+            "DIST_BUILD_TIMEOUT_SECONDS=3600", "DIST_BUILD_TIMEOUT_SECONDS=2", 1
+        )
+        top = top.replace(
+            "DIST_BUILD_KILL_AFTER_SECONDS=2", "DIST_BUILD_KILL_AFTER_SECONDS=1", 1
+        )
+        top = top.replace(
+            "DIST_BUILD_STARTUP_RESERVE_NS=3000000000",
+            "DIST_BUILD_STARTUP_RESERVE_NS=500000000",
+            1,
+        )
         with tempfile.TemporaryDirectory() as tmp:
             harness = Path(tmp) / "outer-watchdog.sh"
             self._write_executable(harness, f"{top}\nsleep 60\n")
@@ -1742,10 +1873,7 @@ class BuildDistStaticTest(unittest.TestCase):
             forged_launcher = root / "forged-fd-launcher.sh"
             self._write_executable(
                 forged_launcher,
-                "#!/usr/bin/env bash\n"
-                "exec 198<\"$1\"\n"
-                "shift\n"
-                "exec \"$@\"\n",
+                "#!/usr/bin/env bash\n" 'exec 198<"$1"\n' "shift\n" 'exec "$@"\n',
             )
             forged = subprocess.run(
                 [str(forged_launcher), str(forged_fd_path), str(harness), marker],
@@ -1786,9 +1914,17 @@ class BuildDistStaticTest(unittest.TestCase):
     def test_dist_startup_initial_probe_is_hard_capped(self) -> None:
         source = BUILD_DIST.read_text(encoding="utf-8")
         top = source[: source.index("\nrepo_dir=")]
-        top = top.replace("DIST_BUILD_TIMEOUT_SECONDS=3600", "DIST_BUILD_TIMEOUT_SECONDS=3", 1)
-        top = top.replace("DIST_BUILD_KILL_AFTER_SECONDS=2", "DIST_BUILD_KILL_AFTER_SECONDS=1", 1)
-        top = top.replace("DIST_BUILD_STARTUP_RESERVE_NS=3000000000", "DIST_BUILD_STARTUP_RESERVE_NS=500000000", 1)
+        top = top.replace(
+            "DIST_BUILD_TIMEOUT_SECONDS=3600", "DIST_BUILD_TIMEOUT_SECONDS=3", 1
+        )
+        top = top.replace(
+            "DIST_BUILD_KILL_AFTER_SECONDS=2", "DIST_BUILD_KILL_AFTER_SECONDS=1", 1
+        )
+        top = top.replace(
+            "DIST_BUILD_STARTUP_RESERVE_NS=3000000000",
+            "DIST_BUILD_STARTUP_RESERVE_NS=500000000",
+            1,
+        )
         top = top.replace(
             "DIST_BUILD_INITIAL_PROBE_TIMEOUT_SECONDS=0.25",
             "DIST_BUILD_INITIAL_PROBE_TIMEOUT_SECONDS=0.2",
@@ -1821,8 +1957,12 @@ class BuildDistStaticTest(unittest.TestCase):
     def test_dist_startup_parent_death_terminates_child(self) -> None:
         source = BUILD_DIST.read_text(encoding="utf-8")
         top = source[: source.index("\nrepo_dir=")]
-        top = top.replace("DIST_BUILD_TIMEOUT_SECONDS=3600", "DIST_BUILD_TIMEOUT_SECONDS=30", 1)
-        top = top.replace("DIST_BUILD_KILL_AFTER_SECONDS=2", "DIST_BUILD_KILL_AFTER_SECONDS=1", 1)
+        top = top.replace(
+            "DIST_BUILD_TIMEOUT_SECONDS=3600", "DIST_BUILD_TIMEOUT_SECONDS=30", 1
+        )
+        top = top.replace(
+            "DIST_BUILD_KILL_AFTER_SECONDS=2", "DIST_BUILD_KILL_AFTER_SECONDS=1", 1
+        )
         with tempfile.TemporaryDirectory() as tmp:
             pid_path = Path(tmp) / "parent.pid"
             harness = Path(tmp) / "parent-death.sh"
@@ -1866,8 +2006,12 @@ class BuildDistStaticTest(unittest.TestCase):
     def test_dist_startup_watchdog_death_is_fail_closed(self) -> None:
         source = BUILD_DIST.read_text(encoding="utf-8")
         top = source[: source.index("\nrepo_dir=")]
-        top = top.replace("DIST_BUILD_TIMEOUT_SECONDS=3600", "DIST_BUILD_TIMEOUT_SECONDS=30", 1)
-        top = top.replace("DIST_BUILD_KILL_AFTER_SECONDS=2", "DIST_BUILD_KILL_AFTER_SECONDS=1", 1)
+        top = top.replace(
+            "DIST_BUILD_TIMEOUT_SECONDS=3600", "DIST_BUILD_TIMEOUT_SECONDS=30", 1
+        )
+        top = top.replace(
+            "DIST_BUILD_KILL_AFTER_SECONDS=2", "DIST_BUILD_KILL_AFTER_SECONDS=1", 1
+        )
         with tempfile.TemporaryDirectory() as tmp:
             pid_path = Path(tmp) / "child.pid"
             harness = Path(tmp) / "watchdog-death.sh"
@@ -1966,12 +2110,12 @@ class BuildDistStaticTest(unittest.TestCase):
             harness = Path(tmp) / "monitor-fd-closed.sh"
             self._write_executable(
                 harness,
-                f'{top}\n'
+                f"{top}\n"
                 'monitor_fd="/proc/${handoff_monitor_pid}/fd/197"\n'
                 'if [[ -e "${monitor_fd}" || -L "${monitor_fd}" ]]; then\n'
                 '  printf "monitor retained FD197\\n" >&2\n'
-                '  exit 1\n'
-                'fi\n'
+                "  exit 1\n"
+                "fi\n"
                 'printf "monitor-fd-closed\\n"\n',
             )
             result = subprocess.run(
@@ -2018,7 +2162,9 @@ class BuildDistStaticTest(unittest.TestCase):
                 returncode = process.wait(timeout=6)
                 elapsed = time.monotonic() - started
 
-                while self._pid_is_live(resistant_pid) and time.monotonic() - started < 5:
+                while (
+                    self._pid_is_live(resistant_pid) and time.monotonic() - started < 5
+                ):
                     time.sleep(0.02)
                 self.assertNotEqual(returncode, 0)
                 self.assertFalse(self._pid_is_live(resistant_pid))
@@ -2061,7 +2207,9 @@ class BuildDistStaticTest(unittest.TestCase):
                 started = time.monotonic()
                 returncode = process.wait(timeout=6)
 
-                while self._pid_is_live(resistant_pid) and time.monotonic() - started < 5:
+                while (
+                    self._pid_is_live(resistant_pid) and time.monotonic() - started < 5
+                ):
                     time.sleep(0.02)
                 self.assertNotEqual(returncode, 0)
                 self.assertFalse(self._pid_is_live(resistant_pid))
@@ -2104,7 +2252,9 @@ class BuildDistStaticTest(unittest.TestCase):
                 returncode = process.wait(timeout=6)
                 elapsed = time.monotonic() - started
 
-                while self._pid_is_live(resistant_pid) and time.monotonic() - started < 5:
+                while (
+                    self._pid_is_live(resistant_pid) and time.monotonic() - started < 5
+                ):
                     time.sleep(0.02)
                 self.assertNotEqual(returncode, 0)
                 self.assertFalse(self._pid_is_live(resistant_pid))
@@ -2116,7 +2266,9 @@ class BuildDistStaticTest(unittest.TestCase):
                 if resistant_pid is not None and self._pid_is_live(resistant_pid):
                     os.kill(resistant_pid, signal.SIGKILL)
 
-    def test_dist_combined_supervisor_monitor_death_kills_descendant_group(self) -> None:
+    def test_dist_combined_supervisor_monitor_death_kills_descendant_group(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             pid_path = Path(tmp) / "combined-resistant.pid"
             harness = Path(tmp) / "combined-group-abort.sh"
@@ -2149,7 +2301,9 @@ class BuildDistStaticTest(unittest.TestCase):
                 returncode = process.wait(timeout=6)
                 elapsed = time.monotonic() - started
 
-                while self._pid_is_live(resistant_pid) and time.monotonic() - started < 5:
+                while (
+                    self._pid_is_live(resistant_pid) and time.monotonic() - started < 5
+                ):
                     time.sleep(0.02)
                 self.assertNotEqual(returncode, 0)
                 self.assertFalse(self._pid_is_live(resistant_pid))
@@ -2196,7 +2350,7 @@ class BuildDistStaticTest(unittest.TestCase):
             launcher = root / "fd-launcher.sh"
             self._write_executable(
                 harness,
-                f'{top}\nhandoff_monitor_starttime=0\nsleep 0.1 &\nwait $!\nsleep 60\n',
+                f"{top}\nhandoff_monitor_starttime=0\nsleep 0.1 &\nwait $!\nsleep 60\n",
             )
             self._write_startup_fd_launcher(launcher)
             process, lock_fd = self._start_valid_handoff(harness, launcher)
@@ -2265,7 +2419,9 @@ class BuildDistStaticTest(unittest.TestCase):
                     monitor_pid = int(monitor_path.read_text(encoding="ascii").strip())
                 if monitor_pid is not None:
                     deadline = time.monotonic() + 2
-                    while self._pid_is_live(monitor_pid) and time.monotonic() < deadline:
+                    while (
+                        self._pid_is_live(monitor_pid) and time.monotonic() < deadline
+                    ):
                         time.sleep(0.02)
                     self.assertFalse(self._pid_is_live(monitor_pid))
             finally:
@@ -2290,7 +2446,7 @@ class BuildDistStaticTest(unittest.TestCase):
         self.assertIn("info[2] != child.pid", startup)
         self.assertIn("info[3] != child.pid", startup)
         self.assertIn("info[4] != child_starttime", startup)
-        self.assertIn("info[0] in (b\"Z\", b\"X\", b\"T\", b\"t\")", startup)
+        self.assertIn('info[0] in (b"Z", b"X", b"T", b"t")', startup)
         self.assertIn("preexec_fn=install_child_parent_death_signal", supervisor)
         self.assertIn("pdeath_signal = 1", supervisor)
         self.assertIn("os.getppid() != child_parent_pid", supervisor)
@@ -2377,7 +2533,7 @@ class BuildDistStaticTest(unittest.TestCase):
                 "python3 -c 'import os,signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.signal(signal.SIGHUP, signal.SIG_IGN); print(os.getpid(), flush=True); time.sleep(60)' &\n"
                 "resistant_pid=$!\n"
                 f"printf '%s\\n' \"$resistant_pid\" > '{resistant_path}'\n"
-                "kill -KILL -- \"$$\"\n"
+                'kill -KILL -- "$$"\n'
                 "sleep 60\n",
             )
             process = subprocess.Popen(
@@ -2393,7 +2549,9 @@ class BuildDistStaticTest(unittest.TestCase):
                 while time.monotonic() < wait_deadline:
                     if resistant_path.exists():
                         try:
-                            resistant_pid = int(resistant_path.read_text(encoding="ascii").strip())
+                            resistant_pid = int(
+                                resistant_path.read_text(encoding="ascii").strip()
+                            )
                         except (OSError, ValueError, UnicodeDecodeError):
                             resistant_pid = None
                         if resistant_pid is not None:
@@ -2402,7 +2560,9 @@ class BuildDistStaticTest(unittest.TestCase):
                 self.assertIsNotNone(resistant_pid)
                 returncode = process.wait(timeout=8)
                 reap_deadline = time.monotonic() + 3
-                while time.monotonic() < reap_deadline and self._pid_is_live(resistant_pid):
+                while time.monotonic() < reap_deadline and self._pid_is_live(
+                    resistant_pid
+                ):
                     time.sleep(0.02)
                 self.assertEqual(returncode, 137)
                 self.assertFalse(self._pid_is_live(resistant_pid))
@@ -2419,18 +2579,17 @@ class BuildDistStaticTest(unittest.TestCase):
             script = self._startup_top(timeout_seconds=20)
             script = script.replace(
                 "    def process_info(pid):\n",
-                "    process_info_eintr = 32\n\n"
-                "    def process_info(pid):\n",
+                "    process_info_eintr = 32\n\n" "    def process_info(pid):\n",
                 1,
             )
             script = script.replace(
-                '    def process_info(pid):\n'
-                '        while True:\n'
-                '            try:\n'
+                "    def process_info(pid):\n"
+                "        while True:\n"
+                "            try:\n"
                 '                with open(f"/proc/{pid}/stat", "rb") as handle:\n',
-                '    def process_info(pid):\n'
-                '        while True:\n'
-                '            try:\n'
+                "    def process_info(pid):\n"
+                "        while True:\n"
+                "            try:\n"
                 "                global process_info_eintr\n"
                 "                if process_info_eintr:\n"
                 "                    process_info_eintr -= 1\n"
@@ -2438,7 +2597,9 @@ class BuildDistStaticTest(unittest.TestCase):
                 '                with open(f"/proc/{pid}/stat", "rb") as handle:\n',
                 1,
             )
-            self._write_executable(harness, f"{script}\nprintf 'eintr-supervisor-ok\\n'\n")
+            self._write_executable(
+                harness, f"{script}\nprintf 'eintr-supervisor-ok\\n'\n"
+            )
             result = subprocess.run(
                 [str(harness)],
                 cwd=REPO_ROOT,
@@ -2457,18 +2618,17 @@ class BuildDistStaticTest(unittest.TestCase):
             script = self._startup_top(timeout_seconds=20)
             script = script.replace(
                 "proxy_parent_pid = os.getppid()\n\n\n",
-                "proxy_parent_pid = os.getppid()\n\n"
-                "process_info_eintr = 32\n\n\n",
+                "proxy_parent_pid = os.getppid()\n\n" "process_info_eintr = 32\n\n\n",
                 1,
             )
             script = script.replace(
-                'def process_info(pid):\n'
-                '    while True:\n'
-                '        try:\n'
+                "def process_info(pid):\n"
+                "    while True:\n"
+                "        try:\n"
                 '            with open(f"/proc/{pid}/stat", "rb") as handle:\n',
-                'def process_info(pid):\n'
-                '    while True:\n'
-                '        try:\n'
+                "def process_info(pid):\n"
+                "    while True:\n"
+                "        try:\n"
                 "            global process_info_eintr\n"
                 "            if process_info_eintr:\n"
                 "                process_info_eintr -= 1\n"
@@ -2489,7 +2649,9 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("eintr-proxy-ok", result.stdout)
 
-    def test_dist_sigkill_supervisor_and_monitor_still_kill_descendant_group(self) -> None:
+    def test_dist_sigkill_supervisor_and_monitor_still_kill_descendant_group(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             state_path = Path(tmp) / "watchers-and-resistant.pid"
             harness = Path(tmp) / "double-sigkill.sh"
@@ -2499,7 +2661,7 @@ class BuildDistStaticTest(unittest.TestCase):
                 f"{top}\n"
                 "python3 -c 'import signal,time; signal.signal(signal.SIGTERM, signal.SIG_IGN); signal.signal(signal.SIGHUP, signal.SIG_IGN); time.sleep(60)' &\n"
                 "resistant_pid=$!\n"
-                f"printf '%s %s %s\\n' \"$resistant_pid\" \"$handoff_monitor_pid\" \"$DIST_BUILD_SUPERVISOR_PID\" > '{state_path}'\n"
+                f'printf \'%s %s %s\\n\' "$resistant_pid" "$handoff_monitor_pid" "$DIST_BUILD_SUPERVISOR_PID" > \'{state_path}\'\n'
                 "sleep 60\n",
             )
             process = subprocess.Popen(
@@ -2536,7 +2698,9 @@ class BuildDistStaticTest(unittest.TestCase):
                     os.kill(process.pid, signal.SIGKILL)
                     returncode = process.wait(timeout=3)
 
-                while self._pid_is_live(resistant_pid) and time.monotonic() - started < 4:
+                while (
+                    self._pid_is_live(resistant_pid) and time.monotonic() - started < 4
+                ):
                     time.sleep(0.02)
                 self.assertNotEqual(returncode, 0)
                 self.assertFalse(self._pid_is_live(resistant_pid))
@@ -2557,11 +2721,11 @@ class BuildDistStaticTest(unittest.TestCase):
                 harness,
                 f"{top}\n"
                 "for _ in $(seq 1 200); do\n"
-                "  kill -USR1 \"$handoff_monitor_pid\"\n"
-                "  kill -USR1 \"$DIST_BUILD_SUPERVISOR_PID\"\n"
+                '  kill -USR1 "$handoff_monitor_pid"\n'
+                '  kill -USR1 "$DIST_BUILD_SUPERVISOR_PID"\n'
                 "done\n"
                 "sleep 0.2\n"
-                "kill -0 \"$handoff_monitor_pid\"\n"
+                'kill -0 "$handoff_monitor_pid"\n'
                 "printf 'eintr-ok\\n'\n",
             )
             result = subprocess.run(
@@ -2587,7 +2751,9 @@ class BuildDistStaticTest(unittest.TestCase):
             root.chmod(0o777)
             rejected = self._run_tmp_validation(program, root)
             self.assertNotEqual(rejected.returncode, 0)
-            self.assertIn("euid-owned private or root-owned sticky standard temp", rejected.stderr)
+            self.assertIn(
+                "euid-owned private or root-owned sticky standard temp", rejected.stderr
+            )
 
             target = root / "target"
             target.mkdir(mode=0o700)
@@ -2597,7 +2763,9 @@ class BuildDistStaticTest(unittest.TestCase):
             self.assertNotEqual(rejected_link.returncode, 0)
             self.assertIn("not a symlink", rejected_link.stderr)
 
-    def test_dist_workspace_has_private_lock_and_bounded_identity_sweep_contract(self) -> None:
+    def test_dist_workspace_has_private_lock_and_bounded_identity_sweep_contract(
+        self,
+    ) -> None:
         source = BUILD_DIST.read_text(encoding="utf-8")
 
         workspace_setup = source[: source.index("cleanup() {")]
@@ -2613,7 +2781,9 @@ class BuildDistStaticTest(unittest.TestCase):
         self.assertIn("st_uid", workspace_setup)
         self.assertIn("foreign", workspace_setup.lower())
 
-    def test_dist_deadline_starts_before_workspace_and_bounds_find_cleanup(self) -> None:
+    def test_dist_deadline_starts_before_workspace_and_bounds_find_cleanup(
+        self,
+    ) -> None:
         source = BUILD_DIST.read_text(encoding="utf-8")
 
         deadline_marker = "build_start_monotonic"
@@ -2645,7 +2815,7 @@ class BuildDistStaticTest(unittest.TestCase):
         source = BUILD_DIST.read_text(encoding="utf-8")
 
         self.assertIn("BUILD_DIST_ABORT_PHASE", source)
-        self.assertIn('SIGKILL', source)
+        self.assertIn("SIGKILL", source)
         self.assertIn('"journal"', source)
         self.assertIn('"rolled-back"', source)
         self.assertIn("preserving", source)
@@ -2655,22 +2825,36 @@ class BuildDistStaticTest(unittest.TestCase):
         source = BUILD_DIST.read_text(encoding="utf-8")
 
         self.assertIn('safe_fs="${repo_dir}/scripts/safe-local-fs.py"', source)
-        self.assertIn('python3 "${safe_fs}" install-tree build-dist "${source_path}" "${target_path}"', source)
+        self.assertIn(
+            'python3 "${safe_fs}" install-tree build-dist "${source_path}" "${target_path}"',
+            source,
+        )
         self.assertIn("distribution_tree_excludes=", source)
-        self.assertIn("for tool in python3 tar sha256sum mktemp find grep git stat realpath timeout;", source)
-        self.assertIn('--exclude-name __pycache__', source)
+        self.assertIn(
+            "for tool in python3 tar sha256sum mktemp find grep git stat realpath timeout;",
+            source,
+        )
+        self.assertIn("--exclude-name __pycache__", source)
         self.assertIn('"${distribution_tree_excludes[@]}"', source)
-        self.assertIn('python3 "${safe_fs}" copy-file build-dist "${source_path}" "${target_path}" 0644', source)
-        self.assertNotIn('cp -a "${repo_dir}/${path}" "${work_dir}/${package}/"', source)
+        self.assertIn(
+            'python3 "${safe_fs}" copy-file build-dist "${source_path}" "${target_path}" 0644',
+            source,
+        )
+        self.assertNotIn(
+            'cp -a "${repo_dir}/${path}" "${work_dir}/${package}/"', source
+        )
 
     def test_verify_dist_checks_companion_checksum(self) -> None:
         source = VERIFY_DIST.read_text(encoding="utf-8")
 
-        self.assertIn('for tool in realpath stat tar awk mktemp find grep python3 sha256sum timeout;', source)
+        self.assertIn(
+            "for tool in realpath stat tar awk mktemp find grep python3 sha256sum timeout;",
+            source,
+        )
         self.assertIn('checksum_path="$tarball.sha256"', source)
-        self.assertIn('archive checksum file target does not match archive', source)
+        self.assertIn("archive checksum file target does not match archive", source)
         self.assertIn('sha256sum "${tarball}"', source)
-        self.assertIn('archive checksum mismatch:', source)
+        self.assertIn("archive checksum mismatch:", source)
 
     def test_build_dist_cleanup_requires_expected_identity(self) -> None:
         source = BUILD_DIST.read_text(encoding="utf-8")
@@ -2692,7 +2876,9 @@ class BuildDistStaticTest(unittest.TestCase):
             source,
         )
 
-    def test_dist_activation_requires_original_stage_and_empty_destination(self) -> None:
+    def test_dist_activation_requires_original_stage_and_empty_destination(
+        self,
+    ) -> None:
         source = BUILD_DIST.read_text(encoding="utf-8")
 
         activation_start = source.index(
@@ -2727,9 +2913,14 @@ class BuildDistStaticTest(unittest.TestCase):
         self.assertIn("readonly DIST_FINALIZE_LOCK_TIMEOUT_SECONDS=30", source)
         self.assertIn("readonly DIST_FINALIZE_KILL_AFTER_SECONDS=2", source)
         self.assertIn("readonly DIST_CLEANUP_TIMEOUT_SECONDS=30", source)
-        self.assertIn('timeout --signal=TERM --kill-after="${DIST_BUILD_KILL_AFTER_SECONDS}s"', source)
+        self.assertIn(
+            'timeout --signal=TERM --kill-after="${DIST_BUILD_KILL_AFTER_SECONDS}s"',
+            source,
+        )
         self.assertIn("build_staged_tarball()", source)
-        self.assertIn("build_deadline = time.monotonic() + int(timeout_seconds)", source)
+        self.assertIn(
+            "build_deadline = time.monotonic() + int(timeout_seconds)", source
+        )
         self.assertIn("stdin=subprocess.DEVNULL", source)
         self.assertIn("os.set_blocking(stdout_fd, False)", source)
         self.assertIn("os.set_blocking(stderr_fd, False)", source)
@@ -2739,7 +2930,9 @@ class BuildDistStaticTest(unittest.TestCase):
         self.assertIn("producer_metadata", source)
         self.assertIn("finalize_run_seconds", source)
         self.assertIn("os.fsync(stage_fd)", source)
-        self.assertNotIn(' | write_regular_file_from_stdin "${staging_tarball}"', source)
+        self.assertNotIn(
+            ' | write_regular_file_from_stdin "${staging_tarball}"', source
+        )
         self.assertNotIn("| write_regular_file_from_stdin", source)
         self.assertIn(
             "finalizer_deadline = time.monotonic() + finalize_timeout_seconds",
@@ -2759,7 +2952,10 @@ class BuildDistStaticTest(unittest.TestCase):
         self.assertIn("backup_sha256", source)
         self.assertIn("stage_size", source)
         self.assertIn("stage_sha256", source)
-        self.assertIn("_hash_regular_at(\n                transaction_fd,\n                member[\"backup_name\"]", source)
+        self.assertIn(
+            '_hash_regular_at(\n                transaction_fd,\n                member["backup_name"]',
+            source,
+        )
         self.assertIn('"--expected-identity",', source)
         self.assertIn("_verified_recovery_path", source)
         self.assertIn("suppress_output=True", source)
@@ -2777,7 +2973,9 @@ class BuildDistStaticTest(unittest.TestCase):
         self.assertNotIn('"build-dist stage claim"', source)
         self.assertIn("_open_lock_parent_chain", source)
         self.assertIn("os.O_NOFOLLOW", source)
-        self.assertIn('assert-private-chain build-dist "${dist_dir}" --allow-missing', source)
+        self.assertIn(
+            'assert-private-chain build-dist "${dist_dir}" --allow-missing', source
+        )
         self.assertIn('assert-private-chain build-dist "${dist_dir}"', source)
         self.assertNotIn("lock_fd = os.open", source)
         self.assertNotIn("os.fdopen(lock_fd", source)

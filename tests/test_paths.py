@@ -14,7 +14,9 @@ class PathsTest(unittest.TestCase):
     def test_cleanup_note_does_not_leak_error_details(self) -> None:
         primary = RuntimeError("primary failure")
 
-        paths._note_cleanup_failure(primary, OSError("secret path and descriptor details"))
+        paths._note_cleanup_failure(
+            primary, OSError("secret path and descriptor details")
+        )
 
         self.assertEqual(primary.__notes__, ["runtime directory cleanup failed"])
 
@@ -22,28 +24,44 @@ class PathsTest(unittest.TestCase):
         fallback = Path("/safe/fallback")
         with (
             mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": "~/data"}, clear=False),
-            mock.patch.object(Path, "expanduser", side_effect=RuntimeError("home unavailable")),
+            mock.patch.object(
+                Path, "expanduser", side_effect=RuntimeError("home unavailable")
+            ),
         ):
             self.assertEqual(paths._xdg_path("XDG_DATA_HOME", fallback), fallback)
 
     def test_safe_home_path_uses_private_fallback_when_home_lookup_fails(self) -> None:
         fallback = Path("/tmp") / f"{paths.APP_ID}-fallback"
         with (
-            mock.patch.object(Path, "home", side_effect=RuntimeError("home unavailable")),
-            mock.patch("speed_of_cinnamon.paths._private_runtime_temp_root", return_value=fallback),
+            mock.patch.object(
+                Path, "home", side_effect=RuntimeError("home unavailable")
+            ),
+            mock.patch(
+                "speed_of_cinnamon.paths._private_runtime_temp_root",
+                return_value=fallback,
+            ),
         ):
-            self.assertEqual(paths._safe_home_path(".local", "share"), fallback / ".local" / "share")
+            self.assertEqual(
+                paths._safe_home_path(".local", "share"), fallback / ".local" / "share"
+            )
 
-    def test_safe_home_path_rejects_relative_home_before_building_runtime_paths(self) -> None:
+    def test_safe_home_path_rejects_relative_home_before_building_runtime_paths(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             temp_root = Path(tmp)
             private_root = temp_root / f"{paths.APP_ID}-{os.getuid()}"
             with (
                 mock.patch.object(Path, "home", return_value=Path("relative-home")),
-                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)),
+                mock.patch(
+                    "speed_of_cinnamon.paths.tempfile.gettempdir",
+                    return_value=str(temp_root),
+                ),
                 mock.patch.dict(paths.os.environ, {"XDG_STATE_HOME": ""}, clear=False),
             ):
-                self.assertEqual(paths.xdg_state_home(), private_root / ".local" / "state")
+                self.assertEqual(
+                    paths.xdg_state_home(), private_root / ".local" / "state"
+                )
 
             self.assertTrue(private_root.is_dir())
 
@@ -63,7 +81,9 @@ class PathsTest(unittest.TestCase):
             mock.patch.dict(paths.os.environ, {"XDG_STATE_HOME": ""}, clear=False),
             mock.patch.object(environment_type, "__getitem__", non_text_xdg_value),
         ):
-            self.assertEqual(paths.os.environ["HOME"], original_getitem(paths.os.environ, "HOME"))
+            self.assertEqual(
+                paths.os.environ["HOME"], original_getitem(paths.os.environ, "HOME")
+            )
             self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
             self.assertEqual(paths.xdg_state_home(), Path.home() / ".local" / "state")
             self.assertEqual(paths.xdg_cache_home(), Path.home() / ".cache")
@@ -73,7 +93,9 @@ class PathsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             candidate = Path(tmp) / r"literal\x00\n\t"
             with mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(candidate)}):
-                self.assertEqual(paths._xdg_path("XDG_DATA_HOME", Path("/safe/fallback")), candidate)
+                self.assertEqual(
+                    paths._xdg_path("XDG_DATA_HOME", Path("/safe/fallback")), candidate
+                )
 
     def test_xdg_path_rejects_real_null_and_control_codepoints(self) -> None:
         fallback = Path("/safe/fallback")
@@ -97,8 +119,12 @@ class PathsTest(unittest.TestCase):
                     "XDG_CACHE_HOME": str(link),
                 },
             ):
-                self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
-                self.assertEqual(paths.xdg_state_home(), Path.home() / ".local" / "state")
+                self.assertEqual(
+                    paths.xdg_data_home(), Path.home() / ".local" / "share"
+                )
+                self.assertEqual(
+                    paths.xdg_state_home(), Path.home() / ".local" / "state"
+                )
                 self.assertEqual(paths.xdg_cache_home(), Path.home() / ".cache")
 
     def test_ensure_runtime_dirs_rejects_symlinked_final_directory(self) -> None:
@@ -110,7 +136,14 @@ class PathsTest(unittest.TestCase):
             target.mkdir()
             (data_root / paths.APP_ID).symlink_to(target, target_is_directory=True)
 
-            with mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(data_root), "XDG_STATE_HOME": str(base / "state"), "XDG_CACHE_HOME": str(base / "cache")}):
+            with mock.patch.dict(
+                paths.os.environ,
+                {
+                    "XDG_DATA_HOME": str(data_root),
+                    "XDG_STATE_HOME": str(base / "state"),
+                    "XDG_CACHE_HOME": str(base / "cache"),
+                },
+            ):
                 with self.assertRaises(OSError):
                     paths.ensure_runtime_dirs()
 
@@ -146,16 +179,26 @@ class PathsTest(unittest.TestCase):
             ):
                 self.assertEqual(directory.stat().st_mode & 0o077, 0)
 
-    def test_ensure_runtime_dirs_preserves_permission_error_when_close_is_interrupted(self) -> None:
+    def test_ensure_runtime_dirs_preserves_permission_error_when_close_is_interrupted(
+        self,
+    ) -> None:
         with (
-            mock.patch.object(paths, "ensure_directory_without_following_symlinks", return_value=123),
-            mock.patch.object(paths.os, "fchmod", side_effect=OSError("permission denied")),
+            mock.patch.object(
+                paths, "ensure_directory_without_following_symlinks", return_value=123
+            ),
+            mock.patch.object(
+                paths.os, "fchmod", side_effect=OSError("permission denied")
+            ),
             mock.patch.object(paths.os, "close", side_effect=KeyboardInterrupt),
         ):
-            with self.assertRaisesRegex(RuntimeError, "runtime directory could not be made private") as caught:
+            with self.assertRaisesRegex(
+                RuntimeError, "runtime directory could not be made private"
+            ) as caught:
                 paths.ensure_runtime_dirs()
 
-        self.assertIn("runtime directory cleanup failed", "\n".join(caught.exception.__notes__))
+        self.assertIn(
+            "runtime directory cleanup failed", "\n".join(caught.exception.__notes__)
+        )
 
     def test_safe_home_path_falls_back_when_home_is_symlinked(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -169,16 +212,25 @@ class PathsTest(unittest.TestCase):
             private_root = temp_root / f"{paths.APP_ID}-{os.getuid()}"
 
             with (
-                mock.patch("speed_of_cinnamon.paths.Path.home", return_value=symlink_home),
-                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)),
+                mock.patch(
+                    "speed_of_cinnamon.paths.Path.home", return_value=symlink_home
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.paths.tempfile.gettempdir",
+                    return_value=str(temp_root),
+                ),
                 mock.patch.dict(
                     paths.os.environ,
                     {"XDG_STATE_HOME": "", "XDG_DATA_HOME": "", "XDG_CACHE_HOME": ""},
                     clear=False,
                 ),
             ):
-                self.assertEqual(paths.xdg_data_home(), private_root / ".local" / "share")
-                self.assertEqual(paths.xdg_state_home(), private_root / ".local" / "state")
+                self.assertEqual(
+                    paths.xdg_data_home(), private_root / ".local" / "share"
+                )
+                self.assertEqual(
+                    paths.xdg_state_home(), private_root / ".local" / "state"
+                )
                 self.assertEqual(paths.xdg_cache_home(), private_root / ".cache")
                 self.assertEqual(private_root.stat().st_mode & 0o077, 0)
 
@@ -194,19 +246,40 @@ class PathsTest(unittest.TestCase):
             temp_link = base / "temp-link"
             temp_link.symlink_to(temp_real, target_is_directory=True)
 
-            with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=home_link), mock.patch(
-                "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_link)
+            with (
+                mock.patch(
+                    "speed_of_cinnamon.paths.Path.home", return_value=home_link
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.paths.tempfile.gettempdir",
+                    return_value=str(temp_link),
+                ),
+                mock.patch.dict(
+                    paths.os.environ,
+                    {"XDG_CACHE_HOME": ""},
+                    clear=False,
+                ),
             ):
-                self.assertEqual(paths.xdg_cache_home(), Path("/tmp") / f"{paths.APP_ID}-{os.getuid()}" / ".cache")
+                self.assertEqual(
+                    paths.xdg_cache_home(),
+                    Path("/tmp") / f"{paths.APP_ID}-{os.getuid()}" / ".cache",
+                )
 
-    def test_private_temp_root_falls_back_from_unencodable_or_null_tempdir(self) -> None:
+    def test_private_temp_root_falls_back_from_unencodable_or_null_tempdir(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             for tempdir in (f"{tmp}/\ud800", f"{tmp}/root\x00"):
                 with self.subTest(tempdir=repr(tempdir)):
-                    with mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tempdir):
+                    with mock.patch(
+                        "speed_of_cinnamon.paths.tempfile.gettempdir",
+                        return_value=tempdir,
+                    ):
                         root = paths._private_runtime_temp_root()
 
-                    self.assertEqual(root, Path("/tmp") / f"{paths.APP_ID}-{os.getuid()}")
+                    self.assertEqual(
+                        root, Path("/tmp") / f"{paths.APP_ID}-{os.getuid()}"
+                    )
 
     def test_safe_home_path_rejects_symlinked_private_temp_root(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -222,9 +295,14 @@ class PathsTest(unittest.TestCase):
             private_link = temp_root / f"{paths.APP_ID}-{os.getuid()}"
             private_link.symlink_to(target, target_is_directory=True)
 
-            with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=home_link), mock.patch(
-                "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)
-            ), mock.patch.dict(os.environ, {"XDG_CACHE_HOME": ""}):
+            with mock.patch(
+                "speed_of_cinnamon.paths.Path.home", return_value=home_link
+            ), mock.patch(
+                "speed_of_cinnamon.paths.tempfile.gettempdir",
+                return_value=str(temp_root),
+            ), mock.patch.dict(
+                os.environ, {"XDG_CACHE_HOME": ""}
+            ):
                 with self.assertRaises(RuntimeError):
                     paths.xdg_cache_home()
 
@@ -240,11 +318,16 @@ class PathsTest(unittest.TestCase):
 
             with (
                 mock.patch("speed_of_cinnamon.paths.Path.home", return_value=home_link),
-                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=str(temp_root)),
+                mock.patch(
+                    "speed_of_cinnamon.paths.tempfile.gettempdir",
+                    return_value=str(temp_root),
+                ),
                 mock.patch("speed_of_cinnamon.paths.os.O_NOFOLLOW", None, create=True),
                 mock.patch.dict(os.environ, {"XDG_CACHE_HOME": ""}),
             ):
-                with self.assertRaisesRegex(RuntimeError, "secure temporary directory open is not supported"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "secure temporary directory open is not supported"
+                ):
                     paths.xdg_cache_home()
 
     def test_valid_xdg_override_does_not_require_home_fallback(self) -> None:
@@ -269,30 +352,55 @@ class PathsTest(unittest.TestCase):
     def test_private_temp_root_inspection_failure_is_controlled(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with (
-                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp),
-                mock.patch("speed_of_cinnamon.paths.os.fstat", side_effect=OSError("stat failed")),
+                mock.patch(
+                    "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.paths.os.fstat",
+                    side_effect=OSError("stat failed"),
+                ),
             ):
-                with self.assertRaisesRegex(RuntimeError, "temporary directory is not safe"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "temporary directory is not safe"
+                ):
                     paths._private_runtime_temp_root()
 
-    def test_private_temp_root_preserves_inspection_failure_when_close_is_interrupted(self) -> None:
+    def test_private_temp_root_preserves_inspection_failure_when_close_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with (
-                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp),
-                mock.patch("speed_of_cinnamon.paths.ensure_directory_without_following_symlinks", return_value=123),
-                mock.patch("speed_of_cinnamon.paths.os.fstat", side_effect=OSError("stat failed")),
-                mock.patch("speed_of_cinnamon.paths.os.close", side_effect=KeyboardInterrupt),
+                mock.patch(
+                    "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.paths.ensure_directory_without_following_symlinks",
+                    return_value=123,
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.paths.os.fstat",
+                    side_effect=OSError("stat failed"),
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.paths.os.close", side_effect=KeyboardInterrupt
+                ),
             ):
-                with self.assertRaisesRegex(RuntimeError, "temporary directory is not safe"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "temporary directory is not safe"
+                ):
                     paths._private_runtime_temp_root()
 
-    def test_private_temp_root_preserves_success_when_directory_close_fails(self) -> None:
+    def test_private_temp_root_preserves_success_when_directory_close_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             real_open = os.open
             real_close = os.close
             private_root = Path(tmp) / f"{paths.APP_ID}-{os.getuid()}"
             private_root.mkdir(mode=0o700)
-            directory_fd = real_open(private_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            directory_fd = real_open(
+                private_root, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+            )
 
             def close_wrapper(fd: int) -> None:
                 if fd == directory_fd:
@@ -302,7 +410,11 @@ class PathsTest(unittest.TestCase):
             try:
                 with (
                     mock.patch.object(paths.tempfile, "gettempdir", return_value=tmp),
-                    mock.patch.object(paths, "ensure_directory_without_following_symlinks", return_value=directory_fd),
+                    mock.patch.object(
+                        paths,
+                        "ensure_directory_without_following_symlinks",
+                        return_value=directory_fd,
+                    ),
                     mock.patch.object(paths.os, "close", side_effect=close_wrapper),
                 ):
                     result = paths._private_runtime_temp_root()
@@ -316,15 +428,25 @@ class PathsTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             collision = Path(tmp) / f"{paths.APP_ID}-{os.getuid()}"
             collision.write_text("not a directory", encoding="utf-8")
-            with mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp):
-                with self.assertRaisesRegex(RuntimeError, "temporary directory is not safe"):
+            with mock.patch(
+                "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp
+            ):
+                with self.assertRaisesRegex(
+                    RuntimeError, "temporary directory is not safe"
+                ):
                     paths._private_runtime_temp_root()
 
     def test_private_temp_root_uses_fd_bound_directory_creation(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             with (
-                mock.patch("speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp),
-                mock.patch.object(Path, "mkdir", side_effect=AssertionError("path mkdir must not be used")),
+                mock.patch(
+                    "speed_of_cinnamon.paths.tempfile.gettempdir", return_value=tmp
+                ),
+                mock.patch.object(
+                    Path,
+                    "mkdir",
+                    side_effect=AssertionError("path mkdir must not be used"),
+                ),
             ):
                 private_root = paths._private_runtime_temp_root()
 
@@ -333,7 +455,9 @@ class PathsTest(unittest.TestCase):
 
     def test_xdg_paths_accept_absolute_non_symlink_roots(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+            with mock.patch(
+                "speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")
+            ):
                 custom = Path(tmp) / "custom-data"
                 with mock.patch.dict(
                     paths.os.environ,
@@ -351,39 +475,55 @@ class PathsTest(unittest.TestCase):
                 self.assertEqual(paths.xdg_data_home(), custom)
 
             with mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": "   "}):
-                self.assertEqual(paths.xdg_data_home(), Path.home() / ".local" / "share")
+                self.assertEqual(
+                    paths.xdg_data_home(), Path.home() / ".local" / "share"
+                )
 
     def test_xdg_paths_do_not_resolve_after_symlink_check(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             custom = Path(tmp) / "custom-data"
             with (
                 mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(custom)}),
-                mock.patch.object(Path, "resolve", side_effect=AssertionError("must not canonicalize after check")),
+                mock.patch.object(
+                    Path,
+                    "resolve",
+                    side_effect=AssertionError("must not canonicalize after check"),
+                ),
             ):
                 self.assertEqual(paths.xdg_data_home(), custom)
 
     def test_xdg_paths_reject_relative_roots(self) -> None:
-        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+        with mock.patch(
+            "speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")
+        ):
             with mock.patch.dict(
                 paths.os.environ,
                 {
                     "XDG_DATA_HOME": "relative-data",
                 },
             ):
-                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+                self.assertEqual(
+                    paths.xdg_data_home(), Path("/home/example") / ".local" / "share"
+                )
 
     def test_xdg_paths_reject_parent_traversal_roots(self) -> None:
-        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+        with mock.patch(
+            "speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")
+        ):
             with mock.patch.dict(
                 paths.os.environ,
                 {
                     "XDG_DATA_HOME": "/tmp/safe/../data",
                 },
             ):
-                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+                self.assertEqual(
+                    paths.xdg_data_home(), Path("/home/example") / ".local" / "share"
+                )
 
     def test_xdg_paths_reject_oversized_roots(self) -> None:
-        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+        with mock.patch(
+            "speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")
+        ):
             oversized = "/" + ("x" * (paths.MAX_XDG_PATH_CHARS + 1))
             with mock.patch.dict(
                 paths.os.environ,
@@ -391,16 +531,23 @@ class PathsTest(unittest.TestCase):
                     "XDG_DATA_HOME": oversized,
                 },
             ):
-                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+                self.assertEqual(
+                    paths.xdg_data_home(), Path("/home/example") / ".local" / "share"
+                )
 
     def test_xdg_paths_reject_oversized_components(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             custom = Path(tmp) / ("x" * (paths.MAX_PATH_COMPONENT_BYTES + 1))
             with (
-                mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")),
+                mock.patch(
+                    "speed_of_cinnamon.paths.Path.home",
+                    return_value=Path("/home/example"),
+                ),
                 mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(custom)}),
             ):
-                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+                self.assertEqual(
+                    paths.xdg_data_home(), Path("/home/example") / ".local" / "share"
+                )
 
     def test_xdg_path_rejects_oversized_value_after_home_expansion(self) -> None:
         oversized_home = "/" + ("a" * paths.MAX_XDG_PATH_CHARS)
@@ -410,7 +557,10 @@ class PathsTest(unittest.TestCase):
             {"HOME": oversized_home, "XDG_CACHE_HOME": "~"},
             clear=False,
         ):
-            self.assertEqual(paths._xdg_path("XDG_CACHE_HOME", Path("/safe/fallback")), Path("/safe/fallback"))
+            self.assertEqual(
+                paths._xdg_path("XDG_CACHE_HOME", Path("/safe/fallback")),
+                Path("/safe/fallback"),
+            )
 
     def test_xdg_path_reserves_room_for_derived_app_paths(self) -> None:
         custom = Path("/tmp/custom-xdg")
@@ -418,8 +568,13 @@ class PathsTest(unittest.TestCase):
         fallback = Path("/tmp/private-runtime")
         with (
             mock.patch("speed_of_cinnamon.paths.MAX_XDG_PATH_CHARS", max_chars),
-            mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")),
-            mock.patch("speed_of_cinnamon.paths._private_runtime_temp_root", return_value=fallback),
+            mock.patch(
+                "speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")
+            ),
+            mock.patch(
+                "speed_of_cinnamon.paths._private_runtime_temp_root",
+                return_value=fallback,
+            ),
         ):
             with mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": str(custom)}):
                 self.assertEqual(paths.xdg_data_home(), fallback / ".local" / "share")
@@ -432,22 +587,37 @@ class PathsTest(unittest.TestCase):
         with (
             mock.patch("speed_of_cinnamon.paths.MAX_XDG_PATH_CHARS", max_chars),
             mock.patch("speed_of_cinnamon.paths.Path.home", return_value=home),
-            mock.patch("speed_of_cinnamon.paths._private_runtime_temp_root", return_value=fallback),
+            mock.patch(
+                "speed_of_cinnamon.paths._private_runtime_temp_root",
+                return_value=fallback,
+            ),
             mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": ""}),
         ):
             self.assertEqual(paths.xdg_data_home(), fallback / ".local" / "share")
 
     def test_xdg_paths_reject_unencodable_roots(self) -> None:
-        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
-            with mock.patch("speed_of_cinnamon.paths.os.environ.__getitem__", return_value="/tmp/root\ud800"):
-                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+        with tempfile.TemporaryDirectory(dir="/tmp") as tmp:
+            safe_home = Path(tmp) / "home"
+            safe_home.mkdir()
+            with mock.patch(
+                "speed_of_cinnamon.paths.Path.home", return_value=safe_home
+            ):
+                with mock.patch(
+                    "speed_of_cinnamon.paths.os.environ",
+                    {"XDG_DATA_HOME": "/tmp/root\ud800"},
+                ):
+                    self.assertEqual(
+                        paths.xdg_data_home(), safe_home / ".local" / "share"
+                    )
 
     def test_xdg_paths_accept_literal_backslash_null_roots(self) -> None:
         with mock.patch.dict(paths.os.environ, {"XDG_DATA_HOME": "/tmp/root\\x00"}):
             self.assertEqual(paths.xdg_data_home(), Path("/tmp/root\\x00"))
 
     def test_xdg_paths_reject_c1_control_roots(self) -> None:
-        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+        with mock.patch(
+            "speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")
+        ):
             with mock.patch.dict(
                 paths.os.environ,
                 {
@@ -456,12 +626,16 @@ class PathsTest(unittest.TestCase):
                     "XDG_CACHE_HOME": "/tmp/root\\u0085",
                 },
             ):
-                self.assertEqual(paths.xdg_data_home(), Path("/home/example") / ".local" / "share")
+                self.assertEqual(
+                    paths.xdg_data_home(), Path("/home/example") / ".local" / "share"
+                )
                 self.assertEqual(paths.xdg_state_home(), Path("/tmp/root\\x85"))
                 self.assertEqual(paths.xdg_cache_home(), Path("/tmp/root\\u0085"))
 
     def test_xdg_paths_accept_home_subdirectories(self) -> None:
-        with mock.patch("speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")):
+        with mock.patch(
+            "speed_of_cinnamon.paths.Path.home", return_value=Path("/home/example")
+        ):
             data_root = Path("/home/example") / ".local"
             allowed = data_root / "share" / "custom"
             with mock.patch.dict(
@@ -491,8 +665,12 @@ class PathsTest(unittest.TestCase):
             secret_link = base / "secret-token-link"
             secret_link.symlink_to(target, target_is_directory=True)
 
-            with self.assertRaisesRegex(RuntimeError, "^input path must not pass through a symlink$") as raised:
-                path_safety.assert_no_symlink_ancestors(secret_link / "child", field_name="input path")
+            with self.assertRaisesRegex(
+                RuntimeError, "^input path must not pass through a symlink$"
+            ) as raised:
+                path_safety.assert_no_symlink_ancestors(
+                    secret_link / "child", field_name="input path"
+                )
 
             self.assertNotIn("secret-token-link", str(raised.exception))
 

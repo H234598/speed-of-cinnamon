@@ -7,13 +7,13 @@ export PATH="${TRUSTED_COMMAND_PATH}"
 readonly GIT_TIMEOUT_SECONDS=30
 
 # Real applet acceptance test. It never writes clipboard or sends keystrokes.
-if [[ "${SOC_REAL_E2E:-0}" != "1" ]]; then
-  printf 'Refusing live API test. Set SOC_REAL_E2E=1. This consumes API quota.\n' >&2
-  exit 2
+if [[ ${SOC_REAL_E2E:-0} != "1" ]]; then
+	printf 'Refusing live API test. Set SOC_REAL_E2E=1. This consumes API quota.\n' >&2
+	exit 2
 fi
-if [[ "${SOC_RUN_GUI_LIVE_TESTS:-0}" != "1" ]]; then
-  printf 'Refusing desktop acceptance test. Set SOC_RUN_GUI_LIVE_TESTS=1 explicitly.\n' >&2
-  exit 2
+if [[ ${SOC_RUN_GUI_LIVE_TESTS:-0} != "1" ]]; then
+	printf 'Refusing desktop acceptance test. Set SOC_RUN_GUI_LIVE_TESTS=1 explicitly.\n' >&2
+	exit 2
 fi
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -30,41 +30,41 @@ old_source=""
 snapshot_set=0
 
 for tool in arecord espeak-ng ffmpeg gdbus pactl pw-play python3 mktemp git timeout; do
-  command -v -- "${tool}" >/dev/null 2>&1 || {
-    printf 'real-e2e: required tool missing: %s\n' "${tool}" >&2
-    exit 2
-  }
+	command -v -- "${tool}" >/dev/null 2>&1 || {
+		printf 'real-e2e: required tool missing: %s\n' "${tool}" >&2
+		exit 2
+	}
 done
-[[ -f "${safe_fs}" && ! -L "${safe_fs}" ]] || {
-  printf 'real-e2e: invalid safe filesystem helper.\n' >&2
-  exit 2
+[[ -f ${safe_fs} && ! -L ${safe_fs} ]] || {
+	printf 'real-e2e: invalid safe filesystem helper.\n' >&2
+	exit 2
 }
-[[ -n "${DBUS_SESSION_BUS_ADDRESS:-}" ]] || {
-  printf 'real-e2e: Cinnamon session D-Bus is unavailable.\n' >&2
-  exit 2
+[[ -n ${DBUS_SESSION_BUS_ADDRESS:-} ]] || {
+	printf 'real-e2e: Cinnamon session D-Bus is unavailable.\n' >&2
+	exit 2
 }
 
 eval_cinnamon() {
-  timeout --signal=TERM --kill-after=2s 10s \
-    gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon \
-    --method org.Cinnamon.Eval "$1"
+	timeout --signal=TERM --kill-after=2s 10s \
+		gdbus call --session --dest org.Cinnamon --object-path /org/Cinnamon \
+		--method org.Cinnamon.Eval "$1"
 }
 
 cleanup() {
-  set +e
-  if (( snapshot_set )); then
-    eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; if(i&&i._socRealE2eSnapshot){const G=imports.gi.GLib; const old=String(i._socRealE2eSnapshot.xdgStateHome||\"\"); if(old){G.setenv(\"XDG_STATE_HOME\",old,true);}else{G.unsetenv(\"XDG_STATE_HOME\");} Object.assign(i,i._socRealE2eSnapshot);delete i._socRealE2eSnapshot;} \"restored\";" >/dev/null
-  fi
-  if [[ -n "${old_source}" ]]; then
-    pactl set-default-source "${old_source}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${sink_module}" ]]; then
-    pactl unload-module "${sink_module}" >/dev/null 2>&1 || true
-  fi
-  if [[ -n "${tmp_root}" && -n "${tmp_identity}" ]]; then
-    python3 "${safe_fs}" remove real-e2e "${tmp_root}" --kind dir \
-      --expected-identity "${tmp_identity}" >/dev/null 2>&1 || true
-  fi
+	set +e
+	if ((snapshot_set)); then
+		eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; if(i&&i._socRealE2eSnapshot){const G=imports.gi.GLib; const old=String(i._socRealE2eSnapshot.xdgStateHome||\"\"); if(old){G.setenv(\"XDG_STATE_HOME\",old,true);}else{G.unsetenv(\"XDG_STATE_HOME\");} Object.assign(i,i._socRealE2eSnapshot);delete i._socRealE2eSnapshot;} \"restored\";" >/dev/null
+	fi
+	if [[ -n ${old_source} ]]; then
+		pactl set-default-source "${old_source}" >/dev/null 2>&1 || true
+	fi
+	if [[ -n ${sink_module} ]]; then
+		pactl unload-module "${sink_module}" >/dev/null 2>&1 || true
+	fi
+	if [[ -n ${tmp_root} && -n ${tmp_identity} ]]; then
+		python3 "${safe_fs}" remove real-e2e "${tmp_root}" --kind dir \
+			--expected-identity "${tmp_identity}" >/dev/null 2>&1 || true
+	fi
 }
 trap cleanup EXIT INT TERM
 
@@ -74,9 +74,9 @@ mkdir -m 700 -- "${tmp_root}/state"
 test_state_home_json="$(python3 -c 'import json,sys; print(json.dumps(sys.argv[1]))' "${tmp_root}/state")"
 
 active="$(eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i ? (i.transcriber===\"openai-compatible\" && i.openaiCompatibleUrl && i.openaiCompatibleModel && i.openaiCompatibleTextModel ? \"ready\" : \"misconfigured\") : \"missing\";")"
-if [[ "${active}" != *ready* ]]; then
-  printf 'real-e2e: running applet is missing or OpenAI-compatible API/model settings are incomplete.\n' >&2
-  exit 2
+if [[ ${active} != *ready* ]]; then
+	printf 'real-e2e: running applet is missing or OpenAI-compatible API/model settings are incomplete.\n' >&2
+	exit 2
 fi
 
 old_source="$(pactl get-default-source)"
@@ -84,37 +84,37 @@ sink_module="$(pactl load-module module-null-sink sink_name="${sink_name}")"
 pactl set-default-source "${sink_name}.monitor"
 
 espeak-ng -v de -s 145 -w "${tmp_root}/source.wav" \
-  'Dies ist ein echter Speed of Cinnamon Aufnahme Test.'
+	'Dies ist ein echter Speed of Cinnamon Aufnahme Test.'
 ffmpeg -nostdin -loglevel error -y -i "${tmp_root}/source.wav" -ac 1 -ar 16000 "${tmp_root}/speech.wav"
 
 snapshot_set=1
 eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; const G=imports.gi.GLib; if(!i) throw new Error(\"applet missing\"); i._socRealE2eSnapshot={xdgStateHome:G.getenv(\"XDG_STATE_HOME\")||\"\",insertMethod:i.insertMethod,autoRelisten:i.autoRelisten,showTranscriptionNotifications:i.showTranscriptionNotifications,openaiCompatibleFlexProcessing:i.openaiCompatibleFlexProcessing,inputDevice:i.inputDevice}; G.setenv(\"XDG_STATE_HOME\",${test_state_home_json},true); if(i.recorder===\"arecord\") i.inputDevice=\"pipewire\"; i.insertMethod=\"none\"; i.autoRelisten=false; i.showTranscriptionNotifications=false; \"prepared\";" >/dev/null
 
 run_case() {
-  local flex="$1"
-  local state=""
-  eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i.openaiCompatibleFlexProcessing=${flex}; i._toggleRecording(\"start\"); \"started\";" >/dev/null
-  for _ in $(seq 1 30); do
-    state="$(eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i&&i.status===\"recording\" ? \"recording\" : (i&&i.status||\"unknown\");")"
-    [[ "${state}" == *recording* ]] && break
-    [[ "${state}" == *error* ]] && break
-    sleep 1
-  done
-  if [[ "${state}" != *recording* ]]; then
-    printf 'real-e2e: recorder did not become ready for flex=%s (state: %s)\n' "${flex}" "${state}" >&2
-    return 1
-  fi
-  pw-play --target "${sink_name}" "${tmp_root}/speech.wav"
-  sleep 1
-  eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i._toggleRecording(\"stop\"); \"stopped\";" >/dev/null
-  for _ in $(seq 1 90); do
-    state="$(eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i&&i.status===\"done\"&&i.lastTranscript ? \"done\" : (i&&i.status||\"unknown\");")"
-    [[ "${state}" == *done* ]] && return 0
-    [[ "${state}" == *failed* ]] && break
-    sleep 1
-  done
-  printf 'real-e2e: applet case flex=%s failed with state: %s\n' "${flex}" "${state}" >&2
-  return 1
+	local flex="$1"
+	local state=""
+	eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i.openaiCompatibleFlexProcessing=${flex}; i._toggleRecording(\"start\"); \"started\";" >/dev/null
+	for _ in $(seq 1 30); do
+		state="$(eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i&&i.status===\"recording\" ? \"recording\" : (i&&i.status||\"unknown\");")"
+		[[ ${state} == *recording* ]] && break
+		[[ ${state} == *error* ]] && break
+		sleep 1
+	done
+	if [[ ${state} != *recording* ]]; then
+		printf 'real-e2e: recorder did not become ready for flex=%s (state: %s)\n' "${flex}" "${state}" >&2
+		return 1
+	fi
+	pw-play --target "${sink_name}" "${tmp_root}/speech.wav"
+	sleep 1
+	eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i._toggleRecording(\"stop\"); \"stopped\";" >/dev/null
+	for _ in $(seq 1 90); do
+		state="$(eval_cinnamon "const i=imports.ui.appletManager.getRunningInstancesForUuid(\"${uuid}\")[0]; i&&i.status===\"done\"&&i.lastTranscript ? \"done\" : (i&&i.status||\"unknown\");")"
+		[[ ${state} == *done* ]] && return 0
+		[[ ${state} == *failed* ]] && break
+		sleep 1
+	done
+	printf 'real-e2e: applet case flex=%s failed with state: %s\n' "${flex}" "${state}" >&2
+	return 1
 }
 
 run_case true

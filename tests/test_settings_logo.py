@@ -44,7 +44,9 @@ def _load_logo_module() -> types.ModuleType:
     previous = {name: sys.modules.get(name) for name in replacements}
     sys.modules.update(replacements)
     try:
-        spec = importlib.util.spec_from_file_location("speed_of_cinnamon_settings_logo_test", LOGO_MODULE_PATH)
+        spec = importlib.util.spec_from_file_location(
+            "speed_of_cinnamon_settings_logo_test", LOGO_MODULE_PATH
+        )
         if spec is None or spec.loader is None:
             raise RuntimeError("could not load SettingsLogo.py")
         module = importlib.util.module_from_spec(spec)

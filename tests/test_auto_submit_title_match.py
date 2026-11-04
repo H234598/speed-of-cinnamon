@@ -3,8 +3,7 @@ import unittest
 
 
 APPLET_SOURCE = (
-    Path(__file__).resolve().parents[1]
-    / "files/speed-of-cinnamon@H234598/applet.js"
+    Path(__file__).resolve().parents[1] / "files/speed-of-cinnamon@H234598/applet.js"
 ).read_text(encoding="utf-8")
 
 

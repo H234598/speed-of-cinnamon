@@ -126,7 +126,10 @@ def _transcribe(audio_path: Path, language: str, model_path: Path) -> str:
             separator_chars = 1 if text_parts else 0
             transcript_chars += separator_chars + len(segment_text)
             transcript_bytes += separator_chars + len(segment_text.encode("utf-8"))
-            if transcript_chars > MAX_TRANSCRIPT_CHARS or transcript_bytes > MAX_TRANSCRIPT_CHARS:
+            if (
+                transcript_chars > MAX_TRANSCRIPT_CHARS
+                or transcript_bytes > MAX_TRANSCRIPT_CHARS
+            ):
                 raise WorkerFailure("too-large")
             text_parts.append(segment_text)
     except WorkerFailure:
@@ -203,7 +206,9 @@ def _diagnose_runtime_payload() -> dict[str, object]:
 def main(argv: list[str] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     if arguments == ["--diagnose-runtime"]:
-        sys.stdout.write(json.dumps(_diagnose_runtime_payload(), ensure_ascii=True) + "\n")
+        sys.stdout.write(
+            json.dumps(_diagnose_runtime_payload(), ensure_ascii=True) + "\n"
+        )
         sys.stdout.flush()
         return 0
     if "--diagnose-runtime" in arguments:
@@ -218,7 +223,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         audio_path, language, model_path = validated
         text = _transcribe(audio_path, language, model_path)
-        sys.stdout.write(json.dumps({"status": "done", "transcript": text}, ensure_ascii=False) + "\n")
+        sys.stdout.write(
+            json.dumps({"status": "done", "transcript": text}, ensure_ascii=False)
+            + "\n"
+        )
         sys.stdout.flush()
     except WorkerFailure as exc:
         _write_failure(exc.code)

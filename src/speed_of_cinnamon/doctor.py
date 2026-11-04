@@ -21,7 +21,12 @@ from .command_chain import (
 )
 from .http_safety import has_unsafe_url_characters, is_loopback_hostname
 from .insert_methods import normalize_insert_method
-from .models import default_ctranslate2_model_path, default_whisper_cpp_model_path, model_backend_for_path, model_supports_language
+from .models import (
+    default_ctranslate2_model_path,
+    default_whisper_cpp_model_path,
+    model_backend_for_path,
+    model_supports_language,
+)
 from .postprocessor import (
     DEFAULT_OPENAI_COMPATIBLE_MODEL,
     DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL,
@@ -87,11 +92,17 @@ DOCTOR_CHECK_NAMES = frozenset(
 )
 
 
-_FASTER_WHISPER_READY_DETAIL = "python module, CPU int8 runtime, and child worker available"
+_FASTER_WHISPER_READY_DETAIL = (
+    "python module, CPU int8 runtime, and child worker available"
+)
 _CTRANSLATE2_MISSING_DETAIL = "CTranslate2 runtime is missing"
 _FASTER_WHISPER_MODULE_MISSING_DETAIL = "faster-whisper module is missing"
-_FASTER_WHISPER_WORKER_MISSING_DETAIL = "faster-whisper child worker is missing or unsafe"
-_CTRANSLATE2_INT8_UNSUPPORTED_DETAIL = "CTranslate2 CPU int8 compute type is unsupported"
+_FASTER_WHISPER_WORKER_MISSING_DETAIL = (
+    "faster-whisper child worker is missing or unsafe"
+)
+_CTRANSLATE2_INT8_UNSUPPORTED_DETAIL = (
+    "CTranslate2 CPU int8 compute type is unsupported"
+)
 _FASTER_WHISPER_PROBE_TIMEOUT_DETAIL = "faster-whisper runtime probe timed out"
 _FASTER_WHISPER_PROBE_FAILED_DETAIL = "faster-whisper runtime probe failed"
 _FASTER_WHISPER_PROBE_INCOMPLETE_DETAIL = "faster-whisper runtime probe is incomplete"
@@ -106,7 +117,9 @@ _FASTER_WHISPER_SAFE_FAILURE_DETAILS = frozenset(
         _FASTER_WHISPER_PROBE_INCOMPLETE_DETAIL,
     }
 )
-_GNA_CPU_MODEL_RE = re.compile(r"(?<![A-Za-z0-9])i5-1245u(?![A-Za-z0-9])", re.ASCII | re.IGNORECASE)
+_GNA_CPU_MODEL_RE = re.compile(
+    r"(?<![A-Za-z0-9])i5-1245u(?![A-Za-z0-9])", re.ASCII | re.IGNORECASE
+)
 _GNA_DRIVER_CANDIDATES = (
     (Path("/sys/module/intel_gna"), Path("/sys/module")),
     (Path("/sys/bus/pci/drivers/intel_gna"), Path("/sys/bus/pci/drivers")),
@@ -436,7 +449,9 @@ def _env_desktop() -> dict[str, object]:
     desktop_session = _coerce_desktop_env("DESKTOP_SESSION")
     display = _coerce_desktop_env("DISPLAY")
     desktop_names = ":".join([current_desktop, desktop_session]).lower()
-    session_is_x11 = session_type.lower() == "x11" or (not session_type and bool(display))
+    session_is_x11 = session_type.lower() == "x11" or (
+        not session_type and bool(display)
+    )
     return {
         "current_desktop": current_desktop,
         "session_type": session_type,
@@ -475,7 +490,11 @@ def _setting(
     if _contains_http_header_control_chars(value):
         raise ValueError(f"setting {key} contains invalid control character")
     normalized = value.strip()
-    return _doctor_field_text(normalized, field_name=f"setting {key}") if limit else normalized
+    return (
+        _doctor_field_text(normalized, field_name=f"setting {key}")
+        if limit
+        else normalized
+    )
 
 
 def _doctor_field_text(value: str, *, field_name: str) -> str:
@@ -537,7 +556,9 @@ def _run_audio_probe(command: str, *args: str) -> tuple[str, str]:
                 error_output,
                 returncode,
             )
-            return ("ok", package_output) if package_output is not None else ("failed", "")
+            return (
+                ("ok", package_output) if package_output is not None else ("failed", "")
+            )
         if returncode != 0:
             return "failed", ""
         return "ok", output.strip()
@@ -625,7 +646,9 @@ def _audio_pci_drivers(output: str) -> list[str] | None:
     for line in lines:
         if line and not line[0].isspace():
             header = line.casefold()
-            audio_device = "audio device" in header or "multimedia audio controller" in header
+            audio_device = (
+                "audio device" in header or "multimedia audio controller" in header
+            )
             continue
         if not audio_device:
             continue
@@ -701,10 +724,15 @@ def _pipewire_source_evidence(output: str) -> tuple[str, bool | None] | None:
         alsa_source.startswith("platform-")
         or (alsa_source.startswith("pci-") and "-platform-" in alsa_source)
     )
-    source_tokens = folded_source.replace("-", "_").replace(".", "_").replace(":", "_").split("_")
+    source_tokens = (
+        folded_source.replace("-", "_").replace(".", "_").replace(":", "_").split("_")
+    )
     structured_dmic = internal_source and (
         any(token.startswith("dmic") for token in source_tokens)
-        or ("sof_sdw" in folded_source and any(token.startswith("mic") for token in source_tokens))
+        or (
+            "sof_sdw" in folded_source
+            and any(token.startswith("mic") for token in source_tokens)
+        )
     )
     return source_class, True if structured_dmic else None
 
@@ -717,28 +745,39 @@ def _audio_diagnostics() -> dict[str, object]:
         pci_drivers = []
 
     modules_status, modules_output = _run_audio_probe("lsmod")
-    loaded_modules = _audio_loaded_modules(modules_output) if modules_status == "ok" else set()
+    loaded_modules = (
+        _audio_loaded_modules(modules_output) if modules_status == "ok" else set()
+    )
     if loaded_modules is None:
         modules_status = "failed"
         loaded_modules = set()
     sof_modules = sorted(
-        module for module in loaded_modules if module.startswith("snd_sof") or "_sof_" in module
+        module
+        for module in loaded_modules
+        if module.startswith("snd_sof") or "_sof_" in module
     )
     soundwire_modules = sorted(
         module
         for module in loaded_modules
-        if module.startswith("soundwire_") or (module.startswith("snd_") and "_sdw" in module)
+        if module.startswith("soundwire_")
+        or (module.startswith("snd_") and "_sdw" in module)
     )
 
     packages_status, packages_output = _run_audio_probe("rpm", *_AUDIO_RPM_ARGS)
-    packages = _audio_package_versions(packages_output) if packages_status == "ok" else None
+    packages = (
+        _audio_package_versions(packages_output) if packages_status == "ok" else None
+    )
     if packages is None:
         if packages_status == "ok":
             packages_status = "failed"
         packages = {name: None for name in AUDIO_PACKAGE_NAMES}
 
-    pipewire_status, pipewire_output = _run_audio_probe("wpctl", "inspect", "@DEFAULT_AUDIO_SOURCE@")
-    pipewire_evidence = _pipewire_source_evidence(pipewire_output) if pipewire_status == "ok" else None
+    pipewire_status, pipewire_output = _run_audio_probe(
+        "wpctl", "inspect", "@DEFAULT_AUDIO_SOURCE@"
+    )
+    pipewire_evidence = (
+        _pipewire_source_evidence(pipewire_output) if pipewire_status == "ok" else None
+    )
     if pipewire_evidence is None:
         if pipewire_status == "ok":
             pipewire_status = "failed"
@@ -754,9 +793,7 @@ def _audio_diagnostics() -> dict[str, object]:
     soundwire_active = None
     legacy_hda_active = "snd_hda_intel" in pci_drivers
     legacy_hda_warning = bool(
-        legacy_hda_active
-        and not sof_active
-        and dmic_visible is True
+        legacy_hda_active and not sof_active and dmic_visible is True
     )
     warnings = []
     if legacy_hda_warning:
@@ -880,7 +917,10 @@ def _cpu_flags(
             or any(
                 not token.isascii()
                 or not token
-                or any(not (char.islower() or char.isdecimal() or char == "_") for char in token)
+                or any(
+                    not (char.islower() or char.isdecimal() or char == "_")
+                    for char in token
+                )
                 for token in tokens
             )
         ):
@@ -951,9 +991,7 @@ def _kernel_hfi_state() -> bool | None:
     if config is None:
         return None
     records = [
-        line
-        for line in config.splitlines()
-        if "CONFIG_INTEL_HFI_THERMAL" in line
+        line for line in config.splitlines() if "CONFIG_INTEL_HFI_THERMAL" in line
     ]
     if records == ["CONFIG_INTEL_HFI_THERMAL=y"]:
         return True
@@ -973,7 +1011,11 @@ def _cpu_diagnostics() -> dict[str, object]:
     records = _cpuinfo_records(cpuinfo, online_cpus)
     model = _normalized_cpu_model(records) if records is not None else None
     flags = _cpu_flags(records) if records is not None else None
-    avx2 = all("avx2" in cpu_flags for cpu_flags in flags.values()) if flags is not None else None
+    avx2 = (
+        all("avx2" in cpu_flags for cpu_flags in flags.values())
+        if flags is not None
+        else None
+    )
     avx_vnni = (
         all("avx_vnni" in cpu_flags for cpu_flags in flags.values())
         if flags is not None
@@ -989,9 +1031,7 @@ def _cpu_diagnostics() -> dict[str, object]:
     )
     hfi_runtime_active = None
     hfi_available = (
-        False
-        if hfi_cpu_flag is False or hfi_kernel_built_in is False
-        else None
+        False if hfi_cpu_flag is False or hfi_kernel_built_in is False else None
     )
 
     if _online_cpus() != online_cpus:
@@ -1019,7 +1059,9 @@ def _cpu_diagnostics() -> dict[str, object]:
         hfi_kernel_built_in,
     )
     return {
-        "probe_status": "ok" if all(value is not None for value in observable_values) else "partial",
+        "probe_status": (
+            "ok" if all(value is not None for value in observable_values) else "partial"
+        ),
         **values,
     }
 
@@ -1053,7 +1095,11 @@ def _doctor_command_template_detail(
         try:
             _command_path(segment[0])
         except (CommandChainError, IndexError) as exc:
-            return str(exc) if isinstance(exc, CommandChainError) else f"{field_name} is empty"
+            return (
+                str(exc)
+                if isinstance(exc, CommandChainError)
+                else f"{field_name} is empty"
+            )
     return None
 
 
@@ -1081,7 +1127,9 @@ def _validate_remote_http_url(value: str, *, field_name: str) -> str:
     except UnicodeEncodeError as exc:
         raise ValueError(f"{field_name} contains invalid UTF-8") from exc
     if len(raw) > MAX_REMOTE_URL_CHARS:
-        raise ValueError(f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} characters)")
+        raise ValueError(
+            f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} characters)"
+        )
     try:
         raw_encoded = raw.encode("utf-8")
     except UnicodeEncodeError as exc:
@@ -1090,7 +1138,9 @@ def _validate_remote_http_url(value: str, *, field_name: str) -> str:
     if not normalized:
         raise ValueError(f"{field_name} is required")
     if len(raw_encoded) > MAX_REMOTE_URL_CHARS:
-        raise ValueError(f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} bytes)")
+        raise ValueError(
+            f"{field_name} is too large (max {MAX_REMOTE_URL_CHARS} bytes)"
+        )
     try:
         parsed = urllib.parse.urlparse(normalized)
     except ValueError as exc:
@@ -1100,12 +1150,18 @@ def _validate_remote_http_url(value: str, *, field_name: str) -> str:
     if not parsed.hostname:
         raise ValueError(f"{field_name} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
-        raise ValueError(f"{field_name} must use https:// unless host is local loopback")
+        raise ValueError(
+            f"{field_name} must use https:// unless host is local loopback"
+        )
     try:
         parsed.port
     except ValueError as exc:
         raise ValueError(f"{field_name} has invalid port") from exc
-    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
+    if (
+        "@" in parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise ValueError(f"{field_name} must not contain userinfo")
     if parsed.query or parsed.fragment:
         raise ValueError(f"{field_name} must not contain query or fragment")
@@ -1125,8 +1181,12 @@ def _safe_remote_url_display(value: str, *, field_name: str) -> str:
     safe_path = ""
     if path_segments:
         first_segment = path_segments[0]
-        version_suffix = first_segment[1:].split(".") if first_segment[:1].lower() == "v" else []
-        is_version_prefix = bool(version_suffix) and all(part.isdigit() for part in version_suffix)
+        version_suffix = (
+            first_segment[1:].split(".") if first_segment[:1].lower() == "v" else []
+        )
+        is_version_prefix = bool(version_suffix) and all(
+            part.isdigit() for part in version_suffix
+        )
         if first_segment.lower() == "api" or is_version_prefix:
             safe_path = f"/{first_segment}"
             if len(path_segments) > 1:
@@ -1134,14 +1194,18 @@ def _safe_remote_url_display(value: str, *, field_name: str) -> str:
     return urllib.parse.urlunparse((parsed.scheme, netloc, safe_path, "", "", ""))
 
 
-def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]) -> dict[str, object]:
+def _recorder_status(
+    settings: Mapping[str, object], checks: Mapping[str, Check]
+) -> dict[str, object]:
     recorder = _setting(settings, "recorder", "auto").lower()
     input_device = _setting(settings, "input-device", "").strip()
     max_seconds = settings.get("max-seconds", 30)
     if isinstance(max_seconds, bool) or not isinstance(max_seconds, int):
         raise ValueError("setting max-seconds must be an integer")
     if max_seconds < 0 or max_seconds > MAX_RECORDING_SECONDS:
-        raise ValueError(f"setting max-seconds must be between 0 and {MAX_RECORDING_SECONDS}")
+        raise ValueError(
+            f"setting max-seconds must be between 0 and {MAX_RECORDING_SECONDS}"
+        )
     recorder_names = ("pw-record", "parecord", "arecord")
 
     def _available(name: str) -> bool:
@@ -1161,7 +1225,11 @@ def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]
             ),
         }
     if recorder not in recorder_names:
-        return {"ok": False, "value": recorder, "detail": f"unknown recorder: {recorder}"}
+        return {
+            "ok": False,
+            "value": recorder,
+            "detail": f"unknown recorder: {recorder}",
+        }
     if recorder == "parecord" and max_seconds > 0 and not _ok(checks, "timeout"):
         return {
             "ok": False,
@@ -1169,7 +1237,9 @@ def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]
             "detail": "timeout is required to enforce max-seconds with parecord",
         }
     detail = _check_detail(checks, recorder, f"{recorder} missing")
-    if recorder == "arecord" and input_device.lower().startswith(("alsa_input.", "bluez_input.")):
+    if recorder == "arecord" and input_device.lower().startswith(
+        ("alsa_input.", "bluez_input.")
+    ):
         return {
             "ok": False,
             "value": recorder,
@@ -1190,15 +1260,26 @@ def _recorder_status(settings: Mapping[str, object], checks: Mapping[str, Check]
     }
 
 
-def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Check]) -> dict[str, object]:
+def _transcriber_status(
+    settings: Mapping[str, object], checks: Mapping[str, Check]
+) -> dict[str, object]:
     language = _setting(settings, "language", "en")
     transcriber = _setting(settings, "transcriber", "auto").lower().replace("_", "-")
     command_template = _setting(settings, "transcriber-command", limit=False)
     whisper_model = _setting(settings, "whisper-model", limit=False)
-    openai_compatible_model = _setting(settings, "openai-compatible-model", DEFAULT_OPENAI_COMPATIBLE_MODEL, limit=False)
-    openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False)
+    openai_compatible_model = _setting(
+        settings,
+        "openai-compatible-model",
+        DEFAULT_OPENAI_COMPATIBLE_MODEL,
+        limit=False,
+    )
+    openai_compatible_url = _setting(
+        settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False
+    )
     whisper_ok = _ok(checks, "whisper")
-    whisper_cpp_ok = _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
+    whisper_cpp_ok = (
+        _ok(checks, "whisper-cli") or _ok(checks, "whisper.cpp") or _ok(checks, "pwcpp")
+    )
     faster_whisper_ok = _ok(checks, "faster-whisper")
 
     def _faster_whisper_problem_detail() -> str:
@@ -1212,11 +1293,19 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
 
     transcriber = normalize_backend(transcriber)
     if not language:
-        return {"ok": False, "value": transcriber or "auto", "detail": "language must not be empty"}
+        return {
+            "ok": False,
+            "value": transcriber or "auto",
+            "detail": "language must not be empty",
+        }
     try:
         language_bytes = len(language.encode("utf-8"))
     except UnicodeEncodeError:
-        return {"ok": False, "value": transcriber or "auto", "detail": "language contains invalid UTF-8"}
+        return {
+            "ok": False,
+            "value": transcriber or "auto",
+            "detail": "language contains invalid UTF-8",
+        }
     if len(language) > MAX_LANGUAGE_CODE_CHARS:
         return {
             "ok": False,
@@ -1236,11 +1325,15 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     )
     if command_detail:
         return {"ok": False, "value": transcriber or "auto", "detail": command_detail}
-    command_detail = _doctor_command_template_detail(
-        command_template,
-        field_name="transcriber command",
-        placeholder_pattern=_COMMAND_TEMPLATE_PLACEHOLDER_RE,
-    ) if command_template else None
+    command_detail = (
+        _doctor_command_template_detail(
+            command_template,
+            field_name="transcriber command",
+            placeholder_pattern=_COMMAND_TEMPLATE_PLACEHOLDER_RE,
+        )
+        if command_template
+        else None
+    )
     if command_detail:
         return {"ok": False, "value": transcriber or "auto", "detail": command_detail}
     try:
@@ -1253,7 +1346,9 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
         elif transcriber == "faster-whisper":
             local_model = default_ctranslate2_model_path(language)
         elif transcriber == "auto" and not command_template:
-            local_model = default_ctranslate2_model_path(language) or default_whisper_cpp_model_path(language)
+            local_model = default_ctranslate2_model_path(
+                language
+            ) or default_whisper_cpp_model_path(language)
         else:
             local_model = ""
     except (OSError, ValueError, RuntimeError):
@@ -1267,22 +1362,33 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
     local_model_exists = False
     local_model_kind = ""
     local_model_is_invalid = bool(
-        local_model and (_contains_escaped_null(local_model) or _contains_http_header_control_chars(local_model))
+        local_model
+        and (
+            _contains_escaped_null(local_model)
+            or _contains_http_header_control_chars(local_model)
+        )
     )
     if local_model and not local_model_is_invalid:
         try:
             local_model_path = Path(local_model).expanduser()
             assert_no_symlink_ancestors(local_model_path, field_name="voice model path")
-            local_model_kind = _local_model_path_kind(local_model_path, field_name="voice model path")
+            local_model_kind = _local_model_path_kind(
+                local_model_path, field_name="voice model path"
+            )
             local_model_exists = local_model_kind is not None
             model_backend = model_backend_for_path(local_model_path)
             if local_model_kind == "directory":
-                _validate_ctranslate2_model_tree(local_model_path, field_name="voice model path")
+                _validate_ctranslate2_model_tree(
+                    local_model_path, field_name="voice model path"
+                )
             if local_model_kind == "directory" and not model_backend:
                 model_backend = "faster-whisper"
             model_ok = local_model_exists and (
                 (model_backend == "whisper-cpp" and local_model_kind == "file")
-                or (model_backend == "faster-whisper" and local_model_kind == "directory")
+                or (
+                    model_backend == "faster-whisper"
+                    and local_model_kind == "directory"
+                )
                 or (not model_backend and local_model_kind in {"file", "directory"})
             )
         except (OSError, ValueError, RuntimeError, TranscriptionError):
@@ -1295,9 +1401,13 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
         local_model_path = None
         model_ok = False
 
-    local_model_language_ok = bool(not local_model or model_supports_language(local_model, language))
+    local_model_language_ok = bool(
+        not local_model or model_supports_language(local_model, language)
+    )
 
-    def _model_problem(value: str, *, explicit_backend: str = "") -> dict[str, object] | None:
+    def _model_problem(
+        value: str, *, explicit_backend: str = ""
+    ) -> dict[str, object] | None:
         def _problem(detail: str) -> dict[str, object]:
             result: dict[str, object] = {"ok": False, "value": value, "detail": detail}
             if model_backend in {"whisper-cpp", "faster-whisper"}:
@@ -1319,10 +1429,14 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
                 return _problem(
                     f"English-only whisper.cpp model does not support language {language}; use a multilingual model"
                 )
-            return _problem(f"voice model does not support language {language}; use a compatible model")
+            return _problem(
+                f"voice model does not support language {language}; use a compatible model"
+            )
         return None
 
-    def _model_backend_status(value: str, expected_backend: str = "") -> dict[str, object]:
+    def _model_backend_status(
+        value: str, expected_backend: str = ""
+    ) -> dict[str, object]:
         problem = _model_problem(value, explicit_backend=expected_backend)
         if problem is not None:
             return problem
@@ -1347,7 +1461,11 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
                 "detail": "CTranslate2 model and faster-whisper available",
             }
         if not whisper_cpp_ok:
-            return {"ok": False, "value": value, "detail": "whisper.cpp command is missing"}
+            return {
+                "ok": False,
+                "value": value,
+                "detail": "whisper.cpp command is missing",
+            }
         return {
             "ok": True,
             "value": value,
@@ -1357,11 +1475,21 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
 
     if transcriber in {"", "auto"}:
         if command_template:
-            return {"ok": True, "value": "auto", "resolved": "command", "detail": "custom command configured"}
+            return {
+                "ok": True,
+                "value": "auto",
+                "resolved": "command",
+                "detail": "custom command configured",
+            }
         if whisper_model and local_model:
             return _model_backend_status("auto")
         if whisper_ok:
-            return {"ok": True, "value": "auto", "resolved": "whisper", "detail": "whisper command available"}
+            return {
+                "ok": True,
+                "value": "auto",
+                "resolved": "whisper",
+                "detail": "whisper command available",
+            }
         if local_model:
             return _model_backend_status("auto")
         return {
@@ -1373,7 +1501,11 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
         return {
             "ok": bool(command_template),
             "value": "command",
-            "detail": "custom command configured" if command_template else "custom transcriber command is empty",
+            "detail": (
+                "custom command configured"
+                if command_template
+                else "custom transcriber command is empty"
+            ),
         }
     if transcriber == "whisper":
         return {
@@ -1396,7 +1528,10 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
         if model_detail:
             return {"ok": False, "value": "openai-compatible", "detail": model_detail}
         try:
-            endpoint_display = _safe_remote_url_display(openai_compatible_url, field_name="OpenAI-compatible speech endpoint URL")
+            endpoint_display = _safe_remote_url_display(
+                openai_compatible_url,
+                field_name="OpenAI-compatible speech endpoint URL",
+            )
         except ValueError as exc:
             return {
                 "ok": False,
@@ -1412,7 +1547,11 @@ def _transcriber_status(settings: Mapping[str, object], checks: Mapping[str, Che
         return _model_backend_status("whisper-cpp", "whisper-cpp")
     if transcriber in {"faster-whisper", "ctranslate2", "ct2"}:
         return _model_backend_status("faster-whisper", "faster-whisper")
-    return {"ok": False, "value": transcriber, "detail": f"unknown transcriber: {transcriber}"}
+    return {
+        "ok": False,
+        "value": transcriber,
+        "detail": f"unknown transcriber: {transcriber}",
+    }
 
 
 def _output_status(
@@ -1422,7 +1561,9 @@ def _output_status(
     applet: bool = False,
 ) -> dict[str, object]:
     applet = _coerce_required_bool(applet, field_name="applet")
-    insert_method = normalize_insert_method(_setting(settings, "insert-method", "clipboard-paste"))
+    insert_method = normalize_insert_method(
+        _setting(settings, "insert-method", "clipboard-paste")
+    )
     cinnamon_flag = _coerce_payload_bool(desktop, "cinnamon")
     x11_flag = _coerce_payload_bool(desktop, "x11")
     cinnamon_clipboard = applet and cinnamon_flag
@@ -1431,11 +1572,18 @@ def _output_status(
     # only the verifiable X11 xdotool path.
     wayland_paste = applet and _ok(checks, "wtype")
     paste_ok = x11_paste or wayland_paste
-    cli_clipboard = _ok(checks, "xclip") or _ok(checks, "xsel") or _ok(checks, "wl-copy")
+    cli_clipboard = (
+        _ok(checks, "xclip") or _ok(checks, "xsel") or _ok(checks, "wl-copy")
+    )
     cli_paste_writer = _ok(checks, "xclip") or _ok(checks, "xsel")
 
     if insert_method == "none":
-        return {"ok": True, "value": "none", "paste_ok": False, "detail": "text insertion disabled"}
+        return {
+            "ok": True,
+            "value": "none",
+            "paste_ok": False,
+            "detail": "text insertion disabled",
+        }
     if insert_method == "clipboard":
         return {
             "ok": cinnamon_clipboard or cli_clipboard,
@@ -1466,19 +1614,35 @@ def _output_status(
             detail += "; install xdotool or wtype for paste"
         else:
             detail += "; install xdotool for CLI automatic paste"
-        return {"ok": ok, "value": insert_method, "paste_ok": paste_ok, "detail": detail}
+        return {
+            "ok": ok,
+            "value": insert_method,
+            "paste_ok": paste_ok,
+            "detail": detail,
+        }
     if insert_method == "type":
         return {
             "ok": x11_paste,
             "value": "type",
             "paste_ok": x11_paste,
-            "detail": "xdotool direct typing works" if x11_paste else "xdotool on Cinnamon X11 is required for direct typing",
+            "detail": (
+                "xdotool direct typing works"
+                if x11_paste
+                else "xdotool on Cinnamon X11 is required for direct typing"
+            ),
         }
-    return {"ok": False, "value": insert_method, "paste_ok": False, "detail": f"unknown insert method: {insert_method}"}
+    return {
+        "ok": False,
+        "value": insert_method,
+        "paste_ok": False,
+        "detail": f"unknown insert method: {insert_method}",
+    }
 
 
 def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
-    backend = _setting(settings, "post-process-backend", "none").lower().replace("_", "-")
+    backend = (
+        _setting(settings, "post-process-backend", "none").lower().replace("_", "-")
+    )
     command_template = _setting(settings, "post-process-command", limit=False)
     language = _setting(settings, "language", "en", limit=False)
     ollama_model = _setting(settings, "ollama-model", limit=False)
@@ -1489,10 +1653,15 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
         DEFAULT_OPENAI_COMPATIBLE_TEXT_MODEL,
         limit=False,
     )
-    openai_compatible_url = _setting(settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False)
-    simple_language_required = backend in {"ollama", "openai-compatible", "openai", "local-openai"} or (
-        backend in {"command", "custom"} and "{language}" in command_template
+    openai_compatible_url = _setting(
+        settings, "openai-compatible-url", DEFAULT_OPENAI_COMPATIBLE_URL, limit=False
     )
+    simple_language_required = backend in {
+        "ollama",
+        "openai-compatible",
+        "openai",
+        "local-openai",
+    } or (backend in {"command", "custom"} and "{language}" in command_template)
     if simple_language_required:
         try:
             _safe_prompt_language(language)
@@ -1528,12 +1697,20 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
         }
     if backend == "ollama":
         if not ollama_model:
-            return {"ok": False, "value": "ollama", "detail": "Ollama model is required"}
-        model_detail = _doctor_text_limit(ollama_model, field_name="Ollama model", max_chars=MAX_OLLAMA_MODEL_CHARS)
+            return {
+                "ok": False,
+                "value": "ollama",
+                "detail": "Ollama model is required",
+            }
+        model_detail = _doctor_text_limit(
+            ollama_model, field_name="Ollama model", max_chars=MAX_OLLAMA_MODEL_CHARS
+        )
         if model_detail:
             return {"ok": False, "value": "ollama", "detail": model_detail}
         try:
-            endpoint_display = _safe_remote_url_display(ollama_url, field_name="Ollama URL")
+            endpoint_display = _safe_remote_url_display(
+                ollama_url, field_name="Ollama URL"
+            )
         except ValueError as exc:
             return {"ok": False, "value": "ollama", "detail": str(exc)}
         return {
@@ -1555,14 +1732,18 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
         )
         if model_detail:
             return {"ok": False, "value": "openai-compatible", "detail": model_detail}
-        if not _openai_compatible_model_supports_text_polishing(openai_compatible_model):
+        if not _openai_compatible_model_supports_text_polishing(
+            openai_compatible_model
+        ):
             return {
                 "ok": False,
                 "value": "openai-compatible",
                 "detail": "OpenAI-compatible model is not allowed for text polishing",
             }
         try:
-            endpoint_display = _safe_remote_url_display(openai_compatible_url, field_name="OpenAI-compatible API URL")
+            endpoint_display = _safe_remote_url_display(
+                openai_compatible_url, field_name="OpenAI-compatible API URL"
+            )
         except ValueError as exc:
             return {"ok": False, "value": "openai-compatible", "detail": str(exc)}
         return {
@@ -1573,7 +1754,11 @@ def _postprocessor_status(settings: Mapping[str, object]) -> dict[str, object]:
                 "ensure the configured endpoint is reachable"
             ),
         }
-    return {"ok": False, "value": backend, "detail": f"unknown post-process backend: {backend}"}
+    return {
+        "ok": False,
+        "value": backend,
+        "detail": f"unknown post-process backend: {backend}",
+    }
 
 
 def configured_status(
@@ -1622,7 +1807,9 @@ def configured_status(
         and _coerce_payload_bool(output, "ok")
         and not _coerce_payload_bool(output, "paste_ok")
     ):
-        warnings.append("automatic paste is unavailable; Cinnamon clipboard copy still works")
+        warnings.append(
+            "automatic paste is unavailable; Cinnamon clipboard copy still works"
+        )
     return {
         "recorder": recorder,
         "transcriber": transcriber,
@@ -1632,7 +1819,9 @@ def configured_status(
     }
 
 
-def report(settings: Mapping[str, object] | None = None, applet: bool = False) -> dict[str, object]:
+def report(
+    settings: Mapping[str, object] | None = None, applet: bool = False
+) -> dict[str, object]:
     if settings is not None and not isinstance(settings, Mapping):
         raise RuntimeError("settings must be an object")
     applet = _coerce_required_bool(applet, field_name="applet")
@@ -1687,14 +1876,22 @@ def _contains_escaped_null(value: str) -> bool:
     return "\x00" in lowered or "\\x00" in lowered or "\\u0000" in lowered
 
 
-def _contains_http_header_control_chars(value: str, *, allow_newline: bool = False) -> bool:
+def _contains_http_header_control_chars(
+    value: str, *, allow_newline: bool = False
+) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ValueError("value must be text")
     lowered = (value or "").lower()
     control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
-    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+    if any(
+        sequence in lowered
+        for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")
+    ):
         return True
-    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
+    if any(
+        f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered
+        for codepoint in control_codepoints
+    ):
         return True
     for char in lowered:
         codepoint = ord(char)
@@ -1737,9 +1934,13 @@ def parse_settings_json(value: str) -> dict[str, object]:
     if _contains_escaped_null(value):
         raise ValueError("settings JSON contains invalid null byte")
     if len(value) > MAX_SETTINGS_JSON_CHARS:
-        raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)")
+        raise ValueError(
+            f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} characters)"
+        )
     if len(value.encode("utf-8")) > MAX_SETTINGS_JSON_CHARS:
-        raise ValueError(f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} bytes)")
+        raise ValueError(
+            f"settings JSON is too large (max {MAX_SETTINGS_JSON_CHARS} bytes)"
+        )
     try:
         parsed = json.loads(
             value,
@@ -1782,7 +1983,9 @@ def _validate_json_string_encoding(value: object, *, field_name: str) -> None:
     return
 
 
-def _validate_json_string_safety(value: object, *, field_name: str, allow_newline: bool = False) -> None:
+def _validate_json_string_safety(
+    value: object, *, field_name: str, allow_newline: bool = False
+) -> None:
     if isinstance(value, str):
         if _contains_escaped_null(value):
             raise ValueError(f"{field_name} contains invalid null byte")

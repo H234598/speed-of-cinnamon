@@ -102,9 +102,7 @@ _SCOPE_EXEC_LATCH_NONCE_RE = re.compile(r"^[0-9a-f]{64}$", re.ASCII)
 _SCOPE_EXEC_LATCH_MAX_BYTES = len(_SCOPE_EXEC_LATCH_MESSAGE_PREFIX) + 64
 _LOCAL_MODEL_GATE_REQUIRED_TOKEN = "--local-model-ready-ack-required"
 _LOCAL_MODEL_GATE_ADDRESS_ENV = "SPEED_OF_CINNAMON_LOCAL_MODEL_GATE_ADDRESS"
-_LOCAL_MODEL_GATE_READY_NONCE_ENV = (
-    "SPEED_OF_CINNAMON_LOCAL_MODEL_GATE_READY_NONCE"
-)
+_LOCAL_MODEL_GATE_READY_NONCE_ENV = "SPEED_OF_CINNAMON_LOCAL_MODEL_GATE_READY_NONCE"
 _LOCAL_MODEL_GATE_ACK_NONCE_ENV = "SPEED_OF_CINNAMON_LOCAL_MODEL_GATE_ACK_NONCE"
 _LOCAL_MODEL_GATE_CONTROLLER_PID_ENV = (
     "SPEED_OF_CINNAMON_LOCAL_MODEL_GATE_CONTROLLER_PID"
@@ -546,12 +544,8 @@ class _LocalModelReadyAckGate:
             _LOCAL_MODEL_GATE_CONTROLLER_PID_ENV: str(identity.process_id),
             _LOCAL_MODEL_GATE_CONTROLLER_UID_ENV: str(self._controller_uid),
             _LOCAL_MODEL_GATE_CONTROLLER_GID_ENV: str(self._controller_gid),
-            _LOCAL_MODEL_GATE_CONTROLLER_DEVICE_ENV: str(
-                identity.directory_device
-            ),
-            _LOCAL_MODEL_GATE_CONTROLLER_INODE_ENV: str(
-                identity.directory_inode
-            ),
+            _LOCAL_MODEL_GATE_CONTROLLER_DEVICE_ENV: str(identity.directory_device),
+            _LOCAL_MODEL_GATE_CONTROLLER_INODE_ENV: str(identity.directory_inode),
             _LOCAL_MODEL_GATE_CONTROLLER_START_TIME_ENV: str(identity.start_time),
             _LOCAL_MODEL_GATE_DEADLINE_ENV: self._absolute_deadline.hex(),
         }
@@ -634,15 +628,11 @@ class _LocalModelReadyAckGate:
                 cpu_weight=LOCAL_MODEL_CPU_WEIGHT,
                 io_weight=LOCAL_MODEL_IO_WEIGHT,
             )
-            and _pidfd_process_id(self._spawn_pidfd)
-            == spawn_identity.process_id
+            and _pidfd_process_id(self._spawn_pidfd) == spawn_identity.process_id
             and _pidfd_process_id(self._controller_pidfd)
             == self._controller_identity.process_id
-            and _canonical_process_identity(spawn_identity.process_id)
-            == spawn_identity
-            and _canonical_process_identity(
-                self._controller_identity.process_id
-            )
+            and _canonical_process_identity(spawn_identity.process_id) == spawn_identity
+            and _canonical_process_identity(self._controller_identity.process_id)
             == self._controller_identity
             and time.monotonic() < self._absolute_deadline
         )
@@ -674,15 +664,11 @@ class _LocalModelReadyAckGate:
                 cpu_weight=LOCAL_MODEL_CPU_WEIGHT,
                 io_weight=LOCAL_MODEL_IO_WEIGHT,
             )
-            and _pidfd_process_id(self._spawn_pidfd)
-            == spawn_identity.process_id
+            and _pidfd_process_id(self._spawn_pidfd) == spawn_identity.process_id
             and _pidfd_process_id(self._controller_pidfd)
             == self._controller_identity.process_id
-            and _canonical_process_identity(spawn_identity.process_id)
-            == spawn_identity
-            and _canonical_process_identity(
-                self._controller_identity.process_id
-            )
+            and _canonical_process_identity(spawn_identity.process_id) == spawn_identity
+            and _canonical_process_identity(self._controller_identity.process_id)
             == self._controller_identity
             and time.monotonic() < self._absolute_deadline
         )
@@ -734,7 +720,10 @@ class _LocalModelReadyAckGate:
         if time.monotonic() >= self._absolute_deadline:
             self._fail()
         spawn_identity = self._spawn_identity
-        if type(spawn_identity) is not _CanonicalProcessIdentity or self._spawn_pidfd < 0:
+        if (
+            type(spawn_identity) is not _CanonicalProcessIdentity
+            or self._spawn_pidfd < 0
+        ):
             self._fail()
         listener = self._listener_owner[0]
         if listener is None:
@@ -964,7 +953,9 @@ class _ScopeExecAttemptOutcome:
 
 def _scope_exec_fd_has_elf_magic(descriptor: int) -> bool:
     try:
-        return os.pread(descriptor, len(_SCOPE_EXEC_ELF_MAGIC), 0) == _SCOPE_EXEC_ELF_MAGIC
+        return (
+            os.pread(descriptor, len(_SCOPE_EXEC_ELF_MAGIC), 0) == _SCOPE_EXEC_ELF_MAGIC
+        )
     except (AttributeError, OSError, OverflowError, TypeError, ValueError):
         return False
 
@@ -982,6 +973,15 @@ def _set_cpu_priority(value: int) -> bool:
     except (AttributeError, OSError, OverflowError, ValueError):
         return False
     return True
+
+
+def _filtered_environment(
+    extra: dict[str, str] | None = None,
+) -> dict[str, str]:
+    environment = dict(os.environ)
+    if extra:
+        environment.update(extra)
+    return environment
 
 
 def _ionice_command(arguments: list[str]) -> bool:
@@ -1049,9 +1049,7 @@ def _scope_exec_file_identity(
     try:
         descriptor = os.open(
             path,
-            os.O_RDONLY
-            | getattr(os, "O_CLOEXEC", 0)
-            | nofollow,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | nofollow,
         )
         before = os.fstat(descriptor)
         path_stat = os.stat(path, follow_symlinks=False)
@@ -1169,10 +1167,13 @@ def _scope_exec_launch_spec(argv: Sequence[str]) -> _ScopeExecLaunchSpec | None:
 
 
 def _scope_exec_launch_spec_is_unchanged(spec: _ScopeExecLaunchSpec) -> bool:
-    return _scope_exec_file_identity(
-        spec.executable.path,
-        executable=True,
-    ) == spec.executable
+    return (
+        _scope_exec_file_identity(
+            spec.executable.path,
+            executable=True,
+        )
+        == spec.executable
+    )
 
 
 def _open_scope_exec_launch_fd(spec: _ScopeExecLaunchSpec) -> int | None:
@@ -1273,18 +1274,22 @@ def _validated_scope_exec_target(argv: Sequence[str]) -> list[str] | None:
     except PriorityScopeError:
         return None
     if (
-        len(command) >= 2
-        and os.path.realpath(command[0]) == entry
-        and command[1] in _INTERNAL_EXEC_WRAPPER_TOKENS
-    ) or (
-        len(command) >= 3
-        and os.path.realpath(command[1]) == entry
-        and command[2] in _INTERNAL_EXEC_WRAPPER_TOKENS
-    ) or (
-        len(command) >= 4
-        and command[1] == "-I"
-        and os.path.realpath(command[2]) == entry
-        and command[3] in _INTERNAL_EXEC_WRAPPER_TOKENS
+        (
+            len(command) >= 2
+            and os.path.realpath(command[0]) == entry
+            and command[1] in _INTERNAL_EXEC_WRAPPER_TOKENS
+        )
+        or (
+            len(command) >= 3
+            and os.path.realpath(command[1]) == entry
+            and command[2] in _INTERNAL_EXEC_WRAPPER_TOKENS
+        )
+        or (
+            len(command) >= 4
+            and command[1] == "-I"
+            and os.path.realpath(command[2]) == entry
+            and command[3] in _INTERNAL_EXEC_WRAPPER_TOKENS
+        )
     ):
         return None
     return command
@@ -1461,10 +1466,7 @@ def _parse_local_model_direct_supervisor_status(
         if (
             flags & required != required
             or wrapper_returncode != _LOCAL_MODEL_DIRECT_SUPERVISOR_EXIT
-            or (
-                root_present
-                and flags & cleanup_flags != cleanup_flags
-            )
+            or (root_present and flags & cleanup_flags != cleanup_flags)
             or (
                 not root_present
                 and flags
@@ -1569,7 +1571,9 @@ def build_local_model_priority_scope_command(
     )
 
 
-def _read_cgroup_file(path: Path, *, max_bytes: int = MAX_CGROUP_FILE_BYTES) -> str | None:
+def _read_cgroup_file(
+    path: Path, *, max_bytes: int = MAX_CGROUP_FILE_BYTES
+) -> str | None:
     try:
         with path.open("rb") as handle:
             data = handle.read(max_bytes + 1)
@@ -1866,7 +1870,9 @@ def _cgroup2_mount_mappings() -> tuple[_Cgroup2MountMapping, ...] | None:
                 len(number) > MAX_CGROUP_DEVICE_COMPONENT_DIGITS
                 for number in device_numbers
             )
-            or any(len(number) > 1 and number.startswith("0") for number in device_numbers)
+            or any(
+                len(number) > 1 and number.startswith("0") for number in device_numbers
+            )
             or not fields[5]
         ):
             continue
@@ -1947,7 +1953,9 @@ def _mapped_cgroup2_location(
     )
     if cgroup_data is None:
         return None
-    cgroup_paths = [line[3:] for line in cgroup_data.splitlines() if line.startswith("0::")]
+    cgroup_paths = [
+        line[3:] for line in cgroup_data.splitlines() if line.startswith("0::")
+    ]
     if len(cgroup_paths) != 1:
         return None
     cgroup_path = _normalized_absolute_path(cgroup_paths[0])
@@ -1970,9 +1978,8 @@ def _mapped_cgroup2_location(
         mapped_stat = os.stat(resolved, follow_symlinks=False)
     except (NotImplementedError, OSError, TypeError, ValueError):
         return None
-    if (
-        not stat.S_ISDIR(mapped_stat.st_mode)
-        or not _scope_stat_matches_mount_mapping(mapped_stat, mount_mapping)
+    if not stat.S_ISDIR(mapped_stat.st_mode) or not _scope_stat_matches_mount_mapping(
+        mapped_stat, mount_mapping
     ):
         return None
     return resolved, mount_mapping
@@ -2052,9 +2059,7 @@ def _bound_cgroup2_hierarchy(
         raise PriorityScopeError("SOC CPU affinity cgroup-v2 boundary is unavailable")
     components = _cgroup2_relative_components(cgroup_path, mount_mapping)
     if components is None:
-        raise PriorityScopeError(
-            "SOC CPU affinity cgroup-v2 boundary is unavailable"
-        )
+        raise PriorityScopeError("SOC CPU affinity cgroup-v2 boundary is unavailable")
 
     directory_flags = os.O_RDONLY | directory_flag | nofollow | cloexec | nonblock
     descriptors: list[int] = []
@@ -2086,12 +2091,9 @@ def _bound_cgroup2_hierarchy(
                 raise PriorityScopeError(
                     "SOC CPU affinity cgroup-v2 boundary is unavailable"
                 ) from None
-            if (
-                not stat.S_ISDIR(directory_stat.st_mode)
-                or not _scope_stat_matches_mount_mapping(
-                    directory_stat, mount_mapping
-                )
-            ):
+            if not stat.S_ISDIR(
+                directory_stat.st_mode
+            ) or not _scope_stat_matches_mount_mapping(directory_stat, mount_mapping):
                 raise PriorityScopeError(
                     "SOC CPU affinity cgroup-v2 boundary is unavailable"
                 )
@@ -2146,12 +2148,9 @@ def _scope_exec_cpuset_snapshot_from_bound(
                 raise PriorityScopeError(
                     "SOC CPU affinity cpuset is unavailable or invalid"
                 ) from None
-            if (
-                not stat.S_ISREG(cpuset_stat.st_mode)
-                or not _scope_stat_matches_mount_mapping(
-                    cpuset_stat, mount_mapping
-                )
-            ):
+            if not stat.S_ISREG(
+                cpuset_stat.st_mode
+            ) or not _scope_stat_matches_mount_mapping(cpuset_stat, mount_mapping):
                 raise PriorityScopeError(
                     "SOC CPU affinity cpuset is unavailable or invalid"
                 )
@@ -2326,9 +2325,7 @@ def _bound_cgroup2_hierarchy_is_current(
             if (
                 not stat.S_ISDIR(descriptor_stat.st_mode)
                 or not stat.S_ISDIR(path_stat.st_mode)
-                or not _scope_stat_matches_mount_mapping(
-                    descriptor_stat, mount_mapping
-                )
+                or not _scope_stat_matches_mount_mapping(descriptor_stat, mount_mapping)
                 or (descriptor_stat.st_dev, descriptor_stat.st_ino) != identity
                 or (path_stat.st_dev, path_stat.st_ino) != identity
             ):
@@ -2474,9 +2471,7 @@ def _cgroup_resource_public_snapshot(
         if limit is not None
     ]
     quota, period = (
-        effective_cpu_limit
-        if effective_cpu_limit is not None
-        else (None, periods[-1])
+        effective_cpu_limit if effective_cpu_limit is not None else (None, periods[-1])
     )
     return CgroupResourceSnapshot(
         effective_cpus=snapshot.cpuset.cpus,
@@ -3125,9 +3120,7 @@ def _identity_pidfd_is_live(
         current_identity = _canonical_process_identity(identity.process_id)
         readable_after, _, _ = select.select((descriptor,), (), (), 0.0)
         return (
-            not readable_before
-            and not readable_after
-            and current_identity == identity
+            not readable_before and not readable_after and current_identity == identity
         )
     except (Exception, SystemExit):
         return False
@@ -3137,11 +3130,14 @@ def _local_model_gate_datagram_is_attributable(
     datagram: _LocalModelGateDatagram,
     process_id: int,
 ) -> bool:
-    return any(
-        credentials[0] == process_id
-        for credentials in datagram.credentials
-        if len(credentials) == 3
-    ) or process_id in datagram.pidfd_process_ids
+    return (
+        any(
+            credentials[0] == process_id
+            for credentials in datagram.credentials
+            if len(credentials) == 3
+        )
+        or process_id in datagram.pidfd_process_ids
+    )
 
 
 def _receive_local_model_gate_datagram(
@@ -3317,13 +3313,7 @@ def _local_model_gate_ancestor_identity(
         not stat.S_ISDIR(metadata.st_mode)
         or metadata.st_uid not in {0, uid}
         or mode & (stat.S_ISUID | stat.S_ISGID)
-        or (
-            mode & 0o022
-            and not (
-                metadata.st_uid == 0
-                and mode & stat.S_ISVTX
-            )
-        )
+        or (mode & 0o022 and not (metadata.st_uid == 0 and mode & stat.S_ISVTX))
     ):
         return None
     return (metadata.st_dev, metadata.st_ino, metadata.st_mode, metadata.st_uid)
@@ -3399,10 +3389,9 @@ def _open_local_model_gate_runtime_path(
         try:
             current_descriptor = os.open("/", flags)
             root_metadata = os.fstat(current_descriptor)
-            if (
-                _local_model_gate_ancestor_identity(root_metadata, uid) is None
-                or not _descriptor_is_cloexec(current_descriptor)
-            ):
+            if _local_model_gate_ancestor_identity(
+                root_metadata, uid
+            ) is None or not _descriptor_is_cloexec(current_descriptor):
                 raise OSError(errno.EACCES, "unsafe runtime ancestry")
             for position, component in enumerate(components):
                 next_descriptor = os.open(
@@ -3527,14 +3516,11 @@ def _valid_local_model_gate_endpoint_path(
         return False
     domain_name = os.path.basename(os.path.dirname(value))
     name = os.path.basename(value)
-    token = name.removeprefix(prefix).removesuffix(
-        _LOCAL_MODEL_GATE_SOCKET_SUFFIX
-    )
+    token = name.removeprefix(prefix).removesuffix(_LOCAL_MODEL_GATE_SOCKET_SUFFIX)
     return (
         len(encoded) <= _LOCAL_MODEL_GATE_MAX_SOCKET_PATH_BYTES
         and _valid_local_model_gate_domain_name(domain_name)
-        and name
-        == prefix + token + _LOCAL_MODEL_GATE_SOCKET_SUFFIX
+        and name == prefix + token + _LOCAL_MODEL_GATE_SOCKET_SUFFIX
         and _LOCAL_MODEL_GATE_ADDRESS_RE.fullmatch(token) is not None
     )
 
@@ -3788,8 +3774,7 @@ def _bind_local_model_gate_endpoint(
         if (
             type(endpoint_identity) is not tuple
             or len(endpoint_identity) != 5
-            or owner.endpoint
-            != _LocalModelGateEndpoint(path, name, endpoint_identity)
+            or owner.endpoint != _LocalModelGateEndpoint(path, name, endpoint_identity)
             or not _local_model_gate_directory_is_stable(owner)
         ):
             return None
@@ -3830,9 +3815,7 @@ def _valid_local_model_gate_source(
 def _valid_local_model_gate_endpoint_name(value: object, *, prefix: str) -> bool:
     if type(value) is not str:
         return False
-    token = value.removeprefix(prefix).removesuffix(
-        _LOCAL_MODEL_GATE_SOCKET_SUFFIX
-    )
+    token = value.removeprefix(prefix).removesuffix(_LOCAL_MODEL_GATE_SOCKET_SUFFIX)
     return (
         value == prefix + token + _LOCAL_MODEL_GATE_SOCKET_SUFFIX
         and _LOCAL_MODEL_GATE_ADDRESS_RE.fullmatch(token) is not None
@@ -3896,21 +3879,16 @@ def _local_model_gate_domain_entries(gate_descriptor: int) -> tuple[str, ...]:
         scan_after = os.fstat(scan_descriptor)
         gate_after = os.fstat(gate_descriptor)
         if (
-            (
-                scan_after.st_dev,
-                scan_after.st_ino,
-                scan_after.st_mode,
-                scan_after.st_uid,
-            )
-            != before_identity
-            or (
-                gate_after.st_dev,
-                gate_after.st_ino,
-                gate_after.st_mode,
-                gate_after.st_uid,
-            )
-            != before_identity
-        ):
+            scan_after.st_dev,
+            scan_after.st_ino,
+            scan_after.st_mode,
+            scan_after.st_uid,
+        ) != before_identity or (
+            gate_after.st_dev,
+            gate_after.st_ino,
+            gate_after.st_mode,
+            gate_after.st_uid,
+        ) != before_identity:
             raise OSError(errno.ESTALE, "gate directory changed")
     except BaseException as exc:
         primary = exc
@@ -4085,9 +4063,7 @@ def _retire_local_model_gate_domain(
                 owner,
                 prefix=_LOCAL_MODEL_GATE_WRAPPER_PREFIX,
             )
-            or set(_local_model_gate_domain_entries(
-                owner.directory_descriptors[1]
-            ))
+            or set(_local_model_gate_domain_entries(owner.directory_descriptors[1]))
             != expected_names
         ):
             return False
@@ -4579,12 +4555,14 @@ def _wait_for_local_model_gate_ack(
                 ):
                     success = False
                     break
-            if not _identity_pidfd_is_live(
-                configuration.controller_identity,
-                pidfd_owner[0],
-            ) or _local_model_gate_domain_path_state(
-                resources
-            ) != "retired" or time.monotonic() >= handshake_deadline:
+            if (
+                not _identity_pidfd_is_live(
+                    configuration.controller_identity,
+                    pidfd_owner[0],
+                )
+                or _local_model_gate_domain_path_state(resources) != "retired"
+                or time.monotonic() >= handshake_deadline
+            ):
                 success = False
     except BaseException as exc:
         primary = exc
@@ -4614,13 +4592,12 @@ def _run_scope_exec_wrapper(argv: Sequence[str]) -> None:
     if not arguments or arguments[0] != _SCOPE_EXEC_WRAPPER_TOKEN:
         raise PriorityScopeError(_SCOPE_EXEC_ARGUMENTS_FAILURE)
     latch_required = (
-        len(arguments) > 1
-        and arguments[1] == _SCOPE_EXEC_LATCH_REQUIRED_TOKEN
+        len(arguments) > 1 and arguments[1] == _SCOPE_EXEC_LATCH_REQUIRED_TOKEN
     )
     local_model_gate_required = (
         len(arguments) > 1 and arguments[1] == _LOCAL_MODEL_GATE_REQUIRED_TOKEN
     )
-    environment = os.environ.copy()
+    environment = _filtered_environment()
     controller_pidfd_owner = [-1]
     controller_identity: _CanonicalProcessIdentity | None = None
     descriptor = -1
@@ -4661,12 +4638,11 @@ def _run_scope_exec_wrapper(argv: Sequence[str]) -> None:
             raise PriorityScopeError(_SCOPE_EXEC_ARGUMENTS_FAILURE)
         descriptor = opened
         if local_model_gate_required:
-            if (
-                type(controller_identity) is not _CanonicalProcessIdentity
-                or not _identity_pidfd_is_live(
-                    controller_identity,
-                    controller_pidfd_owner[0],
-                )
+            if type(
+                controller_identity
+            ) is not _CanonicalProcessIdentity or not _identity_pidfd_is_live(
+                controller_identity,
+                controller_pidfd_owner[0],
             ):
                 raise PriorityScopeError(_SCOPE_EXEC_FAILURE)
         try:
@@ -4698,7 +4674,7 @@ def _run_local_model_direct_exec_wrapper(
     absolute_deadline: float | None = None,
 ) -> None:
     spec = _local_model_direct_launch_spec_from_arguments(argv)
-    environment = os.environ.copy()
+    environment = _filtered_environment()
     if (
         spec is None
         or any(key in environment for key in _LOCAL_MODEL_DIRECT_FORBIDDEN_ENV_KEYS)
@@ -4716,19 +4692,13 @@ def _run_local_model_direct_exec_wrapper(
     ):
         raise PriorityScopeError(_LOCAL_MODEL_DIRECT_EXEC_FAILURE)
     cpu_priority = _current_cpu_priority()
-    io_priority = _current_io_priority_direct(
-        absolute_deadline=absolute_deadline
-    )
+    io_priority = _current_io_priority_direct(absolute_deadline=absolute_deadline)
     if (
         type(cpu_priority) is not int
         or cpu_priority < LOCAL_MODEL_CPU_NICE
-        or io_priority
-        != (IO_PRIORITY_CLASS, int(LOCAL_MODEL_IO_PRIORITY_LEVEL))
+        or io_priority != (IO_PRIORITY_CLASS, int(LOCAL_MODEL_IO_PRIORITY_LEVEL))
         or not _SCOPE_EXEC_FD_EXEC_SUPPORTED
-        or (
-            absolute_deadline is not None
-            and time.monotonic() >= absolute_deadline
-        )
+        or (absolute_deadline is not None and time.monotonic() >= absolute_deadline)
     ):
         raise PriorityScopeError(_LOCAL_MODEL_DIRECT_EXEC_FAILURE)
 
@@ -4738,10 +4708,7 @@ def _run_local_model_direct_exec_wrapper(
     try:
         if not _descriptor_is_cloexec(descriptor):
             raise PriorityScopeError(_LOCAL_MODEL_DIRECT_EXEC_FAILURE)
-        if (
-            absolute_deadline is not None
-            and time.monotonic() >= absolute_deadline
-        ):
+        if absolute_deadline is not None and time.monotonic() >= absolute_deadline:
             raise PriorityScopeError(_LOCAL_MODEL_DIRECT_EXEC_FAILURE)
         try:
             os.execve(descriptor, list(spec.argv), environment)
@@ -4896,9 +4863,7 @@ def _install_local_model_direct_seccomp(
 
     def deny_syscall(numbers: tuple[int, ...]) -> None:
         for number in numbers:
-            instruction_list.extend(
-                (jump(_BPF_JMP_JEQ_K, number, 0, 1), deny)
-            )
+            instruction_list.extend((jump(_BPF_JMP_JEQ_K, number, 0, 1), deny))
 
     def deny_syscall_argument(
         numbers: tuple[int, ...],
@@ -4915,9 +4880,7 @@ def _install_local_model_direct_seccomp(
                     )
                 )
             block.append(statement(_BPF_LD_W_ABS, 0))
-            instruction_list.append(
-                jump(_BPF_JMP_JEQ_K, number, 0, len(block))
-            )
+            instruction_list.append(jump(_BPF_JMP_JEQ_K, number, 0, len(block)))
             instruction_list.extend(block)
 
     def deny_syscall_nonzero_argument(
@@ -4931,9 +4894,7 @@ def _install_local_model_direct_seccomp(
                 deny,
                 statement(_BPF_LD_W_ABS, 0),
             ]
-            instruction_list.append(
-                jump(_BPF_JMP_JEQ_K, number, 0, len(block))
-            )
+            instruction_list.append(jump(_BPF_JMP_JEQ_K, number, 0, len(block)))
             instruction_list.extend(block)
 
     deny_syscall(syscall_numbers(_X86_64_IOPRIO_SET))
@@ -4985,9 +4946,7 @@ def _install_local_model_direct_seccomp(
     instruction_list.append(statement(_BPF_RET_K, _SECCOMP_RET_ALLOW))
     if len(instruction_list) > 4096:
         return False
-    filters = (_LocalModelDirectSockFilter * len(instruction_list))(
-        *instruction_list
-    )
+    filters = (_LocalModelDirectSockFilter * len(instruction_list))(*instruction_list)
     program = _LocalModelDirectSockFprog(
         len(filters),
         ctypes.cast(filters, ctypes.POINTER(_LocalModelDirectSockFilter)),
@@ -5025,8 +4984,7 @@ def _local_model_direct_nproc_limit(
     ):
         return None
     reserve = (
-        _LOCAL_MODEL_DIRECT_NPROC_MODEL_HEADROOM
-        + _LOCAL_MODEL_DIRECT_NPROC_RACE_MARGIN
+        _LOCAL_MODEL_DIRECT_NPROC_MODEL_HEADROOM + _LOCAL_MODEL_DIRECT_NPROC_RACE_MARGIN
     )
     if current_uid_tasks > _LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT - reserve:
         return None
@@ -5036,9 +4994,8 @@ def _local_model_direct_nproc_limit(
     )
     if desired > _LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT:
         return None
-    if (
-        inherited_hard_limit != resource.RLIM_INFINITY
-        and (inherited_hard_limit <= 0 or desired > inherited_hard_limit)
+    if inherited_hard_limit != resource.RLIM_INFINITY and (
+        inherited_hard_limit <= 0 or desired > inherited_hard_limit
     ):
         return None
     return desired
@@ -5108,12 +5065,8 @@ def _current_uid_task_count() -> int | None:
     if not sys.platform.startswith("linux"):
         return None
     try:
-        scan_deadline = (
-            time.monotonic() + _LOCAL_MODEL_DIRECT_PROC_SCAN_SECONDS
-        )
-        directory_flags = (
-            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
-        )
+        scan_deadline = time.monotonic() + _LOCAL_MODEL_DIRECT_PROC_SCAN_SECONDS
+        directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
         current_uid = os.getuid()
         proc_fd = os.open(os.fspath(_PROC_ROOT), directory_flags)
         try:
@@ -5280,8 +5233,7 @@ def _arm_local_model_direct_target_security(
         if (
             resource.getrlimit(resource.RLIMIT_NICE) != (0, 0)
             or resource.getrlimit(resource.RLIMIT_RTPRIO) != (0, 0)
-            or resource.getrlimit(resource.RLIMIT_NPROC)
-            != (nproc_limit, nproc_limit)
+            or resource.getrlimit(resource.RLIMIT_NPROC) != (nproc_limit, nproc_limit)
             or not _local_model_direct_cap_sys_nice_is_absent()
         ):
             return False
@@ -5345,9 +5297,8 @@ def _capture_local_model_direct_proc_identity(
         try:
             identity = _proc_process_identity(process_fd, process_pid)
         except OSError as error:
-            if (
-                error.errno in _PROC_EXIT_ERRNOS
-                and _bound_proc_process_has_exited(process_fd, process_pid)
+            if error.errno in _PROC_EXIT_ERRNOS and _bound_proc_process_has_exited(
+                process_fd, process_pid
             ):
                 return None
             raise
@@ -5441,10 +5392,7 @@ def _local_model_direct_descendants_within_limit(
                                 if time.monotonic() >= scan_deadline:
                                     return False
                                 task_name = task.name
-                                if (
-                                    not task_name.isascii()
-                                    or not task_name.isdecimal()
-                                ):
+                                if not task_name.isascii() or not task_name.isdecimal():
                                     return False
                                 scanned_tasks += 1
                                 if (
@@ -5488,10 +5436,7 @@ def _local_model_direct_descendants_within_limit(
                                     if (
                                         not field.isascii()
                                         or not field.isdigit()
-                                        or (
-                                            len(field) > 1
-                                            and field.startswith(b"0")
-                                        )
+                                        or (len(field) > 1 and field.startswith(b"0"))
                                     ):
                                         return False
                                     child_pid = int(field, 10)
@@ -5513,10 +5458,7 @@ def _local_model_direct_descendants_within_limit(
                                         continue
                                     if child_identity not in known_identities:
                                         known_identities.add(child_identity)
-                                        if (
-                                            len(known_identities) - 1
-                                            > descendant_limit
-                                        ):
+                                        if len(known_identities) - 1 > descendant_limit:
                                             return False
                                         pending.append(child_identity)
                     finally:
@@ -5677,8 +5619,9 @@ def _drain_local_model_direct_children(
     )
 
 
-def _take_local_model_direct_supervisor_configuration(
-) -> tuple[int, float, int] | None:
+def _take_local_model_direct_supervisor_configuration() -> (
+    tuple[int, float, int] | None
+):
     descriptor_value = os.environ.pop(_LOCAL_MODEL_DIRECT_STATUS_FD_ENV, None)
     deadline_value = os.environ.pop(_LOCAL_MODEL_DIRECT_DEADLINE_ENV, None)
     controller_value = os.environ.pop(
@@ -6229,9 +6172,8 @@ def _open_scope_directory_candidate(
         except OSError:
             pass
         return None
-    if (
-        not stat.S_ISDIR(scope_stat.st_mode)
-        or not _scope_stat_matches_mount_mapping(scope_stat, mount_mapping)
+    if not stat.S_ISDIR(scope_stat.st_mode) or not _scope_stat_matches_mount_mapping(
+        scope_stat, mount_mapping
     ):
         try:
             os.close(descriptor)
@@ -6351,17 +6293,14 @@ def _read_scope_file_snapshot(
         initial_mount_id = (
             _descriptor_mount_id(descriptor) if mount_mapping is not None else None
         )
-        if (
-            not stat.S_ISREG(initial_stat.st_mode)
-            or (
-                mount_mapping is not None
-                and (
-                    not _scope_stat_matches_mount_mapping(
-                        initial_stat,
-                        mount_mapping,
-                    )
-                    or initial_mount_id != expected_mount_id
+        if not stat.S_ISREG(initial_stat.st_mode) or (
+            mount_mapping is not None
+            and (
+                not _scope_stat_matches_mount_mapping(
+                    initial_stat,
+                    mount_mapping,
                 )
+                or initial_mount_id != expected_mount_id
             )
         ):
             return None
@@ -6671,13 +6610,16 @@ def _priority_scope_snapshot(
     io_weight: int,
     include_process_ids: bool,
     include_membership: bool = False,
-) -> tuple[
-    int,
-    int,
-    str | None,
-    _ScopeFileSnapshot | None,
-    _ScopeFileSnapshot | None,
-] | None:
+) -> (
+    tuple[
+        int,
+        int,
+        str | None,
+        _ScopeFileSnapshot | None,
+        _ScopeFileSnapshot | None,
+    ]
+    | None
+):
     if (
         not isinstance(identity, PriorityScopeIdentity)
         or not isinstance(identity.path, str)
@@ -6854,7 +6796,9 @@ def _priority_scope_snapshot(
             or (include_membership and process_ids_before is None)
             or (include_membership and process_ids_after is None)
             or (include_membership and process_ids_before != process_ids_after)
-            or (include_membership and process_identity_before != process_identity_after)
+            or (
+                include_membership and process_identity_before != process_identity_after
+            )
         ):
             return None
         parsed_cpu_weight = _parse_cgroup_weight_contents(cpu_contents)
@@ -6864,7 +6808,10 @@ def _priority_scope_snapshot(
         )
         if parsed_cpu_weight != cpu_weight or parsed_io_weight != io_weight:
             return None
-        if pid is not None and _cgroup2_path_for_pid(pid, mappings=mappings) != scope_path:
+        if (
+            pid is not None
+            and _cgroup2_path_for_pid(pid, mappings=mappings) != scope_path
+        ):
             return None
         if (
             include_membership
@@ -6948,11 +6895,7 @@ def _canonical_cgroup_lines(
     max_bytes: int,
     allow_empty: bool,
 ) -> tuple[str, ...] | None:
-    if (
-        type(contents) is not str
-        or len(contents) > max_bytes
-        or not contents.isascii()
-    ):
+    if type(contents) is not str or len(contents) > max_bytes or not contents.isascii():
         return None
     if not contents:
         return () if allow_empty else None
@@ -7107,9 +7050,7 @@ def _scope_exec_supervisor_spec(
     return _ScopeExecSupervisorSpec(
         command=arguments,
         target=target,
-        fixed_files=tuple(
-            identity for identity in fixed_files if identity is not None
-        ),
+        fixed_files=tuple(identity for identity in fixed_files if identity is not None),
     )
 
 
@@ -7239,9 +7180,7 @@ def _bind_scope_attempt_process_group(
             return None
         process_group_id = os.getpgid(process_id)
         if process_group_id != process_id:
-            raise PriorityScopeError(
-                "SOC priority scope child identity is unavailable"
-            )
+            raise PriorityScopeError("SOC priority scope child identity is unavailable")
         if process.poll() is not None:
             return None
     except PriorityScopeError:
@@ -7266,9 +7205,9 @@ def _raise_scope_attempt_signal(stop_signal: int) -> None:
 
 class _ScopeExecSignalForwarder:
     def __init__(self) -> None:
-        self._bound_process_group: (
-            tuple[subprocess.Popen[bytes], int | None] | None
-        ) = None
+        self._bound_process_group: tuple[subprocess.Popen[bytes], int | None] | None = (
+            None
+        )
         self.pending: list[int] = []
         self.primary_signal: int | None = None
         self.primary_signal_forwarded = False
@@ -7291,9 +7230,8 @@ class _ScopeExecSignalForwarder:
         if bound is None:
             if self.primary_signal is None and not self.error_cleanup_active:
                 self.primary_signal = stop_signal
-            if (
-                stop_signal not in self.pending
-                and len(self.pending) < len(_SCOPE_EXEC_FORWARDED_SIGNALS)
+            if stop_signal not in self.pending and len(self.pending) < len(
+                _SCOPE_EXEC_FORWARDED_SIGNALS
             ):
                 self.pending.append(stop_signal)
             return
@@ -7428,7 +7366,13 @@ def _supervise_scope_attempt(
             if polled is not None:
                 try:
                     waited = process.wait(timeout=_SCOPE_EXEC_REAP_TIMEOUT_SECONDS)
-                except (OSError, OverflowError, TypeError, ValueError, subprocess.TimeoutExpired):
+                except (
+                    OSError,
+                    OverflowError,
+                    TypeError,
+                    ValueError,
+                    subprocess.TimeoutExpired,
+                ):
                     raise PriorityScopeError(
                         "SOC priority scope child status is unavailable"
                     ) from None
@@ -7488,10 +7432,15 @@ def _ensure_soc_priority_scope_for_module(
     normalize_marker_affinity: bool,
     status_invocation: bool = False,
 ) -> bool:
-    if module_name not in {
-        "speed_of_cinnamon.cli",
-        "speed_of_cinnamon.resource_gate",
-    } or not isinstance(normalize_marker_affinity, bool) or not isinstance(status_invocation, bool):
+    if (
+        module_name
+        not in {
+            "speed_of_cinnamon.cli",
+            "speed_of_cinnamon.resource_gate",
+        }
+        or not isinstance(normalize_marker_affinity, bool)
+        or not isinstance(status_invocation, bool)
+    ):
         raise PriorityScopeError("SOC CLI launch specification is invalid")
     if status_invocation and module_name != "speed_of_cinnamon.cli":
         raise PriorityScopeError("SOC CLI launch specification is invalid")
@@ -7525,9 +7474,7 @@ def _ensure_soc_priority_scope_for_module(
         raise PriorityScopeError("SOC CLI arguments are invalid") from None
     if any(not isinstance(item, str) for item in user_arguments):
         raise PriorityScopeError("SOC CLI arguments are invalid")
-    target = _scope_exec_launch_spec(
-        [runtime, "-m", module_name, *user_arguments]
-    )
+    target = _scope_exec_launch_spec([runtime, "-m", module_name, *user_arguments])
     if target is None:
         raise PriorityScopeError("SOC CLI launch specification is invalid")
     try:
@@ -7549,7 +7496,7 @@ def _ensure_soc_priority_scope_for_module(
         if status_invocation:
             raise PriorityScopeError("SOC status supervision is unavailable") from None
         return False
-    environment = os.environ.copy()
+    environment = _filtered_environment()
     environment[SOC_PRIORITY_SCOPE_MARKER] = "1"
     environment[_SCOPE_EXEC_LATCH_ADDRESS_ENV] = address
     environment[_SCOPE_EXEC_LATCH_NONCE_ENV] = nonce
@@ -7561,7 +7508,7 @@ def _ensure_soc_priority_scope_for_module(
         with _forward_scope_attempt_signals() as signal_forwarder:
             try:
                 process = subprocess.Popen(  # nosec B603
-                    list(supervisor.command),
+                    [*supervisor.command],
                     env=environment,
                     shell=False,
                     close_fds=True,
@@ -7618,9 +7565,7 @@ def _ensure_soc_priority_scope_for_module(
                                 signal_forwarder,
                             )
                     except BaseException:
-                        preexisting_signal = (
-                            signal_forwarder.begin_error_cleanup()
-                        )
+                        preexisting_signal = signal_forwarder.begin_error_cleanup()
                         _terminate_scope_attempt(
                             process,
                             process_group_id=signal_forwarder.process_group_id,
@@ -7635,14 +7580,10 @@ def _ensure_soc_priority_scope_for_module(
                         signal_to_propagate = preexisting_signal
                     else:
                         if outcome.timed_out:
-                            preexisting_signal = (
-                                signal_forwarder.begin_error_cleanup()
-                            )
+                            preexisting_signal = signal_forwarder.begin_error_cleanup()
                             reaped_returncode = _terminate_scope_attempt(
                                 process,
-                                process_group_id=(
-                                    signal_forwarder.process_group_id
-                                ),
+                                process_group_id=(signal_forwarder.process_group_id),
                                 forwarded_signal=(
                                     preexisting_signal
                                     if signal_forwarder.primary_signal_forwarded
@@ -7650,7 +7591,10 @@ def _ensure_soc_priority_scope_for_module(
                                 ),
                             )
                             if preexisting_signal is None:
-                                if status_invocation and outcome.latch_state == "entered":
+                                if (
+                                    status_invocation
+                                    and outcome.latch_state == "entered"
+                                ):
                                     if reaped_returncode is None:
                                         raise PriorityScopeError(
                                             "SOC status command cleanup failed"
@@ -7748,13 +7692,10 @@ def _read_ionice_output_bounded(
     *,
     absolute_deadline: float | None = None,
 ) -> str | None:
-    if (
-        absolute_deadline is not None
-        and (
-            type(absolute_deadline) is not float
-            or not math.isfinite(absolute_deadline)
-            or time.monotonic() >= absolute_deadline
-        )
+    if absolute_deadline is not None and (
+        type(absolute_deadline) is not float
+        or not math.isfinite(absolute_deadline)
+        or time.monotonic() >= absolute_deadline
     ):
         return None
     try:
@@ -7810,7 +7751,13 @@ def _read_ionice_output_bounded(
         if process.wait(timeout=remaining) != 0:
             return None
         return bytes(output).decode("utf-8", errors="replace")
-    except (OSError, OverflowError, ValueError, UnicodeError, subprocess.TimeoutExpired):
+    except (
+        OSError,
+        OverflowError,
+        ValueError,
+        UnicodeError,
+        subprocess.TimeoutExpired,
+    ):
         return None
     finally:
         if selector is not None:
@@ -7861,7 +7808,9 @@ def local_model_command(
             unit_name=unit_name,
         )
     except PriorityScopeError as exc:
-        raise LocalModelPriorityError(str(exc).replace("SOC", "local model", 1)) from exc
+        raise LocalModelPriorityError(
+            str(exc).replace("SOC", "local model", 1)
+        ) from exc
 
 
 def local_model_scope_probe_command() -> list[str]:
@@ -7940,13 +7889,17 @@ def _prepare_local_model_ready_ack_gate(
     gate: _LocalModelReadyAckGate | None = None
     primary: BaseException | None = None
     try:
-        if controller_identity is None or not _open_identity_pidfd(
-            controller_identity,
-            resources.controller_pidfd_owner,
-        ) or not _open_local_model_gate_directory(
-            resources,
-            uid=uid,
-            create=True,
+        if (
+            controller_identity is None
+            or not _open_identity_pidfd(
+                controller_identity,
+                resources.controller_pidfd_owner,
+            )
+            or not _open_local_model_gate_directory(
+                resources,
+                uid=uid,
+                create=True,
+            )
         ):
             raise OSError(errno.ENOTSUP, "controller pidfd unavailable")
         ready_nonce = secrets.token_hex(32)
@@ -7957,6 +7910,7 @@ def _prepare_local_model_ready_ack_gate(
             or ready_nonce == ack_nonce
         ):
             raise OSError(errno.EIO, "gate identifiers unavailable")
+
         def acquire_listener() -> socket.socket:
             endpoint = socket.socket(
                 socket.AF_UNIX,
@@ -8124,9 +8078,7 @@ def with_local_model_priority(function):
 
 
 def _scope_exec_main() -> None:
-    direct = bool(
-        len(sys.argv) > 1 and sys.argv[1] == _LOCAL_MODEL_DIRECT_EXEC_TOKEN
-    )
+    direct = bool(len(sys.argv) > 1 and sys.argv[1] == _LOCAL_MODEL_DIRECT_EXEC_TOKEN)
     try:
         if direct:
             _run_local_model_direct_supervisor(sys.argv[1:])
@@ -8141,9 +8093,7 @@ def _scope_exec_main() -> None:
         )
         if failure not in allowed_failures:
             failure = (
-                _LOCAL_MODEL_DIRECT_EXEC_FAILURE
-                if direct
-                else _SCOPE_EXEC_FAILURE
+                _LOCAL_MODEL_DIRECT_EXEC_FAILURE if direct else _SCOPE_EXEC_FAILURE
             )
         raise SystemExit(failure) from None
 

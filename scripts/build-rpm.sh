@@ -8,49 +8,49 @@ export PATH="${TRUSTED_COMMAND_PATH}"
 # RPM lifecycle watchdog starts before repository discovery.
 readonly RPM_LIFECYCLE_TIMEOUT_SECONDS=3600
 readonly RPM_LIFECYCLE_KILL_AFTER_SECONDS=30
-if ((
-  RPM_LIFECYCLE_TIMEOUT_SECONDS <= 0
-  || RPM_LIFECYCLE_KILL_AFTER_SECONDS <= 0
-  || RPM_LIFECYCLE_TIMEOUT_SECONDS <= RPM_LIFECYCLE_KILL_AFTER_SECONDS
-)); then
-  printf 'invalid RPM lifecycle watchdog budget\n' >&2
-  exit 1
+if ((\
+	RPM_LIFECYCLE_TIMEOUT_SECONDS <= 0 || \
+	RPM_LIFECYCLE_KILL_AFTER_SECONDS <= 0 || \
+	RPM_LIFECYCLE_TIMEOUT_SECONDS <= RPM_LIFECYCLE_KILL_AFTER_SECONDS)) \
+		; then
+	printf 'invalid RPM lifecycle watchdog budget\n' >&2
+	exit 1
 fi
 readonly RPM_LIFECYCLE_HANDOFF_FD=9
 lifecycle_script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 lifecycle_supervisor="${lifecycle_script_dir}/rpm-lifecycle-supervisor.py"
 lifecycle_python="$(command -v -- python3 || true)"
-if [[ -z "${lifecycle_python}" || ! -f "${lifecycle_supervisor}" ]]; then
-  printf 'RPM lifecycle supervisor is unavailable\n' >&2
-  exit 1
+if [[ -z ${lifecycle_python} || ! -f ${lifecycle_supervisor} ]]; then
+	printf 'RPM lifecycle supervisor is unavailable\n' >&2
+	exit 1
 fi
 lifecycle_handoff_valid=0
 # Anonymous pipe is per invocation; same-UID callers can forge inherited FDs, an accepted risk.
 if [[ -e "/proc/self/fd/${RPM_LIFECYCLE_HANDOFF_FD}" ]]; then
-  lifecycle_handoff_status="$(
-    "${lifecycle_python}" -I -B "${lifecycle_supervisor}" \
-      --check-handoff-fd="${RPM_LIFECYCLE_HANDOFF_FD}" \
-      --handoff-timeout=0.1 \
-      --handoff-max-bytes=256
-  )" || lifecycle_handoff_status=""
-  if [[ "${lifecycle_handoff_status}" == "valid" ]]; then
-    lifecycle_handoff_valid=1
-  fi
+	lifecycle_handoff_status="$(
+		"${lifecycle_python}" -I -B "${lifecycle_supervisor}" \
+			--check-handoff-fd="${RPM_LIFECYCLE_HANDOFF_FD}" \
+			--handoff-timeout=0.1 \
+			--handoff-max-bytes=256
+	)" || lifecycle_handoff_status=""
+	if [[ ${lifecycle_handoff_status} == "valid" ]]; then
+		lifecycle_handoff_valid=1
+	fi
 fi
-if (( lifecycle_handoff_valid == 1 )); then
-  exec 9<&-
+if ((lifecycle_handoff_valid == 1)); then
+	exec 9<&-
 else
-  if [[ -e "/proc/self/fd/${RPM_LIFECYCLE_HANDOFF_FD}" ]]; then
-    exec 9<&-
-  fi
-  lifecycle_handoff_token="rpm-lifecycle-${BASHPID}-${PPID}-${RANDOM}-${RANDOM}"
-  exec 9< <(printf '%s\n' "${lifecycle_handoff_token}")
-  # Trusted tools must not call setsid; detached compromised descendants are accepted risk.
-  exec "${lifecycle_python}" -I -B "${lifecycle_supervisor}" \
-    --timeout="${RPM_LIFECYCLE_TIMEOUT_SECONDS}" \
-    --kill-after="${RPM_LIFECYCLE_KILL_AFTER_SECONDS}" \
-    --handoff-fd="${RPM_LIFECYCLE_HANDOFF_FD}" \
-    -- /bin/bash --noprofile --norc -p "${BASH_SOURCE[0]}" "$@"
+	if [[ -e "/proc/self/fd/${RPM_LIFECYCLE_HANDOFF_FD}" ]]; then
+		exec 9<&-
+	fi
+	lifecycle_handoff_token="rpm-lifecycle-${BASHPID}-${PPID}-${RANDOM}-${RANDOM}"
+	exec 9< <(printf '%s\n' "${lifecycle_handoff_token}")
+	# Trusted tools must not call setsid; detached compromised descendants are accepted risk.
+	exec "${lifecycle_python}" -I -B "${lifecycle_supervisor}" \
+		--timeout="${RPM_LIFECYCLE_TIMEOUT_SECONDS}" \
+		--kill-after="${RPM_LIFECYCLE_KILL_AFTER_SECONDS}" \
+		--handoff-fd="${RPM_LIFECYCLE_HANDOFF_FD}" \
+		-- /bin/bash --noprofile --norc -p "${BASH_SOURCE[0]}" "$@"
 fi
 # RPM lifecycle watchdog ends.
 
@@ -61,13 +61,13 @@ safe_fs_cmd=("${lifecycle_python}" -I -B "${safe_fs}")
 readonly RPM_IDENTITY_MAX_BYTES=256
 readonly RPM_IDENTITY_TIMEOUT_SECONDS=5
 bounded_safe_fs_identity() {
-  local target=$1
-  local kind=$2
-  "${lifecycle_python}" -I -B "${lifecycle_supervisor}" \
-    --identity \
-    --identity-timeout="${RPM_IDENTITY_TIMEOUT_SECONDS}" \
-    --identity-max-bytes="${RPM_IDENTITY_MAX_BYTES}" \
-    -- "${safe_fs_cmd[@]}" identity build-rpm "${target}" --kind "${kind}"
+	local target=$1
+	local kind=$2
+	"${lifecycle_python}" -I -B "${lifecycle_supervisor}" \
+		--identity \
+		--identity-timeout="${RPM_IDENTITY_TIMEOUT_SECONDS}" \
+		--identity-max-bytes="${RPM_IDENTITY_MAX_BYTES}" \
+		-- "${safe_fs_cmd[@]}" identity build-rpm "${target}" --kind "${kind}"
 }
 cleanup_timeout_command="$(command -v -- timeout || true)"
 cleanup_clock_command=("${lifecycle_python}" -I -B)
@@ -85,59 +85,59 @@ readonly RPM_CLEANUP_LAUNCH_MARGIN_NS=50000000
 readonly RPM_CLEANUP_CLOCK_TIMEOUT_SECONDS=0.25
 readonly RPM_CLEANUP_CLOCK_TIMEOUT_NS=250000000
 
-if ((
-  RPM_FINALIZE_TIMEOUT_SECONDS <= 0
-  || RPM_FINALIZE_KILL_AFTER_SECONDS <= 0
-  || RPM_FINALIZE_TIMEOUT_SECONDS <= RPM_FINALIZE_KILL_AFTER_SECONDS
-  || RPM_STARTUP_SWEEP_TIMEOUT_SECONDS <= 0
-  || RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS <= 0
-  || RPM_STARTUP_SWEEP_TIMEOUT_SECONDS <= RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS
-  || RPM_OUTPUT_TIMEOUT_SECONDS <= 0
-  || RPM_OUTPUT_KILL_AFTER_SECONDS <= 0
-  || RPM_OUTPUT_TIMEOUT_SECONDS <= RPM_OUTPUT_KILL_AFTER_SECONDS
-)); then
-  printf 'invalid RPM watchdog budget\n' >&2
-  exit 1
+if ((\
+	RPM_FINALIZE_TIMEOUT_SECONDS <= 0 || \
+	RPM_FINALIZE_KILL_AFTER_SECONDS <= 0 || \
+	RPM_FINALIZE_TIMEOUT_SECONDS <= RPM_FINALIZE_KILL_AFTER_SECONDS || \
+	RPM_STARTUP_SWEEP_TIMEOUT_SECONDS <= 0 || \
+	RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS <= 0 || \
+	RPM_STARTUP_SWEEP_TIMEOUT_SECONDS <= RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS || \
+	RPM_OUTPUT_TIMEOUT_SECONDS <= 0 || \
+	RPM_OUTPUT_KILL_AFTER_SECONDS <= 0 || \
+	RPM_OUTPUT_TIMEOUT_SECONDS <= RPM_OUTPUT_KILL_AFTER_SECONDS)) \
+		; then
+	printf 'invalid RPM watchdog budget\n' >&2
+	exit 1
 fi
 
 require_cmd() {
-  local tool=$1
-  if ! command -v -- "${tool}" >/dev/null 2>&1; then
-    printf '%s not found. Install %s.\n' "${tool}" "${tool}" >&2
-    exit 1
-  fi
+	local tool=$1
+	if ! command -v -- "${tool}" >/dev/null 2>&1; then
+		printf '%s not found. Install %s.\n' "${tool}" "${tool}" >&2
+		exit 1
+	fi
 }
 
 require_regular_source_file() {
-  local path=$1
-  local label=$2
-  local link_count
+	local path=$1
+	local label=$2
+	local link_count
 
-  if [[ ! -f "${path}" || -L "${path}" ]]; then
-    printf '%s must be a regular file: %s\n' "${label}" "${path}" >&2
-    exit 1
-  fi
-  link_count="$(stat -c '%h' "${path}")"
-  if [[ "${link_count}" -ne 1 ]]; then
-    printf '%s must not be hardlinked: %s\n' "${label}" "${path}" >&2
-    exit 1
-  fi
+	if [[ ! -f ${path} || -L ${path} ]]; then
+		printf '%s must be a regular file: %s\n' "${label}" "${path}" >&2
+		exit 1
+	fi
+	link_count="$(stat -c '%h' "${path}")"
+	if [[ ${link_count} -ne 1 ]]; then
+		printf '%s must not be hardlinked: %s\n' "${label}" "${path}" >&2
+		exit 1
+	fi
 }
 
 bind_directory_fd() {
-  local path=$1
-  local expected_identity=$2
-  local label=$3
-  local output_variable=$4
-  local directory_fd
+	local path=$1
+	local expected_identity=$2
+	local label=$3
+	local output_variable=$4
+	local directory_fd
 
-  if ! exec {directory_fd}<"${path}"; then
-    printf 'failed to open %s for bound use: %s\n' "${label}" "${path}" >&2
-    return 1
-  fi
-  if ! timeout --foreground --signal=TERM --kill-after="${RPM_FINALIZE_KILL_AFTER_SECONDS}s" \
-    "$((RPM_FINALIZE_TIMEOUT_SECONDS - RPM_FINALIZE_KILL_AFTER_SECONDS))s" \
-    "${python_bin}" -I -B - "${directory_fd}" "${path}" "${expected_identity}" "${label}" <<'PY'
+	if ! exec {directory_fd}<"${path}"; then
+		printf 'failed to open %s for bound use: %s\n' "${label}" "${path}" >&2
+		return 1
+	fi
+	if ! timeout --foreground --signal=TERM --kill-after="${RPM_FINALIZE_KILL_AFTER_SECONDS}s" \
+		"$((RPM_FINALIZE_TIMEOUT_SECONDS - RPM_FINALIZE_KILL_AFTER_SECONDS))s" \
+		"${python_bin}" -I -B - "${directory_fd}" "${path}" "${expected_identity}" "${label}" <<'PY'; then
 import os
 import stat
 import sys
@@ -162,26 +162,25 @@ if (
 ):
     raise SystemExit(f"{label} changed before bound use: {path}")
 PY
-  then
-    exec {directory_fd}<&-
-    return 1
-  fi
-  printf -v "${output_variable}" '%s' "${directory_fd}"
+		exec {directory_fd}<&-
+		return 1
+	fi
+	printf -v "${output_variable}" '%s' "${directory_fd}"
 }
 
 activate_with_finalize_lock() {
-  local lock_path=$1
-  local staging_path=$2
-  local final_path=$3
-  local publish_path=$4
-  local previous_path=$5
-  local previous_recovery_path=$6
-  local staging_identity=$7
-  local lifecycle_supervisor_path=$8
+	local lock_path=$1
+	local staging_path=$2
+	local final_path=$3
+	local publish_path=$4
+	local previous_path=$5
+	local previous_recovery_path=$6
+	local staging_identity=$7
+	local lifecycle_supervisor_path=$8
 
-  timeout --foreground --signal=TERM --kill-after="${RPM_FINALIZE_KILL_AFTER_SECONDS}s" \
-    "$((RPM_FINALIZE_TIMEOUT_SECONDS - RPM_FINALIZE_KILL_AFTER_SECONDS))s" \
-    "${python_bin}" -I -B - "$lock_path" "$safe_fs" "$staging_path" "$final_path" "$publish_path" "$previous_path" "$previous_recovery_path" "$staging_identity" "$lifecycle_supervisor_path" "$RPM_FINALIZE_TIMEOUT_SECONDS" "$RPM_FINALIZE_LOCK_TIMEOUT_SECONDS" <<'PY'
+	timeout --foreground --signal=TERM --kill-after="${RPM_FINALIZE_KILL_AFTER_SECONDS}s" \
+		"$((RPM_FINALIZE_TIMEOUT_SECONDS - RPM_FINALIZE_KILL_AFTER_SECONDS))s" \
+		"${python_bin}" -I -B - "$lock_path" "$safe_fs" "$staging_path" "$final_path" "$publish_path" "$previous_path" "$previous_recovery_path" "$staging_identity" "$lifecycle_supervisor_path" "$RPM_FINALIZE_TIMEOUT_SECONDS" "$RPM_FINALIZE_LOCK_TIMEOUT_SECONDS" <<'PY'
 import ctypes
 import errno
 import os
@@ -1266,77 +1265,77 @@ PY
 
 require_cmd python3
 require_cmd timeout
-if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then
-  rpm_runtime_root="${XDG_RUNTIME_DIR}"
-  if [[ ! "${rpm_runtime_root}" == /* || ! -d "${rpm_runtime_root}" || -L "${rpm_runtime_root}" ]]; then
-    printf 'XDG_RUNTIME_DIR must be an existing private directory: %s\n' "${rpm_runtime_root}" >&2
-    exit 1
-  fi
-  if ! "${safe_fs_cmd[@]}" assert-private-chain build-rpm "${rpm_runtime_root}"; then
-    printf 'XDG_RUNTIME_DIR has an untrusted ancestor chain: %s\n' "${rpm_runtime_root}" >&2
-    exit 1
-  fi
+if [[ -n ${XDG_RUNTIME_DIR:-} ]]; then
+	rpm_runtime_root="${XDG_RUNTIME_DIR}"
+	if [[ ! ${rpm_runtime_root} == /* || ! -d ${rpm_runtime_root} || -L ${rpm_runtime_root} ]]; then
+		printf 'XDG_RUNTIME_DIR must be an existing private directory: %s\n' "${rpm_runtime_root}" >&2
+		exit 1
+	fi
+	if ! "${safe_fs_cmd[@]}" assert-private-chain build-rpm "${rpm_runtime_root}"; then
+		printf 'XDG_RUNTIME_DIR has an untrusted ancestor chain: %s\n' "${rpm_runtime_root}" >&2
+		exit 1
+	fi
 else
-  if [[ -z "${HOME:-}" ]]; then
-    printf 'HOME is required for private RPM runtime storage when XDG_RUNTIME_DIR is absent.\n' >&2
-    exit 1
-  fi
-  if ! "${safe_fs_cmd[@]}" assert-private-chain build-rpm "${HOME}"; then
-    printf 'HOME has an untrusted ancestor chain for RPM runtime storage: %s\n' "${HOME}" >&2
-    exit 1
-  fi
-  rpm_runtime_root="${HOME}/.cache/speed-of-cinnamon/rpm-${EUID}"
+	if [[ -z ${HOME:-} ]]; then
+		printf 'HOME is required for private RPM runtime storage when XDG_RUNTIME_DIR is absent.\n' >&2
+		exit 1
+	fi
+	if ! "${safe_fs_cmd[@]}" assert-private-chain build-rpm "${HOME}"; then
+		printf 'HOME has an untrusted ancestor chain for RPM runtime storage: %s\n' "${HOME}" >&2
+		exit 1
+	fi
+	rpm_runtime_root="${HOME}/.cache/speed-of-cinnamon/rpm-${EUID}"
 fi
-if [[ ! "${rpm_runtime_root}" == /* ]]; then
-  printf 'RPM runtime root must be an absolute path: %s\n' "${rpm_runtime_root}" >&2
-  exit 1
+if [[ ${rpm_runtime_root} != /* ]]; then
+	printf 'RPM runtime root must be an absolute path: %s\n' "${rpm_runtime_root}" >&2
+	exit 1
 fi
-if [[ -L "${rpm_runtime_root}" ]]; then
-  printf 'RPM runtime root must not be a symlink: %s\n' "${rpm_runtime_root}" >&2
-  exit 1
+if [[ -L ${rpm_runtime_root} ]]; then
+	printf 'RPM runtime root must not be a symlink: %s\n' "${rpm_runtime_root}" >&2
+	exit 1
 fi
 if ! "${safe_fs_cmd[@]}" assert-private-chain build-rpm "${rpm_runtime_root}" --allow-missing; then
-  printf 'RPM runtime root has an untrusted ancestor chain: %s\n' "${rpm_runtime_root}" >&2
-  exit 1
+	printf 'RPM runtime root has an untrusted ancestor chain: %s\n' "${rpm_runtime_root}" >&2
+	exit 1
 fi
-if [[ ! -e "${rpm_runtime_root}" ]]; then
-  "${safe_fs_cmd[@]}" mkdirs build-rpm "${rpm_runtime_root}"
+if [[ ! -e ${rpm_runtime_root} ]]; then
+	"${safe_fs_cmd[@]}" mkdirs build-rpm "${rpm_runtime_root}"
 fi
 if ! "${safe_fs_cmd[@]}" assert-private-chain build-rpm "${rpm_runtime_root}"; then
-  printf 'RPM runtime root has an untrusted ancestor chain: %s\n' "${rpm_runtime_root}" >&2
-  exit 1
+	printf 'RPM runtime root has an untrusted ancestor chain: %s\n' "${rpm_runtime_root}" >&2
+	exit 1
 fi
-if [[ ! -d "${rpm_runtime_root}" || ! -w "${rpm_runtime_root}" ]]; then
-  printf 'RPM runtime root is not a writable directory: %s\n' "${rpm_runtime_root}" >&2
-  exit 1
+if [[ ! -d ${rpm_runtime_root} || ! -w ${rpm_runtime_root} ]]; then
+	printf 'RPM runtime root is not a writable directory: %s\n' "${rpm_runtime_root}" >&2
+	exit 1
 fi
 runtime_owner="$(stat -c '%u' "${rpm_runtime_root}")"
 runtime_mode="$(stat -c '%a' "${rpm_runtime_root}")"
-if [[ "${runtime_owner}" != "${EUID}" || "${runtime_mode: -2}" != "00" ]]; then
-  printf 'RPM runtime root is not private to current user: %s\n' "${rpm_runtime_root}" >&2
-  exit 1
+if [[ ${runtime_owner} != "${EUID}" || ${runtime_mode: -2} != "00" ]]; then
+	printf 'RPM runtime root is not private to current user: %s\n' "${rpm_runtime_root}" >&2
+	exit 1
 fi
 if ! rpm_runtime_root="$(realpath "${rpm_runtime_root}")"; then
-  printf 'failed to resolve RPM runtime root: %s\n' "${rpm_runtime_root}" >&2
-  exit 1
+	printf 'failed to resolve RPM runtime root: %s\n' "${rpm_runtime_root}" >&2
+	exit 1
 fi
 rpm_tmp_parent="${rpm_runtime_root}/speed-of-cinnamon-rpm-${EUID}"
 if ! "${safe_fs_cmd[@]}" assert-private-chain build-rpm "${rpm_tmp_parent}" --allow-missing; then
-  printf 'RPM temporary parent has an untrusted ancestor chain: %s\n' "${rpm_tmp_parent}" >&2
-  exit 1
+	printf 'RPM temporary parent has an untrusted ancestor chain: %s\n' "${rpm_tmp_parent}" >&2
+	exit 1
 fi
 "${safe_fs_cmd[@]}" mkdirs build-rpm "${rpm_tmp_parent}"
 if ! "${safe_fs_cmd[@]}" assert-private-chain build-rpm "${rpm_tmp_parent}"; then
-  printf 'RPM temporary parent has an untrusted ancestor chain: %s\n' "${rpm_tmp_parent}" >&2
-  exit 1
+	printf 'RPM temporary parent has an untrusted ancestor chain: %s\n' "${rpm_tmp_parent}" >&2
+	exit 1
 fi
-if [[ -L "${rpm_tmp_parent}" ]]; then
-  printf 'RPM temporary parent must not be a symlink: %s\n' "${rpm_tmp_parent}" >&2
-  exit 1
+if [[ -L ${rpm_tmp_parent} ]]; then
+	printf 'RPM temporary parent must not be a symlink: %s\n' "${rpm_tmp_parent}" >&2
+	exit 1
 fi
 timeout --foreground --signal=TERM --kill-after="${RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS}s" \
-  "$((RPM_STARTUP_SWEEP_TIMEOUT_SECONDS - RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS))s" \
-  "${lifecycle_python}" -I -B - "${rpm_tmp_parent}" "${safe_fs}" <<'PY'
+	"$((RPM_STARTUP_SWEEP_TIMEOUT_SECONDS - RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS))s" \
+	"${lifecycle_python}" -I -B - "${rpm_tmp_parent}" "${safe_fs}" <<'PY'
 import os
 import stat
 import subprocess
@@ -1484,260 +1483,260 @@ stage_cleanup_invoked=0
 cleanup_stage_message_emitted=0
 cleanup_parent_skip_reported=0
 cleanup_now_ns() {
-  if [[ -z "${cleanup_timeout_command}" ]]; then
-    return 1
-  fi
-  "${cleanup_timeout_command}" --foreground --signal=KILL \
-    "${RPM_CLEANUP_CLOCK_TIMEOUT_SECONDS}s" \
-    "${cleanup_clock_command[@]}" -c 'import time; print(time.monotonic_ns())'
+	if [[ -z ${cleanup_timeout_command} ]]; then
+		return 1
+	fi
+	"${cleanup_timeout_command}" --foreground --signal=KILL \
+		"${RPM_CLEANUP_CLOCK_TIMEOUT_SECONDS}s" \
+		"${cleanup_clock_command[@]}" -c 'import time; print(time.monotonic_ns())'
 }
 cleanup_deadline_probe() {
-  if [[ -z "${cleanup_timeout_command}" ]]; then
-    return 1
-  fi
-  local deadline_budget_ns=$((RPM_CLEANUP_TIMEOUT_SECONDS * 1000000000 - RPM_CLEANUP_CLOCK_TIMEOUT_NS - RPM_CLEANUP_LAUNCH_MARGIN_NS))
-  if (( deadline_budget_ns <= 0 )); then
-    return 1
-  fi
-  "${cleanup_timeout_command}" --foreground --signal=KILL \
-    "${RPM_CLEANUP_CLOCK_TIMEOUT_SECONDS}s" \
-    "${cleanup_clock_command[@]}" -c \
-    "import time; print(time.monotonic_ns() + ${deadline_budget_ns})"
+	if [[ -z ${cleanup_timeout_command} ]]; then
+		return 1
+	fi
+	local deadline_budget_ns=$((RPM_CLEANUP_TIMEOUT_SECONDS * 1000000000 - RPM_CLEANUP_CLOCK_TIMEOUT_NS - RPM_CLEANUP_LAUNCH_MARGIN_NS))
+	if ((deadline_budget_ns <= 0)); then
+		return 1
+	fi
+	"${cleanup_timeout_command}" --foreground --signal=KILL \
+		"${RPM_CLEANUP_CLOCK_TIMEOUT_SECONDS}s" \
+		"${cleanup_clock_command[@]}" -c \
+		"import time; print(time.monotonic_ns() + ${deadline_budget_ns})"
 }
 start_cleanup_deadline() {
-  if [[ -n "${cleanup_deadline_ns}" ]]; then
-    return 0
-  fi
-  local deadline_ns
-  if ! deadline_ns="$(cleanup_deadline_probe 2>/dev/null)" ||
-      [[ ! "${deadline_ns}" =~ ^[0-9]+$ || "${deadline_ns}" == 0 ]]; then
-    cleanup_deadline_ns=0
-    printf 'RPM cleanup monotonic clock is unavailable\n' >&2
-    return 1
-  fi
-  cleanup_deadline_ns="${deadline_ns}"
+	if [[ -n ${cleanup_deadline_ns} ]]; then
+		return 0
+	fi
+	local deadline_ns
+	if ! deadline_ns="$(cleanup_deadline_probe 2>/dev/null)" ||
+		[[ ! ${deadline_ns} =~ ^[0-9]+$ || ${deadline_ns} == 0 ]]; then
+		cleanup_deadline_ns=0
+		printf 'RPM cleanup monotonic clock is unavailable\n' >&2
+		return 1
+	fi
+	cleanup_deadline_ns="${deadline_ns}"
 }
 cleanup_remaining_value_ns=""
 cleanup_remaining_ns() {
-  cleanup_remaining_value_ns=""
-  local now_ns
-  if [[ -z "${cleanup_deadline_ns}" || "${cleanup_deadline_ns}" == 0 ]]; then
-    cleanup_deadline_ns=0
-    return 1
-  fi
-  if ! now_ns="$(cleanup_now_ns 2>/dev/null)"; then
-    cleanup_deadline_ns=0
-    return 1
-  fi
-  if [[ ! "${now_ns}" =~ ^[0-9]+$ ]]; then
-    cleanup_deadline_ns=0
-    return 1
-  fi
-  local remaining_ns=$((cleanup_deadline_ns - now_ns))
-  if (( remaining_ns <= 0 )); then
-    cleanup_deadline_ns=0
-    return 1
-  fi
-  cleanup_remaining_value_ns="${remaining_ns}"
+	cleanup_remaining_value_ns=""
+	local now_ns
+	if [[ -z ${cleanup_deadline_ns} || ${cleanup_deadline_ns} == 0 ]]; then
+		cleanup_deadline_ns=0
+		return 1
+	fi
+	if ! now_ns="$(cleanup_now_ns 2>/dev/null)"; then
+		cleanup_deadline_ns=0
+		return 1
+	fi
+	if [[ ! ${now_ns} =~ ^[0-9]+$ ]]; then
+		cleanup_deadline_ns=0
+		return 1
+	fi
+	local remaining_ns=$((cleanup_deadline_ns - now_ns))
+	if ((remaining_ns <= 0)); then
+		cleanup_deadline_ns=0
+		return 1
+	fi
+	cleanup_remaining_value_ns="${remaining_ns}"
 }
 cleanup_timeout_value() {
-  local nanoseconds=$1
-  printf '%d.%09d' "$((nanoseconds / 1000000000))" "$((nanoseconds % 1000000000))"
+	local nanoseconds=$1
+	printf '%d.%09d' "$((nanoseconds / 1000000000))" "$((nanoseconds % 1000000000))"
 }
 run_cleanup_safe_fs() {
-  cleanup_safe_fs_invoked=0
-  if [[ -z "${cleanup_timeout_command}" ]]; then
-    printf 'RPM cleanup timeout command is unavailable\n' >&2
-    return 124
-  fi
-  if ! start_cleanup_deadline; then
-    return 124
-  fi
-  if ! cleanup_remaining_ns; then
-    printf 'RPM cleanup deadline exhausted before safe-FS call\n' >&2
-    return 124
-  fi
-  local remaining_ns="${cleanup_remaining_value_ns}"
-  local available_ns=$((remaining_ns - RPM_CLEANUP_LAUNCH_MARGIN_NS))
-  if (( available_ns <= 0 )); then
-    printf 'RPM cleanup deadline exhausted before safe-FS launch\n' >&2
-    return 124
-  fi
-  local kill_after_ns=$((RPM_CLEANUP_KILL_AFTER_SECONDS * 1000000000))
-  if (( kill_after_ns >= available_ns )); then
-    kill_after_ns=$((available_ns / 2))
-  fi
-  local term_ns=$((available_ns - kill_after_ns))
-  if (( term_ns <= 0 || kill_after_ns <= 0 )); then
-    printf 'RPM cleanup deadline cannot reserve TERM/KILL budget\n' >&2
-    return 124
-  fi
-  local term_timeout
-  local kill_after_timeout
-  term_timeout="$(cleanup_timeout_value "${term_ns}")"
-  kill_after_timeout="$(cleanup_timeout_value "${kill_after_ns}")"
-  local status=0
-  cleanup_safe_fs_invoked=1
-  "${cleanup_timeout_command}" --foreground --signal=TERM --kill-after="${kill_after_timeout}s" \
-    "${term_timeout}s" "${safe_fs_cmd[@]}" "$@" || status=$?
-  if (( status == 124 || status == 137 || status == 143 )); then
-    cleanup_deadline_ns=0
-    return 124
-  fi
-  if ! cleanup_remaining_ns; then
-    return 124
-  fi
-  return "${status}"
+	cleanup_safe_fs_invoked=0
+	if [[ -z ${cleanup_timeout_command} ]]; then
+		printf 'RPM cleanup timeout command is unavailable\n' >&2
+		return 124
+	fi
+	if ! start_cleanup_deadline; then
+		return 124
+	fi
+	if ! cleanup_remaining_ns; then
+		printf 'RPM cleanup deadline exhausted before safe-FS call\n' >&2
+		return 124
+	fi
+	local remaining_ns="${cleanup_remaining_value_ns}"
+	local available_ns=$((remaining_ns - RPM_CLEANUP_LAUNCH_MARGIN_NS))
+	if ((available_ns <= 0)); then
+		printf 'RPM cleanup deadline exhausted before safe-FS launch\n' >&2
+		return 124
+	fi
+	local kill_after_ns=$((RPM_CLEANUP_KILL_AFTER_SECONDS * 1000000000))
+	if ((kill_after_ns >= available_ns)); then
+		kill_after_ns=$((available_ns / 2))
+	fi
+	local term_ns=$((available_ns - kill_after_ns))
+	if ((term_ns <= 0 || kill_after_ns <= 0)); then
+		printf 'RPM cleanup deadline cannot reserve TERM/KILL budget\n' >&2
+		return 124
+	fi
+	local term_timeout
+	local kill_after_timeout
+	term_timeout="$(cleanup_timeout_value "${term_ns}")"
+	kill_after_timeout="$(cleanup_timeout_value "${kill_after_ns}")"
+	local status=0
+	cleanup_safe_fs_invoked=1
+	"${cleanup_timeout_command}" --foreground --signal=TERM --kill-after="${kill_after_timeout}s" \
+		"${term_timeout}s" "${safe_fs_cmd[@]}" "$@" || status=$?
+	if ((status == 124 || status == 137 || status == 143)); then
+		cleanup_deadline_ns=0
+		return 124
+	fi
+	if ! cleanup_remaining_ns; then
+		return 124
+	fi
+	return "${status}"
 }
 cleanup_tmpdir() {
-  local inherited_status="$?"
-  local primary_status="${1:-${inherited_status}}"
-  local cleanup_failed=0
-  stage_cleanup_unconfirmed="${stage_cleanup_unconfirmed:-0}"
-  stage_cleanup_status="${stage_cleanup_status:-0}"
-  stage_cleanup_invoked="${stage_cleanup_invoked:-0}"
-  cleanup_stage_message_emitted="${cleanup_stage_message_emitted:-0}"
-  cleanup_parent_skip_reported="${cleanup_parent_skip_reported:-0}"
-  if ! start_cleanup_deadline; then
-    cleanup_failed=1
-  fi
-  if [[ -n "${publish_workspace}" ]]; then
-    printf 'RPM publish workspace cleanup accounting retained (no path probe): %s\n' \
-      "${publish_workspace}" >&2
-  fi
-  if [[ -n "${publish_recovery}" ]]; then
-    printf 'RPM previous recovery cleanup accounting retained (no path probe): %s\n' \
-      "${publish_recovery}" >&2
-  fi
-  if (( stage_cleanup_unconfirmed == 0 )); then
-    if [[ -n "${stage_topdir}" && -n "${stage_topdir_identity}" ]]; then
-      stage_cleanup_status=0
-      run_cleanup_safe_fs remove build-rpm "${stage_topdir}" \
-        --kind dir \
-        --expected-identity "${stage_topdir_identity}" || stage_cleanup_status=$?
-      stage_cleanup_invoked="${cleanup_safe_fs_invoked}"
-      if (( stage_cleanup_status != 0 )); then
-        stage_cleanup_unconfirmed=1
-        if (( cleanup_stage_message_emitted == 0 )); then
-          if (( stage_cleanup_invoked == 1 )); then
-            printf 'RPM stage cleanup failed after safe-FS invocation; safe-FS residue report is authoritative: %s\n' \
-              "${stage_topdir}" >&2
-          else
-            printf 'RPM stage cleanup not attempted; safe-FS was not invoked; residue path retained: %s\n' \
-              "${stage_topdir}" >&2
-          fi
-          cleanup_stage_message_emitted=1
-        fi
-        if [[ "${publish_committed}" != "1" ]]; then
-          cleanup_failed=1
-        fi
-      else
-        stage_topdir=""
-        stage_topdir_identity=""
-      fi
-    elif [[ -n "${stage_topdir}" ]]; then
-      stage_cleanup_status=1
-      stage_cleanup_invoked=0
-      stage_cleanup_unconfirmed=1
-      if (( cleanup_stage_message_emitted == 0 )); then
-        printf 'refusing RPM stage cleanup without verified identity: %s\n' "${stage_topdir}" >&2
-        cleanup_stage_message_emitted=1
-      fi
-      if [[ "${publish_committed}" != "1" ]]; then
-        cleanup_failed=1
-      fi
-    fi
-  elif [[ -n "${stage_topdir}" && "${cleanup_stage_message_emitted}" == "0" ]]; then
-    if (( stage_cleanup_invoked == 1 )); then
-      printf 'RPM stage cleanup failed after safe-FS invocation; safe-FS residue report is authoritative: %s\n' \
-        "${stage_topdir}" >&2
-    else
-      printf 'RPM stage cleanup not attempted; safe-FS was not invoked; residue path retained: %s\n' \
-        "${stage_topdir}" >&2
-    fi
-    cleanup_stage_message_emitted=1
-  fi
-  if (( stage_cleanup_unconfirmed != 0 )); then
-    if [[ -n "${rpmbuild_tmpdir}" && "${cleanup_parent_skip_reported}" == "0" ]]; then
-      printf 'RPM workspace cleanup skipped because stage cleanup is unconfirmed; residue path retained: %s\n' \
-        "${rpmbuild_tmpdir}" >&2
-      cleanup_parent_skip_reported=1
-      if [[ "${publish_committed}" != "1" ]]; then
-        cleanup_failed=1
-      fi
-    fi
-  elif [[ -n "${rpmbuild_tmpdir}" && -n "${rpmbuild_tmpdir_identity}" ]]; then
-    local workspace_cleanup_status=0
-    run_cleanup_safe_fs remove build-rpm "${rpmbuild_tmpdir}" --kind dir \
-      --expected-identity "${rpmbuild_tmpdir_identity}" || workspace_cleanup_status=$?
-    if (( workspace_cleanup_status != 0 )); then
-      if (( cleanup_safe_fs_invoked == 1 )); then
-        printf 'RPM workspace cleanup failed after safe-FS invocation; safe-FS residue report is authoritative: %s\n' \
-          "${rpmbuild_tmpdir}" >&2
-      else
-        printf 'RPM workspace cleanup not attempted; safe-FS was not invoked; residue path retained: %s\n' \
-          "${rpmbuild_tmpdir}" >&2
-      fi
-      if [[ "${publish_committed}" != "1" ]]; then
-        cleanup_failed=1
-      fi
-    else
-      rpmbuild_tmpdir=""
-      rpmbuild_tmpdir_identity=""
-    fi
-  elif [[ -n "${rpmbuild_tmpdir}" ]]; then
-    printf 'refusing RPM workspace cleanup without verified identity: %s\n' "${rpmbuild_tmpdir}" >&2
-    cleanup_failed=1
-  fi
-  if (( cleanup_failed != 0 && primary_status == 0 )); then
-    return 1
-  fi
-  return "${primary_status}"
+	local inherited_status="$?"
+	local primary_status="${1:-${inherited_status}}"
+	local cleanup_failed=0
+	stage_cleanup_unconfirmed="${stage_cleanup_unconfirmed:-0}"
+	stage_cleanup_status="${stage_cleanup_status:-0}"
+	stage_cleanup_invoked="${stage_cleanup_invoked:-0}"
+	cleanup_stage_message_emitted="${cleanup_stage_message_emitted:-0}"
+	cleanup_parent_skip_reported="${cleanup_parent_skip_reported:-0}"
+	if ! start_cleanup_deadline; then
+		cleanup_failed=1
+	fi
+	if [[ -n ${publish_workspace} ]]; then
+		printf 'RPM publish workspace cleanup accounting retained (no path probe): %s\n' \
+			"${publish_workspace}" >&2
+	fi
+	if [[ -n ${publish_recovery} ]]; then
+		printf 'RPM previous recovery cleanup accounting retained (no path probe): %s\n' \
+			"${publish_recovery}" >&2
+	fi
+	if ((stage_cleanup_unconfirmed == 0)); then
+		if [[ -n ${stage_topdir} && -n ${stage_topdir_identity} ]]; then
+			stage_cleanup_status=0
+			run_cleanup_safe_fs remove build-rpm "${stage_topdir}" \
+				--kind dir \
+				--expected-identity "${stage_topdir_identity}" || stage_cleanup_status=$?
+			stage_cleanup_invoked="${cleanup_safe_fs_invoked}"
+			if ((stage_cleanup_status != 0)); then
+				stage_cleanup_unconfirmed=1
+				if ((cleanup_stage_message_emitted == 0)); then
+					if ((stage_cleanup_invoked == 1)); then
+						printf 'RPM stage cleanup failed after safe-FS invocation; safe-FS residue report is authoritative: %s\n' \
+							"${stage_topdir}" >&2
+					else
+						printf 'RPM stage cleanup not attempted; safe-FS was not invoked; residue path retained: %s\n' \
+							"${stage_topdir}" >&2
+					fi
+					cleanup_stage_message_emitted=1
+				fi
+				if [[ ${publish_committed} != "1" ]]; then
+					cleanup_failed=1
+				fi
+			else
+				stage_topdir=""
+				stage_topdir_identity=""
+			fi
+		elif [[ -n ${stage_topdir} ]]; then
+			stage_cleanup_status=1
+			stage_cleanup_invoked=0
+			stage_cleanup_unconfirmed=1
+			if ((cleanup_stage_message_emitted == 0)); then
+				printf 'refusing RPM stage cleanup without verified identity: %s\n' "${stage_topdir}" >&2
+				cleanup_stage_message_emitted=1
+			fi
+			if [[ ${publish_committed} != "1" ]]; then
+				cleanup_failed=1
+			fi
+		fi
+	elif [[ -n ${stage_topdir} && ${cleanup_stage_message_emitted} == "0" ]]; then
+		if ((stage_cleanup_invoked == 1)); then
+			printf 'RPM stage cleanup failed after safe-FS invocation; safe-FS residue report is authoritative: %s\n' \
+				"${stage_topdir}" >&2
+		else
+			printf 'RPM stage cleanup not attempted; safe-FS was not invoked; residue path retained: %s\n' \
+				"${stage_topdir}" >&2
+		fi
+		cleanup_stage_message_emitted=1
+	fi
+	if ((stage_cleanup_unconfirmed != 0)); then
+		if [[ -n ${rpmbuild_tmpdir} && ${cleanup_parent_skip_reported} == "0" ]]; then
+			printf 'RPM workspace cleanup skipped because stage cleanup is unconfirmed; residue path retained: %s\n' \
+				"${rpmbuild_tmpdir}" >&2
+			cleanup_parent_skip_reported=1
+			if [[ ${publish_committed} != "1" ]]; then
+				cleanup_failed=1
+			fi
+		fi
+	elif [[ -n ${rpmbuild_tmpdir} && -n ${rpmbuild_tmpdir_identity} ]]; then
+		local workspace_cleanup_status=0
+		run_cleanup_safe_fs remove build-rpm "${rpmbuild_tmpdir}" --kind dir \
+			--expected-identity "${rpmbuild_tmpdir_identity}" || workspace_cleanup_status=$?
+		if ((workspace_cleanup_status != 0)); then
+			if ((cleanup_safe_fs_invoked == 1)); then
+				printf 'RPM workspace cleanup failed after safe-FS invocation; safe-FS residue report is authoritative: %s\n' \
+					"${rpmbuild_tmpdir}" >&2
+			else
+				printf 'RPM workspace cleanup not attempted; safe-FS was not invoked; residue path retained: %s\n' \
+					"${rpmbuild_tmpdir}" >&2
+			fi
+			if [[ ${publish_committed} != "1" ]]; then
+				cleanup_failed=1
+			fi
+		else
+			rpmbuild_tmpdir=""
+			rpmbuild_tmpdir_identity=""
+		fi
+	elif [[ -n ${rpmbuild_tmpdir} ]]; then
+		printf 'refusing RPM workspace cleanup without verified identity: %s\n' "${rpmbuild_tmpdir}" >&2
+		cleanup_failed=1
+	fi
+	if ((cleanup_failed != 0 && primary_status == 0)); then
+		return 1
+	fi
+	return "${primary_status}"
 }
 cleanup_on_exit() {
-  local primary_status="$?"
-  local cleanup_status=0
-  trap - EXIT
-  if cleanup_tmpdir "${primary_status}"; then
-    cleanup_status=0
-  else
-    cleanup_status=$?
-  fi
-  if (( primary_status != 0 )); then
-    exit "${primary_status}"
-  fi
-  exit "${cleanup_status}"
+	local primary_status="$?"
+	local cleanup_status=0
+	trap - EXIT
+	if cleanup_tmpdir "${primary_status}"; then
+		cleanup_status=0
+	else
+		cleanup_status=$?
+	fi
+	if ((primary_status != 0)); then
+		exit "${primary_status}"
+	fi
+	exit "${cleanup_status}"
 }
 trap cleanup_on_exit EXIT
 
 rpmbuild_tmpdir="$(mktemp -d "${rpm_tmp_parent}/speed-of-cinnamon-rpm-tmp-XXXXXX")"
-if [[ -L "${rpmbuild_tmpdir}" ]]; then
-  printf 'temporary RPM workspace must not be a symlink: %s\n' "${rpmbuild_tmpdir}" >&2
-  exit 1
+if [[ -L ${rpmbuild_tmpdir} ]]; then
+	printf 'temporary RPM workspace must not be a symlink: %s\n' "${rpmbuild_tmpdir}" >&2
+	exit 1
 fi
 if ! rpmbuild_tmpdir_abs="$(realpath "${rpmbuild_tmpdir}")"; then
-  printf 'failed to resolve temporary RPM workspace: %s\n' "${rpmbuild_tmpdir}" >&2
-  exit 1
+	printf 'failed to resolve temporary RPM workspace: %s\n' "${rpmbuild_tmpdir}" >&2
+	exit 1
 fi
-if [[ "${rpmbuild_tmpdir_abs}" != "${rpm_tmp_parent}/speed-of-cinnamon-rpm-tmp-"* ]]; then
-  printf 'temporary RPM workspace escaped temporary root: %s\n' "${rpmbuild_tmpdir}" >&2
-  exit 1
+if [[ ${rpmbuild_tmpdir_abs} != "${rpm_tmp_parent}/speed-of-cinnamon-rpm-tmp-"* ]]; then
+	printf 'temporary RPM workspace escaped temporary root: %s\n' "${rpmbuild_tmpdir}" >&2
+	exit 1
 fi
 rpmbuild_tmpdir="${rpmbuild_tmpdir_abs}"
 
 if ! rpmbuild_tmpdir_identity="$(bounded_safe_fs_identity "${rpmbuild_tmpdir}" dir)"; then
-  printf 'failed to capture temporary RPM workspace identity: %s\n' "${rpmbuild_tmpdir}" >&2
-  exit 1
+	printf 'failed to capture temporary RPM workspace identity: %s\n' "${rpmbuild_tmpdir}" >&2
+	exit 1
 fi
 
 profile="${1:-fedora}"
 case "${profile}" in
-  fedora|generic)
-    ;;
-  *)
-    printf 'unknown rpm profile: %s\n' "${profile}" >&2
-    exit 1
-    ;;
+fedora | generic)
+	;;
+*)
+	printf 'unknown rpm profile: %s\n' "${profile}" >&2
+	exit 1
+	;;
 esac
 
 require_cmd rpmbuild
@@ -1745,80 +1744,80 @@ require_cmd python3
 require_cmd realpath
 python_bin="${lifecycle_python}"
 if [[ ! -x "${repo_dir}/scripts/build-dist.sh" ]]; then
-  printf 'build-dist script is missing: %s\n' "${repo_dir}/scripts/build-dist.sh" >&2
-  exit 1
+	printf 'build-dist script is missing: %s\n' "${repo_dir}/scripts/build-dist.sh" >&2
+	exit 1
 fi
 require_regular_source_file "${safe_fs}" "safe local filesystem helper"
 read -r tarball < <("${repo_dir}/scripts/build-dist.sh")
-if [[ -L "${tarball}" ]]; then
-  printf 'build-dist output must not be a symlink: %s\n' "${tarball}" >&2
-  exit 1
+if [[ -L ${tarball} ]]; then
+	printf 'build-dist output must not be a symlink: %s\n' "${tarball}" >&2
+	exit 1
 fi
 tarball="$(realpath "${tarball}")"
-if [[ ! -f "${tarball}" || ! "${tarball}" == "${repo_dir}/dist/"*".tar.gz" ]]; then
-  printf 'build-dist output is invalid: %s\n' "${tarball}" >&2
-  exit 1
+if [[ ! -f ${tarball} || ${tarball} != "${repo_dir}/dist/"*".tar.gz" ]]; then
+	printf 'build-dist output is invalid: %s\n' "${tarball}" >&2
+	exit 1
 fi
 
-if [[ "${profile}" == "generic" ]]; then
-  final_topdir="${repo_dir}/dist/rpmbuild-generic"
-  spec_source="${repo_dir}/packaging/speed-of-cinnamon-generic.spec"
+if [[ ${profile} == "generic" ]]; then
+	final_topdir="${repo_dir}/dist/rpmbuild-generic"
+	spec_source="${repo_dir}/packaging/speed-of-cinnamon-generic.spec"
 else
-  final_topdir="${repo_dir}/dist/rpmbuild"
-  spec_source="${repo_dir}/packaging/speed-of-cinnamon.spec"
+	final_topdir="${repo_dir}/dist/rpmbuild"
+	spec_source="${repo_dir}/packaging/speed-of-cinnamon.spec"
 fi
-if [[ -L "${final_topdir}" ]]; then
-  printf 'RPM build directory must not be a symlink: %s\n' "${final_topdir}" >&2
-  exit 1
+if [[ -L ${final_topdir} ]]; then
+	printf 'RPM build directory must not be a symlink: %s\n' "${final_topdir}" >&2
+	exit 1
 fi
-if [[ -L "${spec_source}" ]]; then
-  printf 'spec source file must not be a symlink: %s\n' "${spec_source}" >&2
-  exit 1
+if [[ -L ${spec_source} ]]; then
+	printf 'spec source file must not be a symlink: %s\n' "${spec_source}" >&2
+	exit 1
 fi
 dist_dir="$(dirname "${final_topdir}")"
-if [[ -L "${dist_dir}" ]]; then
-  printf 'dist parent directory must not be a symlink: %s\n' "${dist_dir}" >&2
-  exit 1
+if [[ -L ${dist_dir} ]]; then
+	printf 'dist parent directory must not be a symlink: %s\n' "${dist_dir}" >&2
+	exit 1
 fi
 "${safe_fs_cmd[@]}" mkdirs build-rpm "${dist_dir}"
 dist_finalize_lock="${dist_dir}/.build-rpm.finalize.lock"
 stage_topdir="$(mktemp -d "${rpmbuild_tmpdir}/.$(basename "${final_topdir}").stage.XXXXXX")"
-if [[ -L "${stage_topdir}" ]]; then
-  printf 'temporary RPM stage directory must not be a symlink: %s\n' "${stage_topdir}" >&2
-  exit 1
+if [[ -L ${stage_topdir} ]]; then
+	printf 'temporary RPM stage directory must not be a symlink: %s\n' "${stage_topdir}" >&2
+	exit 1
 fi
 if ! stage_topdir_abs="$(realpath "${stage_topdir}")"; then
-  printf 'failed to resolve temporary RPM stage directory: %s\n' "${stage_topdir}" >&2
-  exit 1
+	printf 'failed to resolve temporary RPM stage directory: %s\n' "${stage_topdir}" >&2
+	exit 1
 fi
-if [[ "${stage_topdir_abs}" != "${rpmbuild_tmpdir}/."*".stage."* ]]; then
-  printf 'temporary RPM stage directory escaped temporary workspace: %s\n' "${stage_topdir}" >&2
-  exit 1
+if [[ ${stage_topdir_abs} != "${rpmbuild_tmpdir}/."*".stage."* ]]; then
+	printf 'temporary RPM stage directory escaped temporary workspace: %s\n' "${stage_topdir}" >&2
+	exit 1
 fi
 stage_topdir="${stage_topdir_abs}"
 if ! stage_topdir_identity="$(bounded_safe_fs_identity "${stage_topdir}" dir)"; then
-  printf 'failed to capture temporary RPM stage identity: %s\n' "${stage_topdir}" >&2
-  exit 1
+	printf 'failed to capture temporary RPM stage identity: %s\n' "${stage_topdir}" >&2
+	exit 1
 fi
 spec_file="${stage_topdir}/SPECS/speed-of-cinnamon.spec"
 
-if [[ ! -f "${spec_source}" ]]; then
-  printf 'spec source missing: %s\n' "${spec_source}" >&2
-  exit 1
+if [[ ! -f ${spec_source} ]]; then
+	printf 'spec source missing: %s\n' "${spec_source}" >&2
+	exit 1
 fi
 require_regular_source_file "${tarball}" "tarball source"
 require_regular_source_file "${spec_source}" "spec source"
 
 for rpm_stage_dir in BUILD BUILDROOT RPMS SOURCES SPECS SRPMS; do
-  "${safe_fs_cmd[@]}" mkdirs build-rpm "${stage_topdir}/${rpm_stage_dir}"
+	"${safe_fs_cmd[@]}" mkdirs build-rpm "${stage_topdir}/${rpm_stage_dir}"
 done
 if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${tarball}" "${stage_topdir}/SOURCES/$(basename "${tarball}")" 0644; then
-  printf 'failed to copy tarball source into RPM staging: %s\n' "${tarball}" >&2
-  exit 1
+	printf 'failed to copy tarball source into RPM staging: %s\n' "${tarball}" >&2
+	exit 1
 fi
 
 version="$(
-  "${python_bin}" -I -B - "${repo_dir}" <<'PY'
+	"${python_bin}" -I -B - "${repo_dir}" <<'PY'
 import sys
 from pathlib import Path
 import tomllib
@@ -1839,16 +1838,16 @@ if not isinstance(version, str) or not version:
 print(version)
 PY
 )"
-if [[ -z "${version}" || ! "${version}" =~ ^[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
-  printf 'invalid version from pyproject.toml: %s\n' "${version}" >&2
-  exit 1
+if [[ -z ${version} || ! ${version} =~ ^[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
+	printf 'invalid version from pyproject.toml: %s\n' "${version}" >&2
+	exit 1
 fi
 
 if ! "${safe_fs_cmd[@]}" copy-file build-rpm "${spec_source}" "${spec_file}" 0644; then
-  printf 'failed to copy spec source into RPM staging: %s\n' "${spec_source}" >&2
-  exit 1
+	printf 'failed to copy spec source into RPM staging: %s\n' "${spec_source}" >&2
+	exit 1
 fi
-"${python_bin}" -I -B - <<'PY' "${spec_file}" "${version}"
+"${python_bin}" -I -B - "${spec_file}" "${version}" <<'PY'
 import os
 from pathlib import Path
 import re
@@ -1969,10 +1968,10 @@ PY
 rpmbuild_bin="$(command -v -- rpmbuild)"
 rpmbuild_status=0
 timeout --foreground --signal=TERM --kill-after=30s "${RPM_BUILD_TIMEOUT_SECONDS}s" \
-  "${python_bin}" -I -B - "${rpmbuild_bin}" "${python_bin}" \
-  "${stage_topdir}" "${stage_topdir_identity}" \
-  "${rpmbuild_tmpdir}" "${rpmbuild_tmpdir_identity}" \
-  "$(basename "${spec_file}")" <<'PY' || rpmbuild_status=$?
+	"${python_bin}" -I -B - "${rpmbuild_bin}" "${python_bin}" \
+	"${stage_topdir}" "${stage_topdir_identity}" \
+	"${rpmbuild_tmpdir}" "${rpmbuild_tmpdir_identity}" \
+	"$(basename "${spec_file}")" <<'PY' || rpmbuild_status=$?
 import os
 import stat
 import sys
@@ -2161,8 +2160,8 @@ finally:
         else:
             raise SystemExit("build-rpm rpmbuild descriptor cleanup failed") from cleanup_errors[0]
 PY
-if (( rpmbuild_status != 0 )); then
-  exit "${rpmbuild_status}"
+if ((rpmbuild_status != 0)); then
+	exit "${rpmbuild_status}"
 fi
 
 publish_workspace="${dist_dir}/.$(basename "${final_topdir}").publish-workspace-${BASHPID}"
@@ -2171,16 +2170,16 @@ publish_previous="${final_topdir}.previous"
 publish_recovery="${dist_dir}/.$(basename "${final_topdir}").previous-recovery-${BASHPID}"
 finalization_result=""
 if ! finalization_result="$(activate_with_finalize_lock \
-  "${dist_finalize_lock}" "${stage_topdir}" "${final_topdir}" \
-  "${publish_candidate}" "${publish_previous}" "${publish_recovery}" \
-  "${stage_topdir_identity}" "${lifecycle_supervisor}")"; then
-  printf 'failed to activate RPM build directory: %s\n' "${final_topdir}" >&2
-  exit 1
+	"${dist_finalize_lock}" "${stage_topdir}" "${final_topdir}" \
+	"${publish_candidate}" "${publish_previous}" "${publish_recovery}" \
+	"${stage_topdir_identity}" "${lifecycle_supervisor}")"; then
+	printf 'failed to activate RPM build directory: %s\n' "${final_topdir}" >&2
+	exit 1
 fi
-if (( ${#finalization_result} > 256 )) ||
-    [[ ! "${finalization_result}" =~ ^([0-9]+:[0-9]+:[0-9]+)[[:space:]]+([0-9]+:[0-9]+:[0-9]+)[[:space:]]+([0-9]+:[0-9]+:[0-9]+)$ ]]; then
-  printf 'invalid RPM finalization identity result\n' >&2
-  exit 1
+if ((${#finalization_result} > 256)) ||
+	[[ ! ${finalization_result} =~ ^([0-9]+:[0-9]+:[0-9]+)[[:space:]]+([0-9]+:[0-9]+:[0-9]+)[[:space:]]+([0-9]+:[0-9]+:[0-9]+)$ ]]; then
+	printf 'invalid RPM finalization identity result\n' >&2
+	exit 1
 fi
 final_topdir_identity="${BASH_REMATCH[1]}"
 final_rpms_identity="${BASH_REMATCH[2]}"
@@ -2190,15 +2189,15 @@ publish_workspace=""
 publish_recovery=""
 final_topdir_fd=""
 if ! bind_directory_fd "${final_topdir}" "${final_topdir_identity}" \
-  "final RPM build directory" final_topdir_fd; then
-  exit 1
+	"final RPM build directory" final_topdir_fd; then
+	exit 1
 fi
 # RPM output enumeration stays bounded while its process-level watchdog protects the exit trap.
 output_status=0
 timeout --foreground --signal=TERM --kill-after="${RPM_OUTPUT_KILL_AFTER_SECONDS}s" \
-  "$((RPM_OUTPUT_TIMEOUT_SECONDS - RPM_OUTPUT_KILL_AFTER_SECONDS))s" \
-  "${python_bin}" -I -B - "${final_topdir_fd}" "${final_topdir}" "${final_topdir_identity}" \
-  "${final_rpms_identity}" "${final_srpms_identity}" <<'PY' || output_status=$?
+	"$((RPM_OUTPUT_TIMEOUT_SECONDS - RPM_OUTPUT_KILL_AFTER_SECONDS))s" \
+	"${python_bin}" -I -B - "${final_topdir_fd}" "${final_topdir}" "${final_topdir_identity}" \
+	"${final_rpms_identity}" "${final_srpms_identity}" <<'PY' || output_status=$?
 import os
 import stat
 import sys
@@ -2340,24 +2339,24 @@ final_topdir_fd=""
 
 stage_cleanup_status=0
 run_cleanup_safe_fs remove build-rpm "${stage_topdir}" --kind dir \
-  --expected-identity "${stage_topdir_identity}" || stage_cleanup_status=$?
+	--expected-identity "${stage_topdir_identity}" || stage_cleanup_status=$?
 stage_cleanup_invoked="${cleanup_safe_fs_invoked}"
-if (( stage_cleanup_status == 0 )); then
-  stage_topdir=""
-  stage_topdir_identity=""
+if ((stage_cleanup_status == 0)); then
+	stage_topdir=""
+	stage_topdir_identity=""
 else
-  stage_cleanup_unconfirmed=1
-  if (( cleanup_stage_message_emitted == 0 )); then
-    if (( stage_cleanup_invoked == 1 )); then
-      printf 'RPM stage cleanup failed after commit and safe-FS invocation; safe-FS residue report is authoritative: %s\n' \
-        "${stage_topdir}" >&2
-    else
-      printf 'RPM stage cleanup after commit not attempted; safe-FS was not invoked; residue path retained: %s\n' \
-        "${stage_topdir}" >&2
-    fi
-    cleanup_stage_message_emitted=1
-  fi
+	stage_cleanup_unconfirmed=1
+	if ((cleanup_stage_message_emitted == 0)); then
+		if ((stage_cleanup_invoked == 1)); then
+			printf 'RPM stage cleanup failed after commit and safe-FS invocation; safe-FS residue report is authoritative: %s\n' \
+				"${stage_topdir}" >&2
+		else
+			printf 'RPM stage cleanup after commit not attempted; safe-FS was not invoked; residue path retained: %s\n' \
+				"${stage_topdir}" >&2
+		fi
+		cleanup_stage_message_emitted=1
+	fi
 fi
-if (( output_status != 0 )); then
-  exit "${output_status}"
+if ((output_status != 0)); then
+	exit "${output_status}"
 fi

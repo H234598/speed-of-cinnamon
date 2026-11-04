@@ -32,7 +32,9 @@ class BackupStateError(RuntimeError):
     pass
 
 
-def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+def _note_lock_cleanup_failure(
+    primary: BaseException, cleanup_error: BaseException
+) -> None:
     del cleanup_error
     primary.add_note("backup state lock cleanup failed")
 
@@ -50,10 +52,14 @@ def _reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]
     return result
 
 
-def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
+def _flock_retry(
+    fd: int, operation: int, *, timeout_seconds: float | None = None
+) -> None:
     if timeout_seconds is None:
         raise BackupStateError("backup state lock timeout is required")
-    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+    if isinstance(timeout_seconds, bool) or not isinstance(
+        timeout_seconds, (int, float)
+    ):
         raise BackupStateError("backup state lock timeout is invalid")
     try:
         timeout = float(timeout_seconds)
@@ -82,16 +88,26 @@ def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = Non
 
 
 def _safe_text(value: object, *, field_name: str, max_chars: int = 4096) -> str:
-    if isinstance(value, bool) or not isinstance(value, str) or not value or len(value) > max_chars:
+    if (
+        isinstance(value, bool)
+        or not isinstance(value, str)
+        or not value
+        or len(value) > max_chars
+    ):
         raise BackupStateError(f"backup state {field_name} is invalid")
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
-        raise BackupStateError(f"backup state {field_name} contains a control character")
+        raise BackupStateError(
+            f"backup state {field_name} contains a control character"
+        )
     return value
 
 
 def _safe_token(value: object, *, field_name: str) -> str:
     text = _safe_text(value, field_name=field_name, max_chars=256)
-    if any(char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-" for char in text):
+    if any(
+        char not in "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789._-"
+        for char in text
+    ):
         raise BackupStateError(f"backup state {field_name} is invalid")
     return text
 
@@ -107,16 +123,26 @@ def _empty_state() -> dict[str, object]:
 
 
 def _normalize_artifact(value: object) -> dict[str, object]:
-    if not isinstance(value, Mapping) or set(value) != {"kind", "source_identity", "size", "sha256", "mtime_ns"}:
+    if not isinstance(value, Mapping) or set(value) != {
+        "kind",
+        "source_identity",
+        "size",
+        "sha256",
+        "mtime_ns",
+    }:
         raise BackupStateError("backup state artifact is invalid")
     kind = _safe_token(value["kind"], field_name="artifact kind")
-    source_identity = _safe_token(value["source_identity"], field_name="artifact source identity")
+    source_identity = _safe_token(
+        value["source_identity"], field_name="artifact source identity"
+    )
     sha256 = _safe_token(value["sha256"], field_name="artifact hash")
     if len(sha256) != 64 or any(char not in "0123456789abcdef" for char in sha256):
         raise BackupStateError("backup state artifact hash is invalid")
     return {
         "kind": kind,
-        "mtime_ns": _safe_nonnegative_integer(value["mtime_ns"], field_name="artifact mtime"),
+        "mtime_ns": _safe_nonnegative_integer(
+            value["mtime_ns"], field_name="artifact mtime"
+        ),
         "sha256": sha256,
         "size": _safe_nonnegative_integer(value["size"], field_name="artifact size"),
         "source_identity": source_identity,
@@ -126,23 +152,48 @@ def _normalize_artifact(value: object) -> dict[str, object]:
 def _normalize_job(value: object) -> dict[str, object]:
     if not isinstance(value, Mapping):
         raise BackupStateError("backup state job is invalid")
-    required = {"job_id", "status", "created_at_utc", "updated_at_utc", "archive_name", "error", "artifacts"}
+    required = {
+        "job_id",
+        "status",
+        "created_at_utc",
+        "updated_at_utc",
+        "archive_name",
+        "error",
+        "artifacts",
+    }
     if set(value) != required:
         raise BackupStateError("backup state job fields are invalid")
     status = _safe_token(value["status"], field_name="job status")
     if status not in _STATUSES:
         raise BackupStateError("backup state job status is invalid")
     artifacts = value["artifacts"]
-    if not isinstance(artifacts, list) or len(artifacts) > MAX_BACKUP_STATE_ARTIFACTS_PER_JOB:
+    if (
+        not isinstance(artifacts, list)
+        or len(artifacts) > MAX_BACKUP_STATE_ARTIFACTS_PER_JOB
+    ):
         raise BackupStateError("backup state job artifacts are invalid")
     return {
-        "archive_name": "" if value["archive_name"] == "" else _safe_text(value["archive_name"], field_name="archive name", max_chars=512),
+        "archive_name": (
+            ""
+            if value["archive_name"] == ""
+            else _safe_text(
+                value["archive_name"], field_name="archive name", max_chars=512
+            )
+        ),
         "artifacts": [_normalize_artifact(item) for item in artifacts],
-        "created_at_utc": _safe_text(value["created_at_utc"], field_name="created timestamp", max_chars=64),
-        "error": "" if value["error"] == "" else _safe_text(value["error"], field_name="job error", max_chars=512),
+        "created_at_utc": _safe_text(
+            value["created_at_utc"], field_name="created timestamp", max_chars=64
+        ),
+        "error": (
+            ""
+            if value["error"] == ""
+            else _safe_text(value["error"], field_name="job error", max_chars=512)
+        ),
         "job_id": _safe_token(value["job_id"], field_name="job id"),
         "status": status,
-        "updated_at_utc": _safe_text(value["updated_at_utc"], field_name="updated timestamp", max_chars=64),
+        "updated_at_utc": _safe_text(
+            value["updated_at_utc"], field_name="updated timestamp", max_chars=64
+        ),
     }
 
 
@@ -154,7 +205,10 @@ def _normalize_state(value: object) -> dict[str, object]:
     jobs = value["jobs"]
     if not isinstance(jobs, list) or len(jobs) > MAX_BACKUP_STATE_JOBS:
         raise BackupStateError("backup state jobs are invalid")
-    return {"schema_version": BACKUP_STATE_SCHEMA_VERSION, "jobs": [_normalize_job(job) for job in jobs]}
+    return {
+        "schema_version": BACKUP_STATE_SCHEMA_VERSION,
+        "jobs": [_normalize_job(job) for job in jobs],
+    }
 
 
 class BackupStateStore:
@@ -162,7 +216,11 @@ class BackupStateStore:
 
     def __init__(self, path: Path | None = None):
         candidate = default_backup_state_file() if path is None else path
-        if isinstance(candidate, bool) or not isinstance(candidate, Path) or not candidate.is_absolute():
+        if (
+            isinstance(candidate, bool)
+            or not isinstance(candidate, Path)
+            or not candidate.is_absolute()
+        ):
             raise BackupStateError("backup state path must be absolute")
         assert_safe_path_components(candidate, field_name="backup state path")
         assert_no_symlink_ancestors(candidate, field_name="backup state path")
@@ -179,13 +237,23 @@ class BackupStateStore:
                 lock_path.parent,
                 field_name="backup state directory",
             )
-            assert_fd_is_private_directory(parent_fd, field_name="backup state directory")
+            assert_fd_is_private_directory(
+                parent_fd, field_name="backup state directory"
+            )
             nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-            if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-                raise BackupStateError("backup state lock requires secure no-follow support")
+            if (
+                isinstance(nofollow_flag, bool)
+                or not isinstance(nofollow_flag, int)
+                or nofollow_flag <= 0
+            ):
+                raise BackupStateError(
+                    "backup state lock requires secure no-follow support"
+                )
             flags = os.O_RDWR | os.O_CREAT | nofollow_flag | getattr(os, "O_CLOEXEC", 0)
             fd = os.open(lock_path.name, flags, 0o600, dir_fd=parent_fd)
-            assert_fd_is_regular_private_file(fd, field_name="backup state lock", require_private_mode=True)
+            assert_fd_is_regular_private_file(
+                fd, field_name="backup state lock", require_private_mode=True
+            )
             while True:
                 try:
                     _flock_retry(
@@ -228,11 +296,15 @@ class BackupStateStore:
                     for cleanup_error in cleanup_errors:
                         _note_lock_cleanup_failure(primary_error, cleanup_error)
                 else:
-                    raise BackupStateError("backup state lock cleanup failed") from cleanup_errors[0]
+                    raise BackupStateError(
+                        "backup state lock cleanup failed"
+                    ) from cleanup_errors[0]
 
     def _read_unlocked(self) -> dict[str, object]:
         try:
-            fd = open_file_without_following_symlinks(self.path, os.O_RDONLY, field_name="backup state")
+            fd = open_file_without_following_symlinks(
+                self.path, os.O_RDONLY, field_name="backup state"
+            )
         except FileNotFoundError:
             return _empty_state()
         try:
@@ -279,11 +351,18 @@ class BackupStateStore:
 
     def _write_unlocked(self, state: Mapping[str, object]) -> None:
         normalized = _normalize_state(state)
-        rendered = (json.dumps(normalized, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n")
+        rendered = (
+            json.dumps(
+                normalized, sort_keys=True, separators=(",", ":"), allow_nan=False
+            )
+            + "\n"
+        )
         if len(rendered.encode("utf-8")) > MAX_BACKUP_STATE_BYTES:
             raise BackupStateError("backup state is too large")
         try:
-            write_text_atomically_without_following_symlinks(self.path, rendered, field_name="backup state")
+            write_text_atomically_without_following_symlinks(
+                self.path, rendered, field_name="backup state"
+            )
         except OSError as exc:
             raise BackupStateError("backup state could not be written") from exc
 

@@ -87,10 +87,9 @@ class ResourceGateTests(unittest.TestCase):
         affinity: frozenset[int] = frozenset({0, 1, 2, 3}),
         argv: list[str] | None = None,
         bootstrap: bool = True,
-        namespace_values: list[
-            process_priority.InitialNamespaceIdentity | None
-        ]
-        | None = None,
+        namespace_values: (
+            list[process_priority.InitialNamespaceIdentity | None] | None
+        ) = None,
     ) -> tuple[int, dict[str, object], str]:
         output = io.StringIO()
         file_values = system_files() if files is None else files
@@ -104,9 +103,7 @@ class ResourceGateTests(unittest.TestCase):
                 resource_gate.process_priority,
                 "current_cgroup_resource_snapshot",
                 return_value=(
-                    resource_snapshot()
-                    if snapshot is _DEFAULT_SNAPSHOT
-                    else snapshot
+                    resource_snapshot() if snapshot is _DEFAULT_SNAPSHOT else snapshot
                 ),
             ),
             mock.patch.object(
@@ -172,10 +169,7 @@ class ResourceGateTests(unittest.TestCase):
             "psi": (
                 {
                     "files": system_files(
-                        cpu_psi=(
-                            "some avg10=5.01 avg60=4.00 "
-                            "avg300=3.00 total=1\n"
-                        )
+                        cpu_psi=("some avg10=5.01 avg60=4.00 " "avg300=3.00 total=1\n")
                     )
                 },
                 "psi",
@@ -184,8 +178,7 @@ class ResourceGateTests(unittest.TestCase):
                 {
                     "files": system_files(
                         memory_psi=(
-                            "full avg10=1.01 avg60=0.50 "
-                            "avg300=0.25 total=1\n"
+                            "full avg10=1.01 avg60=0.50 " "avg300=0.25 total=1\n"
                         )
                     )
                 },
@@ -194,10 +187,7 @@ class ResourceGateTests(unittest.TestCase):
             "io_psi": (
                 {
                     "files": system_files(
-                        io_psi=(
-                            "full avg10=1.01 avg60=0.50 "
-                            "avg300=0.25 total=1\n"
-                        )
+                        io_psi=("full avg10=1.01 avg60=0.50 " "avg300=0.25 total=1\n")
                     )
                 },
                 "psi",
@@ -238,9 +228,7 @@ class ResourceGateTests(unittest.TestCase):
         self.assertEqual(payload["metrics"]["online_cpus"], 5)
 
         code, payload, _raw = self.run_gate(
-            snapshot=resource_snapshot(
-                online_cpus=frozenset({0, 1, 2, 3})
-            ),
+            snapshot=resource_snapshot(online_cpus=frozenset({0, 1, 2, 3})),
             argv=["--require-full-online"],
         )
         self.assertEqual(code, 0)
@@ -407,7 +395,9 @@ class ResourceGateTests(unittest.TestCase):
             code = resource_gate.main([], stdout=output)
 
         self.assertEqual(code, 75)
-        self.assertEqual(json.loads(output.getvalue())["reasons"], ["high_qos_unavailable"])
+        self.assertEqual(
+            json.loads(output.getvalue())["reasons"], ["high_qos_unavailable"]
+        )
         snapshot.assert_not_called()
         reader.assert_not_called()
         affinity.assert_not_called()

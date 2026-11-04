@@ -8,42 +8,48 @@ import { fileURLToPath } from "node:url";
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const appletSource = fs.readFileSync(
   path.join(root, "files/speed-of-cinnamon@H234598/applet.js"),
-  "utf8"
+  "utf8",
 );
 const stateSource = fs.readFileSync(
   path.join(root, "src/speed_of_cinnamon/state.py"),
-  "utf8"
+  "utf8",
 );
 const cliSource = fs.readFileSync(
   path.join(root, "src/speed_of_cinnamon/cli.py"),
-  "utf8"
+  "utf8",
 );
 const backendStatusesMatch = appletSource.match(
-  /const BACKEND_PAYLOAD_STATUSES = (\[[^;]+\]);/
+  /const BACKEND_PAYLOAD_STATUSES = (\[[^;]+\]);/,
 );
 const stateStatusesMatch = stateSource.match(
-  /VALID_STATE_STATUSES = frozenset\(\{([^}]+)\}\)/s
+  /VALID_STATE_STATUSES = frozenset\(\s*\{([^}]+)\}\s*\)/s,
 );
 const cliStatusExtrasMatch = cliSource.match(
-  /_PUBLIC_PAYLOAD_STATUSES = VALID_STATE_STATUSES \| frozenset\(\s*\{([^}]+)\}/s
+  /_PUBLIC_PAYLOAD_STATUSES = VALID_STATE_STATUSES \| frozenset\(\s*\{([^}]+)\}/s,
 );
 assert.notEqual(backendStatusesMatch, null);
 assert.notEqual(stateStatusesMatch, null);
 assert.notEqual(cliStatusExtrasMatch, null);
-const backendPayloadStatuses = JSON.parse(backendStatusesMatch[1]);
-const pythonPublicPayloadStatuses = Array.from(new Set([
-  ...Array.from(stateStatusesMatch[1].matchAll(/"([^"]+)"/g), (match) => match[1]),
-  ...Array.from(cliStatusExtrasMatch[1].matchAll(/"([^"]+)"/g), (match) => match[1]),
-]));
+const backendPayloadStatuses = JSON.parse(backendStatusesMatch[1].replace(/,\s*\]$/, "]"));
+const pythonPublicPayloadStatuses = Array.from(
+  new Set([
+    ...Array.from(
+      stateStatusesMatch[1].matchAll(/"([^"]+)"/g),
+      (match) => match[1],
+    ),
+    ...Array.from(
+      cliStatusExtrasMatch[1].matchAll(/"([^"]+)"/g),
+      (match) => match[1],
+    ),
+  ]),
+);
 
 function makeDoctorPayload(ok = true) {
   return {
     schema_version: 1,
     status: "done",
     ok,
-    checks: [
-      { name: "python3", ok, detail: "python3 available" },
-    ],
+    checks: [{ name: "python3", ok, detail: "python3 available" }],
     desktop: { cinnamon: true },
     configured: {
       recorder: { ok, detail: "recorder available" },
@@ -57,15 +63,14 @@ function makeDoctorPayload(ok = true) {
 }
 
 function loadAppletMethod(name, nextName, clock, extraContext = {}) {
-  const start = appletSource.indexOf(`  ${name}: function(`);
+  const start = appletSource.search(
+    new RegExp(`^  ${name}: function\\s*\\(`, "m"),
+  );
   const end = appletSource.indexOf(`\n  ${nextName}:`, start);
   assert.notEqual(start, -1);
   assert.notEqual(end, -1);
 
-  const property = appletSource
-    .slice(start, end)
-    .trim()
-    .replace(/,\s*$/, "");
+  const property = appletSource.slice(start, end).trim().replace(/,\s*$/, "");
 
   const loadedMethod = vm.runInNewContext(`({${property}}).${name}`, {
     CLIPBOARD_READY_RETRY_MS: 40,
@@ -86,7 +91,7 @@ function loadAppletMethod(name, nextName, clock, extraContext = {}) {
     clearTimeout,
     ...extraContext,
   });
-  return function(...args) {
+  return function (...args) {
     if (this && typeof this._processCleanupStatus !== "function") {
       this._processCleanupStatus = (result) => {
         if (result === true || result === "stopped") {
@@ -106,7 +111,7 @@ const requeueErrorJournalEntry = loadAppletMethod(
   "_requeueErrorJournalEntry",
   "_clearErrorJournalRetryTimer",
   { value: 0 },
-  { MAX_ERROR_JOURNAL_QUEUE: 128 }
+  { MAX_ERROR_JOURNAL_QUEUE: 128 },
 );
 
 function makeErrorJournalSubprocessHarness(options = {}) {
@@ -131,11 +136,12 @@ function makeErrorJournalSubprocessHarness(options = {}) {
     wait_check_async() {},
     wait_check_finish: () => true,
   };
-  const cancellableRegistry = options.unregisterCancellableFails === true
-    ? new Proxy({}, { deleteProperty: () => false })
-    : {};
+  const cancellableRegistry =
+    options.unregisterCancellableFails === true
+      ? new Proxy({}, { deleteProperty: () => false })
+      : {};
   const Gio = {
-    Cancellable: function() {
+    Cancellable: function () {
       return cancellable;
     },
     SubprocessFlags: {
@@ -143,7 +149,7 @@ function makeErrorJournalSubprocessHarness(options = {}) {
       STDERR_PIPE: 2,
       STDIN_PIPE: 4,
     },
-    SubprocessLauncher: function() {
+    SubprocessLauncher: function () {
       return {
         setenv() {},
         spawnv(args) {
@@ -181,34 +187,34 @@ function makeErrorJournalSubprocessHarness(options = {}) {
       SUBPROCESS_READ_CHUNK_BYTES: 256,
       _decodeSubprocessOutputChunks: () => "",
       utf8ByteLength: (value) => Buffer.byteLength(value, "utf8"),
-    }
+    },
   );
   const reportSubprocessError = loadAppletMethod(
     "_reportSubprocessError",
     "_recordLifecycleError",
-    { value: 0 }
+    { value: 0 },
   );
   const unregisterCancellable = loadAppletMethod(
     "_unregisterCancellable",
     "_trackOrphanedCancellable",
-    { value: 0 }
+    { value: 0 },
   );
   const clearTrackedTimer = loadAppletMethod(
     "_clearTrackedTimer",
     "_scheduleTrackedTimer",
     { value: 0 },
-    { Mainloop }
+    { Mainloop },
   );
   const trackedTimerOwnedBy = loadAppletMethod(
     "_trackedTimerOwnedBy",
     "_untrackTimer",
-    { value: 0 }
+    { value: 0 },
   );
   const scheduleTrackedTimer = loadAppletMethod(
     "_scheduleTrackedTimer",
     "_init",
     { value: 0 },
-    { Mainloop }
+    { Mainloop },
   );
   const applet = {
     appletRemoved: false,
@@ -237,18 +243,19 @@ function makeErrorJournalSubprocessHarness(options = {}) {
       this._resourceRegistry.cancellables["cancellable-1"] = target;
       return "cancellable-1";
     },
-    _unregisterCancellable: options.unregisterCancellableFails === true
-      ? unregisterCancellable
-      : () => true,
+    _unregisterCancellable:
+      options.unregisterCancellableFails === true
+        ? unregisterCancellable
+        : () => true,
     _untrackOrphanedCancellable: () => true,
     _unregisterProcess: () => true,
     _untrackOrphanedProcess: () => true,
-    _clearTrackedTimer: options.realTimeoutTimerFailure === true
-      ? clearTrackedTimer
-      : () => true,
-    _scheduleTrackedTimer: options.realTimeoutTimerFailure === true
-      ? scheduleTrackedTimer
-      : undefined,
+    _clearTrackedTimer:
+      options.realTimeoutTimerFailure === true ? clearTrackedTimer : () => true,
+    _scheduleTrackedTimer:
+      options.realTimeoutTimerFailure === true
+        ? scheduleTrackedTimer
+        : undefined,
     _trackTimer(name, sourceId, propertyName, _resourceGroup, owner) {
       this._resourceRegistry.timers[name] = sourceId;
       this._resourceRegistry.timerOwners[name] = owner || {};
@@ -260,9 +267,8 @@ function makeErrorJournalSubprocessHarness(options = {}) {
     },
     _trackedTimerOwnedBy: trackedTimerOwnedBy,
     _untrackTimer: () => true,
-    _untrackOrphanedTimer: options.realTimeoutTimerFailure === true
-      ? () => false
-      : () => true,
+    _untrackOrphanedTimer:
+      options.realTimeoutTimerFailure === true ? () => false : () => true,
     _trackOrphanedTimer: () => true,
     _runStateGuarded(_group, callback) {
       return callback();
@@ -309,7 +315,7 @@ test("error journal spawn failure cannot recursively spawn record-error", () => 
       ["/trusted/soc", "record-error", "--json"],
       {},
       { resourceGroup: "error-journal", timeoutMs: 0 },
-      () => {}
+      () => {},
     );
   };
 
@@ -318,7 +324,7 @@ test("error journal spawn failure cannot recursively spawn record-error", () => 
     ["/trusted/soc", "record-error", "--json"],
     {},
     { resourceGroup: "error-journal", timeoutMs: 0 },
-    () => {}
+    () => {},
   );
 
   assert.equal(handle, null);
@@ -335,7 +341,7 @@ test("non-journal spawn failure keeps normal lifecycle reporting", () => {
     ["/trusted/soc", "status", "--json"],
     {},
     { resourceGroup: "status", timeoutMs: 0 },
-    () => {}
+    () => {},
   );
 
   assert.equal(handle, null);
@@ -348,7 +354,7 @@ test("error journal null handle is retained without recursive drain", () => {
   const drainErrorJournalQueue = loadAppletMethod(
     "_drainErrorJournalQueue",
     "_safeLogError",
-    { value: 0 }
+    { value: 0 },
   );
   const spawnCalls = [];
   const entry = { group: "status", message: "status start failed" };
@@ -369,7 +375,10 @@ test("error journal null handle is retained without recursive drain", () => {
   drainErrorJournalQueue.call(applet);
 
   assert.equal(spawnCalls.length, 1);
-  assert.equal(Array.from(spawnCalls[0].args).join("\0"), "/trusted/soc\0record-error\0--json");
+  assert.equal(
+    Array.from(spawnCalls[0].args).join("\0"),
+    "/trusted/soc\0record-error\0--json",
+  );
   assert.equal(spawnCalls[0].options.resourceGroup, "error-journal");
   assert.equal(applet.errorJournalInFlight, false);
   assert.deepEqual(applet.errorJournalQueue, [entry]);
@@ -379,7 +388,7 @@ test("error journal keeps failed payload and removes only explicit success", () 
   const drainErrorJournalQueue = loadAppletMethod(
     "_drainErrorJournalQueue",
     "_safeLogError",
-    { value: 0 }
+    { value: 0 },
   );
   for (const [payload, expectedQueued, expectedSafeLogs] of [
     [{ status: "error", error: "journal unavailable" }, 1, 1],
@@ -426,7 +435,7 @@ test("asynchronous error journal failure requeues without immediate respawn", ()
   const drainErrorJournalQueue = loadAppletMethod(
     "_drainErrorJournalQueue",
     "_safeLogError",
-    { value: 0 }
+    { value: 0 },
   );
   const entry = { group: "status", message: "status start failed" };
   const safeErrors = [];
@@ -467,7 +476,7 @@ test("error journal drain composes with real spawnJson success validation", () =
   const drainErrorJournalQueue = loadAppletMethod(
     "_drainErrorJournalQueue",
     "_safeLogError",
-    clock
+    clock,
   );
   const spawnJson = loadAppletMethod("_spawnJson", "_spawnText", clock, {
     CLI_COMMAND_TIMEOUT_MS: 1000,
@@ -477,12 +486,12 @@ test("error journal drain composes with real spawnJson success validation", () =
   const guardStateCallback = loadAppletMethod(
     "_guardStateCallback",
     "_handleInitializationFailure",
-    clock
+    clock,
   );
   const reportSubprocessError = loadAppletMethod(
     "_reportSubprocessError",
     "_recordLifecycleError",
-    clock
+    clock,
   );
   for (const [payload, expectedQueued] of [
     [{ status: "error", error: "journal unavailable" }, 1],
@@ -520,7 +529,7 @@ test("error journal drain composes with real spawnJson success validation", () =
       _safeLogError(error) {
         safeErrors.push(error);
       },
-      _lifecycleErrorText: (error) => String(error && error.message || error),
+      _lifecycleErrorText: (error) => String((error && error.message) || error),
     };
 
     drainErrorJournalQueue.call(applet);
@@ -536,7 +545,7 @@ function makeErrorJournalRetryHarness(payloads) {
   const drainErrorJournalQueue = loadAppletMethod(
     "_drainErrorJournalQueue",
     "_safeLogError",
-    clock
+    clock,
   );
   const scheduleErrorJournalRetry = loadAppletMethod(
     "_scheduleErrorJournalRetry",
@@ -545,12 +554,12 @@ function makeErrorJournalRetryHarness(payloads) {
     {
       ERROR_JOURNAL_RETRY_BASE_MS: 250,
       ERROR_JOURNAL_RETRY_MAX_MS: 4000,
-    }
+    },
   );
   const clearErrorJournalRetryTimer = loadAppletMethod(
     "_clearErrorJournalRetryTimer",
     "_scheduleErrorJournalRetry",
-    clock
+    clock,
   );
   const timers = [];
   let spawnCalls = 0;
@@ -572,7 +581,14 @@ function makeErrorJournalRetryHarness(payloads) {
       callback(payload);
       return { token: `journal-${spawnCalls}` };
     },
-    _scheduleTrackedTimer(name, delay, callback, useSeconds, propertyName, resourceGroup) {
+    _scheduleTrackedTimer(
+      name,
+      delay,
+      callback,
+      useSeconds,
+      propertyName,
+      resourceGroup,
+    ) {
       const timer = {
         id: timers.length + 1,
         name,
@@ -592,7 +608,13 @@ function makeErrorJournalRetryHarness(payloads) {
     },
     _safeLogError() {},
   };
-  return { applet, timers, get spawnCalls() { return spawnCalls; } };
+  return {
+    applet,
+    timers,
+    get spawnCalls() {
+      return spawnCalls;
+    },
+  };
 }
 
 test("failed error journal payload retries once by timer then resets on success", () => {
@@ -609,7 +631,10 @@ test("failed error journal payload retries once by timer then resets on success"
   assert.equal(harness.timers[0].delay, 250);
   assert.equal(harness.timers[0].resourceGroup, "error-journal");
 
-  harness.applet.errorJournalQueue.push({ group: "status", message: "another failure" });
+  harness.applet.errorJournalQueue.push({
+    group: "status",
+    message: "another failure",
+  });
   harness.applet._drainErrorJournalQueue();
   assert.equal(harness.spawnCalls, 1);
   assert.equal(harness.timers.length, 1);
@@ -636,12 +661,18 @@ test("error journal retry uses one capped timer and remains teardown safe", () =
     assert.equal(harness.timers[index].callback(), false);
   }
 
-  assert.deepEqual(harness.timers.map((timer) => timer.delay), [250, 500, 1000, 2000, 4000, 4000, 4000]);
+  assert.deepEqual(
+    harness.timers.map((timer) => timer.delay),
+    [250, 500, 1000, 2000, 4000, 4000, 4000],
+  );
   harness.applet.errorJournalQueue = Array.from(
     { length: 128 },
-    (_value, index) => ({ group: "status", message: `error-${index}` })
+    (_value, index) => ({ group: "status", message: `error-${index}` }),
   );
-  harness.applet._requeueErrorJournalEntry({ group: "status", message: "retry" });
+  harness.applet._requeueErrorJournalEntry({
+    group: "status",
+    message: "retry",
+  });
   assert.equal(harness.applet.errorJournalQueue.length, 128);
   assert.equal(harness.applet.errorJournalQueue[0].message, "retry");
 
@@ -657,13 +688,13 @@ test("error journal retry scheduling blocks reentrant drain from foreign timer c
   const drainErrorJournalQueue = loadAppletMethod(
     "_drainErrorJournalQueue",
     "_safeLogError",
-    clock
+    clock,
   );
   const recordErrorFile = loadAppletMethod(
     "_recordErrorFile",
     "_drainErrorJournalQueue",
     clock,
-    { MAX_ERROR_JOURNAL_QUEUE: 128 }
+    { MAX_ERROR_JOURNAL_QUEUE: 128 },
   );
   const scheduleErrorJournalRetry = loadAppletMethod(
     "_scheduleErrorJournalRetry",
@@ -672,7 +703,7 @@ test("error journal retry scheduling blocks reentrant drain from foreign timer c
     {
       ERROR_JOURNAL_RETRY_BASE_MS: 250,
       ERROR_JOURNAL_RETRY_MAX_MS: 4000,
-    }
+    },
   );
   const scheduleTrackedTimer = loadAppletMethod(
     "_scheduleTrackedTimer",
@@ -689,7 +720,7 @@ test("error journal retry scheduling blocks reentrant drain from foreign timer c
           throw new Error("seconds timer is unexpected");
         },
       },
-    }
+    },
   );
   const retryOrphanedTimers = loadAppletMethod(
     "_retryOrphanedTimers",
@@ -699,30 +730,38 @@ test("error journal retry scheduling blocks reentrant drain from foreign timer c
       LIFECYCLE_REMOVED: "REMOVED",
       LIFECYCLE_REMOVING: "REMOVING",
       Mainloop: { source_remove: () => false },
-    }
+    },
   );
   const clearTrackedTimer = loadAppletMethod(
     "_clearTrackedTimer",
     "_scheduleTrackedTimer",
     clock,
-    { Mainloop: { source_remove: () => false } }
+    { Mainloop: { source_remove: () => false } },
   );
   const trackedTimerOwnedBy = loadAppletMethod(
     "_trackedTimerOwnedBy",
     "_untrackTimer",
-    clock
+    clock,
   );
-  const trackTimer = loadAppletMethod("_trackTimer", "_trackedTimerOwnedBy", clock);
-  const untrackTimer = loadAppletMethod("_untrackTimer", "_trackOrphanedTimer", clock);
+  const trackTimer = loadAppletMethod(
+    "_trackTimer",
+    "_trackedTimerOwnedBy",
+    clock,
+  );
+  const untrackTimer = loadAppletMethod(
+    "_untrackTimer",
+    "_trackOrphanedTimer",
+    clock,
+  );
   const untrackOrphanedTimer = loadAppletMethod(
     "_untrackOrphanedTimer",
     "_retryOrphanedTimers",
-    clock
+    clock,
   );
   const reportSubprocessError = loadAppletMethod(
     "_reportSubprocessError",
     "_recordLifecycleError",
-    clock
+    clock,
   );
   const timerCallbacks = [];
   const payloads = [
@@ -742,13 +781,15 @@ test("error journal retry scheduling blocks reentrant drain from foreign timer c
     errorJournalRetryTimer: 0,
     errorJournalRetryScheduling: false,
     _activeTrackedTimer: null,
-    _orphanedTimers: [{
-      name: "foreign-timer",
-      sourceId: 31,
-      propertyName: "",
-      sourceRemoved: false,
-      resourceGroup: "status",
-    }],
+    _orphanedTimers: [
+      {
+        name: "foreign-timer",
+        sourceId: 31,
+        propertyName: "",
+        sourceRemoved: false,
+        resourceGroup: "status",
+      },
+    ],
     _resourceRegistry: { timers: {}, timerGroups: {}, timerOwners: {} },
     _lifecycleAllowsWork: () => true,
     _cliCommand: () => "/trusted/soc",
@@ -757,7 +798,13 @@ test("error journal retry scheduling blocks reentrant drain from foreign timer c
     _requeueErrorJournalEntry: requeueErrorJournalEntry,
     _scheduleErrorJournalRetry: scheduleErrorJournalRetry,
     _clearErrorJournalRetryTimer() {
-      return clearTrackedTimer.call(this, "error-journal-retry", "errorJournalRetryTimer", undefined, "error-journal");
+      return clearTrackedTimer.call(
+        this,
+        "error-journal-retry",
+        "errorJournalRetryTimer",
+        undefined,
+        "error-journal",
+      );
     },
     _scheduleTrackedTimer: scheduleTrackedTimer,
     _retryOrphanedTimers: retryOrphanedTimers,
@@ -772,7 +819,7 @@ test("error journal retry scheduling blocks reentrant drain from foreign timer c
       lifecycleErrors += 1;
       this._recordErrorFile(group, error);
     },
-    _lifecycleErrorText: (error) => String(error && error.message || error),
+    _lifecycleErrorText: (error) => String((error && error.message) || error),
     _safeLogError() {},
     _spawnJson(_args, callback) {
       const payload = payloads[spawnCalls];
@@ -801,7 +848,7 @@ test("error journal retry scheduling clears gate after scheduler throw or zero",
   const drainErrorJournalQueue = loadAppletMethod(
     "_drainErrorJournalQueue",
     "_safeLogError",
-    clock
+    clock,
   );
   const scheduleErrorJournalRetry = loadAppletMethod(
     "_scheduleErrorJournalRetry",
@@ -810,7 +857,7 @@ test("error journal retry scheduling clears gate after scheduler throw or zero",
     {
       ERROR_JOURNAL_RETRY_BASE_MS: 250,
       ERROR_JOURNAL_RETRY_MAX_MS: 4000,
-    }
+    },
   );
 
   for (const schedulerResult of ["throw", "zero"]) {
@@ -871,7 +918,7 @@ test("error journal cleanup failure only uses bounded safe logging", () => {
     ["/trusted/soc", "record-error", "--json"],
     {},
     { resourceGroup: "error-journal", timeoutMs: 0 },
-    (_stdout, _stderr, result) => callbackResults.push(result)
+    (_stdout, _stderr, result) => callbackResults.push(result),
   );
 
   assert.notEqual(handle, null);
@@ -883,7 +930,9 @@ test("error journal cleanup failure only uses bounded safe logging", () => {
 });
 
 test("error journal internal unregister failure cannot start another journal spawn", () => {
-  const harness = makeErrorJournalSubprocessHarness({ unregisterCancellableFails: true });
+  const harness = makeErrorJournalSubprocessHarness({
+    unregisterCancellableFails: true,
+  });
   const callbackResults = [];
   let recursiveAttempts = 0;
   harness.applet._recordLifecycleError = () => {
@@ -893,7 +942,7 @@ test("error journal internal unregister failure cannot start another journal spa
       ["/trusted/soc", "record-error", "--json"],
       {},
       { resourceGroup: "error-journal", timeoutMs: 0 },
-      () => {}
+      () => {},
     );
   };
   const handle = harness.runBoundedSubprocess.call(
@@ -901,7 +950,7 @@ test("error journal internal unregister failure cannot start another journal spa
     ["/trusted/soc", "record-error", "--json"],
     {},
     { resourceGroup: "error-journal", timeoutMs: 0 },
-    (_stdout, _stderr, result) => callbackResults.push(result)
+    (_stdout, _stderr, result) => callbackResults.push(result),
   );
 
   assert.notEqual(handle, null);
@@ -917,12 +966,12 @@ test("global delayed cleanup orchestrator failure remains neutral", () => {
   const scheduleProcessCleanupRetry = loadAppletMethod(
     "_scheduleProcessCleanupRetry",
     "_cancelPendingRecordingStart",
-    { value: 0 }
+    { value: 0 },
   );
   const reportSubprocessError = loadAppletMethod(
     "_reportSubprocessError",
     "_recordLifecycleError",
-    { value: 0 }
+    { value: 0 },
   );
   const lifecycleErrors = [];
   const safeErrors = [];
@@ -932,7 +981,14 @@ test("global delayed cleanup orchestrator failure remains neutral", () => {
     processCleanupRetryTimer: 0,
     _lifecycleAllowsWork: () => true,
     _processCleanupStillPending: () => true,
-    _scheduleTrackedTimer(_name, _delay, callback, _useSeconds, _propertyName, resourceGroup) {
+    _scheduleTrackedTimer(
+      _name,
+      _delay,
+      callback,
+      _useSeconds,
+      _propertyName,
+      resourceGroup,
+    ) {
       retryCallback = callback;
       retryResourceGroup = resourceGroup;
       return 71;
@@ -961,7 +1017,7 @@ test("tracking the same monitor orphan twice upgrades its existing entry", () =>
   const trackOrphanedMonitor = loadAppletMethod(
     "_trackOrphanedMonitor",
     "_untrackOrphanedMonitor",
-    { value: 0 }
+    { value: 0 },
   );
   const monitor = {};
   const lifecycleErrors = [];
@@ -993,13 +1049,13 @@ test("missing cancellable registry routes known orphans by resource group", () =
   const reportSubprocessError = loadAppletMethod(
     "_reportSubprocessError",
     "_recordLifecycleError",
-    { value: 0 }
+    { value: 0 },
   );
   const retryCancellables = loadAppletMethod(
     "_retryOrphanedCancellables",
     "_cancelAllCancellables",
     { value: 0 },
-    { LIFECYCLE_REMOVED: "REMOVED", LIFECYCLE_REMOVING: "REMOVING" }
+    { LIFECYCLE_REMOVED: "REMOVED", LIFECYCLE_REMOVING: "REMOVING" },
   );
 
   for (const [resourceGroup, expectedLifecycleErrors, expectedSafeErrors] of [
@@ -1011,16 +1067,20 @@ test("missing cancellable registry routes known orphans by resource group", () =
     const applet = {
       appletRemoved: false,
       lifecycleState: "RUNNING",
-      _orphanedCancellables: [{
-        token: "c-1",
-        cancelSucceeded: false,
-        resourceGroup,
-      }],
+      _orphanedCancellables: [
+        {
+          token: "c-1",
+          cancelSucceeded: false,
+          resourceGroup,
+        },
+      ],
       _resourceRegistry: {},
       _reportSubprocessError: reportSubprocessError,
       _recordLifecycleError(group, error) {
         if (resourceGroup === "error-journal") {
-          throw new Error("error-journal failure recursed into lifecycle journaling");
+          throw new Error(
+            "error-journal failure recursed into lifecycle journaling",
+          );
         }
         lifecycleErrors.push([group, error]);
       },
@@ -1044,19 +1104,19 @@ test("mixed orphan cleanup routes each entry by its own resource group", () => {
   const reportSubprocessError = loadAppletMethod(
     "_reportSubprocessError",
     "_recordLifecycleError",
-    { value: 0 }
+    { value: 0 },
   );
   const retryProcesses = loadAppletMethod(
     "_retryOrphanedProcesses",
     "_processCleanupStillPending",
     { value: 0 },
-    { LIFECYCLE_REMOVED: "REMOVED", LIFECYCLE_REMOVING: "REMOVING" }
+    { LIFECYCLE_REMOVED: "REMOVED", LIFECYCLE_REMOVING: "REMOVING" },
   );
   const retryCancellables = loadAppletMethod(
     "_retryOrphanedCancellables",
     "_cancelAllCancellables",
     { value: 0 },
-    { LIFECYCLE_REMOVED: "REMOVED", LIFECYCLE_REMOVING: "REMOVING" }
+    { LIFECYCLE_REMOVED: "REMOVED", LIFECYCLE_REMOVING: "REMOVING" },
   );
   const retryTimers = loadAppletMethod(
     "_retryOrphanedTimers",
@@ -1066,7 +1126,7 @@ test("mixed orphan cleanup routes each entry by its own resource group", () => {
       LIFECYCLE_REMOVED: "REMOVED",
       LIFECYCLE_REMOVING: "REMOVING",
       Mainloop: { source_remove: () => false },
-    }
+    },
   );
 
   for (const groups of [
@@ -1102,8 +1162,16 @@ test("mixed orphan cleanup routes each entry by its own resource group", () => {
       })),
       _resourceRegistry: {
         cancellables: {
-          "c-0": { cancel() { throw new Error("cancel failed"); } },
-          "c-1": { cancel() { throw new Error("cancel failed"); } },
+          "c-0": {
+            cancel() {
+              throw new Error("cancel failed");
+            },
+          },
+          "c-1": {
+            cancel() {
+              throw new Error("cancel failed");
+            },
+          },
         },
       },
     };
@@ -1131,17 +1199,17 @@ test("mixed teardown registries route each entry by its stored resource group", 
   const reportSubprocessError = loadAppletMethod(
     "_reportSubprocessError",
     "_recordLifecycleError",
-    { value: 0 }
+    { value: 0 },
   );
   const terminateAllProcesses = loadAppletMethod(
     "_terminateAllProcesses",
     "_terminateProcessesByGroup",
-    { value: 0 }
+    { value: 0 },
   );
   const cancelAllCancellables = loadAppletMethod(
     "_cancelAllCancellables",
     "_trackTimer",
-    { value: 0 }
+    { value: 0 },
   );
 
   for (const groups of [
@@ -1162,16 +1230,18 @@ test("mixed teardown registries route each entry by its stored resource group", 
     const processApplet = {
       ...base,
       _resourceRegistry: {
-        processes: Object.fromEntries(groups.map((group, index) => [
-          `p-${index}`,
-          {
-            group,
-            process: {},
-            cancel() {
-              throw new Error("process cancel failed");
+        processes: Object.fromEntries(
+          groups.map((group, index) => [
+            `p-${index}`,
+            {
+              group,
+              process: {},
+              cancel() {
+                throw new Error("process cancel failed");
+              },
             },
-          },
-        ])),
+          ]),
+        ),
       },
       _trackOrphanedProcess: () => true,
     };
@@ -1180,15 +1250,19 @@ test("mixed teardown registries route each entry by its stored resource group", 
     const cancellableApplet = {
       ...base,
       _resourceRegistry: {
-        cancellables: Object.fromEntries(groups.map((_group, index) => [
-          `c-${index}`,
-          {
-            cancel() {
-              throw new Error("cancellable cancel failed");
+        cancellables: Object.fromEntries(
+          groups.map((_group, index) => [
+            `c-${index}`,
+            {
+              cancel() {
+                throw new Error("cancellable cancel failed");
+              },
             },
-          },
-        ])),
-        cancellableGroups: Object.fromEntries(groups.map((group, index) => [`c-${index}`, group])),
+          ]),
+        ),
+        cancellableGroups: Object.fromEntries(
+          groups.map((group, index) => [`c-${index}`, group]),
+        ),
       },
       _trackOrphanedCancellable: () => true,
     };
@@ -1203,7 +1277,7 @@ test("singleton cleanup retry never applies first caller group to mixed orphans"
   const scheduleProcessCleanupRetry = loadAppletMethod(
     "_scheduleProcessCleanupRetry",
     "_cancelPendingRecordingStart",
-    { value: 0 }
+    { value: 0 },
   );
   let retryCallback = null;
   const retryArgumentCounts = [];
@@ -1243,14 +1317,16 @@ test("singleton cleanup retry never applies first caller group to mixed orphans"
 });
 
 test("error journal timeout timer cleanup failure stays non-recursive", () => {
-  const harness = makeErrorJournalSubprocessHarness({ realTimeoutTimerFailure: true });
+  const harness = makeErrorJournalSubprocessHarness({
+    realTimeoutTimerFailure: true,
+  });
   const callbackResults = [];
   const handle = harness.runBoundedSubprocess.call(
     harness.applet,
     ["/trusted/soc", "record-error", "--json"],
     {},
     { resourceGroup: "error-journal", timeoutMs: 25 },
-    (_stdout, _stderr, result) => callbackResults.push(result)
+    (_stdout, _stderr, result) => callbackResults.push(result),
   );
 
   assert.notEqual(handle, null);
@@ -1271,7 +1347,7 @@ test("error journal callback failure only uses bounded safe logging", () => {
     { resourceGroup: "error-journal", timeoutMs: 0 },
     () => {
       throw new Error("journal callback failed");
-    }
+    },
   );
 
   assert.notEqual(handle, null);
@@ -1290,17 +1366,17 @@ test("spawnJson keeps error journal callback failure out of lifecycle journal", 
   const guardStateCallback = loadAppletMethod(
     "_guardStateCallback",
     "_handleInitializationFailure",
-    clock
+    clock,
   );
   const runStateGuarded = loadAppletMethod(
     "_runStateGuarded",
     "_runTeardownGuarded",
-    clock
+    clock,
   );
   const reportSubprocessError = loadAppletMethod(
     "_reportSubprocessError",
     "_recordLifecycleError",
-    clock
+    clock,
   );
   const lifecycleErrors = [];
   const safeErrors = [];
@@ -1327,7 +1403,7 @@ test("spawnJson keeps error journal callback failure out of lifecycle journal", 
     _safeLogError(error) {
       safeErrors.push(error);
     },
-    _lifecycleErrorText: (error) => String(error && error.message || error),
+    _lifecycleErrorText: (error) => String((error && error.message) || error),
   };
 
   const handle = spawnJson.call(
@@ -1336,7 +1412,7 @@ test("spawnJson keeps error journal callback failure out of lifecycle journal", 
     () => {
       throw new Error("journal callback failed");
     },
-    { resourceGroup: "error-journal", invalidatesStatus: false }
+    { resourceGroup: "error-journal", invalidatesStatus: false },
   );
 
   assert.equal(handle.token, "journal");
@@ -1349,7 +1425,7 @@ test("empty done payload follows relisten completion while insert is active", ()
   const finishAppletTextInsert = loadAppletMethod(
     "_finishAppletTextInsert",
     "_insertTranscriptText",
-    clock
+    clock,
   );
   const completedPayloads = [];
   const applet = {
@@ -1371,7 +1447,7 @@ test("preserved status refreshes transcript action sensitivity", () => {
   const setStatusPreservingRecording = loadAppletMethod(
     "_setStatusPreservingRecording",
     "_setStatus",
-    clock
+    clock,
   );
   const copyItem = {};
   const insertItem = {};
@@ -1398,7 +1474,12 @@ test("preserved status refreshes transcript action sensitivity", () => {
     _recordLifecycleError() {},
   };
 
-  setStatusPreservingRecording.call(applet, "done", "Transcript ready", "hello");
+  setStatusPreservingRecording.call(
+    applet,
+    "done",
+    "Transcript ready",
+    "hello",
+  );
 
   assert.equal(applet.lastTranscript, "hello");
   assert.equal(copyItem.sensitive, true);
@@ -1415,7 +1496,7 @@ test("settings import preserves only allowlisted status icons", () => {
     {
       BOOLEAN_IMPORT_SETTINGS: {},
       STATUS_ICON_ALLOWLIST: { "soc-original": true, "ready-01": true },
-    }
+    },
   );
   const applet = {
     _coerceImportedEnumSetting(value, allowedValues, fallback) {
@@ -1424,12 +1505,22 @@ test("settings import preserves only allowlisted status icons", () => {
   };
 
   assert.equal(
-    coerceImportedSetting.call(applet, "status-icon-ready", "ready-01", "soc-original"),
-    "ready-01"
+    coerceImportedSetting.call(
+      applet,
+      "status-icon-ready",
+      "ready-01",
+      "soc-original",
+    ),
+    "ready-01",
   );
   assert.equal(
-    coerceImportedSetting.call(applet, "status-icon-ready", "ready-999", "soc-original"),
-    "soc-original"
+    coerceImportedSetting.call(
+      applet,
+      "status-icon-ready",
+      "ready-999",
+      "soc-original",
+    ),
+    "soc-original",
   );
 });
 
@@ -1449,7 +1540,7 @@ test("recording starts when only focus target capture fails", () => {
   const startWithLanguage = loadAppletMethod(
     "_startWithLanguage",
     "_populateLanguageMenu",
-    clock
+    clock,
   );
   let toggleCalls = 0;
   const applet = {
@@ -1481,7 +1572,7 @@ test("language start does not report success before focus callback", () => {
   const startWithLanguage = loadAppletMethod(
     "_startWithLanguage",
     "_populateLanguageMenu",
-    clock
+    clock,
   );
   let completeFocus;
   let toggleCalls = 0;
@@ -1516,7 +1607,7 @@ test("language start clears token when focus capture throws", () => {
   const startWithLanguage = loadAppletMethod(
     "_startWithLanguage",
     "_populateLanguageMenu",
-    clock
+    clock,
   );
   let lifecycleErrors = 0;
   const applet = {
@@ -1545,7 +1636,7 @@ test("language start rejects synchronous toggle exception", () => {
   const startWithLanguage = loadAppletMethod(
     "_startWithLanguage",
     "_populateLanguageMenu",
-    clock
+    clock,
   );
   let lifecycleErrors = 0;
   const applet = {
@@ -1587,32 +1678,32 @@ test("main hotkey waits for focus capture and cancels stale pending start", () =
       PRIMARY_HOTKEY_ID: "speed-of-cinnamon-primary-language",
       SECONDARY_HOTKEY_ID: "speed-of-cinnamon-secondary-language",
       CANCEL_HOTKEY_ID: "speed-of-cinnamon-cancel",
-    }
+    },
   );
   const startWithLanguage = loadAppletMethod(
     "_startWithLanguage",
     "_populateLanguageMenu",
-    clock
+    clock,
   );
   const cancelPendingFocusStart = loadAppletMethod(
     "_cancelPendingRecordingFocusStart",
     "_populateLanguageMenu",
-    clock
+    clock,
   );
   const cancelRecording = loadAppletMethod(
     "_cancelRecording",
     "_invalidateBackgroundCallbacksForRecording",
-    clock
+    clock,
   );
   const cancelPendingRecordingStart = loadAppletMethod(
     "_cancelPendingRecordingStart",
     "_queueRecordingStartAfterCleanup",
-    clock
+    clock,
   );
   const clearAutoRelistenRetryTimer = loadAppletMethod(
     "_clearAutoRelistenRetryTimer",
     "_transcriptDigest",
-    clock
+    clock,
   );
   let completeFocus;
   let startCalls = 0;
@@ -1690,12 +1781,12 @@ for (const transientBlock of ["busy", "cleanup"]) {
     const finishPendingRelisten = loadAppletMethod(
       "_finishPendingRelisten",
       "_transcriptDigest",
-      clock
+      clock,
     );
     const schedulePendingAutoRelistenRetry = loadAppletMethod(
       "_schedulePendingAutoRelistenRetry",
       "_clearAutoRelistenRetryTimer",
-      clock
+      clock,
     );
     const timers = [];
     let relistenCalls = 0;
@@ -1711,7 +1802,8 @@ for (const transientBlock of ["busy", "cleanup"]) {
       _autoRelistenStartBlock: "",
       isCommandRunning: transientBlock === "busy",
       _hasLocalProcessingWorkflow: () => false,
-      _processCleanupStillPending: () => transientBlock === "cleanup" && blocked,
+      _processCleanupStillPending: () =>
+        transientBlock === "cleanup" && blocked,
       _lifecycleAllowsWork: () => true,
       _restartRelistenRecording() {
         relistenCalls += 1;
@@ -1746,7 +1838,7 @@ for (const transientBlock of ["busy", "cleanup"]) {
     assert.equal(relistenCalls, 2);
     assert.equal(applet.autoRelistenPending, true);
     assert.equal(applet.autoRelistenPendingToken, "1:recording");
-});
+  });
 }
 
 test("auto relisten retry schedule failure terminates pending work", () => {
@@ -1754,12 +1846,12 @@ test("auto relisten retry schedule failure terminates pending work", () => {
   const finishPendingRelisten = loadAppletMethod(
     "_finishPendingRelisten",
     "_transcriptDigest",
-    clock
+    clock,
   );
   const schedulePendingAutoRelistenRetry = loadAppletMethod(
     "_schedulePendingAutoRelistenRetry",
     "_clearAutoRelistenRetryTimer",
-    clock
+    clock,
   );
   const statusEvents = [];
   const applet = {
@@ -1802,27 +1894,27 @@ test("new auto relisten reservation clears stale retry before scheduling", () =>
   const ensurePendingRelisten = loadAppletMethod(
     "_ensureAutoRelistenPendingForDonePayload",
     "_finishPendingRelisten",
-    clock
+    clock,
   );
   const finishPendingRelisten = loadAppletMethod(
     "_finishPendingRelisten",
     "_transcriptDigest",
-    clock
+    clock,
   );
   const prepareAutoRelistenReservation = loadAppletMethod(
     "_prepareAutoRelistenReservation",
     "_finishPendingRelisten",
-    clock
+    clock,
   );
   const clearAutoRelistenRetryTimer = loadAppletMethod(
     "_clearAutoRelistenRetryTimer",
     "_transcriptDigest",
-    clock
+    clock,
   );
   const schedulePendingAutoRelistenRetry = loadAppletMethod(
     "_schedulePendingAutoRelistenRetry",
     "_clearAutoRelistenRetryTimer",
-    clock
+    clock,
   );
   const clearedTimers = [];
   const scheduledTimers = [];
@@ -1864,7 +1956,9 @@ test("new auto relisten reservation clears stale retry before scheduling", () =>
 
   assert.equal(ensurePendingRelisten.call(applet, { language: "de" }), true);
   assert.equal(applet.autoRelistenPendingToken, "1:done:new-recording");
-  assert.deepEqual(clearedTimers, [["auto-relisten-retry", "autoRelistenRetryTimer"]]);
+  assert.deepEqual(clearedTimers, [
+    ["auto-relisten-retry", "autoRelistenRetryTimer"],
+  ]);
 
   assert.equal(applet._finishPendingRelisten(), false);
   assert.equal(scheduledTimers.length, 1);
@@ -1885,7 +1979,7 @@ test("failed stale retry clear prevents timed auto relisten reservation", () => 
 
   applet._maybeAutoTranscribeRecorded(
     { status: "recorded", audio_path: "/tmp/new-recording.flac" },
-    "recorded"
+    "recorded",
   );
 
   assert.equal(harness.requests.length, 0);
@@ -1900,17 +1994,17 @@ test("failed stale retry clear prevents done auto relisten reservation", () => {
   const ensurePendingRelisten = loadAppletMethod(
     "_ensureAutoRelistenPendingForDonePayload",
     "_finishPendingRelisten",
-    clock
+    clock,
   );
   const prepareAutoRelistenReservation = loadAppletMethod(
     "_prepareAutoRelistenReservation",
     "_finishPendingRelisten",
-    clock
+    clock,
   );
   const clearAutoRelistenRetryTimer = loadAppletMethod(
     "_clearAutoRelistenRetryTimer",
     "_transcriptDigest",
-    clock
+    clock,
   );
   const applet = {
     autoRelisten: true,
@@ -1945,7 +2039,7 @@ test("manual stop invalidates pending auto relisten retry", () => {
   const schedulePendingAutoRelistenRetry = loadAppletMethod(
     "_schedulePendingAutoRelistenRetry",
     "_clearAutoRelistenRetryTimer",
-    clock
+    clock,
   );
   const harness = makeRecordingApplet();
   const { applet } = harness;
@@ -1961,7 +2055,9 @@ test("manual stop invalidates pending auto relisten retry", () => {
   staleRetryCallback();
   applet._cancelRecording();
 
-  assert.deepEqual(harness.trackedTimerClears, [["auto-relisten-retry", "autoRelistenRetryTimer"]]);
+  assert.deepEqual(harness.trackedTimerClears, [
+    ["auto-relisten-retry", "autoRelistenRetryTimer"],
+  ]);
   assert.equal(applet.autoRelistenRetryTimer, 0);
   assert.equal(applet.autoRelistenPending, false);
   assert.equal(applet.autoRelistenPendingToken, "");
@@ -1979,7 +2075,7 @@ test("teardown invalidates and removes the tracked auto relisten timer", () => {
       PRIMARY_HOTKEY_ID: "speed-of-cinnamon-primary-language",
       SECONDARY_HOTKEY_ID: "speed-of-cinnamon-secondary-language",
       CANCEL_HOTKEY_ID: "speed-of-cinnamon-cancel",
-    }
+    },
   );
   const beginTeardown = loadAppletMethod(
     "_beginTeardown",
@@ -1988,7 +2084,7 @@ test("teardown invalidates and removes the tracked auto relisten timer", () => {
     {
       LIFECYCLE_REMOVING: "REMOVING",
       LIFECYCLE_REMOVED: "REMOVED",
-    }
+    },
   );
   const clearedTimers = [];
   const applet = {
@@ -2005,7 +2101,7 @@ test("teardown invalidates and removes the tracked auto relisten timer", () => {
     _clearAutoRelistenRetryTimer: loadAppletMethod(
       "_clearAutoRelistenRetryTimer",
       "_transcriptDigest",
-      clock
+      clock,
     ),
     _clearTrackedTimer(name, propertyName) {
       clearedTimers.push([name, propertyName]);
@@ -2028,7 +2124,10 @@ test("teardown invalidates and removes the tracked auto relisten timer", () => {
   onAppletRemoved.call(applet);
 
   assert.equal(applet.errorJournalRetryScheduling, false);
-  assert.deepEqual(clearedTimers[0], ["auto-relisten-retry", "autoRelistenRetryTimer"]);
+  assert.deepEqual(clearedTimers[0], [
+    "auto-relisten-retry",
+    "autoRelistenRetryTimer",
+  ]);
   assert.equal(applet.autoRelistenRetryTimer, 0);
   assert.equal(applet.targetWindowGeneration, 8);
   assert.equal(applet.targetWindowXPendingGeneration, 0);
@@ -2055,18 +2154,20 @@ test("unrelated orphaned timer does not block status timer scheduling", () => {
           return true;
         },
       },
-    }
+    },
   );
   const trackedTimerOwnedBy = loadAppletMethod(
     "_trackedTimerOwnedBy",
     "_untrackTimer",
-    clock
+    clock,
   );
   const applet = {
     appletRemoved: false,
     lifecycleState: "active",
     spawnGeneration: 1,
-    _orphanedTimers: [{ name: "clipboard", sourceId: 99, propertyName: "clipboardTimer" }],
+    _orphanedTimers: [
+      { name: "clipboard", sourceId: 99, propertyName: "clipboardTimer" },
+    ],
     _resourceRegistry: { timers: {}, timerGroups: {}, timerOwners: {} },
     _lifecycleAllowsWork: () => true,
     _retryOrphanedTimers() {
@@ -2093,7 +2194,7 @@ test("unrelated orphaned timer does not block status timer scheduling", () => {
     10,
     () => false,
     false,
-    "statusTimer"
+    "statusTimer",
   );
 
   assert.equal(retryCalls, 1);
@@ -2124,12 +2225,12 @@ test("busy command retires status poll and status application schedules one repl
           return timerCallbacks.delete(sourceId);
         },
       },
-    }
+    },
   );
   const trackedTimerOwnedBy = loadAppletMethod(
     "_trackedTimerOwnedBy",
     "_untrackTimer",
-    clock
+    clock,
   );
   const applet = {
     appletRemoved: false,
@@ -2153,17 +2254,17 @@ test("busy command retires status poll and status application schedules one repl
     _scheduleStatusPoll: loadAppletMethod(
       "_scheduleStatusPoll",
       "_scheduleDisplayTick",
-      clock
+      clock,
     ),
     _refreshStatus: loadAppletMethod(
       "_refreshStatus",
       "_hasCancelableRecordingWork",
-      clock
+      clock,
     ),
     _setStatus: loadAppletMethod(
       "_setStatus",
       "_rememberLastErrorMessage",
-      clock
+      clock,
     ),
     _lifecycleAllowsWork: () => true,
     _hasLocalProcessingWorkflow: () => false,
@@ -2261,7 +2362,7 @@ function makeOwnedStatusPollHarness(status) {
     _scheduleStatusPoll: loadAppletMethod(
       "_scheduleStatusPoll",
       "_scheduleDisplayTick",
-      clock
+      clock,
     ),
     _refreshStatus: loadAppletMethod(
       "_refreshStatus",
@@ -2270,17 +2371,17 @@ function makeOwnedStatusPollHarness(status) {
       {
         MAX_CANCEL_RECOVERY_ATTEMPTS: 3,
         STATUS_COMMAND_TIMEOUT_MS: 1000,
-      }
+      },
     ),
     _setStatus: loadAppletMethod(
       "_setStatus",
       "_rememberLastErrorMessage",
-      clock
+      clock,
     ),
     _cancelTextInsertForSettingsChange: loadAppletMethod(
       "_cancelTextInsertForSettingsChange",
       "on_applet_clicked",
-      clock
+      clock,
     ),
     _scheduleTrackedTimer(_name, _delay, callback, _useSeconds, propertyName) {
       const sourceId = nextTimerId++;
@@ -2346,20 +2447,33 @@ function makeOwnedStatusPollHarness(status) {
 }
 
 test("status budget covers scope and state phases without changing Ollama", () => {
-  const statusMatch = appletSource.match(/^const STATUS_COMMAND_TIMEOUT_MS = (\d+);$/m);
-  const ollamaMatch = appletSource.match(/^const OLLAMA_COMMAND_TIMEOUT_MS = (\d+);$/m);
+  const statusMatch = appletSource.match(
+    /^const STATUS_COMMAND_TIMEOUT_MS = (\d+);$/m,
+  );
+  const ollamaMatch = appletSource.match(
+    /^const OLLAMA_COMMAND_TIMEOUT_MS = (\d+);$/m,
+  );
   assert.ok(statusMatch);
   assert.ok(ollamaMatch);
   const statusTimeout = Number(statusMatch[1]);
   assert.ok(statusTimeout > (30 + 2 + 2) * 1000);
   assert.equal(Number(ollamaMatch[1]), 10000);
-  assert.ok(appletSource.includes('timeoutMs: OLLAMA_COMMAND_TIMEOUT_MS, resourceGroup: "ollama"'));
+  assert.ok(
+    appletSource.includes(
+      'timeoutMs: OLLAMA_COMMAND_TIMEOUT_MS, resourceGroup: "ollama"',
+    ),
+  );
 
   const harness = makeOwnedStatusPollHarness("recording");
   const { applet } = harness;
   applet._refreshStatus = loadAppletMethod(
-    "_refreshStatus", "_hasCancelableRecordingWork", { value: 0 },
-    { MAX_CANCEL_RECOVERY_ATTEMPTS: 3, STATUS_COMMAND_TIMEOUT_MS: statusTimeout }
+    "_refreshStatus",
+    "_hasCancelableRecordingWork",
+    { value: 0 },
+    {
+      MAX_CANCEL_RECOVERY_ATTEMPTS: 3,
+      STATUS_COMMAND_TIMEOUT_MS: statusTimeout,
+    },
   );
   const originalSpawn = applet._spawnJson;
   applet._spawnJson = (args, callback, options) => {
@@ -2460,7 +2574,7 @@ test("direct typing aborts when target changes during focus restore", () => {
   const insertTranscriptText = loadAppletMethod(
     "_insertTranscriptText",
     "_restartRelistenRecording",
-    clock
+    clock,
   );
   let restoreCallback = null;
   let typedCalls = 0;
@@ -2506,7 +2620,10 @@ test("direct typing aborts when target changes during focus restore", () => {
     _recordLifecycleError() {},
   };
 
-  assert.equal(insertTranscriptText.call(applet, "secret", () => {}), null);
+  assert.equal(
+    insertTranscriptText.call(applet, "secret", () => {}),
+    null,
+  );
   assert.equal(typeof restoreCallback, "function");
   restoreCallback(true);
 
@@ -2519,7 +2636,7 @@ test("clipboard-paste falls back to clipboard when menu close fails", () => {
   const copyAndMaybePaste = loadAppletMethod(
     "_copyAndMaybePasteTranscriptText",
     "_confirmClipboardOverwriteForPaste",
-    clock
+    clock,
   );
   const clipboardWrites = [];
   const statuses = [];
@@ -2545,18 +2662,21 @@ test("clipboard-paste falls back to clipboard when menu close fails", () => {
       true,
       false,
       (result) => completions.push(result),
-      () => true
+      () => true,
     ),
-    false
+    false,
   );
 
   assert.deepEqual(clipboardWrites, ["hello"]);
   assert.deepEqual(completions, [false]);
-  assert.deepEqual(statuses, [{
-    status: "error",
-    message: "Copied to clipboard; paste failed: applet menu could not be closed",
-    transcript: "hello",
-  }]);
+  assert.deepEqual(statuses, [
+    {
+      status: "error",
+      message:
+        "Copied to clipboard; paste failed: applet menu could not be closed",
+      transcript: "hello",
+    },
+  ]);
 });
 
 test("clipboard-paste-submit fallback does not append auto-submit newline", () => {
@@ -2564,23 +2684,23 @@ test("clipboard-paste-submit fallback does not append auto-submit newline", () =
   const insertTranscriptText = loadAppletMethod(
     "_insertTranscriptText",
     "_restartRelistenRecording",
-    clock
+    clock,
   );
   const copyAndMaybePaste = loadAppletMethod(
     "_copyAndMaybePasteTranscriptText",
     "_confirmClipboardOverwriteForPaste",
-    clock
+    clock,
   );
   const resolveOutputActions = loadAppletMethod(
     "_resolveOutputActions",
     "_migrateInsertMethodSemantics",
-    clock
+    clock,
   );
   const preparedTranscriptText = loadAppletMethod(
     "_preparedTranscriptText",
     "_sanitizeSpecialChars",
     clock,
-    { MAX_TEXT_INSERT_CHARS: 120000 }
+    { MAX_TEXT_INSERT_CHARS: 120000 },
   );
   const clipboardWrites = [];
   let pasteCalls = 0;
@@ -2604,7 +2724,10 @@ test("clipboard-paste-submit fallback does not append auto-submit newline", () =
     _resolveOutputActions: resolveOutputActions,
     _preparedTranscriptText: preparedTranscriptText,
     _copyAndMaybePasteTranscriptText: copyAndMaybePaste,
-    _pasteClipboardAfterFocus: () => { pasteCalls += 1; return false; },
+    _pasteClipboardAfterFocus: () => {
+      pasteCalls += 1;
+      return false;
+    },
     _setClipboardText(text) {
       clipboardWrites.push(text);
       return true;
@@ -2623,23 +2746,38 @@ test("clipboard-paste-submit fallback does not append auto-submit newline", () =
 test("clipboard writer backend waits for verified xclip copy and safe fallback", () => {
   const clock = { value: 0 };
   const setClipboardText = loadAppletMethod(
-    "_setClipboardText", "_copyClipboardText", clock,
-    { MAX_SPAWN_JSON_BYTES: 262144, utf8ByteLength: (value) => Buffer.byteLength(value) }
+    "_setClipboardText",
+    "_copyClipboardText",
+    clock,
+    {
+      MAX_SPAWN_JSON_BYTES: 262144,
+      utf8ByteLength: (value) => Buffer.byteLength(value),
+    },
   );
   const writes = [];
   const completions = [];
   let ownerCompletion;
   const applet = {
     clipboardBackend: "gtk",
-    clipboard: { set_text: (_type, text) => { writes.push(text); return true; } },
+    clipboard: {
+      set_text: (_type, text) => {
+        writes.push(text);
+        return true;
+      },
+    },
     _lifecycleAllowsWork: () => true,
     _normalizeClipboardBackend: (value) => value,
     _clipboardXclipWriterContext: () => ({ path: "/usr/bin/xclip", env: {} }),
-    _startClipboardXclipOwner: (_text, _context, callback) => { ownerCompletion = callback; },
+    _startClipboardXclipOwner: (_text, _context, callback) => {
+      ownerCompletion = callback;
+    },
     _clearClipboardOverwriteApproval() {},
     _clipboardXclipOwner: null,
   };
-  assert.equal(setClipboardText.call(applet, "gtk", (ok) => completions.push(ok)), true);
+  assert.equal(
+    setClipboardText.call(applet, "gtk", (ok) => completions.push(ok)),
+    true,
+  );
   assert.deepEqual(writes, ["gtk"]);
   assert.deepEqual(completions, []);
 
@@ -2649,19 +2787,35 @@ test("clipboard writer backend waits for verified xclip copy and safe fallback",
   assert.equal(ownerCompletion, undefined);
 
   applet.clipboardBackend = "xclip-preferred";
-  assert.equal(setClipboardText.call(applet, "preferred", (ok) => completions.push(ok)), null);
+  assert.equal(
+    setClipboardText.call(applet, "preferred", (ok) => completions.push(ok)),
+    null,
+  );
   assert.deepEqual(writes, ["gtk", "gtk-first"]);
   ownerCompletion(true, false);
   assert.deepEqual(completions, [true]);
   assert.deepEqual(writes, ["gtk", "gtk-first"]);
 
-  applet.clipboard = { set_text: (_type, text) => { writes.push(text); return true; } };
-  assert.equal(setClipboardText.call(applet, "fallback", (ok) => completions.push(ok)), null);
+  applet.clipboard = {
+    set_text: (_type, text) => {
+      writes.push(text);
+      return true;
+    },
+  };
+  assert.equal(
+    setClipboardText.call(applet, "fallback", (ok) => completions.push(ok)),
+    null,
+  );
   ownerCompletion(false, false);
   assert.deepEqual(writes, ["gtk", "gtk-first"]);
   assert.deepEqual(completions, [true, false]);
 
-  assert.equal(setClipboardText.call(applet, "safe-fallback", (ok) => completions.push(ok)), null);
+  assert.equal(
+    setClipboardText.call(applet, "safe-fallback", (ok) =>
+      completions.push(ok),
+    ),
+    null,
+  );
   ownerCompletion(false, true);
   assert.deepEqual(writes, ["gtk", "gtk-first", "safe-fallback"]);
   assert.deepEqual(completions, [true, false, true]);
@@ -2704,7 +2858,7 @@ function makeLateXclipOwnerHarness() {
   };
   const Gio = {
     SubprocessFlags: { STDIN_PIPE: 1, STDERR_PIPE: 2 },
-    SubprocessLauncher: function() {
+    SubprocessLauncher: function () {
       return {
         set_environ() {},
         spawnv: () => process,
@@ -2720,19 +2874,35 @@ function makeLateXclipOwnerHarness() {
     utf8ByteLength: (value) => Buffer.byteLength(value),
   };
   const startClipboardXclipOwner = loadAppletMethod(
-    "_startClipboardXclipOwner", "_setClipboardText", clock, context
+    "_startClipboardXclipOwner",
+    "_setClipboardText",
+    clock,
+    context,
   );
   const stopClipboardXclipOwner = loadAppletMethod(
-    "_stopClipboardXclipOwner", "_startClipboardXclipOwner", clock, context
+    "_stopClipboardXclipOwner",
+    "_startClipboardXclipOwner",
+    clock,
+    context,
   );
   const setClipboardText = loadAppletMethod(
-    "_setClipboardText", "_copyClipboardText", clock, context
+    "_setClipboardText",
+    "_copyClipboardText",
+    clock,
+    context,
   );
   const applet = {
     clipboardBackend: "xclip-preferred",
-    clipboard: { set_text(_type, text) { gtkWrites.push(text); return true; } },
+    clipboard: {
+      set_text(_type, text) {
+        gtkWrites.push(text);
+        return true;
+      },
+    },
     spawnGeneration: 1,
-    _resourceRegistry: { processes: { 41: { processGroupIdentity: "own-group" } } },
+    _resourceRegistry: {
+      processes: { 41: { processGroupIdentity: "own-group" } },
+    },
     _clipboardXclipOwner: null,
     _clipboardWriteSerial: 0,
     _lifecycleAllowsWork: () => true,
@@ -2744,7 +2914,9 @@ function makeLateXclipOwnerHarness() {
     _startClipboardXclipOwner: startClipboardXclipOwner,
     _scheduleTrackedTimer: () => true,
     _clearTrackedTimer() {},
-    _terminateProcess(ownerProcess) { stoppedProcesses.push(ownerProcess); },
+    _terminateProcess(ownerProcess) {
+      stoppedProcesses.push(ownerProcess);
+    },
     _processGroupState: () => "stopped",
     _unregisterProcess: () => true,
     _runBoundedSubprocess(_args, _env, _options, callback) {
@@ -2758,10 +2930,17 @@ function makeLateXclipOwnerHarness() {
   };
   const sendStderrError = () => {
     assert.ok(stderrCallbacks.length > 0);
-    stderrCallbacks.shift()(stderrPipe, { error: new Error("private reader failure") });
+    stderrCallbacks.shift()(stderrPipe, {
+      error: new Error("private reader failure"),
+    });
   };
   const confirmCopy = () => {
-    assert.equal(setClipboardText.call(applet, "dummy", (copied) => copyResults.push(copied)), null);
+    assert.equal(
+      setClipboardText.call(applet, "dummy", (copied) =>
+        copyResults.push(copied),
+      ),
+      null,
+    );
     const owner = applet._clipboardXclipOwner;
     assert.ok(owner);
     sendStderr("Waiting for selection requests, Control-C to quit\n");
@@ -2775,8 +2954,17 @@ function makeLateXclipOwnerHarness() {
     assert.equal(typeof exitCallback, "function");
     exitCallback(process, {});
   };
-  return { applet, process, copyResults, gtkWrites, stoppedProcesses,
-    sendStderr, sendStderrError, confirmCopy, confirmExit };
+  return {
+    applet,
+    process,
+    copyResults,
+    gtkWrites,
+    stoppedProcesses,
+    sendStderr,
+    sendStderrError,
+    confirmCopy,
+    confirmExit,
+  };
 }
 
 test("xclip owner stops after post-ack stderr overflow without another copy callback", () => {
@@ -2842,60 +3030,60 @@ test("Wayland focus evidence survives a dynamic Codex title for one paste and su
     "_rememberFocusedWindow",
     "_restoreTargetWindowForPaste",
     clock,
-    { global: { display: { focus_window: targetWindow } } }
+    { global: { display: { focus_window: targetWindow } } },
   );
   const captureWaylandTargetEvidence = loadAppletMethod(
     "_captureWaylandTargetEvidence",
     "_isTargetWindowXLookupPending",
     clock,
-    { AUTO_PASTE_IDENTITY_MARKERS: identityMarkers }
+    { AUTO_PASTE_IDENTITY_MARKERS: identityMarkers },
   );
   const waylandTargetEvidence = loadAppletMethod(
     "_waylandTargetEvidenceForCurrentGeneration",
     "_captureWaylandTargetEvidence",
-    clock
+    clock,
   );
   const isTerminalTargetWindow = loadAppletMethod(
     "_isTerminalTargetWindow",
     "_clipboardProgramSpecs",
     clock,
-    { TERMINAL_WINDOW_MARKERS: terminalMarkers }
+    { TERMINAL_WINDOW_MARKERS: terminalMarkers },
   );
   const isCodexTerminalTargetWindow = loadAppletMethod(
     "_isCodexTerminalTargetWindow",
     "_normalizeCodexTerminalSubmitKey",
-    clock
+    clock,
   );
   const pasteClipboardAfterFocus = loadAppletMethod(
     "_pasteClipboardAfterFocus",
     "_typeTextAfterFocus",
-    clock
+    clock,
   );
   const copyAndMaybePaste = loadAppletMethod(
     "_copyAndMaybePasteTranscriptText",
     "_confirmClipboardOverwriteForPaste",
-    clock
+    clock,
   );
   const targetXWindowSnapshot = loadAppletMethod(
     "_targetXWindowSnapshot",
     "_targetXWindowMatchesSnapshot",
-    clock
+    clock,
   );
   const codexTerminalSubmitKey = loadAppletMethod(
     "_codexTerminalSubmitKey",
     "_isTerminalTargetWindow",
-    clock
+    clock,
   );
   const normalizeCodexTerminalSubmitKey = loadAppletMethod(
     "_normalizeCodexTerminalSubmitKey",
     "_normalizeCodexTerminalCustomKey",
     clock,
-    { CODEX_TERMINAL_SUBMIT_KEY_MODES: ["enter", "tab", "custom-key"] }
+    { CODEX_TERMINAL_SUBMIT_KEY_MODES: ["enter", "tab", "custom-key"] },
   );
   const normalizeCodexTerminalCustomKey = loadAppletMethod(
     "_normalizeCodexTerminalCustomKey",
     "_codexTerminalSubmitKey",
-    clock
+    clock,
   );
   let clipboardWrites = 0;
   let pasteCalls = 0;
@@ -2914,11 +3102,15 @@ test("Wayland focus evidence survives a dynamic Codex title for one paste and su
     _isWaylandSession: () => true,
     _isUsableTargetWindow: () => true,
     _windowLooksLikeSpeedOfCinnamon: () => false,
-    _windowProbeValue: loadAppletMethod("_windowProbeValue", "_windowLooksLikeSpeedOfCinnamon", clock),
+    _windowProbeValue: loadAppletMethod(
+      "_windowProbeValue",
+      "_windowLooksLikeSpeedOfCinnamon",
+      clock,
+    ),
     _windowIdentityValueMatchesMarker: loadAppletMethod(
       "_windowIdentityValueMatchesMarker",
       "_markerAllowsAutoPasteIdentity",
-      clock
+      clock,
     ),
     _terminateProcessesByGroup: () => true,
     _clearTargetWindowXid() {
@@ -2940,12 +3132,21 @@ test("Wayland focus evidence survives a dynamic Codex title for one paste and su
     _isCodexTerminalTargetWindow: isCodexTerminalTargetWindow,
     _targetXWindowSnapshot: targetXWindowSnapshot,
     _pasteClipboardAfterFocus: pasteClipboardAfterFocus,
-    _preferredKeyboardProgram: () => ({ kind: "wtype", path: "/usr/bin/wtype" }),
+    _preferredKeyboardProgram: () => ({
+      kind: "wtype",
+      path: "/usr/bin/wtype",
+    }),
     _restoreTargetWindowForPaste(callback) {
       callback(true);
       return true;
     },
-    _spawnKeyboardAfterFocus(args, followUpArgs, _expectedText, _expectedTarget, callback) {
+    _spawnKeyboardAfterFocus(
+      args,
+      followUpArgs,
+      _expectedText,
+      _expectedTarget,
+      callback,
+    ) {
       pasteCalls += 1;
       if (followUpArgs) {
         submitCalls += 1;
@@ -2962,7 +3163,10 @@ test("Wayland focus evidence survives a dynamic Codex title for one paste and su
     _setStatus() {},
   };
 
-  assert.equal(applet._rememberFocusedWindow(false, () => {}), true);
+  assert.equal(
+    applet._rememberFocusedWindow(false, () => {}),
+    true,
+  );
   assert.equal(applet.targetWindowWaylandEvidence.generation, 1);
   assert.equal(applet.targetWindowWaylandEvidence.title, "codex — project");
   assert.equal(applet._isCodexTerminalTargetWindow(), true);
@@ -2975,8 +3179,11 @@ test("Wayland focus evidence survives a dynamic Codex title for one paste and su
   targetWindow.windowClass = "unknown-window";
   applet.targetWindowGeneration += 1;
   assert.equal(
-    applet._captureWaylandTargetEvidence(targetWindow, applet.targetWindowGeneration),
-    true
+    applet._captureWaylandTargetEvidence(
+      targetWindow,
+      applet.targetWindowGeneration,
+    ),
+    true,
   );
   assert.equal(applet.targetWindowWaylandEvidence.markerMatches.pdf, false);
 
@@ -2993,18 +3200,27 @@ test("Wayland focus evidence survives a dynamic Codex title for one paste and su
     targetWindow.windowClass = windowClass;
     applet.targetWindowGeneration += 1;
     assert.equal(
-      applet._captureWaylandTargetEvidence(targetWindow, applet.targetWindowGeneration),
-      true
+      applet._captureWaylandTargetEvidence(
+        targetWindow,
+        applet.targetWindowGeneration,
+      ),
+      true,
     );
-    assert.equal(applet.targetWindowWaylandEvidence.markerMatches[marker], true);
+    assert.equal(
+      applet.targetWindowWaylandEvidence.markerMatches[marker],
+      true,
+    );
   }
 
   targetWindow.title = "shell prompt";
   targetWindow.windowClass = "xterm-codex";
   applet.targetWindowGeneration += 1;
   assert.equal(
-    applet._captureWaylandTargetEvidence(targetWindow, applet.targetWindowGeneration),
-    true
+    applet._captureWaylandTargetEvidence(
+      targetWindow,
+      applet.targetWindowGeneration,
+    ),
+    true,
   );
   assert.equal(applet.targetWindowWaylandEvidence.terminal, true);
   assert.equal(applet.targetWindowWaylandEvidence.codex, false);
@@ -3013,8 +3229,11 @@ test("Wayland focus evidence survives a dynamic Codex title for one paste and su
   targetWindow.windowClass = "xterm";
   applet.targetWindowGeneration += 1;
   assert.equal(
-    applet._captureWaylandTargetEvidence(targetWindow, applet.targetWindowGeneration),
-    true
+    applet._captureWaylandTargetEvidence(
+      targetWindow,
+      applet.targetWindowGeneration,
+    ),
+    true,
   );
 
   targetWindow.title = "shell prompt";
@@ -3031,9 +3250,9 @@ test("Wayland focus evidence survives a dynamic Codex title for one paste and su
       true,
       true,
       () => {},
-      () => true
+      () => true,
     ),
-    null
+    null,
   );
 
   assert.equal(clipboardWrites, 1);
@@ -3064,12 +3283,12 @@ test("X11 Codex detection requires the live or captured title", () => {
     "_isTerminalTargetWindow",
     "_clipboardProgramSpecs",
     clock,
-    { TERMINAL_WINDOW_MARKERS: ["xterm"] }
+    { TERMINAL_WINDOW_MARKERS: ["xterm"] },
   );
   const isCodexTerminalTargetWindow = loadAppletMethod(
     "_isCodexTerminalTargetWindow",
     "_normalizeCodexTerminalSubmitKey",
-    clock
+    clock,
   );
   const applet = {
     targetWindow,
@@ -3081,7 +3300,7 @@ test("X11 Codex detection requires the live or captured title", () => {
     _windowProbeValue: loadAppletMethod(
       "_windowProbeValue",
       "_windowLooksLikeSpeedOfCinnamon",
-      clock
+      clock,
     ),
     _isTerminalTargetWindow: isTerminalTargetWindow,
     _isCodexTerminalTargetWindow: isCodexTerminalTargetWindow,
@@ -3111,22 +3330,22 @@ test("real keyboard paste and submit callbacks remain exactly once", () => {
   const spawnKeyboardAfterFocus = loadAppletMethod(
     "_spawnKeyboardAfterFocus",
     "_spawnKeyboardWhenClipboardReady",
-    clock
+    clock,
   );
   const spawnKeyboardWhenClipboardReady = loadAppletMethod(
     "_spawnKeyboardWhenClipboardReady",
     "_spawnKeyboardProcess",
-    clock
+    clock,
   );
   const spawnKeyboardProcess = loadAppletMethod(
     "_spawnKeyboardProcess",
     "_spawnKeyboardArgs",
-    clock
+    clock,
   );
   const spawnKeyboardArgs = loadAppletMethod(
     "_spawnKeyboardArgs",
     "_finishAppletTextInsert",
-    clock
+    clock,
   );
   const timers = [];
   const keyboardCalls = [];
@@ -3179,9 +3398,9 @@ test("real keyboard paste and submit callbacks remain exactly once", () => {
         completions += 1;
       },
       () => true,
-      100
+      100,
     ),
-    true
+    true,
   );
   assert.equal(timers.length, 1);
 
@@ -3219,55 +3438,55 @@ test("real recording start preserves current Wayland evidence through cleanup", 
   const startWithLanguage = loadAppletMethod(
     "_startWithLanguage",
     "_populateLanguageMenu",
-    clock
+    clock,
   );
   const rememberFocusedWindow = loadAppletMethod(
     "_rememberFocusedWindow",
     "_restoreTargetWindowForPaste",
     clock,
-    { global: { display: { focus_window: targetWindow } } }
+    { global: { display: { focus_window: targetWindow } } },
   );
   const captureWaylandTargetEvidence = loadAppletMethod(
     "_captureWaylandTargetEvidence",
     "_isTargetWindowXLookupPending",
     clock,
-    { AUTO_PASTE_IDENTITY_MARKERS: identityMarkers }
+    { AUTO_PASTE_IDENTITY_MARKERS: identityMarkers },
   );
   const waylandTargetEvidence = loadAppletMethod(
     "_waylandTargetEvidenceForCurrentGeneration",
     "_captureWaylandTargetEvidence",
-    clock
+    clock,
   );
   const cancelTextInsertForSettingsChange = loadAppletMethod(
     "_cancelTextInsertForSettingsChange",
     "on_applet_clicked",
-    clock
+    clock,
   );
   const isTerminalTargetWindow = loadAppletMethod(
     "_isTerminalTargetWindow",
     "_clipboardProgramSpecs",
     clock,
-    { TERMINAL_WINDOW_MARKERS: ["xterm"] }
+    { TERMINAL_WINDOW_MARKERS: ["xterm"] },
   );
   const isCodexTerminalTargetWindow = loadAppletMethod(
     "_isCodexTerminalTargetWindow",
     "_normalizeCodexTerminalSubmitKey",
-    clock
+    clock,
   );
   const targetXWindowSnapshot = loadAppletMethod(
     "_targetXWindowSnapshot",
     "_targetXWindowMatchesSnapshot",
-    clock
+    clock,
   );
   const copyAndMaybePaste = loadAppletMethod(
     "_copyAndMaybePasteTranscriptText",
     "_confirmClipboardOverwriteForPaste",
-    clock
+    clock,
   );
   const pasteClipboardAfterFocus = loadAppletMethod(
     "_pasteClipboardAfterFocus",
     "_typeTextAfterFocus",
-    clock
+    clock,
   );
   const normalizeOutputMethod = (value) => value;
   let pasteCalls = 0;
@@ -3290,12 +3509,12 @@ test("real recording start preserves current Wayland evidence through cleanup", 
   applet._windowProbeValue = loadAppletMethod(
     "_windowProbeValue",
     "_windowLooksLikeSpeedOfCinnamon",
-    clock
+    clock,
   );
   applet._windowIdentityValueMatchesMarker = loadAppletMethod(
     "_windowIdentityValueMatchesMarker",
     "_markerAllowsAutoPasteIdentity",
-    clock
+    clock,
   );
   applet._clearTargetWindowXid = () => {
     applet.targetWindowXid = "";
@@ -3308,12 +3527,21 @@ test("real recording start preserves current Wayland evidence through cleanup", 
   applet._targetXWindowSnapshot = targetXWindowSnapshot;
   applet._pasteClipboardAfterFocus = pasteClipboardAfterFocus;
   applet._normalizeOutputMethod = normalizeOutputMethod;
-  applet._preferredKeyboardProgram = () => ({ kind: "wtype", path: "/usr/bin/wtype" });
+  applet._preferredKeyboardProgram = () => ({
+    kind: "wtype",
+    path: "/usr/bin/wtype",
+  });
   applet._restoreTargetWindowForPaste = (callback) => {
     callback(true);
     return true;
   };
-  applet._spawnKeyboardAfterFocus = (_args, followUpArgs, _text, _target, callback) => {
+  applet._spawnKeyboardAfterFocus = (
+    _args,
+    followUpArgs,
+    _text,
+    _target,
+    callback,
+  ) => {
     pasteCalls += 1;
     submitArgs = followUpArgs;
     callback(true);
@@ -3329,18 +3557,25 @@ test("real recording start preserves current Wayland evidence through cleanup", 
   applet._clearPasteTimer = () => true;
   applet._forgetAutoInsertFingerprint = () => true;
 
-  assert.equal(applet._startWithLanguage("en"), true, JSON.stringify({
-    status: applet.status,
-    requests: harness.requests,
-    lifecycleErrors: harness.lifecycleErrors,
-    cleanupGroups: harness.cleanupGroups,
-    generation: applet.targetWindowGeneration,
-    evidence: applet.targetWindowWaylandEvidence,
-  }));
+  assert.equal(
+    applet._startWithLanguage("en"),
+    true,
+    JSON.stringify({
+      status: applet.status,
+      requests: harness.requests,
+      lifecycleErrors: harness.lifecycleErrors,
+      cleanupGroups: harness.cleanupGroups,
+      generation: applet.targetWindowGeneration,
+      evidence: applet.targetWindowWaylandEvidence,
+    }),
+  );
   assert.equal(harness.requests.length, 1);
   assert.equal(harness.requests[0].args[0], "start");
   assert.equal(applet.targetWindowWaylandEvidence.targetWindow, targetWindow);
-  assert.equal(applet.targetWindowWaylandEvidence.generation, applet.targetWindowGeneration);
+  assert.equal(
+    applet.targetWindowWaylandEvidence.generation,
+    applet.targetWindowGeneration,
+  );
 
   targetWindow.title = "shell prompt";
   assert.equal(applet._isTerminalTargetWindow(), true);
@@ -3354,9 +3589,9 @@ test("real recording start preserves current Wayland evidence through cleanup", 
       true,
       true,
       () => {},
-      () => true
+      () => true,
     ),
-    null
+    null,
   );
   assert.equal(clipboardWrites, 1);
   assert.equal(pasteCalls, 1);
@@ -3387,55 +3622,55 @@ test("pending recording retry preserves Wayland evidence after transient cleanup
   const startWithLanguage = loadAppletMethod(
     "_startWithLanguage",
     "_populateLanguageMenu",
-    clock
+    clock,
   );
   const rememberFocusedWindow = loadAppletMethod(
     "_rememberFocusedWindow",
     "_restoreTargetWindowForPaste",
     clock,
-    { global: { display: { focus_window: targetWindow } } }
+    { global: { display: { focus_window: targetWindow } } },
   );
   const captureWaylandTargetEvidence = loadAppletMethod(
     "_captureWaylandTargetEvidence",
     "_isTargetWindowXLookupPending",
     clock,
-    { AUTO_PASTE_IDENTITY_MARKERS: identityMarkers }
+    { AUTO_PASTE_IDENTITY_MARKERS: identityMarkers },
   );
   const waylandTargetEvidence = loadAppletMethod(
     "_waylandTargetEvidenceForCurrentGeneration",
     "_captureWaylandTargetEvidence",
-    clock
+    clock,
   );
   const cancelTextInsertForSettingsChange = loadAppletMethod(
     "_cancelTextInsertForSettingsChange",
     "on_applet_clicked",
-    clock
+    clock,
   );
   const isTerminalTargetWindow = loadAppletMethod(
     "_isTerminalTargetWindow",
     "_clipboardProgramSpecs",
     clock,
-    { TERMINAL_WINDOW_MARKERS: ["xterm"] }
+    { TERMINAL_WINDOW_MARKERS: ["xterm"] },
   );
   const isCodexTerminalTargetWindow = loadAppletMethod(
     "_isCodexTerminalTargetWindow",
     "_normalizeCodexTerminalSubmitKey",
-    clock
+    clock,
   );
   const targetXWindowSnapshot = loadAppletMethod(
     "_targetXWindowSnapshot",
     "_targetXWindowMatchesSnapshot",
-    clock
+    clock,
   );
   const copyAndMaybePaste = loadAppletMethod(
     "_copyAndMaybePasteTranscriptText",
     "_confirmClipboardOverwriteForPaste",
-    clock
+    clock,
   );
   const pasteClipboardAfterFocus = loadAppletMethod(
     "_pasteClipboardAfterFocus",
     "_typeTextAfterFocus",
-    clock
+    clock,
   );
   let cleanupPending = true;
   let clipboardWrites = 0;
@@ -3466,12 +3701,12 @@ test("pending recording retry preserves Wayland evidence after transient cleanup
   applet._windowProbeValue = loadAppletMethod(
     "_windowProbeValue",
     "_windowLooksLikeSpeedOfCinnamon",
-    clock
+    clock,
   );
   applet._windowIdentityValueMatchesMarker = loadAppletMethod(
     "_windowIdentityValueMatchesMarker",
     "_markerAllowsAutoPasteIdentity",
-    clock
+    clock,
   );
   applet._clearTargetWindowXid = () => {};
   applet._codexTerminalSubmitKey = () => "F6";
@@ -3479,12 +3714,21 @@ test("pending recording retry preserves Wayland evidence after transient cleanup
   applet._isCodexTerminalTargetWindow = isCodexTerminalTargetWindow;
   applet._targetXWindowSnapshot = targetXWindowSnapshot;
   applet._pasteClipboardAfterFocus = pasteClipboardAfterFocus;
-  applet._preferredKeyboardProgram = () => ({ kind: "wtype", path: "/usr/bin/wtype" });
+  applet._preferredKeyboardProgram = () => ({
+    kind: "wtype",
+    path: "/usr/bin/wtype",
+  });
   applet._restoreTargetWindowForPaste = (callback) => {
     callback(true);
     return true;
   };
-  applet._spawnKeyboardAfterFocus = (_args, followUpArgs, _text, _target, callback) => {
+  applet._spawnKeyboardAfterFocus = (
+    _args,
+    followUpArgs,
+    _text,
+    _target,
+    callback,
+  ) => {
     pasteCalls += 1;
     submitArgs = followUpArgs;
     callback(true);
@@ -3504,7 +3748,7 @@ test("pending recording retry preserves Wayland evidence after transient cleanup
   assert.equal(harness.requests.length, 0);
   assert.equal(applet.recordingStartPendingAfterCleanup, true);
   const retryTimer = harness.scheduledTimers.find(
-    (timer) => timer.propertyName === "recordingStartRetryTimer"
+    (timer) => timer.propertyName === "recordingStartRetryTimer",
   );
   assert.ok(retryTimer);
   assert.equal(applet.targetWindowWaylandEvidence.title, "codex — project");
@@ -3527,9 +3771,9 @@ test("pending recording retry preserves Wayland evidence after transient cleanup
       true,
       true,
       () => {},
-      () => true
+      () => true,
     ),
-    null
+    null,
   );
   assert.equal(clipboardWrites, 1);
   assert.equal(pasteCalls, 1);
@@ -3541,7 +3785,7 @@ test("synchronous text insertion failure releases fingerprint reservation", () =
   const finishAppletTextInsert = loadAppletMethod(
     "_finishAppletTextInsert",
     "_ensureAutoRelistenPendingForDonePayload",
-    clock
+    clock,
   );
   const forgottenFingerprints = [];
   const applet = {
@@ -3622,15 +3866,21 @@ function makeRecordingApplet(options = {}) {
   let clipboardApprovalClears = 0;
   let textCleanupCalls = 0;
 
-  const applyPayloadSafely = options.realStopPayload === true
-    ? loadAppletMethod("_applyPayloadSafely", "_applyPayload", clock)
-    : function(payload) {
-        appliedPayloads.push(payload);
-        this.status = String(payload.status || this.status).toLowerCase();
-      };
-  const applyPayload = options.realStopPayload === true
-    ? loadAppletMethod("_applyPayload", "_artifactEncryptionWarningKey", clock)
-    : function() {};
+  const applyPayloadSafely =
+    options.realStopPayload === true
+      ? loadAppletMethod("_applyPayloadSafely", "_applyPayload", clock)
+      : function (payload) {
+          appliedPayloads.push(payload);
+          this.status = String(payload.status || this.status).toLowerCase();
+        };
+  const applyPayload =
+    options.realStopPayload === true
+      ? loadAppletMethod(
+          "_applyPayload",
+          "_artifactEncryptionWarningKey",
+          clock,
+        )
+      : function () {};
 
   const state = {
     status: "idle",
@@ -3714,57 +3964,57 @@ function makeRecordingApplet(options = {}) {
     _toggleRecording: loadAppletMethod(
       "_toggleRecording",
       "_restartApplet",
-      clock
+      clock,
     ),
     _cancelRecording: loadAppletMethod(
       "_cancelRecording",
       "_invalidateBackgroundCallbacksForRecording",
-      clock
+      clock,
     ),
     _failCancelRecovery: loadAppletMethod(
       "_failCancelRecovery",
       "_cancelRecording",
-      clock
+      clock,
     ),
     _hasCancelableRecordingWork: loadAppletMethod(
       "_hasCancelableRecordingWork",
       "_updateRecordingArtifactState",
-      clock
+      clock,
     ),
     _updateRecordingArtifactState: loadAppletMethod(
       "_updateRecordingArtifactState",
       "_failCancelRecovery",
-      clock
+      clock,
     ),
     _invalidateBackgroundCallbacksForRecording: loadAppletMethod(
       "_invalidateBackgroundCallbacksForRecording",
       "_runDoctor",
-      clock
+      clock,
     ),
     _cancelPendingRecordingStart: loadAppletMethod(
       "_cancelPendingRecordingStart",
       "_queueRecordingStartAfterCleanup",
-      clock
+      clock,
     ),
     _cancelPendingRecordingFocusStart: loadAppletMethod(
       "_cancelPendingRecordingFocusStart",
       "_populateLanguageMenu",
-      clock
+      clock,
     ),
     _prepareAutoRelistenReservation: loadAppletMethod(
       "_prepareAutoRelistenReservation",
       "_finishPendingRelisten",
-      clock
+      clock,
     ),
     _clearAutoRelistenRetryTimer: loadAppletMethod(
       "_clearAutoRelistenRetryTimer",
       "_transcriptDigest",
-      clock
+      clock,
     ),
     _queueRecordingStartAfterCleanup: loadAppletMethod(
       "_queueRecordingStartAfterCleanup",
       "_clearProcessCleanupRetryTimer",
-      clock
+      clock,
     ),
 
     _hasActiveRecordingState() {
@@ -3805,7 +4055,10 @@ function makeRecordingApplet(options = {}) {
 
       let cancellationSucceeded = true;
       for (const group of textInsertCleanupGroups) {
-        if (this._processCleanupStatus(this._terminateProcessesByGroup(group)) !== "stopped") {
+        if (
+          this._processCleanupStatus(this._terminateProcessesByGroup(group)) !==
+          "stopped"
+        ) {
           cancellationSucceeded = false;
         }
       }
@@ -3848,7 +4101,9 @@ function makeRecordingApplet(options = {}) {
     _applyPayloadSafely: applyPayloadSafely,
     _applyPayload: applyPayload,
     _normalizePayloadStatus(value) {
-      return String(value || "").trim().toLowerCase();
+      return String(value || "")
+        .trim()
+        .toLowerCase();
     },
     _payloadStringMarker(payload, keys, fallback) {
       for (const key of keys || []) {
@@ -3872,7 +4127,7 @@ function makeRecordingApplet(options = {}) {
       return "";
     },
     _payloadErrorMessage(payload, fallback) {
-      return String(payload && payload.error || fallback || "");
+      return String((payload && payload.error) || fallback || "");
     },
     _maybeWarnRejectedArtifactPassphrase() {},
     _maybeWarnUnencryptedArtifactStorage() {},
@@ -3883,11 +4138,16 @@ function makeRecordingApplet(options = {}) {
       relistenCalls.push(args);
       return false;
     },
-    _maybeAutoTranscribeRecorded: options.realTimedAutoTranscribe === true
-      ? loadAppletMethod("_maybeAutoTranscribeRecorded", "_clearStatusTimer", clock)
-      : function(...args) {
-          transcribeCalls.push(args);
-        },
+    _maybeAutoTranscribeRecorded:
+      options.realTimedAutoTranscribe === true
+        ? loadAppletMethod(
+            "_maybeAutoTranscribeRecorded",
+            "_clearStatusTimer",
+            clock,
+          )
+        : function (...args) {
+            transcribeCalls.push(args);
+          },
     _setStatus(status, message, transcript) {
       statusEvents.push({ status, message, transcript });
       this.status = status;
@@ -4006,7 +4266,7 @@ test("queued manual stop preserves latch and does not relisten", () => {
   assert.equal(applet.autoRelistenPendingLanguage, "");
   assert.deepEqual(
     harness.requests.map((request) => request.args[0]),
-    ["start", "stop"]
+    ["start", "stop"],
   );
 
   applet.status = "idle";
@@ -4060,13 +4320,13 @@ test("background cleanup failure still cleans text groups but does not spawn", (
   assert.equal(harness.textCleanupCalls, 1);
   assert.equal(
     harness.preservedStatusEvents.some((event) => event.status === "error"),
-    true
+    true,
   );
 
   for (const group of textInsertCleanupGroups) {
     assert.equal(
       harness.cleanupGroups.filter((value) => value === group).length,
-      1
+      1,
     );
   }
 });
@@ -4199,17 +4459,17 @@ test("pending retry never rebinds evidence from a replaced target window", () =>
   const waylandTargetEvidence = loadAppletMethod(
     "_waylandTargetEvidenceForCurrentGeneration",
     "_captureWaylandTargetEvidence",
-    clock
+    clock,
   );
   const cancelTextInsertForSettingsChange = loadAppletMethod(
     "_cancelTextInsertForSettingsChange",
     "on_applet_clicked",
-    clock
+    clock,
   );
   const isCodexTerminalTargetWindow = loadAppletMethod(
     "_isCodexTerminalTargetWindow",
     "_normalizeCodexTerminalSubmitKey",
-    clock
+    clock,
   );
 
   applet._isWaylandSession = () => true;
@@ -4255,7 +4515,7 @@ test("text cleanup failure does not spawn an idle recording", () => {
   for (const group of textInsertCleanupGroups) {
     assert.equal(
       harness.cleanupGroups.filter((value) => value === group).length,
-      1
+      1,
     );
   }
 });
@@ -4281,16 +4541,13 @@ for (const testCase of applyPayloadSourceCases) {
         payload,
         undefined,
         true,
-        testCase.sourceAction
+        testCase.sourceAction,
       );
     } else {
       applet._applyPayloadSafely(payload, undefined, true);
     }
 
-    assert.equal(
-      harness.requests.length,
-      testCase.shouldStop ? 1 : 0
-    );
+    assert.equal(harness.requests.length, testCase.shouldStop ? 1 : 0);
     if (testCase.shouldStop) {
       assert.equal(harness.requests[0].args[0], "stop");
     }
@@ -4310,7 +4567,7 @@ test("stop error preserves recoverable recording state", () => {
     },
     undefined,
     true,
-    "stop"
+    "stop",
   );
 
   assert.equal(applet.status, "processing");
@@ -4327,7 +4584,7 @@ test("parseSpawnOutput enforces exact backend status and error contracts", () =>
     "_parseSpawnOutput",
     "_argValue",
     clock,
-    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses }
+    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses },
   );
   const normalizePayloadStatus = loadAppletMethod(
     "_normalizePayloadStatus",
@@ -4343,7 +4600,7 @@ test("parseSpawnOutput enforces exact backend status and error contracts", () =>
         "error",
         "setup",
       ],
-    }
+    },
   );
   const receiver = { _normalizePayloadStatus: normalizePayloadStatus };
   const normalized = (value) => JSON.parse(JSON.stringify(value));
@@ -4355,7 +4612,7 @@ test("parseSpawnOutput enforces exact backend status and error contracts", () =>
 
   assert.deepEqual(
     [...backendPayloadStatuses].sort(),
-    [...pythonPublicPayloadStatuses].sort()
+    [...pythonPublicPayloadStatuses].sort(),
   );
 
   for (const status of backendPayloadStatuses) {
@@ -4376,7 +4633,7 @@ test("parseSpawnOutput enforces exact backend status and error contracts", () =>
   ]) {
     assert.deepEqual(
       normalized(parseSpawnOutput.call(receiver, JSON.stringify(raw))),
-      invalidResponse
+      invalidResponse,
     );
   }
   for (const error of [undefined, "", "   ", 1, null]) {
@@ -4386,34 +4643,38 @@ test("parseSpawnOutput enforces exact backend status and error contracts", () =>
     }
     assert.deepEqual(
       normalized(parseSpawnOutput.call(receiver, JSON.stringify(raw))),
-      invalidResponse
+      invalidResponse,
     );
   }
   assert.deepEqual(
-    normalized(parseSpawnOutput.call(
-      receiver,
-      JSON.stringify({
-        status: "error",
-        message: "bounded failure",
-        exit_code: 0,
-      })
-    )),
+    normalized(
+      parseSpawnOutput.call(
+        receiver,
+        JSON.stringify({
+          status: "error",
+          message: "bounded failure",
+          exit_code: 0,
+        }),
+      ),
+    ),
     {
       status: "error",
       message: "bounded failure",
       error: "bounded failure",
-    }
+    },
   );
   assert.deepEqual(
-    normalized(parseSpawnOutput.call(
-      receiver,
-      JSON.stringify({
-        status: "error",
-        error: " ",
-        message: "must not rescue invalid error",
-      })
-    )),
-    invalidResponse
+    normalized(
+      parseSpawnOutput.call(
+        receiver,
+        JSON.stringify({
+          status: "error",
+          error: " ",
+          message: "must not rescue invalid error",
+        }),
+      ),
+    ),
+    invalidResponse,
   );
   for (const exitCode of [0, 1, "1", null]) {
     const parsed = parseSpawnOutput.call(
@@ -4422,7 +4683,7 @@ test("parseSpawnOutput enforces exact backend status and error contracts", () =>
         status: "done",
         error: "bounded failure",
         exit_code: exitCode,
-      })
+      }),
     );
     assert.equal(parsed.status, "done");
     assert.equal(parsed.error, "bounded failure");
@@ -4443,7 +4704,7 @@ test("parseSpawnOutput rejects duplicate raw stdout keys before JSON.parse", () 
     "_parseSpawnOutput",
     "_argValue",
     clock,
-    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses, JSON: parsingJSON }
+    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses, JSON: parsingJSON },
   );
   const invalidResponse = {
     status: "error",
@@ -4458,13 +4719,13 @@ test("parseSpawnOutput rejects duplicate raw stdout keys before JSON.parse", () 
     const callsBefore = parseCalls;
     assert.deepEqual(
       JSON.parse(JSON.stringify(parseSpawnOutput.call({}, raw))),
-      invalidResponse
+      invalidResponse,
     );
     assert.equal(parseCalls, callsBefore);
   }
   const valid = parseSpawnOutput.call(
     {},
-    '{"status":"done","nested":{"\\u006eame":1},"text":"{\\"name\\":1,\\"name\\":2}"}'
+    '{"status":"done","nested":{"\\u006eame":1},"text":"{\\"name\\":1,\\"name\\":2}"}',
   );
   assert.equal(parseCalls, 1);
   assert.equal(valid.status, "done");
@@ -4477,7 +4738,7 @@ test("parseSpawnOutput ignores inherited controls and rejects prototype keys", (
     "_parseSpawnOutput",
     "_argValue",
     clock,
-    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses, JSON, Object }
+    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses, JSON, Object },
   );
   const invalidResponse = {
     status: "error",
@@ -4494,7 +4755,7 @@ test("parseSpawnOutput ignores inherited controls and rejects prototype keys", (
     Object.keys(propertyValues).map((name) => [
       name,
       Object.getOwnPropertyDescriptor(Object.prototype, name),
-    ])
+    ]),
   );
 
   try {
@@ -4508,12 +4769,9 @@ test("parseSpawnOutput ignores inherited controls and rejects prototype keys", (
     }
     assert.deepEqual(
       JSON.parse(JSON.stringify(parseSpawnOutput.call({}, "{}"))),
-      invalidResponse
+      invalidResponse,
     );
-    const parsed = parseSpawnOutput.call(
-      {},
-      '{"status":"done","exit_code":0}'
-    );
+    const parsed = parseSpawnOutput.call({}, '{"status":"done","exit_code":0}');
     assert.equal(Object.getPrototypeOf(parsed), null);
     assert.equal(parsed.status, "done");
     assert.equal(parsed.exit_code, 0);
@@ -4523,7 +4781,7 @@ test("parseSpawnOutput ignores inherited controls and rejects prototype keys", (
       const raw = `{"status":"done","${hostileKey}":{"status":"error"}}`;
       assert.deepEqual(
         JSON.parse(JSON.stringify(parseSpawnOutput.call({}, raw))),
-        invalidResponse
+        invalidResponse,
       );
     }
   } finally {
@@ -4547,24 +4805,24 @@ test("spawnJson forwards only domain errors after nonzero exit", () => {
   const guardStateCallback = loadAppletMethod(
     "_guardStateCallback",
     "_handleInitializationFailure",
-    clock
+    clock,
   );
   const runStateGuarded = loadAppletMethod(
     "_runStateGuarded",
     "_runTeardownGuarded",
-    clock
+    clock,
   );
   const parseSpawnOutput = loadAppletMethod(
     "_parseSpawnOutput",
     "_argValue",
     clock,
-    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses }
+    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses },
   );
   const normalizePayloadStatus = loadAppletMethod(
     "_normalizePayloadStatus",
     "_hotkeyName",
     clock,
-    { PAYLOAD_STATUSES: backendPayloadStatuses }
+    { PAYLOAD_STATUSES: backendPayloadStatuses },
   );
 
   const cases = [
@@ -4679,35 +4937,43 @@ test("spawnJson forwards only domain errors after nonzero exit", () => {
     ]) {
       let received = null;
       const applet = {
-      _statusRefreshToken: 0,
-      _guardStateCallback: guardStateCallback,
-      _runStateGuarded: runStateGuarded,
-      _lifecycleAllowsWork: () => true,
-      _coerceSpawnArgs: (args) => args,
-      _isStatusCommandArgs: () => false,
-      _shouldExposeOpenAiCompatibleApiKeyToBackend: () => false,
-      _runWithBackendEnvironment(_includeKey, callback) {
-        return callback({});
-      },
-      _spawnJsonWithBackendEnvironment(_args, _env, callback) {
-        callback(entry.rawOutput || JSON.stringify(entry.raw), backendResult, "");
-        return { pid: 1 };
-      },
-      _parseSpawnOutput: parseSpawnOutput,
-      _normalizePayloadStatus: normalizePayloadStatus,
-      _reportSubprocessError() {
-        throw new Error("invalid payload escaped parser boundary");
-      },
-      _recordLifecycleError() {},
+        _statusRefreshToken: 0,
+        _guardStateCallback: guardStateCallback,
+        _runStateGuarded: runStateGuarded,
+        _lifecycleAllowsWork: () => true,
+        _coerceSpawnArgs: (args) => args,
+        _isStatusCommandArgs: () => false,
+        _shouldExposeOpenAiCompatibleApiKeyToBackend: () => false,
+        _runWithBackendEnvironment(_includeKey, callback) {
+          return callback({});
+        },
+        _spawnJsonWithBackendEnvironment(_args, _env, callback) {
+          callback(
+            entry.rawOutput || JSON.stringify(entry.raw),
+            backendResult,
+            "",
+          );
+          return { pid: 1 };
+        },
+        _parseSpawnOutput: parseSpawnOutput,
+        _normalizePayloadStatus: normalizePayloadStatus,
+        _reportSubprocessError() {
+          throw new Error("invalid payload escaped parser boundary");
+        },
+        _recordLifecycleError() {},
       };
 
-      spawnJson.call(applet, ["/trusted/soc", "doctor", "--json"], (payload) => {
-        received = JSON.parse(JSON.stringify(payload));
-      });
+      spawnJson.call(
+        applet,
+        ["/trusted/soc", "doctor", "--json"],
+        (payload) => {
+          received = JSON.parse(JSON.stringify(payload));
+        },
+      );
 
       assert.deepEqual(
         received,
-        backendResult.error ? entry.nonzero : entry.success
+        backendResult.error ? entry.nonzero : entry.success,
       );
     }
   }
@@ -4719,19 +4985,19 @@ test("doctor caller cannot accept configured data with invalid backend status", 
     "_parseSpawnOutput",
     "_argValue",
     clock,
-    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses }
+    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses },
   );
   const normalizePayloadStatus = loadAppletMethod(
     "_normalizePayloadStatus",
     "_hotkeyName",
     clock,
-    { PAYLOAD_STATUSES: backendPayloadStatuses }
+    { PAYLOAD_STATUSES: backendPayloadStatuses },
   );
   const runDoctor = loadAppletMethod(
     "_runDoctor",
     "_applyDoctorPayload",
     clock,
-    { DOCTOR_COMMAND_TIMEOUT_MS: 1000 }
+    { DOCTOR_COMMAND_TIMEOUT_MS: 1000 },
   );
   let appliedDoctor = 0;
   const statusEvents = [];
@@ -4766,8 +5032,8 @@ test("doctor caller cannot accept configured data with invalid backend status", 
       callback(
         parseSpawnOutput.call(
           { _normalizePayloadStatus: normalizePayloadStatus },
-          JSON.stringify(invalidPayload)
-        )
+          JSON.stringify(invalidPayload),
+        ),
       );
       return { pid: 1 };
     },
@@ -4782,21 +5048,13 @@ test("doctor caller cannot accept configured data with invalid backend status", 
 });
 
 test("doctor command arguments bind applet report mode", () => {
-  const doctorArgs = loadAppletMethod(
-    "_doctorArgs",
-    "_setupArgs",
-    { value: 0 }
-  );
+  const doctorArgs = loadAppletMethod("_doctorArgs", "_setupArgs", {
+    value: 0,
+  });
 
   assert.deepEqual(
     Array.from(doctorArgs.call({ _cliCommand: () => "/trusted/soc" })),
-    [
-      "/trusted/soc",
-      "doctor",
-      "--applet",
-      "--settings-json-stdin",
-      "--json",
-    ]
+    ["/trusted/soc", "doctor", "--applet", "--settings-json-stdin", "--json"],
   );
 });
 
@@ -4805,28 +5063,28 @@ test("doctor caller requires exact done schema before readiness", () => {
   const validatedDoctorPayload = loadAppletMethod(
     "_validatedDoctorPayload",
     "_runDoctor",
-    clock
+    clock,
   );
   const runDoctor = loadAppletMethod(
     "_runDoctor",
     "_applyDoctorPayload",
     clock,
-    { DOCTOR_COMMAND_TIMEOUT_MS: 1000 }
+    { DOCTOR_COMMAND_TIMEOUT_MS: 1000 },
   );
   const applyDoctorPayload = loadAppletMethod(
     "_applyDoctorPayload",
     "_presentDoctorResult",
-    clock
+    clock,
   );
   const doctorSummary = loadAppletMethod(
     "_doctorSummary",
     "_doctorSectionText",
-    clock
+    clock,
   );
   const doctorSectionText = loadAppletMethod(
     "_doctorSectionText",
     "_openAppletSettings",
-    clock
+    clock,
   );
   const cases = [
     {
@@ -4958,9 +5216,7 @@ test("doctor caller requires exact done schema before readiness", () => {
       expectedText: "Invalid backend response",
     });
   }
-  for (const [field, value] of [
-    ["warnings", ["  "]],
-  ]) {
+  for (const [field, value] of [["warnings", ["  "]]]) {
     cases.push({
       mutate(payload) {
         payload[field] = value;
@@ -5025,7 +5281,10 @@ test("doctor caller requires exact done schema before readiness", () => {
 
     assert.equal(statusEvents.at(-1)[0], testCase.expectedStatus);
     assert.match(statusEvents.at(-1)[1], new RegExp(testCase.expectedText));
-    assert.equal(statusEvents.at(-1)[1].includes("/private/doctor-secret"), false);
+    assert.equal(
+      statusEvents.at(-1)[1].includes("/private/doctor-secret"),
+      false,
+    );
     assert.notEqual(statusEvents.at(-1)[1], "Doctor: Setup needed: ");
   }
 });
@@ -5040,18 +5299,18 @@ test("nonzero cancel transport preserves domain error and continues recovery pol
   const guardStateCallback = loadAppletMethod(
     "_guardStateCallback",
     "_handleInitializationFailure",
-    clock
+    clock,
   );
   const runStateGuarded = loadAppletMethod(
     "_runStateGuarded",
     "_runTeardownGuarded",
-    clock
+    clock,
   );
   const parseSpawnOutput = loadAppletMethod(
     "_parseSpawnOutput",
     "_argValue",
     clock,
-    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses }
+    { BACKEND_PAYLOAD_STATUSES: backendPayloadStatuses },
   );
   const normalizePayloadStatus = loadAppletMethod(
     "_normalizePayloadStatus",
@@ -5067,7 +5326,7 @@ test("nonzero cancel transport preserves domain error and continues recovery pol
         "error",
         "setup",
       ],
-    }
+    },
   );
   const domainPayload = {
     status: "recording",
@@ -5108,7 +5367,7 @@ test("nonzero cancel transport preserves domain error and continues recovery pol
       throw new Error("valid domain payload became a transport error");
     };
     applet._lifecycleErrorText = () => "redacted transport error";
-    applet._applyPayloadSafely = function(payload, ...args) {
+    applet._applyPayloadSafely = function (payload, ...args) {
       transportedPayloads.push(payload);
       return applyPayloadSafely.call(this, payload, ...args);
     };
@@ -5117,16 +5376,12 @@ test("nonzero cancel transport preserves domain error and continues recovery pol
 
     applet._cancelRecording();
 
-    assert.deepEqual(
-      JSON.parse(JSON.stringify(transportedPayloads)),
-      [expectedPayload]
-    );
+    assert.deepEqual(JSON.parse(JSON.stringify(transportedPayloads)), [
+      expectedPayload,
+    ]);
     assert.equal(harness.preservedStatusEvents.length, 1);
     assert.equal(harness.preservedStatusEvents[0].status, "error");
-    assert.equal(
-      harness.preservedStatusEvents[0].message,
-      domainPayload.error
-    );
+    assert.equal(harness.preservedStatusEvents[0].message, domainPayload.error);
     assert.equal(harness.pollCalls.length, 1);
     assert.equal(applet.cancelIntentActive, true);
     assert.equal(applet.cancelRecoveryAttempts, 1);
@@ -5152,7 +5407,7 @@ test("real stop payload does not enqueue another stop request", () => {
   assert.equal(harness.requests.length, 2);
   assert.equal(
     harness.requests.filter((request) => request.args[0] === "stop").length,
-    1
+    1,
   );
   assert.equal(applet.isCommandRunning, false);
 });
@@ -5179,11 +5434,11 @@ test("recorded payload with backend markers does not stop again or cancel", () =
 
   assert.equal(
     harness.requests.filter((request) => request.args[0] === "stop").length,
-    1
+    1,
   );
   assert.equal(
     harness.requests.filter((request) => request.args[0] === "cancel").length,
-    0
+    0,
   );
   assert.equal(applet.isCommandRunning, false);
   assert.equal(harness.statusEvents.length, baselineStatusEvents + 1);
@@ -5207,7 +5462,7 @@ test("real cancel queues behind start and spawns once after callback", () => {
 
   assert.deepEqual(
     harness.requests.map((request) => request.args[0]),
-    ["start", "cancel"]
+    ["start", "cancel"],
   );
   assert.equal(applet.cancelRecoveryAttempts, 1);
 
@@ -5260,7 +5515,7 @@ for (const terminalStatus of ["done", "idle"]) {
 
     assert.deepEqual(
       harness.requests.map((request) => request.args[0]),
-      ["start", "cancel"]
+      ["start", "cancel"],
     );
     assert.equal(harness.insertCalls.length, 0);
     assert.equal(harness.transcribeCalls.length, 0);
@@ -5316,7 +5571,7 @@ for (const stopStatus of ["done", "idle", "recorded"]) {
 
     assert.deepEqual(
       harness.requests.map((request) => request.args[0]),
-      ["stop", "cancel"]
+      ["stop", "cancel"],
     );
     assert.equal(harness.pollCalls.length, 0);
     assert.equal(harness.insertCalls.length, 0);
@@ -5405,12 +5660,12 @@ test("real direct cancel done payload never inserts or relistens", () => {
   harness.requests[0].callback({
     status: "done",
     transcript: "cancelled transcript",
-      audio_deleted: true,
-      log_deleted: true,
-      transcript_deleted: true,
-      inflight_artifacts_deleted: true,
-      cleanup_backups_deleted: true,
-    });
+    audio_deleted: true,
+    log_deleted: true,
+    transcript_deleted: true,
+    inflight_artifacts_deleted: true,
+    cleanup_backups_deleted: true,
+  });
 
   assert.equal(harness.insertCalls.length, 0);
   assert.equal(harness.transcribeCalls.length, 0);
@@ -5485,7 +5740,7 @@ test("cancel processing status poll advances bounded recovery", () => {
   applet._applyPayloadSafely(
     { status: "processing" },
     applet._statusRefreshToken,
-    true
+    true,
   );
 
   assert.equal(applet.cancelRecoveryAttempts, 2);
@@ -5507,7 +5762,7 @@ test("cancel recorded status poll starts exactly one bounded retry", () => {
   applet._applyPayloadSafely(
     { status: "recorded" },
     applet._statusRefreshToken,
-    true
+    true,
   );
 
   assert.equal(applet.cancelRecoveryAttempts, 2);
@@ -5532,7 +5787,7 @@ test("terminal cancel status poll starts one bounded cancel retry", () => {
     applet._applyPayloadSafely(
       { status: "idle" },
       applet._statusRefreshToken,
-      true
+      true,
     );
 
     assert.equal(harness.requests.length, 1);
@@ -5587,21 +5842,36 @@ test("terminal cleanup evidence requires every field with strict boolean values"
     "cleanup_backups_deleted",
   ];
   const invalidMutations = [
-    ["missing", (payload, field) => {
-      delete payload[field];
-    }],
-    ["null", (payload, field) => {
-      payload[field] = null;
-    }],
-    ["number", (payload, field) => {
-      payload[field] = 1;
-    }],
-    ["string", (payload, field) => {
-      payload[field] = "true";
-    }],
-    ["object", (payload, field) => {
-      payload[field] = {};
-    }],
+    [
+      "missing",
+      (payload, field) => {
+        delete payload[field];
+      },
+    ],
+    [
+      "null",
+      (payload, field) => {
+        payload[field] = null;
+      },
+    ],
+    [
+      "number",
+      (payload, field) => {
+        payload[field] = 1;
+      },
+    ],
+    [
+      "string",
+      (payload, field) => {
+        payload[field] = "true";
+      },
+    ],
+    [
+      "object",
+      (payload, field) => {
+        payload[field] = {};
+      },
+    ],
   ];
 
   for (const field of cleanupFields) {
@@ -5632,7 +5902,7 @@ test("terminal cleanup evidence requires every field with strict boolean values"
       assert.deepEqual(
         harness.requests.map((request) => request.args[0]),
         ["start", "cancel"],
-        `${field}/${caseName}: foreign terminal callback must spawn one cancel`
+        `${field}/${caseName}: foreign terminal callback must spawn one cancel`,
       );
       assert.equal(applet.lastTranscript, "previous transcript");
       assert.equal(warningCalls, 0);
@@ -5853,7 +6123,7 @@ test("exhausted recorded status poll cannot spawn or repoll", () => {
   applet._applyPayloadSafely(
     { status: "recorded" },
     applet._statusRefreshToken,
-    true
+    true,
   );
 
   assert.equal(harness.requests.length, 0);
@@ -5962,7 +6232,7 @@ test("cancel status error exhausts recovery without another poll", () => {
   applet._applyPayloadSafely(
     { status: "error", error: "status unavailable" },
     applet._statusRefreshToken,
-    true
+    true,
   );
 
   assert.equal(applet.cancelRecoveryAttempts, 3);
@@ -6004,7 +6274,7 @@ test("recording start cleans each process group exactly once", () => {
   ]) {
     assert.equal(
       harness.cleanupGroups.filter((value) => value === group).length,
-      1
+      1,
     );
   }
 });
@@ -6042,22 +6312,22 @@ test("timed auto-transcribe replaces stale relisten retry and retries one real d
   applet._finishPendingRelisten = loadAppletMethod(
     "_finishPendingRelisten",
     "_transcriptDigest",
-    { value: 1000 }
+    { value: 1000 },
   );
   applet._finishEmptyRelistenDone = loadAppletMethod(
     "_finishEmptyRelistenDone",
     "_insertTranscriptText",
-    { value: 1000 }
+    { value: 1000 },
   );
   applet._ensureAutoRelistenPendingForDonePayload = loadAppletMethod(
     "_ensureAutoRelistenPendingForDonePayload",
     "_finishPendingRelisten",
-    { value: 1000 }
+    { value: 1000 },
   );
   applet._schedulePendingAutoRelistenRetry = loadAppletMethod(
     "_schedulePendingAutoRelistenRetry",
     "_clearAutoRelistenRetryTimer",
-    { value: 1000 }
+    { value: 1000 },
   );
   applet._maybeWarnAutomaticBackup = () => {};
   applet._maybeStartAutoBackup = () => {};
@@ -6069,7 +6339,7 @@ test("timed auto-transcribe replaces stale relisten retry and retries one real d
 
   let relistenAttempts = 0;
   let successfulRelistenStarts = 0;
-  applet._restartRelistenRecording = function() {
+  applet._restartRelistenRecording = function () {
     relistenAttempts += 1;
     if (relistenAttempts === 1) {
       this._autoRelistenStartBlock = "busy";
@@ -6081,13 +6351,12 @@ test("timed auto-transcribe replaces stale relisten retry and retries one real d
 
   applet._maybeAutoTranscribeRecorded(
     { status: "recorded", audio_path: "/tmp/timed-relisten.flac" },
-    "recorded"
+    "recorded",
   );
 
-  assert.deepEqual(harness.trackedTimerClears, [[
-    "auto-relisten-retry",
-    "autoRelistenRetryTimer",
-  ]]);
+  assert.deepEqual(harness.trackedTimerClears, [
+    ["auto-relisten-retry", "autoRelistenRetryTimer"],
+  ]);
   assert.equal(applet.autoRelistenRetryTimer, 0);
   assert.equal(applet.autoRelistenPending, true);
   assert.equal(applet.autoRelistenPendingToken, "1:/tmp/timed-relisten.flac");
@@ -6128,7 +6397,7 @@ test("manual toggle consumes timed stop payload without relistening", () => {
 
   applet._maybeAutoTranscribeRecorded(
     { status: "recorded", audio_path: "/tmp/recording.flac" },
-    "recorded"
+    "recorded",
   );
   assert.equal(harness.requests.length, 1);
   assert.equal(applet.autoRelistenPending, true);
@@ -6142,7 +6411,10 @@ test("manual toggle consumes timed stop payload without relistening", () => {
     transcript: "manual timed result",
   });
 
-  assert.equal(harness.appliedPayloads.at(-1).transcript, "manual timed result");
+  assert.equal(
+    harness.appliedPayloads.at(-1).transcript,
+    "manual timed result",
+  );
   assert.equal(harness.relistenCalls.length, 0);
   assert.equal(applet.isCommandRunning, false);
 });
@@ -6159,7 +6431,7 @@ test("timed auto-transcribe spawn failure releases recording state", () => {
 
   applet._maybeAutoTranscribeRecorded(
     { status: "recorded", audio_path: "/tmp/recording.flac" },
-    "recorded"
+    "recorded",
   );
 
   assert.equal(applet.isCommandRunning, false);
@@ -6172,12 +6444,12 @@ test("recording status uses distinct panel classes and dynamic icon names", () =
   const styleForStatus = loadAppletMethod(
     "_panelStyleClassForStatus",
     "_statusIconNameForStatus",
-    { value: 1000 }
+    { value: 1000 },
   );
   const iconForStatus = loadAppletMethod(
     "_statusIconNameForStatus",
     "_resetStatusIconCache",
-    { value: 1000 }
+    { value: 1000 },
   );
 
   assert.equal(styleForStatus("recording"), "speed-of-cinnamon-recording");
@@ -6195,7 +6467,7 @@ test("process cleanup returns pending before eventual stopped", () => {
   const terminateProcessesByGroup = loadAppletMethod(
     "_terminateProcessesByGroup",
     "_hasTrackedProcessGroup",
-    { value: 0 }
+    { value: 0 },
   );
   const identity = { pid: "321", startTime: "654" };
   const process = {};
@@ -6240,7 +6512,7 @@ test("foreign orphan retry scheduling failure does not fail stopped group", () =
   const terminateProcessesByGroup = loadAppletMethod(
     "_terminateProcessesByGroup",
     "_hasTrackedProcessGroup",
-    { value: 0 }
+    { value: 0 },
   );
   const lifecycleErrors = [];
   const applet = {
@@ -6263,28 +6535,28 @@ test("pending process cancellation is orphan-tracked and eventually unregisters"
   const terminateProcessesByGroup = loadAppletMethod(
     "_terminateProcessesByGroup",
     "_hasTrackedProcessGroup",
-    { value: 0 }
+    { value: 0 },
   );
   const retryOrphanedProcesses = loadAppletMethod(
     "_retryOrphanedProcesses",
     "_processCleanupStillPending",
     { value: 0 },
-    { LIFECYCLE_REMOVING: "removing", LIFECYCLE_REMOVED: "removed" }
+    { LIFECYCLE_REMOVING: "removing", LIFECYCLE_REMOVED: "removed" },
   );
   const trackOrphanedProcess = loadAppletMethod(
     "_trackOrphanedProcess",
     "_untrackOrphanedProcess",
-    { value: 0 }
+    { value: 0 },
   );
   const untrackOrphanedProcess = loadAppletMethod(
     "_untrackOrphanedProcess",
     "_retryOrphanedProcesses",
-    { value: 0 }
+    { value: 0 },
   );
   const unregisterProcess = loadAppletMethod(
     "_unregisterProcess",
     "_trackOrphanedProcess",
-    { value: 0 }
+    { value: 0 },
   );
   const process = {};
   const processes = {
@@ -6321,11 +6593,19 @@ test("pending process cancellation is orphan-tracked and eventually unregisters"
   assert.equal(
     terminateProcessesByGroup.call(applet, "status"),
     "pending",
-    JSON.stringify({ orphanedProcesses, processes, lifecycleErrors, terminationAttempts })
+    JSON.stringify({
+      orphanedProcesses,
+      processes,
+      lifecycleErrors,
+      terminationAttempts,
+    }),
   );
   assert.equal(orphanedProcesses.length, 1);
   assert.equal(orphanedProcesses[0].process, process);
-  assert.equal(Object.prototype.hasOwnProperty.call(processes, "process-1"), true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(processes, "process-1"),
+    true,
+  );
 
   assert.equal(terminateProcessesByGroup.call(applet, "status"), "stopped");
   assert.equal(orphanedProcesses.length, 0);
@@ -6337,28 +6617,28 @@ test("live no-cancel process is orphan-tracked before normal retry", () => {
   const terminateProcessesByGroup = loadAppletMethod(
     "_terminateProcessesByGroup",
     "_hasTrackedProcessGroup",
-    { value: 0 }
+    { value: 0 },
   );
   const retryOrphanedProcesses = loadAppletMethod(
     "_retryOrphanedProcesses",
     "_processCleanupStillPending",
     { value: 0 },
-    { LIFECYCLE_REMOVING: "removing", LIFECYCLE_REMOVED: "removed" }
+    { LIFECYCLE_REMOVING: "removing", LIFECYCLE_REMOVED: "removed" },
   );
   const trackOrphanedProcess = loadAppletMethod(
     "_trackOrphanedProcess",
     "_untrackOrphanedProcess",
-    { value: 0 }
+    { value: 0 },
   );
   const untrackOrphanedProcess = loadAppletMethod(
     "_untrackOrphanedProcess",
     "_retryOrphanedProcesses",
-    { value: 0 }
+    { value: 0 },
   );
   const unregisterProcess = loadAppletMethod(
     "_unregisterProcess",
     "_trackOrphanedProcess",
-    { value: 0 }
+    { value: 0 },
   );
   const process = {};
   const processes = {
@@ -6394,7 +6674,10 @@ test("live no-cancel process is orphan-tracked before normal retry", () => {
 
   assert.equal(terminateProcessesByGroup.call(applet, "status"), "pending");
   assert.equal(orphanedProcesses.length, 1);
-  assert.equal(Object.prototype.hasOwnProperty.call(processes, "process-1"), true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(processes, "process-1"),
+    true,
+  );
   assert.equal(terminateProcessesByGroup.call(applet, "status"), "stopped");
   assert.equal(orphanedProcesses.length, 0);
   assert.equal(Object.keys(processes).length, 0);
@@ -6405,18 +6688,24 @@ test("process cleanup retry rejects stale timer ownership without numeric remova
   const scheduleProcessCleanupRetry = loadAppletMethod(
     "_scheduleProcessCleanupRetry",
     "_cancelPendingRecordingStart",
-    { value: 0 }
+    { value: 0 },
   );
   const clearTrackedTimer = loadAppletMethod(
     "_clearTrackedTimer",
     "_scheduleTrackedTimer",
     { value: 0 },
-    { Mainloop: { source_remove: () => { throw new Error("source_remove must not run"); } } }
+    {
+      Mainloop: {
+        source_remove: () => {
+          throw new Error("source_remove must not run");
+        },
+      },
+    },
   );
   const trackedTimerOwnedBy = loadAppletMethod(
     "_trackedTimerOwnedBy",
     "_untrackTimer",
-    { value: 0 }
+    { value: 0 },
   );
   const scheduled = [];
   const lifecycleErrors = [];
@@ -6445,7 +6734,9 @@ test("process cleanup retry rejects stale timer ownership without numeric remova
     _resourceRegistry: { timers: { "process-cleanup-retry": 23 } },
     _orphanedTimers: [],
     _recordLifecycleError: (...args) => lifecycleErrors.push(args),
-    _scheduleTrackedTimer: () => { throw new Error("new timer must not bypass ambiguity"); },
+    _scheduleTrackedTimer: () => {
+      throw new Error("new timer must not bypass ambiguity");
+    },
   };
   assert.equal(scheduleProcessCleanupRetry.call(mismatchedApplet), false);
   assert.equal(scheduled.length, 1);
@@ -6464,7 +6755,9 @@ test("process cleanup retry rejects stale timer ownership without numeric remova
     _orphanedTimers: [],
     _trackedTimerOwnedBy: trackedTimerOwnedBy,
     _recordLifecycleError: (...args) => lifecycleErrors.push(args),
-    _scheduleTrackedTimer: () => { throw new Error("same-ID stale timer must not schedule through"); },
+    _scheduleTrackedTimer: () => {
+      throw new Error("same-ID stale timer must not schedule through");
+    },
   };
   assert.equal(scheduleProcessCleanupRetry.call(sameIdApplet), false);
   assert.equal(scheduled.length, 1);
@@ -6475,7 +6768,10 @@ test("process cleanup retry rejects stale timer ownership without numeric remova
     _orphanedTimers: [],
     _reportSubprocessError: (...args) => lifecycleErrors.push(args),
   };
-  assert.equal(clearTrackedTimer.call(sourceReuseApplet, "stale", "staleTimer"), false);
+  assert.equal(
+    clearTrackedTimer.call(sourceReuseApplet, "stale", "staleTimer"),
+    false,
+  );
   assert.equal(lifecycleErrors.length >= 1, true);
 });
 
@@ -6500,38 +6796,36 @@ test("stale timer callback and orphan owner cannot remove same-ID replacement", 
     "_scheduleTrackedTimer",
     "_init",
     { value: 0 },
-    { Mainloop }
+    { Mainloop },
   );
   const clearTrackedTimer = loadAppletMethod(
     "_clearTrackedTimer",
     "_scheduleTrackedTimer",
     { value: 0 },
-    { Mainloop }
+    { Mainloop },
   );
-  const trackTimer = loadAppletMethod(
-    "_trackTimer",
-    "_trackedTimerOwnedBy",
-    { value: 0 }
-  );
+  const trackTimer = loadAppletMethod("_trackTimer", "_trackedTimerOwnedBy", {
+    value: 0,
+  });
   const trackedTimerOwnedBy = loadAppletMethod(
     "_trackedTimerOwnedBy",
     "_untrackTimer",
-    { value: 0 }
+    { value: 0 },
   );
   const untrackTimer = loadAppletMethod(
     "_untrackTimer",
     "_trackOrphanedTimer",
-    { value: 0 }
+    { value: 0 },
   );
   const trackOrphanedTimer = loadAppletMethod(
     "_trackOrphanedTimer",
     "_untrackOrphanedTimer",
-    { value: 0 }
+    { value: 0 },
   );
   const untrackOrphanedTimer = loadAppletMethod(
     "_untrackOrphanedTimer",
     "_retryOrphanedTimers",
-    { value: 0 }
+    { value: 0 },
   );
   const lifecycleErrors = [];
   const applet = {
@@ -6560,9 +6854,9 @@ test("stale timer callback and orphan owner cannot remove same-ID replacement", 
       1,
       () => false,
       false,
-      "processCleanupRetryTimer"
+      "processCleanupRetryTimer",
     ),
-    71
+    71,
   );
   const oldOwner = applet.processCleanupRetryTimerOwner;
   assert.equal(typeof oldOwner, "object");
@@ -6573,9 +6867,9 @@ test("stale timer callback and orphan owner cannot remove same-ID replacement", 
       1,
       () => false,
       false,
-      "processCleanupRetryTimer"
+      "processCleanupRetryTimer",
     ),
-    71
+    71,
   );
   const newOwner = applet.processCleanupRetryTimerOwner;
   assert.notEqual(newOwner, oldOwner);
@@ -6604,7 +6898,7 @@ test("stale timer callback and orphan owner cannot remove same-ID replacement", 
       Mainloop,
       LIFECYCLE_REMOVED: "removed",
       LIFECYCLE_REMOVING: "removing",
-    }
+    },
   );
   applet._retryOrphanedTimers = retryOrphanedTimers;
   assert.equal(applet._retryOrphanedTimers(), false);
@@ -6630,25 +6924,43 @@ test("real cleanup retry reaps orphan and resets episode failure latch", () => {
   const scheduleProcessCleanupRetry = loadAppletMethod(
     "_scheduleProcessCleanupRetry",
     "_cancelPendingRecordingStart",
-    { value: 0 }
+    { value: 0 },
   );
   const scheduleTrackedTimer = loadAppletMethod(
     "_scheduleTrackedTimer",
     "_init",
     { value: 0 },
-    { Mainloop }
+    { Mainloop },
   );
   const clearTrackedTimer = loadAppletMethod(
     "_clearTrackedTimer",
     "_scheduleTrackedTimer",
     { value: 0 },
-    { Mainloop: { source_remove: () => true } }
+    { Mainloop: { source_remove: () => true } },
   );
-  const trackTimer = loadAppletMethod("_trackTimer", "_trackedTimerOwnedBy", { value: 0 });
-  const trackedTimerOwnedBy = loadAppletMethod("_trackedTimerOwnedBy", "_untrackTimer", { value: 0 });
-  const untrackTimer = loadAppletMethod("_untrackTimer", "_trackOrphanedTimer", { value: 0 });
-  const trackOrphanedTimer = loadAppletMethod("_trackOrphanedTimer", "_untrackOrphanedTimer", { value: 0 });
-  const untrackOrphanedTimer = loadAppletMethod("_untrackOrphanedTimer", "_retryOrphanedTimers", { value: 0 });
+  const trackTimer = loadAppletMethod("_trackTimer", "_trackedTimerOwnedBy", {
+    value: 0,
+  });
+  const trackedTimerOwnedBy = loadAppletMethod(
+    "_trackedTimerOwnedBy",
+    "_untrackTimer",
+    { value: 0 },
+  );
+  const untrackTimer = loadAppletMethod(
+    "_untrackTimer",
+    "_trackOrphanedTimer",
+    { value: 0 },
+  );
+  const trackOrphanedTimer = loadAppletMethod(
+    "_trackOrphanedTimer",
+    "_untrackOrphanedTimer",
+    { value: 0 },
+  );
+  const untrackOrphanedTimer = loadAppletMethod(
+    "_untrackOrphanedTimer",
+    "_retryOrphanedTimers",
+    { value: 0 },
+  );
   const lifecycleErrors = [];
   const applet = {
     appletRemoved: false,
@@ -6672,7 +6984,12 @@ test("real cleanup retry reaps orphan and resets episode failure latch", () => {
     _pendingHotkeyRebinds: [],
     _orphanedTimers: [],
     _orphanedDialogs: [],
-    _resourceRegistry: { timers: {}, timerGroups: {}, timerOwners: {}, processes: {} },
+    _resourceRegistry: {
+      timers: {},
+      timerGroups: {},
+      timerOwners: {},
+      processes: {},
+    },
     _lifecycleAllowsWork: () => true,
     _scheduleTrackedTimer: scheduleTrackedTimer,
     _clearTrackedTimer: clearTrackedTimer,
@@ -6684,7 +7001,7 @@ test("real cleanup retry reaps orphan and resets episode failure latch", () => {
     _retryOrphanedTimers: () => true,
     _retryOrphanedProcesses() {
       this._orphanedProcesses = this._orphanedProcesses.filter(
-        (entry) => entry && entry.group !== "status"
+        (entry) => entry && entry.group !== "status",
       );
       return true;
     },
@@ -6709,14 +7026,38 @@ test("real cleanup retry reaps orphan and resets episode failure latch", () => {
   assert.equal(typeof Mainloop.callback, "function");
   assert.equal(Mainloop.callback.call(applet), true);
   assert.equal(applet._orphanedProcesses.length, 1);
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._processCleanupFailureLatch, "status"), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._processCleanupFailureLatch, "foreign"), true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._processCleanupFailureLatch,
+      "status",
+    ),
+    false,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._processCleanupFailureLatch,
+      "foreign",
+    ),
+    true,
+  );
   assert.equal(applet.processCleanupRetryTimer, 83);
   applet._orphanedProcesses.length = 0;
   assert.equal(Mainloop.callback.call(applet), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._resourceRegistry.timers, "process-cleanup-retry"), false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._resourceRegistry.timers,
+      "process-cleanup-retry",
+    ),
+    false,
+  );
   assert.equal(applet.processCleanupRetryTimer, 0);
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._processCleanupFailureLatch, "foreign"), true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._processCleanupFailureLatch,
+      "foreign",
+    ),
+    true,
+  );
   assert.equal(lifecycleErrors.length, 0);
 });
 
@@ -6745,19 +7086,19 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   const scheduleProcessCleanupRetry = loadAppletMethod(
     "_scheduleProcessCleanupRetry",
     "_cancelPendingRecordingStart",
-    { value: 0 }
+    { value: 0 },
   );
   const scheduleTrackedTimer = loadAppletMethod(
     "_scheduleTrackedTimer",
     "_init",
     { value: 0 },
-    { Mainloop }
+    { Mainloop },
   );
   const clearTrackedTimer = loadAppletMethod(
     "_clearTrackedTimer",
     "_scheduleTrackedTimer",
     { value: 0 },
-    { Mainloop }
+    { Mainloop },
   );
   const retryOrphanedTimers = loadAppletMethod(
     "_retryOrphanedTimers",
@@ -6767,13 +7108,31 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
       Mainloop,
       LIFECYCLE_REMOVED: "removed",
       LIFECYCLE_REMOVING: "removing",
-    }
+    },
   );
-  const trackTimer = loadAppletMethod("_trackTimer", "_trackedTimerOwnedBy", { value: 0 });
-  const trackedTimerOwnedBy = loadAppletMethod("_trackedTimerOwnedBy", "_untrackTimer", { value: 0 });
-  const untrackTimer = loadAppletMethod("_untrackTimer", "_trackOrphanedTimer", { value: 0 });
-  const trackOrphanedTimer = loadAppletMethod("_trackOrphanedTimer", "_untrackOrphanedTimer", { value: 0 });
-  const untrackOrphanedTimer = loadAppletMethod("_untrackOrphanedTimer", "_retryOrphanedTimers", { value: 0 });
+  const trackTimer = loadAppletMethod("_trackTimer", "_trackedTimerOwnedBy", {
+    value: 0,
+  });
+  const trackedTimerOwnedBy = loadAppletMethod(
+    "_trackedTimerOwnedBy",
+    "_untrackTimer",
+    { value: 0 },
+  );
+  const untrackTimer = loadAppletMethod(
+    "_untrackTimer",
+    "_trackOrphanedTimer",
+    { value: 0 },
+  );
+  const trackOrphanedTimer = loadAppletMethod(
+    "_trackOrphanedTimer",
+    "_untrackOrphanedTimer",
+    { value: 0 },
+  );
+  const untrackOrphanedTimer = loadAppletMethod(
+    "_untrackOrphanedTimer",
+    "_retryOrphanedTimers",
+    { value: 0 },
+  );
   const lifecycleErrors = [];
   const makeApplet = (sourceId, owner) => ({
     appletRemoved: false,
@@ -6806,8 +7165,12 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   const throwOwner = {};
   const throwApplet = makeApplet(211, throwOwner);
   assert.equal(
-    clearTrackedTimer.call(throwApplet, "process-cleanup-retry", "processCleanupRetryTimer"),
-    false
+    clearTrackedTimer.call(
+      throwApplet,
+      "process-cleanup-retry",
+      "processCleanupRetryTimer",
+    ),
+    false,
   );
   assert.equal(sourceRemoveCalls, 1);
   assert.equal(throwApplet._orphanedTimers.length, 1);
@@ -6815,7 +7178,10 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   assert.equal(scheduleProcessCleanupRetry.call(throwApplet, "status"), false);
   assert.equal(sourceRemoveCalls, 1);
   assert.equal(throwApplet.processCleanupRetryTimer, 211);
-  assert.equal(throwApplet._resourceRegistry.timers["process-cleanup-retry"], 211);
+  assert.equal(
+    throwApplet._resourceRegistry.timers["process-cleanup-retry"],
+    211,
+  );
 
   const retryThrowOwner = {};
   const retryThrowApplet = makeApplet(212, retryThrowOwner);
@@ -6830,19 +7196,23 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   });
   assert.equal(retryOrphanedTimers.call(retryThrowApplet), false);
   assert.equal(sourceRemoveCalls, 2);
-  assert.equal(retryThrowApplet._orphanedTimers[0].sourceRemovalAmbiguous, true);
+  assert.equal(
+    retryThrowApplet._orphanedTimers[0].sourceRemovalAmbiguous,
+    true,
+  );
   assert.equal(retryOrphanedTimers.call(retryThrowApplet), false);
   assert.equal(sourceRemoveCalls, 2);
 
   const replacementRetryOwner = {};
   retryThrowApplet.processCleanupRetryTimerOwner = replacementRetryOwner;
-  retryThrowApplet._resourceRegistry.timerOwners["process-cleanup-retry"] = replacementRetryOwner;
+  retryThrowApplet._resourceRegistry.timerOwners["process-cleanup-retry"] =
+    replacementRetryOwner;
   assert.equal(retryOrphanedTimers.call(retryThrowApplet), false);
   assert.equal(sourceRemoveCalls, 2);
   assert.equal(retryThrowApplet.processCleanupRetryTimer, 212);
   assert.equal(
     retryThrowApplet._resourceRegistry.timerOwners["process-cleanup-retry"],
-    replacementRetryOwner
+    replacementRetryOwner,
   );
 
   const registryOnlyOwner = {};
@@ -6852,17 +7222,22 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   assert.equal(sourceRemoveCalls, 3);
   assert.equal(registryOnlyApplet._orphanedTimers.length, 1);
   assert.equal(registryOnlyApplet._orphanedTimers[0].owner, registryOnlyOwner);
-  assert.equal(registryOnlyApplet._orphanedTimers[0].sourceRemovalAmbiguous, true);
+  assert.equal(
+    registryOnlyApplet._orphanedTimers[0].sourceRemovalAmbiguous,
+    true,
+  );
   assert.equal(retryOrphanedTimers.call(registryOnlyApplet), false);
   assert.equal(sourceRemoveCalls, 3);
   const registryOnlyReplacementOwner = {};
-  registryOnlyApplet.processCleanupRetryTimerOwner = registryOnlyReplacementOwner;
-  registryOnlyApplet._resourceRegistry.timerOwners["process-cleanup-retry"] = registryOnlyReplacementOwner;
+  registryOnlyApplet.processCleanupRetryTimerOwner =
+    registryOnlyReplacementOwner;
+  registryOnlyApplet._resourceRegistry.timerOwners["process-cleanup-retry"] =
+    registryOnlyReplacementOwner;
   assert.equal(retryOrphanedTimers.call(registryOnlyApplet), false);
   assert.equal(sourceRemoveCalls, 3);
   assert.equal(
     registryOnlyApplet._resourceRegistry.timerOwners["process-cleanup-retry"],
-    registryOnlyReplacementOwner
+    registryOnlyReplacementOwner,
   );
 
   removeMode = "false";
@@ -6880,28 +7255,42 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   assert.equal(retryOrphanedTimers.call(falseRetryApplet), false);
   assert.equal(sourceRemoveCalls, 4);
   assert.equal(falseRetryApplet._orphanedTimers[0].sourceRemoved, true);
-  assert.equal(falseRetryApplet._orphanedTimers[0].sourceRemovalAmbiguous, false);
+  assert.equal(
+    falseRetryApplet._orphanedTimers[0].sourceRemovalAmbiguous,
+    false,
+  );
   const falseRetryReplacementOwner = {};
   falseRetryApplet.processCleanupRetryTimerOwner = falseRetryReplacementOwner;
-  falseRetryApplet._resourceRegistry.timerOwners["process-cleanup-retry"] = falseRetryReplacementOwner;
+  falseRetryApplet._resourceRegistry.timerOwners["process-cleanup-retry"] =
+    falseRetryReplacementOwner;
   assert.equal(retryOrphanedTimers.call(falseRetryApplet), true);
   assert.equal(sourceRemoveCalls, 4);
   assert.equal(
     falseRetryApplet._resourceRegistry.timerOwners["process-cleanup-retry"],
-    falseRetryReplacementOwner
+    falseRetryReplacementOwner,
   );
 
   removeMode = "false";
   const disappearedOwner = {};
   const disappearedApplet = makeApplet(211, disappearedOwner);
   assert.equal(
-    clearTrackedTimer.call(disappearedApplet, "process-cleanup-retry", "processCleanupRetryTimer"),
-    false
+    clearTrackedTimer.call(
+      disappearedApplet,
+      "process-cleanup-retry",
+      "processCleanupRetryTimer",
+    ),
+    false,
   );
   assert.equal(sourceRemoveCalls, 5);
   assert.equal(disappearedApplet._orphanedTimers[0].sourceRemoved, true);
-  assert.equal(disappearedApplet._orphanedTimers[0].sourceRemovalAmbiguous, false);
-  assert.equal(scheduleProcessCleanupRetry.call(disappearedApplet, "status"), true);
+  assert.equal(
+    disappearedApplet._orphanedTimers[0].sourceRemovalAmbiguous,
+    false,
+  );
+  assert.equal(
+    scheduleProcessCleanupRetry.call(disappearedApplet, "status"),
+    true,
+  );
   assert.equal(sourceRemoveCalls, 5);
   assert.equal(disappearedApplet.processCleanupRetryTimer, 211);
   const replacementOwner = disappearedApplet.processCleanupRetryTimerOwner;
@@ -6913,13 +7302,16 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
       "processCleanupRetryTimer",
       undefined,
       undefined,
-      disappearedOwner
+      disappearedOwner,
     ),
-    false
+    false,
   );
   assert.equal(sourceRemoveCalls, 5);
   assert.equal(disappearedApplet.processCleanupRetryTimer, 211);
-  assert.equal(disappearedApplet.processCleanupRetryTimerOwner, replacementOwner);
+  assert.equal(
+    disappearedApplet.processCleanupRetryTimerOwner,
+    replacementOwner,
+  );
 
   removeMode = "throw";
   nextTimerId = 213;
@@ -6927,13 +7319,19 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   const rollbackApplet = makeApplet(213, rollbackOwner);
   rollbackApplet.processCleanupRetryTimer = 0;
   rollbackApplet.processCleanupRetryTimerOwner = null;
-  rollbackApplet._resourceRegistry = { timers: {}, timerGroups: {}, timerOwners: {} };
+  rollbackApplet._resourceRegistry = {
+    timers: {},
+    timerGroups: {},
+    timerOwners: {},
+  };
   rollbackApplet._orphanedTimers = [];
-  rollbackApplet._trackTimer = () => { throw new Error("timer owner assignment failed"); };
+  rollbackApplet._trackTimer = () => {
+    throw new Error("timer owner assignment failed");
+  };
   rollbackApplet._scheduleProcessCleanupRetry = () => false;
   let rollbackOrphanArgs = null;
   const rollbackTrackOrphanedTimer = rollbackApplet._trackOrphanedTimer;
-  rollbackApplet._trackOrphanedTimer = function(...args) {
+  rollbackApplet._trackOrphanedTimer = function (...args) {
     rollbackOrphanArgs = args;
     return rollbackTrackOrphanedTimer.apply(this, args);
   };
@@ -6945,9 +7343,9 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
       () => false,
       false,
       "processCleanupRetryTimer",
-      "status"
+      "status",
     ),
-    0
+    0,
   );
   assert.equal(sourceRemoveCalls, 6);
   assert.equal(rollbackOrphanArgs[6], true);
@@ -6960,12 +7358,13 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   const rollbackReplacementOwner = {};
   rollbackApplet.processCleanupRetryTimer = 213;
   rollbackApplet.processCleanupRetryTimerOwner = rollbackReplacementOwner;
-  rollbackApplet._resourceRegistry.timerOwners["process-cleanup-retry"] = rollbackReplacementOwner;
+  rollbackApplet._resourceRegistry.timerOwners["process-cleanup-retry"] =
+    rollbackReplacementOwner;
   assert.equal(retryOrphanedTimers.call(rollbackApplet), false);
   assert.equal(sourceRemoveCalls, 6);
   assert.equal(
     rollbackApplet._resourceRegistry.timerOwners["process-cleanup-retry"],
-    rollbackReplacementOwner
+    rollbackReplacementOwner,
   );
 
   sourceRemoveCalls = 0;
@@ -6976,19 +7375,31 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   trackerThrowApplet._trackOrphanedTimer = () => false;
   assert.equal(retryOrphanedTimers.call(trackerThrowApplet), false);
   assert.equal(sourceRemoveCalls, 1);
-  assert.equal(trackerThrowApplet._resourceRegistry.timerCleanupBlocks.length, 1);
-  assert.equal(trackerThrowApplet._resourceRegistry.timerCleanupBlocks[0].owner, trackerThrowOwner);
-  assert.equal(trackerThrowApplet._resourceRegistry.timerCleanupBlocks[0].sourceRemovalAmbiguous, true);
+  assert.equal(
+    trackerThrowApplet._resourceRegistry.timerCleanupBlocks.length,
+    1,
+  );
+  assert.equal(
+    trackerThrowApplet._resourceRegistry.timerCleanupBlocks[0].owner,
+    trackerThrowOwner,
+  );
+  assert.equal(
+    trackerThrowApplet._resourceRegistry.timerCleanupBlocks[0]
+      .sourceRemovalAmbiguous,
+    true,
+  );
   assert.equal(retryOrphanedTimers.call(trackerThrowApplet), false);
   assert.equal(sourceRemoveCalls, 1);
   const trackerThrowReplacementOwner = {};
-  trackerThrowApplet.processCleanupRetryTimerOwner = trackerThrowReplacementOwner;
-  trackerThrowApplet._resourceRegistry.timerOwners["process-cleanup-retry"] = trackerThrowReplacementOwner;
+  trackerThrowApplet.processCleanupRetryTimerOwner =
+    trackerThrowReplacementOwner;
+  trackerThrowApplet._resourceRegistry.timerOwners["process-cleanup-retry"] =
+    trackerThrowReplacementOwner;
   assert.equal(retryOrphanedTimers.call(trackerThrowApplet), false);
   assert.equal(sourceRemoveCalls, 1);
   assert.equal(
     trackerThrowApplet._resourceRegistry.timerOwners["process-cleanup-retry"],
-    trackerThrowReplacementOwner
+    trackerThrowReplacementOwner,
   );
 
   sourceRemoveCalls = 0;
@@ -6999,20 +7410,28 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   trackerFalseApplet._trackOrphanedTimer = () => false;
   assert.equal(retryOrphanedTimers.call(trackerFalseApplet), false);
   assert.equal(sourceRemoveCalls, 1);
-  assert.equal(trackerFalseApplet._resourceRegistry.timerCleanupBlocks.length, 1);
-  assert.equal(trackerFalseApplet._resourceRegistry.timerCleanupBlocks[0].sourceRemoved, true);
+  assert.equal(
+    trackerFalseApplet._resourceRegistry.timerCleanupBlocks.length,
+    1,
+  );
+  assert.equal(
+    trackerFalseApplet._resourceRegistry.timerCleanupBlocks[0].sourceRemoved,
+    true,
+  );
   assert.equal(retryOrphanedTimers.call(trackerFalseApplet), true);
   assert.equal(retryOrphanedTimers.call(trackerFalseApplet), true);
   assert.equal(sourceRemoveCalls, 1);
   trackerFalseApplet._resourceRegistry.timers["process-cleanup-retry"] = 217;
   const trackerFalseReplacementOwner = {};
-  trackerFalseApplet.processCleanupRetryTimerOwner = trackerFalseReplacementOwner;
-  trackerFalseApplet._resourceRegistry.timerOwners["process-cleanup-retry"] = trackerFalseReplacementOwner;
+  trackerFalseApplet.processCleanupRetryTimerOwner =
+    trackerFalseReplacementOwner;
+  trackerFalseApplet._resourceRegistry.timerOwners["process-cleanup-retry"] =
+    trackerFalseReplacementOwner;
   assert.equal(retryOrphanedTimers.call(trackerFalseApplet), false);
   assert.equal(sourceRemoveCalls, 1);
   assert.equal(
     trackerFalseApplet._resourceRegistry.timerOwners["process-cleanup-retry"],
-    trackerFalseReplacementOwner
+    trackerFalseReplacementOwner,
   );
 
   sourceRemoveCalls = 0;
@@ -7036,18 +7455,26 @@ test("process retry distinguishes ambiguous and disappeared source ownership", (
   assert.equal(retryOrphanedTimers.call(mismatchApplet), false);
   assert.equal(sourceRemoveCalls, 1);
   assert.equal(mismatchApplet._resourceRegistry.timerCleanupBlocks.length, 1);
-  assert.equal(mismatchApplet._resourceRegistry.timerCleanupBlocks[0].owner, mismatchOwner);
-  assert.equal(mismatchApplet._resourceRegistry.timerCleanupBlocks[0].sourceRemovalAmbiguous, true);
+  assert.equal(
+    mismatchApplet._resourceRegistry.timerCleanupBlocks[0].owner,
+    mismatchOwner,
+  );
+  assert.equal(
+    mismatchApplet._resourceRegistry.timerCleanupBlocks[0]
+      .sourceRemovalAmbiguous,
+    true,
+  );
   assert.equal(retryOrphanedTimers.call(mismatchApplet), false);
   assert.equal(sourceRemoveCalls, 1);
   const mismatchReplacementOwner = {};
   mismatchApplet.processCleanupRetryTimerOwner = mismatchReplacementOwner;
-  mismatchApplet._resourceRegistry.timerOwners["process-cleanup-retry"] = mismatchReplacementOwner;
+  mismatchApplet._resourceRegistry.timerOwners["process-cleanup-retry"] =
+    mismatchReplacementOwner;
   assert.equal(retryOrphanedTimers.call(mismatchApplet), false);
   assert.equal(sourceRemoveCalls, 1);
   assert.equal(
     mismatchApplet._resourceRegistry.timerOwners["process-cleanup-retry"],
-    mismatchReplacementOwner
+    mismatchReplacementOwner,
   );
 });
 
@@ -7055,24 +7482,28 @@ test("foreign orphan scheduler throw stays outside stopped group result", () => 
   const terminateProcessesByGroup = loadAppletMethod(
     "_terminateProcessesByGroup",
     "_hasTrackedProcessGroup",
-    { value: 0 }
+    { value: 0 },
   );
   const lifecycleErrors = [];
   let globalPending = true;
   const foreignProcess = {};
   const applet = {
     _resourceRegistry: { processes: {} },
-    _orphanedProcesses: [{
-      group: "foreign",
-      process: foreignProcess,
-      generation: 1,
-      processGroupIdentity: { pid: "501", startTime: "1" },
-    }],
+    _orphanedProcesses: [
+      {
+        group: "foreign",
+        process: foreignProcess,
+        generation: 1,
+        processGroupIdentity: { pid: "501", startTime: "1" },
+      },
+    ],
     _processCleanupFailureLatch: {},
     _processCleanupEpisodeByGroup: {},
     _retryOrphanedProcesses: () => true,
     _processCleanupStillPending: () => globalPending,
-    _scheduleProcessCleanupRetry: () => { throw new Error("global retry failed"); },
+    _scheduleProcessCleanupRetry: () => {
+      throw new Error("global retry failed");
+    },
     _recordLifecycleError: (...args) => lifecycleErrors.push(args),
   };
 
@@ -7082,26 +7513,36 @@ test("foreign orphan scheduler throw stays outside stopped group result", () => 
   assert.equal(terminateProcessesByGroup.call(applet, "doctor"), "stopped");
   assert.equal(lifecycleErrors.length, 1);
 
-  applet._orphanedProcesses = [{
-    group: "foreign",
-    process: foreignProcess,
-    generation: 2,
-    processGroupIdentity: { pid: "501", startTime: "2" },
-  }];
+  applet._orphanedProcesses = [
+    {
+      group: "foreign",
+      process: foreignProcess,
+      generation: 2,
+      processGroupIdentity: { pid: "501", startTime: "2" },
+    },
+  ];
   assert.equal(terminateProcessesByGroup.call(applet, "status"), "stopped");
   assert.equal(lifecycleErrors.length, 2);
 
   globalPending = false;
   assert.equal(terminateProcessesByGroup.call(applet, "doctor"), "stopped");
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._processCleanupFailureLatch, "__process-cleanup-retry__"), false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._processCleanupFailureLatch,
+      "__process-cleanup-retry__",
+    ),
+    false,
+  );
 
   globalPending = true;
-  applet._orphanedProcesses = [{
-    group: "foreign",
-    process: {},
-    generation: 3,
-    processGroupIdentity: { pid: "501", startTime: "3" },
-  }];
+  applet._orphanedProcesses = [
+    {
+      group: "foreign",
+      process: {},
+      generation: 3,
+      processGroupIdentity: { pid: "501", startTime: "3" },
+    },
+  ];
   assert.equal(terminateProcessesByGroup.call(applet, "status"), "stopped");
   assert.equal(lifecycleErrors.length, 3);
 });
@@ -7110,7 +7551,7 @@ test("process cleanup failure latch spans retries and resets on episode or stopp
   const terminateProcessesByGroup = loadAppletMethod(
     "_terminateProcessesByGroup",
     "_hasTrackedProcessGroup",
-    { value: 0 }
+    { value: 0 },
   );
   const process = {};
   const processes = {
@@ -7119,7 +7560,9 @@ test("process cleanup failure latch spans retries and resets on episode or stopp
       generation: 1,
       processGroupIdentity: { pid: "601", startTime: "1" },
       group: "focus",
-      cancel: () => { throw new Error("focus cleanup failed"); },
+      cancel: () => {
+        throw new Error("focus cleanup failed");
+      },
     },
   };
   const lifecycleErrors = [];
@@ -7151,14 +7594,22 @@ test("process cleanup failure latch spans retries and resets on episode or stopp
 
   delete processes["process-1"];
   assert.equal(terminateProcessesByGroup.call(applet, "focus"), "stopped");
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._processCleanupFailureLatch, "focus"), false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._processCleanupFailureLatch,
+      "focus",
+    ),
+    false,
+  );
 
   processes["process-2"] = {
     process: {},
     generation: 3,
     processGroupIdentity: { pid: "601", startTime: "3" },
     group: "focus",
-    cancel: () => { throw new Error("new focus cleanup failed"); },
+    cancel: () => {
+      throw new Error("new focus cleanup failed");
+    },
   };
   assert.equal(terminateProcessesByGroup.call(applet, "focus"), "failed");
   assert.equal(lifecycleErrors.length, 4);
@@ -7168,7 +7619,7 @@ test("cleanup failure episodes stay group-local across successful retries", () =
   const terminateProcessesByGroup = loadAppletMethod(
     "_terminateProcessesByGroup",
     "_hasTrackedProcessGroup",
-    { value: 0 }
+    { value: 0 },
   );
   const processA = {};
   const processB = {};
@@ -7176,12 +7627,16 @@ test("cleanup failure episodes stay group-local across successful retries", () =
     a: {
       process: processA,
       group: "group-a",
-      cancel: () => { throw new Error("group A failed"); },
+      cancel: () => {
+        throw new Error("group A failed");
+      },
     },
     b: {
       process: processB,
       group: "group-b",
-      cancel: () => { throw new Error("group B failed"); },
+      cancel: () => {
+        throw new Error("group B failed");
+      },
     },
   };
   const lifecycleErrors = [];
@@ -7205,29 +7660,61 @@ test("cleanup failure episodes stay group-local across successful retries", () =
   assert.equal(lifecycleErrors.length, 1);
   assert.equal(terminateProcessesByGroup.call(applet, "group-b"), "failed");
   assert.equal(lifecycleErrors.length, 2);
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._processCleanupFailureLatch, "group-a"), true);
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._processCleanupFailureLatch, "group-b"), true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._processCleanupFailureLatch,
+      "group-a",
+    ),
+    true,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._processCleanupFailureLatch,
+      "group-b",
+    ),
+    true,
+  );
 
   delete processes.a;
   assert.equal(terminateProcessesByGroup.call(applet, "group-a"), "stopped");
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._processCleanupFailureLatch, "group-a"), false);
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._processCleanupFailureLatch, "group-b"), true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._processCleanupFailureLatch,
+      "group-a",
+    ),
+    false,
+  );
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._processCleanupFailureLatch,
+      "group-b",
+    ),
+    true,
+  );
 
   processes.a = {
     process: {},
     group: "group-a",
-    cancel: () => { throw new Error("new group A failed"); },
+    cancel: () => {
+      throw new Error("new group A failed");
+    },
   };
   assert.equal(terminateProcessesByGroup.call(applet, "group-a"), "failed");
   assert.equal(lifecycleErrors.length, 3);
-  assert.equal(Object.prototype.hasOwnProperty.call(applet._processCleanupFailureLatch, "group-b"), true);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(
+      applet._processCleanupFailureLatch,
+      "group-b",
+    ),
+    true,
+  );
 });
 
 test("doctor and status pending cleanup stay silent until stopped", () => {
   const invalidate = loadAppletMethod(
     "_invalidateBackgroundCallbacksForRecording",
     "_validatedDoctorPayload",
-    { value: 0 }
+    { value: 0 },
   );
   for (const [group, message] of [
     ["status", "Status refresh could not be stopped"],
@@ -7246,20 +7733,29 @@ test("doctor and status pending cleanup stay silent until stopped", () => {
       return "stopped";
     };
 
-    assert.equal(applet._invalidateBackgroundCallbacksForRecording(true), false);
     assert.equal(
-      harness.preservedStatusEvents.filter((event) => event.message === message).length,
-      0
+      applet._invalidateBackgroundCallbacksForRecording(true),
+      false,
     );
-    assert.equal(applet._invalidateBackgroundCallbacksForRecording(true), false);
     assert.equal(
-      harness.preservedStatusEvents.filter((event) => event.message === message).length,
-      0
+      harness.preservedStatusEvents.filter((event) => event.message === message)
+        .length,
+      0,
+    );
+    assert.equal(
+      applet._invalidateBackgroundCallbacksForRecording(true),
+      false,
+    );
+    assert.equal(
+      harness.preservedStatusEvents.filter((event) => event.message === message)
+        .length,
+      0,
     );
     assert.equal(applet._invalidateBackgroundCallbacksForRecording(true), true);
     assert.equal(
-      harness.preservedStatusEvents.filter((event) => event.message === message).length,
-      0
+      harness.preservedStatusEvents.filter((event) => event.message === message)
+        .length,
+      0,
     );
   }
 });
@@ -7268,7 +7764,7 @@ test("definitive process cleanup failure reports once", () => {
   const invalidate = loadAppletMethod(
     "_invalidateBackgroundCallbacksForRecording",
     "_validatedDoctorPayload",
-    { value: 0 }
+    { value: 0 },
   );
   const harness = makeRecordingApplet();
   const { applet } = harness;
@@ -7280,9 +7776,9 @@ test("definitive process cleanup failure reports once", () => {
   assert.equal(applet._invalidateBackgroundCallbacksForRecording(true), false);
   assert.equal(
     harness.preservedStatusEvents.filter(
-      (event) => event.message === "Status refresh could not be stopped"
+      (event) => event.message === "Status refresh could not be stopped",
     ).length,
-    1
+    1,
   );
 });
 
@@ -7290,12 +7786,12 @@ test("history and model refreshes require stopped cleanup", () => {
   const historyRefresh = loadAppletMethod(
     "_refreshHistory",
     "_listAllTranscripts",
-    { value: 0 }
+    { value: 0 },
   );
   const modelRefresh = loadAppletMethod(
     "_refreshModelMenu",
     "_refreshTextModelMenu",
-    { value: 0 }
+    { value: 0 },
   );
   let cleanupStatus = "pending";
   let spawned = 0;
@@ -7354,7 +7850,7 @@ test("text-model settings gate UI follow-up on refresh status", () => {
   const onTextModelSettingsChanged = loadAppletMethod(
     "_onTextModelSettingsChanged",
     "_onOpenAiFlexProcessingSettingsChanged",
-    { value: 0 }
+    { value: 0 },
   );
   let cleanupStatus = "pending";
   let ollamaCleanupCalls = 0;
@@ -7381,10 +7877,15 @@ test("text-model settings gate UI follow-up on refresh status", () => {
       ollamaCleanupCalls += 1;
       return true;
     },
-    _setStatusPreservingRecording: (...args) => preservedStatusEvents.push(args),
+    _setStatusPreservingRecording: (...args) =>
+      preservedStatusEvents.push(args),
     _setStatus: () => {},
-    _populateTextModelMenu: () => { menuPopulationCalls += 1; },
-    _updatePanel: () => { panelUpdates += 1; },
+    _populateTextModelMenu: () => {
+      menuPopulationCalls += 1;
+    },
+    _updatePanel: () => {
+      panelUpdates += 1;
+    },
   };
 
   onTextModelSettingsChanged.call(applet);
@@ -7399,8 +7900,10 @@ test("text-model settings gate UI follow-up on refresh status", () => {
   assert.equal(menuPopulationCalls, 0);
   assert.equal(panelUpdates, 0);
   assert.equal(
-    preservedStatusEvents.filter((event) => event[1] === "Text model list refresh could not be stopped").length,
-    1
+    preservedStatusEvents.filter(
+      (event) => event[1] === "Text model list refresh could not be stopped",
+    ).length,
+    1,
   );
 
   cleanupStatus = "stopped";
@@ -7414,12 +7917,12 @@ test("Ollama model cleanup tri-state gates release and reports failed", () => {
   const clearFlow = loadAppletMethod(
     "_clearOllamaModelFlow",
     "_clearOllamaModelFlowOrReport",
-    { value: 0 }
+    { value: 0 },
   );
   const clearFlowOrReport = loadAppletMethod(
     "_clearOllamaModelFlowOrReport",
     "_isValidOllamaCatalogPayload",
-    { value: 0 }
+    { value: 0 },
   );
 
   for (const cleanupStatus of ["stopped", "pending", "failed"]) {
@@ -7497,11 +8000,13 @@ test("restart and focused-window cleanup block pending work", () => {
     { value: 0 },
     {
       Extension: {
-        reloadExtension: () => { reloads += 1; },
+        reloadExtension: () => {
+          reloads += 1;
+        },
         Type: { APPLET: 1 },
       },
       UUID: "test",
-    }
+    },
   );
   const restartApplet = {
     lastTranscript: "",
@@ -7525,7 +8030,7 @@ test("restart and focused-window cleanup block pending work", () => {
   const rememberFocusedWindow = loadAppletMethod(
     "_rememberFocusedWindow",
     "_closeMenuForKeyboardInsert",
-    { value: 0 }
+    { value: 0 },
   );
   let completionCalls = 0;
   const focusApplet = {
@@ -7538,8 +8043,10 @@ test("restart and focused-window cleanup block pending work", () => {
     _setStatusPreservingRecording: () => {},
   };
   assert.equal(
-    rememberFocusedWindow.call(focusApplet, false, () => { completionCalls += 1; }),
-    false
+    rememberFocusedWindow.call(focusApplet, false, () => {
+      completionCalls += 1;
+    }),
+    false,
   );
   assert.equal(completionCalls, 1);
   assert.equal(focusApplet.targetWindow, undefined);
@@ -7549,7 +8056,7 @@ test("text insertion and recording invalidation distinguish pending from failed"
   const cancelTextInsert = loadAppletMethod(
     "_cancelTextInsertForSettingsChange",
     "on_applet_clicked",
-    { value: 0 }
+    { value: 0 },
   );
   const harness = makeRecordingApplet({
     pendingCleanupGroups: textInsertCleanupGroups,
@@ -7572,7 +8079,7 @@ test("text insertion and recording invalidation distinguish pending from failed"
   });
   assert.equal(
     invalidationHarness.applet._invalidateBackgroundCallbacksForRecording(true),
-    false
+    false,
   );
   assert.equal(invalidationHarness.preservedStatusEvents.length, 0);
 });
@@ -7581,7 +8088,7 @@ test("registration token alone starts a new process cleanup episode", () => {
   const terminateProcessesByGroup = loadAppletMethod(
     "_terminateProcessesByGroup",
     "_hasTrackedProcessGroup",
-    { value: 0 }
+    { value: 0 },
   );
   const lifecycleErrors = [];
   let cancelCalls = 0;
@@ -7614,22 +8121,34 @@ test("registration token alone starts a new process cleanup episode", () => {
     _recordLifecycleError: (...args) => lifecycleErrors.push(args),
   };
 
-  assert.equal(terminateProcessesByGroup.call(applet, "token-episode"), "failed");
+  assert.equal(
+    terminateProcessesByGroup.call(applet, "token-episode"),
+    "failed",
+  );
   assert.equal(cancelCalls, 1);
   assert.equal(trackCalls, 1);
   assert.equal(lifecycleErrors.length, 1);
-  assert.equal(terminateProcessesByGroup.call(applet, "token-episode"), "failed");
+  assert.equal(
+    terminateProcessesByGroup.call(applet, "token-episode"),
+    "failed",
+  );
   assert.equal(cancelCalls, 2);
   assert.equal(trackCalls, 2);
   assert.equal(lifecycleErrors.length, 1);
 
   assert.equal(delete applet._resourceRegistry.processes["token-a"], true);
   applet._resourceRegistry.processes["token-b"] = processEntry;
-  assert.equal(terminateProcessesByGroup.call(applet, "token-episode"), "failed");
+  assert.equal(
+    terminateProcessesByGroup.call(applet, "token-episode"),
+    "failed",
+  );
   assert.equal(cancelCalls, 3);
   assert.equal(trackCalls, 3);
   assert.equal(lifecycleErrors.length, 2);
-  assert.equal(terminateProcessesByGroup.call(applet, "token-episode"), "failed");
+  assert.equal(
+    terminateProcessesByGroup.call(applet, "token-episode"),
+    "failed",
+  );
   assert.equal(cancelCalls, 4);
   assert.equal(trackCalls, 4);
   assert.equal(lifecycleErrors.length, 2);
@@ -7639,31 +8158,43 @@ test("state guard gates callback before lifecycle work", () => {
   const runStateGuarded = loadAppletMethod(
     "_runStateGuarded",
     "_runTeardownGuarded",
-    { value: 0 }
+    { value: 0 },
   );
   let callbackCalls = 0;
   let lifecycleErrors = 0;
   const applet = {
     _lifecycleAllowsWork: () => false,
-    _recordLifecycleError: () => { lifecycleErrors += 1; },
+    _recordLifecycleError: () => {
+      lifecycleErrors += 1;
+    },
   };
 
   assert.equal(
-    runStateGuarded.call(applet, "disabled-state", () => {
-      callbackCalls += 1;
-      return "unexpected";
-    }, "fallback"),
-    "fallback"
+    runStateGuarded.call(
+      applet,
+      "disabled-state",
+      () => {
+        callbackCalls += 1;
+        return "unexpected";
+      },
+      "fallback",
+    ),
+    "fallback",
   );
   assert.equal(callbackCalls, 0);
   assert.equal(lifecycleErrors, 0);
 
   applet._lifecycleAllowsWork = () => true;
   assert.equal(
-    runStateGuarded.call(applet, "state-error", () => {
-      throw new Error("state callback failed");
-    }, "fallback"),
-    "fallback"
+    runStateGuarded.call(
+      applet,
+      "state-error",
+      () => {
+        throw new Error("state callback failed");
+      },
+      "fallback",
+    ),
+    "fallback",
   );
   assert.equal(lifecycleErrors, 1);
 });
@@ -7764,7 +8295,7 @@ test("recording command invalidates pending status generation before dispatch", 
 
     const spawnJson = applet._spawnJson;
     let dispatchSnapshot = null;
-    applet._spawnJson = function(args, callback) {
+    applet._spawnJson = function (args, callback) {
       if (args[0] === action) {
         dispatchSnapshot = {
           generation: this._statusRefreshToken,
@@ -7777,7 +8308,7 @@ test("recording command invalidates pending status generation before dispatch", 
 
     if (applet._toggleRecording(action) !== true)
       throw new Error(`${action}: recording command was not accepted`);
-    if (requests.filter(request => request.args[0] === action).length !== 1)
+    if (requests.filter((request) => request.args[0] === action).length !== 1)
       throw new Error(`${action}: expected exactly one recording dispatch`);
     if (dispatchSnapshot === null)
       throw new Error(`${action}: missing recording dispatch snapshot`);
@@ -7793,13 +8324,17 @@ test("late status payload cannot overwrite newer recording command state", () =>
     const harness = makeRecordingApplet({ realStopPayload: true });
     const { applet, requests } = harness;
     applet._refreshStatus = loadAppletMethod(
-      "_refreshStatus", "_hasCancelableRecordingWork", { value: 1000 },
-      { STATUS_COMMAND_TIMEOUT_MS: 1000 }
+      "_refreshStatus",
+      "_hasCancelableRecordingWork",
+      { value: 1000 },
+      { STATUS_COMMAND_TIMEOUT_MS: 1000 },
     );
     applet._statusArgs = () => ["status"];
     applet._refreshStatus();
     const oldStatusGeneration = applet._statusRefreshToken;
-    const statusRequests = requests.filter(request => request.args[0] === "status");
+    const statusRequests = requests.filter(
+      (request) => request.args[0] === "status",
+    );
     if (statusRequests.length !== 1)
       throw new Error(`${action}: expected exactly one pending status request`);
     const staleStatusRequest = statusRequests[0];
@@ -7810,7 +8345,9 @@ test("late status payload cannot overwrite newer recording command state", () =>
     }
     if (applet._toggleRecording(action) !== true)
       throw new Error(`${action}: recording command was not accepted`);
-    const commandRequests = requests.filter(request => request.args[0] === action);
+    const commandRequests = requests.filter(
+      (request) => request.args[0] === action,
+    );
     if (commandRequests.length !== 1)
       throw new Error(`${action}: expected exactly one recording request`);
     const commandStatus = action === "start" ? "recording" : "processing";
@@ -7823,13 +8360,19 @@ test("late status payload cannot overwrite newer recording command state", () =>
       transcript: applet.lastTranscript,
       message: applet.lastMessage,
     };
-    const effectNames = ["insertCalls", "relistenCalls", "pollCalls", "scheduledTimers", "requests"];
+    const effectNames = [
+      "insertCalls",
+      "relistenCalls",
+      "pollCalls",
+      "scheduledTimers",
+      "requests",
+    ];
     const effectCounts = Object.fromEntries(
-      effectNames.map(name => [name, harness[name].length])
+      effectNames.map((name) => [name, harness[name].length]),
     );
     const realApplyPayload = applet._applyPayload;
     const staleApplyCalls = [];
-    applet._applyPayload = function(...args) {
+    applet._applyPayload = function (...args) {
       const call = { args, threw: false };
       staleApplyCalls.push(call);
       try {
@@ -7844,19 +8387,31 @@ test("late status payload cannot overwrite newer recording command state", () =>
     staleStatusRequest.callback(staleStatusPayload);
 
     if (staleApplyCalls.length !== 1)
-      throw new Error(`${action}: late status did not call the real payload handler exactly once`);
+      throw new Error(
+        `${action}: late status did not call the real payload handler exactly once`,
+      );
     const staleApply = staleApplyCalls[0];
     if (staleApply.args[0] !== staleStatusPayload)
-      throw new Error(`${action}: late status handler received a different payload`);
+      throw new Error(
+        `${action}: late status handler received a different payload`,
+      );
     if (staleApply.args[1] !== oldStatusGeneration)
-      throw new Error(`${action}: late status handler received the wrong generation`);
+      throw new Error(
+        `${action}: late status handler received the wrong generation`,
+      );
     if (staleApply.threw !== false)
-      throw new Error(`${action}: late status handler threw instead of rejecting the stale generation`);
+      throw new Error(
+        `${action}: late status handler threw instead of rejecting the stale generation`,
+      );
 
-    if (!Object.is(applet.status, state.status) ||
-        !Object.is(applet.lastTranscript, state.transcript) ||
-        !Object.is(applet.lastMessage, state.message))
-      throw new Error(`${action}: late status payload changed newer recording state`);
+    if (
+      !Object.is(applet.status, state.status) ||
+      !Object.is(applet.lastTranscript, state.transcript) ||
+      !Object.is(applet.lastMessage, state.message)
+    )
+      throw new Error(
+        `${action}: late status payload changed newer recording state`,
+      );
     for (const name of effectNames) {
       if (harness[name].length !== effectCounts[name])
         throw new Error(`${action}: late status payload changed ${name}`);
@@ -7868,7 +8423,7 @@ test("stale text and status callbacks cannot clear newer tokens", () => {
   const refreshTextModelMenu = loadAppletMethod(
     "_refreshTextModelMenuForBackend",
     "_ensureTextModelMenuPool",
-    { value: 0 }
+    { value: 0 },
   );
   const textCallbacks = [];
   let textMenuUpdates = 0;
@@ -7889,7 +8444,9 @@ test("stale text and status callbacks cannot clear newer tokens", () => {
     _processCleanupStatus: (result) => result,
     _terminateProcessesByGroup: () => "stopped",
     _tryTextModelsArgs: () => ["text-models"],
-    _populateTextModelMenu: () => { textMenuUpdates += 1; },
+    _populateTextModelMenu: () => {
+      textMenuUpdates += 1;
+    },
     _spawnJson: (_args, callback) => {
       textCallbacks.push(callback);
       return {};
@@ -7913,7 +8470,7 @@ test("stale text and status callbacks cannot clear newer tokens", () => {
     "_refreshStatus",
     "_hasCancelableRecordingWork",
     { value: 0 },
-    { STATUS_COMMAND_TIMEOUT_MS: 10000 }
+    { STATUS_COMMAND_TIMEOUT_MS: 10000 },
   );
   const statusCallbacks = [];
   let appliedStatusPayloads = 0;
@@ -7929,8 +8486,12 @@ test("stale text and status callbacks cannot clear newer tokens", () => {
       return {};
     },
     _statusArgs: () => ["status"],
-    _applyPayload: () => { appliedStatusPayloads += 1; },
-    _scheduleStatusPoll: () => { statusPolls += 1; },
+    _applyPayload: () => {
+      appliedStatusPayloads += 1;
+    },
+    _scheduleStatusPoll: () => {
+      statusPolls += 1;
+    },
     _sanitizeErrorMessage: (value) => String(value),
     _setStatusPreservingRecording: () => {},
     _recordLifecycleError: () => {},
@@ -7955,7 +8516,7 @@ test("hotkey rebind retry is bounded and isolated per binding", () => {
     "_retryPendingHotkeyRebinds",
     "_registerHotkey",
     { value: 0 },
-    { HOTKEY_REBIND_MAX_RETRIES: 2 }
+    { HOTKEY_REBIND_MAX_RETRIES: 2 },
   );
   const toggleCallback = () => {};
   const primaryCallback = () => {};
@@ -7988,7 +8549,10 @@ test("hotkey rebind retry is bounded and isolated per binding", () => {
     ],
     _clearPendingHotkeyRebind(name) {
       delete this._pendingHotkeyRebinds[name];
-      return !Object.prototype.hasOwnProperty.call(this._pendingHotkeyRebinds, name);
+      return !Object.prototype.hasOwnProperty.call(
+        this._pendingHotkeyRebinds,
+        name,
+      );
     },
     _disableHotkeyAfterRebindFailure: (name) => {
       blocked.push(name);
@@ -8001,7 +8565,9 @@ test("hotkey rebind retry is bounded and isolated per binding", () => {
       return true;
     },
     _commitSettingValue: () => true,
-    _registerHotkey: (id) => { registered.push(id); },
+    _registerHotkey: (id) => {
+      registered.push(id);
+    },
     _setStatusPreservingRecording: (...args) => statusEvents.push(args),
     _resourceRegistry: { hotkeys: {} },
     _hotkeyDefinitions: {},
@@ -8010,11 +8576,17 @@ test("hotkey rebind retry is bounded and isolated per binding", () => {
 
   assert.equal(retryPendingHotkeyRebinds.call(applet), false);
   assert.deepEqual(registered, ["primary-language-keybinding"]);
-  assert.equal(Object.prototype.hasOwnProperty.call(pending, "toggle-keybinding"), false);
+  assert.equal(
+    Object.prototype.hasOwnProperty.call(pending, "toggle-keybinding"),
+    false,
+  );
   assert.equal(pending["primary-language-keybinding"].attempts, 1);
 
   assert.equal(retryPendingHotkeyRebinds.call(applet), false);
-  assert.deepEqual(registered, ["primary-language-keybinding", "primary-language-keybinding"]);
+  assert.deepEqual(registered, [
+    "primary-language-keybinding",
+    "primary-language-keybinding",
+  ]);
   assert.equal(pending["primary-language-keybinding"].attempts, 2);
 
   assert.equal(retryPendingHotkeyRebinds.call(applet), true);
@@ -8031,10 +8603,14 @@ test("malformed orphan timer registry fails closed before allocation", () => {
     { value: 0 },
     {
       Mainloop: {
-        timeout_add: () => { throw new Error("timer allocation must not run"); },
-        timeout_add_seconds: () => { throw new Error("timer allocation must not run"); },
+        timeout_add: () => {
+          throw new Error("timer allocation must not run");
+        },
+        timeout_add_seconds: () => {
+          throw new Error("timer allocation must not run");
+        },
       },
-    }
+    },
   );
   const reports = [];
   const applet = {
@@ -8044,17 +8620,25 @@ test("malformed orphan timer registry fails closed before allocation", () => {
     _reportSubprocessError: (...args) => reports.push(args),
   };
   assert.equal(
-    scheduleTrackedTimer.call(applet, "malformed", 1, () => false, false, "malformedTimer", "test"),
-    0
+    scheduleTrackedTimer.call(
+      applet,
+      "malformed",
+      1,
+      () => false,
+      false,
+      "malformedTimer",
+      "test",
+    ),
+    0,
   );
   assert.equal(reports.length, 1);
   assert.deepEqual(applet._resourceRegistry.timers, {});
 
-  const retryOrphanedTimers = loadAppletMethod(
+  const _retryOrphanedTimers = loadAppletMethod(
     "_retryOrphanedTimers",
     "_clearTrackedTimer",
     { value: 0 },
-    { LIFECYCLE_REMOVED: "removed", LIFECYCLE_REMOVING: "removing" }
+    { LIFECYCLE_REMOVED: "removed", LIFECYCLE_REMOVING: "removing" },
   );
   let sourceRemoveCalls = 0;
   const retryErrors = [];
@@ -8066,7 +8650,12 @@ test("malformed orphan timer registry fails closed before allocation", () => {
     _recordLifecycleError: (...args) => retryErrors.push(args),
     _reportSubprocessError: (...args) => retryErrors.push(args),
   };
-  const retryMainloop = { source_remove: () => { sourceRemoveCalls += 1; return true; } };
+  const retryMainloop = {
+    source_remove: () => {
+      sourceRemoveCalls += 1;
+      return true;
+    },
+  };
   const retryWithMainloop = loadAppletMethod(
     "_retryOrphanedTimers",
     "_clearTrackedTimer",
@@ -8075,7 +8664,7 @@ test("malformed orphan timer registry fails closed before allocation", () => {
       Mainloop: retryMainloop,
       LIFECYCLE_REMOVED: "removed",
       LIFECYCLE_REMOVING: "removing",
-    }
+    },
   );
   assert.equal(retryWithMainloop.call(retryApplet), false);
   assert.equal(retryErrors.length >= 1, true);
@@ -8086,15 +8675,19 @@ test("state callback fallback survives disabled error group", () => {
   const guardStateCallback = loadAppletMethod(
     "_guardStateCallback",
     "_handleInitializationFailure",
-    { value: 0 }
+    { value: 0 },
   );
   let callbackCalls = 0;
   let safeLogCalls = 0;
   const applet = {
     _lifecycleAllowsWork: () => true,
     _lifecycleGroupEnabled: () => false,
-    _safeLogError: () => { safeLogCalls += 1; },
-    _runStateGuarded: () => { throw new Error("disabled group must not gate state callback"); },
+    _safeLogError: () => {
+      safeLogCalls += 1;
+    },
+    _runStateGuarded: () => {
+      throw new Error("disabled group must not gate state callback");
+    },
   };
   const callback = guardStateCallback.call(
     applet,
@@ -8104,7 +8697,7 @@ test("state callback fallback survives disabled error group", () => {
       return "state-result";
     },
     "fallback",
-    "error-journal"
+    "error-journal",
   );
   assert.equal(callback(), "state-result");
   assert.equal(callbackCalls, 1);
@@ -8113,9 +8706,11 @@ test("state callback fallback survives disabled error group", () => {
   const failingCallback = guardStateCallback.call(
     applet,
     "journal-state",
-    () => { throw new Error("journal callback failed"); },
+    () => {
+      throw new Error("journal callback failed");
+    },
     "fallback",
-    "error-journal"
+    "error-journal",
   );
   assert.equal(failingCallback(), "fallback");
   assert.equal(safeLogCalls, 1);

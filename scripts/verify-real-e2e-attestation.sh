@@ -7,19 +7,19 @@ export PATH="${TRUSTED_COMMAND_PATH}"
 readonly GIT_TIMEOUT_SECONDS=30
 
 for tool in git python3 timeout; do
-  command -v -- "${tool}" >/dev/null 2>&1 || {
-    printf 'real-e2e verifier: required tool missing: %s\n' "${tool}" >&2
-    exit 1
-  }
+	command -v -- "${tool}" >/dev/null 2>&1 || {
+		printf 'real-e2e verifier: required tool missing: %s\n' "${tool}" >&2
+		exit 1
+	}
 done
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 state_dir="${XDG_STATE_HOME:-${HOME}/.local/state}/speed-of-cinnamon"
 attestation="${state_dir}/real-e2e-attestation.json"
 
-[[ -f "${attestation}" && ! -L "${attestation}" ]] || {
-  printf 'real-e2e attestation missing. Run make real-e2e-acceptance after committing.\n' >&2
-  exit 1
+[[ -f ${attestation} && ! -L ${attestation} ]] || {
+	printf 'real-e2e attestation missing. Run make real-e2e-acceptance after committing.\n' >&2
+	exit 1
 }
 PYTHONPATH="${repo_dir}/src" python3 - "${attestation}" "${repo_dir}" "$(timeout --signal=TERM --kill-after=2s "${GIT_TIMEOUT_SECONDS}s" git -C "${repo_dir}" rev-parse HEAD)" <<'PY'
 import json

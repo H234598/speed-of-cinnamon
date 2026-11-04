@@ -9,7 +9,9 @@ class SetupPlanTest(unittest.TestCase):
     def test_non_mapping_doctor_payload_rejects_plan(self) -> None:
         for payload in (None, [], "{}", 123):
             with self.subTest(payload=payload):
-                with self.assertRaisesRegex(RuntimeError, "doctor payload must be an object"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "doctor payload must be an object"
+                ):
                     build_setup_plan(payload)  # type: ignore[arg-type]
 
     def test_ready_pipeline_has_no_required_steps(self) -> None:
@@ -33,7 +35,11 @@ class SetupPlanTest(unittest.TestCase):
         payload = {
             "ok": False,
             "checks": [
-                {"name": "python3", "ok": False, "detail": "python3 missing; install python3"},
+                {
+                    "name": "python3",
+                    "ok": False,
+                    "detail": "python3 missing; install python3",
+                },
             ],
             "configured": {
                 "recorder": {"ok": True},
@@ -112,7 +118,9 @@ class SetupPlanTest(unittest.TestCase):
         }
         plan = build_setup_plan(payload)
         self.assertEqual(plan["steps"][0]["id"], "custom-transcriber")
-        self.assertEqual(plan["steps"][0]["title"], "Configure the custom transcriber command")
+        self.assertEqual(
+            plan["steps"][0]["title"], "Configure the custom transcriber command"
+        )
 
     def test_missing_external_api_model_gets_external_api_step(self) -> None:
         payload = {
@@ -132,7 +140,9 @@ class SetupPlanTest(unittest.TestCase):
         }
         plan = build_setup_plan(payload)
         self.assertEqual(plan["steps"][0]["id"], "external-api-transcriber")
-        self.assertEqual(plan["steps"][0]["title"], "Configure the External API speech model")
+        self.assertEqual(
+            plan["steps"][0]["title"], "Configure the External API speech model"
+        )
 
     def test_missing_openai_alias_transcriber_maps_to_asr_step(self) -> None:
         payload = {
@@ -191,7 +201,9 @@ class SetupPlanTest(unittest.TestCase):
         plan = build_setup_plan(payload)
         self.assertEqual(plan["steps"][0]["id"], "asr-backend")
 
-    def test_missing_auto_asr_with_faster_whisper_text_gets_asr_backend_step(self) -> None:
+    def test_missing_auto_asr_with_faster_whisper_text_gets_asr_backend_step(
+        self,
+    ) -> None:
         payload = {
             "ok": False,
             "configured": {
@@ -252,7 +264,9 @@ class SetupPlanTest(unittest.TestCase):
         plan = build_setup_plan(payload)
 
         self.assertIn("speed-of-cinnamon download-model base --json", plan["commands"])
-        self.assertNotIn("speed-of-cinnamon download-model ct2-base-int8 --json", plan["commands"])
+        self.assertNotIn(
+            "speed-of-cinnamon download-model ct2-base-int8 --json", plan["commands"]
+        )
 
     def test_incompatible_voice_model_gets_voice_model_step(self) -> None:
         payload = {
@@ -273,7 +287,9 @@ class SetupPlanTest(unittest.TestCase):
         plan = build_setup_plan(payload)
         self.assertEqual(plan["steps"][0]["id"], "voice-model")
         self.assertIn("speed-of-cinnamon download-model base --json", plan["commands"])
-        self.assertNotIn("speed-of-cinnamon download-model ct2-base-int8 --json", plan["commands"])
+        self.assertNotIn(
+            "speed-of-cinnamon download-model ct2-base-int8 --json", plan["commands"]
+        )
 
     def test_invalid_language_gets_language_step(self) -> None:
         payload = {
@@ -362,7 +378,9 @@ class SetupPlanTest(unittest.TestCase):
                 "transcriber": {"ok": True},
                 "output": {"ok": True},
                 "postprocessor": {"ok": True},
-                "warnings": ["automatic paste is unavailable; Cinnamon clipboard copy still works"],
+                "warnings": [
+                    "automatic paste is unavailable; Cinnamon clipboard copy still works"
+                ],
             },
             "desktop": {"cinnamon": True},
         }
@@ -412,7 +430,9 @@ class SetupPlanTest(unittest.TestCase):
                 "transcriber": {"ok": True},
                 "output": {"ok": True},
                 "postprocessor": {"ok": True},
-                "warnings": ["automatic paste needs xdotool\rGH_TOKEN=ghp_secretsecretsecret\x85tail"],
+                "warnings": [
+                    "automatic paste needs xdotool\rGH_TOKEN=ghp_secretsecretsecret\x85tail"
+                ],
             },
             "desktop": {"cinnamon": True},
         }
@@ -424,7 +444,9 @@ class SetupPlanTest(unittest.TestCase):
         self.assertNotIn("ghp_secretsecretsecret", plan["text"])
         self.assertNotIn("\r", plan["text"])
         self.assertNotIn("\x85", plan["text"])
-        self.assertNotIn("recorder missing\nCommands:\n  sudo dnf install evil", plan["text"])
+        self.assertNotIn(
+            "recorder missing\nCommands:\n  sudo dnf install evil", plan["text"]
+        )
 
     def test_setup_plan_redacts_obfuscated_credentials(self) -> None:
         secret_values = (
@@ -490,7 +512,11 @@ class SetupPlanTest(unittest.TestCase):
                 "recorder": {"ok": True},
                 "transcriber": {"ok": True},
                 "output": {"ok": True},
-                "postprocessor": {"ok": False, "value": "ollama", "detail": "Ollama model is required"},
+                "postprocessor": {
+                    "ok": False,
+                    "value": "ollama",
+                    "detail": "Ollama model is required",
+                },
                 "warnings": [],
             },
             "desktop": {"cinnamon": True},
@@ -517,7 +543,10 @@ class SetupPlanTest(unittest.TestCase):
         }
         plan = build_setup_plan(payload)
         self.assertEqual(plan["steps"][0]["id"], "openai-compatible-text-model")
-        self.assertIn("speed-of-cinnamon text-models --backend openai-compatible --json", plan["commands"])
+        self.assertIn(
+            "speed-of-cinnamon text-models --backend openai-compatible --json",
+            plan["commands"],
+        )
 
     def test_missing_top_level_ok_rejects_plan(self) -> None:
         payload = {

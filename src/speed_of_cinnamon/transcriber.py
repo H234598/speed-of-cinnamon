@@ -34,7 +34,13 @@ from .models import (
     model_path_is_verified,
     model_supports_language,
 )
-from .command_chain import CommandChainError, MAX_COMMAND_OUTPUT_CHARS, run_command_chain, run_process_bounded_output, split_command_chain
+from .command_chain import (
+    CommandChainError,
+    MAX_COMMAND_OUTPUT_CHARS,
+    run_command_chain,
+    run_process_bounded_output,
+    split_command_chain,
+)
 from .process_priority import (
     LocalModelPriorityError,
     local_model_command,
@@ -47,7 +53,11 @@ from .faster_whisper_worker import (
     RUNTIME_DIAGNOSTIC_SCHEMA_VERSION as _FASTER_WHISPER_RUNTIME_DIAGNOSTIC_SCHEMA_VERSION,
     WORKER_ERROR_MESSAGES as _FASTER_WHISPER_WORKER_ERROR_MESSAGES,
 )
-from .personalization import build_personalization_prompt, normalize_context, normalize_vocabulary
+from .personalization import (
+    build_personalization_prompt,
+    normalize_context,
+    normalize_vocabulary,
+)
 from .http_safety import (
     MAX_DNS_RESOLUTION_TIMEOUT_SECONDS,
     MAX_PINNED_CONNECTION_TIMEOUT_SECONDS,
@@ -175,14 +185,16 @@ def _trusted_transcript_text(
     path: Path,
     output_stat: os.stat_result,
 ) -> _TrustedTranscriptText:
-    if not stat_module.S_ISREG(output_stat.st_mode) or getattr(output_stat, "st_nlink", 1) != 1:
+    if (
+        not stat_module.S_ISREG(output_stat.st_mode)
+        or getattr(output_stat, "st_nlink", 1) != 1
+    ):
         raise TranscriptionError("transcript output is unsafe")
     return _TrustedTranscriptText(text, path, output_stat)
 
 
 _AudioSnapshot = (
-    tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
+    tuple[int, int, int, int, int, int] | tuple[int, int, int, int, int, int, str]
 )
 
 
@@ -208,10 +220,13 @@ def _validate_language_code(language: str) -> str:
         raise TranscriptionError("language contains invalid null byte")
     if _contains_http_header_control_chars(language):
         raise TranscriptionError("language contains invalid control character")
-    normalized = _assert_text_length(language, field_name="language", max_chars=MAX_LANGUAGE_CODE_CHARS).strip()
+    normalized = _assert_text_length(
+        language, field_name="language", max_chars=MAX_LANGUAGE_CODE_CHARS
+    ).strip()
     if not normalized:
         raise TranscriptionError("language must not be empty")
     return normalized
+
 
 _COMMAND_TEMPLATE_PLACEHOLDER_RE = re.compile(
     r"\{(audio|language|text|output_base|output_dir|context|vocabulary|prompt)\}"
@@ -293,9 +308,15 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
             if not isinstance(value, str):
                 raise TranscriptionError("environment base must be a mapping")
             if _contains_escaped_null(key) or _contains_http_header_control_chars(key):
-                raise TranscriptionError("environment key contains invalid control character")
-            if _contains_escaped_null(value) or _contains_http_header_control_chars(value):
-                raise TranscriptionError("environment value contains invalid control character")
+                raise TranscriptionError(
+                    "environment key contains invalid control character"
+                )
+            if _contains_escaped_null(value) or _contains_http_header_control_chars(
+                value
+            ):
+                raise TranscriptionError(
+                    "environment value contains invalid control character"
+                )
             if _is_unsafe_env_var(key):
                 raise TranscriptionError(f"environment key is not allowed: {key}")
             env[key] = value
@@ -312,8 +333,12 @@ def _command_path(command: str) -> str:
     command_name = command.strip()
     if not command_name:
         raise TranscriptionError("empty transcriber executable is not allowed")
-    if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
-        raise TranscriptionError("command must be a bare command name without path separators")
+    if os.path.sep in command_name or (
+        os.path.altsep and os.path.altsep in command_name
+    ):
+        raise TranscriptionError(
+            "command must be a bare command name without path separators"
+        )
     resolution_failed = False
     resolved: str | None = None
     try:
@@ -348,9 +373,15 @@ def _contains_multipart_control_chars(value: str) -> bool:
     if _contains_escaped_null(value):
         return True
     control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
-    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+    if any(
+        sequence in lowered
+        for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")
+    ):
         return True
-    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
+    if any(
+        f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered
+        for codepoint in control_codepoints
+    ):
         return True
     for char in lowered:
         codepoint = ord(char)
@@ -364,9 +395,15 @@ def _contains_http_header_control_chars(value: str) -> bool:
         raise TranscriptionError("value must be text")
     lowered = (value or "").lower()
     control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
-    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+    if any(
+        sequence in lowered
+        for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")
+    ):
         return True
-    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
+    if any(
+        f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered
+        for codepoint in control_codepoints
+    ):
         return True
     for char in lowered:
         codepoint = ord(char)
@@ -383,7 +420,12 @@ def _model_path_exists(path: str) -> bool:
     if _contains_http_header_control_chars(path):
         return False
     try:
-        return _local_model_path_kind(Path(path).expanduser(), field_name="whisper model path") is not None
+        return (
+            _local_model_path_kind(
+                Path(path).expanduser(), field_name="whisper model path"
+            )
+            is not None
+        )
     except (OSError, RuntimeError, ValueError, TranscriptionError):
         return False
 
@@ -429,9 +471,13 @@ def _validate_ctranslate2_model_tree(path: Path, *, field_name: str) -> None:
                     if entry_kind == "directory":
                         pending_directories.append(entry)
                     elif directory_hint:
-                        raise TranscriptionError(f"{field_name} contains unsafe directory entries")
+                        raise TranscriptionError(
+                            f"{field_name} contains unsafe directory entries"
+                        )
                     elif entry_kind != "file":
-                        raise TranscriptionError(f"{field_name} contains unsafe file entries")
+                        raise TranscriptionError(
+                            f"{field_name} contains unsafe file entries"
+                        )
     except TranscriptionError:
         raise
     except OSError as exc:
@@ -440,7 +486,10 @@ def _validate_ctranslate2_model_tree(path: Path, *, field_name: str) -> None:
 
 def _require_ctranslate2_tokenizer(path: str) -> None:
     tokenizer_path = Path(path) / "tokenizer.json"
-    if _local_model_path_kind(tokenizer_path, field_name="CTranslate2 model path") != "file":
+    if (
+        _local_model_path_kind(tokenizer_path, field_name="CTranslate2 model path")
+        != "file"
+    ):
         raise TranscriptionError("CTranslate2 model is missing required tokenizer.json")
 
 
@@ -489,7 +538,9 @@ def _write_text_atomic(path: Path, text: str) -> None:
     if isinstance(text, bool) or not isinstance(text, str):
         raise TranscriptionError("text must be text")
     try:
-        write_text_atomically_without_following_symlinks(path, text, field_name="transcript path")
+        write_text_atomically_without_following_symlinks(
+            path, text, field_name="transcript path"
+        )
     except (OSError, RuntimeError) as exc:
         raise TranscriptionError("failed to write transcript file") from exc
 
@@ -522,7 +573,11 @@ def _same_regular_file_identity(first: os.stat_result, second: os.stat_result) -
 
 def _required_nofollow_flag(error_message: str) -> int:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
         raise TranscriptionError(error_message)
     return nofollow_flag
 
@@ -542,7 +597,10 @@ def _regular_file_stat(path: Path, *, field_name: str) -> os.stat_result | None:
         try:
             fd = os.open(
                 path.name,
-                os.O_RDONLY | nofollow_flag | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0),
+                os.O_RDONLY
+                | nofollow_flag
+                | getattr(os, "O_NONBLOCK", 0)
+                | getattr(os, "O_CLOEXEC", 0),
                 dir_fd=parent_fd,
             )
         except FileNotFoundError:
@@ -588,7 +646,10 @@ def _read_text_file_with_target(
         )
         fd = os.open(
             path.name,
-            os.O_RDONLY | nofollow_flag | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_CLOEXEC", 0),
+            os.O_RDONLY
+            | nofollow_flag
+            | getattr(os, "O_NONBLOCK", 0)
+            | getattr(os, "O_CLOEXEC", 0),
             dir_fd=parent_fd,
         )
         assert_fd_is_regular_private_file(fd, field_name="generated transcript path")
@@ -648,11 +709,15 @@ def _read_text_file_with_stat(
 
 
 def _read_text_file(path: Path, *, size_field_name: str | None = None) -> str:
-    text, _output_stat = _read_text_file_with_stat(path, size_field_name=size_field_name)
+    text, _output_stat = _read_text_file_with_stat(
+        path, size_field_name=size_field_name
+    )
     return text
 
 
-def _file_state_from_stat(file_stat: os.stat_result) -> tuple[int, int, int, int, int, int]:
+def _file_state_from_stat(
+    file_stat: os.stat_result,
+) -> tuple[int, int, int, int, int, int]:
     return (
         file_stat.st_dev,
         file_stat.st_ino,
@@ -829,7 +894,9 @@ def _cleanup_stale_staged_audio_dirs(runtime_root: Path) -> None:
         or directory_flag <= 0
     ):
         return
-    directory_open_flags = os.O_RDONLY | nofollow_flag | directory_flag | getattr(os, "O_CLOEXEC", 0)
+    directory_open_flags = (
+        os.O_RDONLY | nofollow_flag | directory_flag | getattr(os, "O_CLOEXEC", 0)
+    )
 
     def bounded_directory_names(directory_fd: int) -> list[str]:
         names: list[str] = []
@@ -846,7 +913,9 @@ def _cleanup_stale_staged_audio_dirs(runtime_root: Path) -> None:
     root_fd: int | None = None
     try:
         root_fd = os.open(runtime_root, directory_open_flags)
-        assert_fd_is_private_directory(root_fd, field_name="staged audio runtime directory")
+        assert_fd_is_private_directory(
+            root_fd, field_name="staged audio runtime directory"
+        )
         try:
             names = bounded_directory_names(root_fd)
         except OSError:
@@ -865,13 +934,17 @@ def _cleanup_stale_staged_audio_dirs(runtime_root: Path) -> None:
                 ):
                     continue
                 stage_fd = os.open(name, directory_open_flags, dir_fd=root_fd)
-                assert_fd_is_private_directory(stage_fd, field_name="staged audio directory")
+                assert_fd_is_private_directory(
+                    stage_fd, field_name="staged audio directory"
+                )
                 child_names = bounded_directory_names(stage_fd)
                 child_stats: list[tuple[str, os.stat_result]] = []
                 for child_name in child_names:
                     if not isinstance(child_name, str) or not child_name:
                         raise OSError("invalid staged audio entry")
-                    child_stat = os.stat(child_name, dir_fd=stage_fd, follow_symlinks=False)
+                    child_stat = os.stat(
+                        child_name, dir_fd=stage_fd, follow_symlinks=False
+                    )
                     if (
                         not stat_module.S_ISREG(child_stat.st_mode)
                         or getattr(child_stat, "st_nlink", 1) != 1
@@ -880,7 +953,12 @@ def _cleanup_stale_staged_audio_dirs(runtime_root: Path) -> None:
                         raise OSError("unexpected staged audio entry")
                     child_stats.append((child_name, child_stat))
                 for child_name, _child_stat in child_stats:
-                    secure_wipe_regular_file_at(stage_fd, child_name, _child_stat, field_name="staged audio file")
+                    secure_wipe_regular_file_at(
+                        stage_fd,
+                        child_name,
+                        _child_stat,
+                        field_name="staged audio file",
+                    )
                     os.unlink(child_name, dir_fd=stage_fd)
                 os.rmdir(name, dir_fd=root_fd)
             except BaseException:
@@ -1077,7 +1155,9 @@ def _effective_url_port(parsed: urllib.parse.ParseResult) -> int | None:
 
 
 def _url_origin(url: str, *, field_name: str) -> tuple[str, str, int | None]:
-    normalized = _validate_openai_compatible_api_url(url, field_name=field_name, allow_query_fragment=True)
+    normalized = _validate_openai_compatible_api_url(
+        url, field_name=field_name, allow_query_fragment=True
+    )
     parsed = urllib.parse.urlparse(normalized)
     hostname = parsed.hostname
     if not hostname:
@@ -1085,7 +1165,9 @@ def _url_origin(url: str, *, field_name: str) -> tuple[str, str, int | None]:
     return parsed.scheme, hostname.lower(), _effective_url_port(parsed)
 
 
-def _validate_same_origin_redirect(source_url: str, redirect_url: str, *, field_name: str) -> None:
+def _validate_same_origin_redirect(
+    source_url: str, redirect_url: str, *, field_name: str
+) -> None:
     source_origin = _url_origin(source_url, field_name=field_name)
     redirect_origin = _url_origin(redirect_url, field_name=f"{field_name} redirect")
     if redirect_origin != source_origin:
@@ -1094,11 +1176,15 @@ def _validate_same_origin_redirect(source_url: str, redirect_url: str, *, field_
 
 class _SameOriginRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        _validate_same_origin_redirect(req.get_full_url(), newurl, field_name="OpenAI-compatible speech request")
+        _validate_same_origin_redirect(
+            req.get_full_url(), newurl, field_name="OpenAI-compatible speech request"
+        )
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
-def _open_http_request(request: urllib.request.Request, *, timeout: int, field_name: str) -> object:
+def _open_http_request(
+    request: urllib.request.Request, *, timeout: int, field_name: str
+) -> object:
     _validate_http_request(request, field_name=field_name)
     request_deadline = time.monotonic() + timeout
     try:
@@ -1156,10 +1242,16 @@ def _run_transcriber_process(
         deadline=deadline,
         preserve_user_systemd_environment=True,
     )
-    return subprocess.CompletedProcess(command, returncode, stdout=stdout_data, stderr=stderr_data)
+    return subprocess.CompletedProcess(
+        command, returncode, stdout=stdout_data, stderr=stderr_data
+    )
 
 
-def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int = TRANSCRIBE_COMMAND_TIMEOUT_SECONDS) -> None:
+def _run_limited_process(
+    command: list[str] | tuple[str, ...],
+    *,
+    timeout: int = TRANSCRIBE_COMMAND_TIMEOUT_SECONDS,
+) -> None:
     if not isinstance(command, (list, tuple)):
         raise TranscriptionError("transcriber command must be a list or tuple")
     if not command:
@@ -1171,18 +1263,18 @@ def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int =
     executable = command[0].strip()
     if not executable:
         raise TranscriptionError("empty transcriber executable is not allowed")
-    if (
-        _contains_escaped_null(executable)
-        or any(_contains_escaped_null(arg) for arg in command[1:])
+    if _contains_escaped_null(executable) or any(
+        _contains_escaped_null(arg) for arg in command[1:]
     ):
         raise TranscriptionError("command argument contains invalid null byte")
-    if (
-        _contains_http_header_control_chars(executable)
-        or any(_contains_http_header_control_chars(arg) for arg in command[1:])
+    if _contains_http_header_control_chars(executable) or any(
+        _contains_http_header_control_chars(arg) for arg in command[1:]
     ):
         raise TranscriptionError("command argument contains invalid control character")
     if os.path.sep in executable or (os.path.altsep and os.path.altsep in executable):
-        raise TranscriptionError("command must be a bare command name without path separators")
+        raise TranscriptionError(
+            "command must be a bare command name without path separators"
+        )
     resolution_failed = False
     try:
         runtime_executable = _command_path(executable)
@@ -1208,7 +1300,9 @@ def _run_limited_process(command: list[str] | tuple[str, ...], *, timeout: int =
             execution_error = "failed to run transcriber backend"
         else:
             if proc.returncode != 0:
-                execution_error = f"transcriber command failed: exit code {proc.returncode}"
+                execution_error = (
+                    f"transcriber command failed: exit code {proc.returncode}"
+                )
     except (OSError, RuntimeError, TypeError, ValueError):
         execution_error = "failed to run transcriber backend"
     if execution_error is not None:
@@ -1243,7 +1337,9 @@ class _OutputCleanupTracker:
             return expected_target
         attempts = self._capture_attempts.get(path, 0)
         if attempts >= 2:
-            raise TranscriptionCleanupError("failed to capture generated transcript target")
+            raise TranscriptionCleanupError(
+                "failed to capture generated transcript target"
+            )
         self._capture_attempts[path] = attempts + 1
         expected_target = _capture_expected_target(path, field_name=field_name)
         if expected_target.kind is ExpectedTargetKind.UNKNOWN:
@@ -1256,7 +1352,10 @@ class _OutputCleanupTracker:
         current_target = self._targets.get(path)
         if current_target is not None:
             return current_target
-        if not isinstance(expected_target, ExpectedTarget) or expected_target.kind is ExpectedTargetKind.UNKNOWN:
+        if (
+            not isinstance(expected_target, ExpectedTarget)
+            or expected_target.kind is ExpectedTargetKind.UNKNOWN
+        ):
             raise TranscriptionError("failed to capture generated transcript target")
         self._targets[path] = expected_target
         self._states[path] = _OutputCleanupState.CAPTURED
@@ -1336,7 +1435,11 @@ def _is_non_retryable_cleanup_error(error: BaseException) -> bool:
 def _safe_add_note(error: BaseException, note: str) -> None:
     if not isinstance(error, BaseException) or type(note) is not str:
         return
-    if not note or len(note) > 256 or any(ord(char) < 0x20 or 0x7F <= ord(char) < 0xA0 for char in note):
+    if (
+        not note
+        or len(note) > 256
+        or any(ord(char) < 0x20 or 0x7F <= ord(char) < 0xA0 for char in note)
+    ):
         return
     try:
         add_note = getattr(error, "add_note")
@@ -1353,7 +1456,9 @@ def _new_sanitized_cleanup_error(
     note: str,
 ) -> BaseException:
     if isinstance(error, KeyboardInterrupt):
-        sanitized: BaseException = KeyboardInterrupt("transcription cleanup interrupted")
+        sanitized: BaseException = KeyboardInterrupt(
+            "transcription cleanup interrupted"
+        )
     elif isinstance(error, SystemExit):
         sanitized = SystemExit("transcription cleanup interrupted")
     elif isinstance(error, GeneratorExit):
@@ -1432,7 +1537,10 @@ def _release_directory_fd(fd: int | None) -> None:
 
 
 def _raise_cleanup_errors(cleanup_errors: list[BaseException]) -> None:
-    if any(_is_non_retryable_cleanup_error(cleanup_error) for cleanup_error in cleanup_errors):
+    if any(
+        _is_non_retryable_cleanup_error(cleanup_error)
+        for cleanup_error in cleanup_errors
+    ):
         cleanup_error = next(
             cleanup_error
             for cleanup_error in cleanup_errors
@@ -1462,9 +1570,17 @@ def _transcriber_output_namespace_lock(parent: Path):
                 "secure transcript output lock is not supported"
             )
             cloexec_flag = getattr(os, "O_CLOEXEC", None)
-            if isinstance(cloexec_flag, bool) or not isinstance(cloexec_flag, int) or cloexec_flag <= 0:
-                raise TranscriptionError("secure transcript output lock is not supported")
-            assert_no_symlink_ancestors(parent, field_name="transcript output directory")
+            if (
+                isinstance(cloexec_flag, bool)
+                or not isinstance(cloexec_flag, int)
+                or cloexec_flag <= 0
+            ):
+                raise TranscriptionError(
+                    "secure transcript output lock is not supported"
+                )
+            assert_no_symlink_ancestors(
+                parent, field_name="transcript output directory"
+            )
             parent_fd = open_directory_without_following_symlinks(
                 parent,
                 field_name="transcript output directory",
@@ -1486,8 +1602,12 @@ def _transcriber_output_namespace_lock(parent: Path):
                 )
             except OSError as exc:
                 if exc.errno == errno.ELOOP:
-                    raise TranscriptionError("transcript output lock is unsafe") from None
-                raise TranscriptionError("failed to prepare transcript output lock") from None
+                    raise TranscriptionError(
+                        "transcript output lock is unsafe"
+                    ) from None
+                raise TranscriptionError(
+                    "failed to prepare transcript output lock"
+                ) from None
             lock_stat = os.fstat(lock_fd)
             if (
                 not stat_module.S_ISREG(lock_stat.st_mode)
@@ -1500,14 +1620,20 @@ def _transcriber_output_namespace_lock(parent: Path):
                 os.set_inheritable(lock_fd, False)
                 fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                raise TranscriptionError("transcript output namespace is busy") from None
+                raise TranscriptionError(
+                    "transcript output namespace is busy"
+                ) from None
             except OSError:
-                raise TranscriptionError("failed to acquire transcript output lock") from None
+                raise TranscriptionError(
+                    "failed to acquire transcript output lock"
+                ) from None
             locked = True
         except TranscriptionError as exc:
             primary_error = exc
         except (OSError, RuntimeError, ValueError):
-            primary_error = TranscriptionError("failed to prepare transcript output lock")
+            primary_error = TranscriptionError(
+                "failed to prepare transcript output lock"
+            )
         except BaseException as exc:
             primary_error = exc
         if primary_error is None:
@@ -1665,12 +1791,18 @@ def _read_private_file_bytes(
     *,
     field_name: str,
     max_bytes: int | None = None,
-    expected_snapshot: tuple[int, int, int, int, int, int, str] | tuple[int, int, int, int, int, int] | None = None,
+    expected_snapshot: (
+        tuple[int, int, int, int, int, int, str]
+        | tuple[int, int, int, int, int, int]
+        | None
+    ) = None,
     chunk_callback: object | None = None,
 ) -> bytes:
     if not isinstance(path, Path):
         raise TranscriptionError("path must be a Path")
-    if max_bytes is not None and (isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0):
+    if max_bytes is not None and (
+        isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes < 0
+    ):
         raise TranscriptionError("max_bytes must be a non-negative integer")
     effective_max_bytes = MAX_AUDIO_FILE_BYTES if max_bytes is None else max_bytes
     if isinstance(field_name, bool) or not isinstance(field_name, str):
@@ -1683,15 +1815,22 @@ def _read_private_file_bytes(
         if (
             not isinstance(expected_snapshot, tuple)
             or len(expected_snapshot) not in (6, 7)
-            or any(isinstance(part, bool) or not isinstance(part, int) for part in expected_snapshot[:6])
+            or any(
+                isinstance(part, bool) or not isinstance(part, int)
+                for part in expected_snapshot[:6]
+            )
         ):
             raise TranscriptionError(f"failed to read {field_name}")
         expected_snapshot_metadata = expected_snapshot[:6]
         if len(expected_snapshot) == 7:
-            if not isinstance(expected_snapshot[6], str) or isinstance(expected_snapshot[6], bool):
+            if not isinstance(expected_snapshot[6], str) or isinstance(
+                expected_snapshot[6], bool
+            ):
                 raise TranscriptionError(f"failed to read {field_name}")
             expected_snapshot_digest = expected_snapshot[6]
-    nofollow_flag = _required_nofollow_flag(f"secure {field_name} open is not supported on this platform")
+    nofollow_flag = _required_nofollow_flag(
+        f"secure {field_name} open is not supported on this platform"
+    )
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     fd: int | None = None
     parent_fd: int | None = None
@@ -1726,12 +1865,21 @@ def _read_private_file_bytes(
 
     read_setup_failed = False
     try:
-        parent_fd = open_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
-        fd = os.open(path.name, os.O_RDONLY | nofollow_flag | nonblock_flag, dir_fd=parent_fd)
+        parent_fd = open_directory_without_following_symlinks(
+            path.parent, field_name=f"{field_name} directory"
+        )
+        fd = os.open(
+            path.name, os.O_RDONLY | nofollow_flag | nonblock_flag, dir_fd=parent_fd
+        )
         assert_fd_is_regular_private_file(fd, field_name=field_name)
         observed_snapshot, observed_ctime_ns = _snapshot_fd(fd)
-        if expected_snapshot_metadata is not None and observed_snapshot != expected_snapshot_metadata:
-            raise TranscriptionError(f"{field_name} changed between validation and read")
+        if (
+            expected_snapshot_metadata is not None
+            and observed_snapshot != expected_snapshot_metadata
+        ):
+            raise TranscriptionError(
+                f"{field_name} changed between validation and read"
+            )
     except OSError:
         release_open_fds(None)
         read_setup_failed = True
@@ -1755,7 +1903,9 @@ def _read_private_file_bytes(
         data_buffer = bytearray()
         total_bytes = 0
         while total_bytes <= effective_max_bytes:
-            chunk = handle.read(min(MULTIPART_FILE_CHUNK_BYTES, effective_max_bytes + 1 - total_bytes))
+            chunk = handle.read(
+                min(MULTIPART_FILE_CHUNK_BYTES, effective_max_bytes + 1 - total_bytes)
+            )
             if not isinstance(chunk, bytes):
                 raise TranscriptionError(f"failed to read {field_name}")
             if not chunk:
@@ -1778,11 +1928,15 @@ def _read_private_file_bytes(
                 and final_snapshot != expected_snapshot_metadata
             )
         ):
-            raise TranscriptionError(f"{field_name} changed between validation and read")
+            raise TranscriptionError(
+                f"{field_name} changed between validation and read"
+            )
         if total_bytes > effective_max_bytes:
             raise TranscriptionError(f"{field_name} is too large")
         if hasher is not None and hasher.hexdigest() != expected_snapshot_digest:
-            raise TranscriptionError(f"{field_name} changed between validation and read")
+            raise TranscriptionError(
+                f"{field_name} changed between validation and read"
+            )
     except (OSError, ValueError):
         read_failed = True
     finally:
@@ -1826,7 +1980,9 @@ def _snapshot_private_file(
     value_error = False
     snapshot_error = False
     try:
-        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
+        fd = open_file_without_following_symlinks(
+            path, os.O_RDONLY | nonblock_flag, field_name=field_name
+        )
         assert_fd_is_regular_private_file(fd, field_name=field_name)
         file_stat = os.fstat(fd)
         if include_hash and file_stat.st_size > MAX_AUDIO_FILE_BYTES:
@@ -1855,8 +2011,10 @@ def _snapshot_private_file(
         if (
             not _same_regular_file_identity(file_stat, final_stat)
             or file_stat.st_size != final_stat.st_size
-            or getattr(file_stat, "st_mtime_ns", 0) != getattr(final_stat, "st_mtime_ns", 0)
-            or getattr(file_stat, "st_ctime_ns", 0) != getattr(final_stat, "st_ctime_ns", 0)
+            or getattr(file_stat, "st_mtime_ns", 0)
+            != getattr(final_stat, "st_mtime_ns", 0)
+            or getattr(file_stat, "st_ctime_ns", 0)
+            != getattr(final_stat, "st_ctime_ns", 0)
         ):
             raise TranscriptionError("audio file changed while snapshotting")
         return (*snapshot, hash_state.hexdigest())
@@ -1885,10 +2043,16 @@ def _snapshot_private_file(
 def _staged_audio_file_for_local_backend(
     audio_path: Path,
     *,
-    expected_snapshot: tuple[int, int, int, int, int, int] | tuple[int, int, int, int, int, int, str] | None = None,
+    expected_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ) = None,
 ):
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
-    nofollow_flag = _required_nofollow_flag("failed to stage audio file for backend access")
+    nofollow_flag = _required_nofollow_flag(
+        "failed to stage audio file for backend access"
+    )
     if expected_snapshot is None:
         expected_snapshot = _snapshot_private_file(
             audio_path,
@@ -1902,7 +2066,9 @@ def _staged_audio_file_for_local_backend(
     expected_snapshot_metadata = expected_snapshot[:6]
     expected_snapshot_digest = None
     if len(expected_snapshot) == 7:
-        if not isinstance(expected_snapshot[6], str) or isinstance(expected_snapshot[6], bool):
+        if not isinstance(expected_snapshot[6], str) or isinstance(
+            expected_snapshot[6], bool
+        ):
             raise TranscriptionError("failed to stage audio file for backend access")
         expected_snapshot_digest = expected_snapshot[6]
     if expected_snapshot_metadata[4] > MAX_AUDIO_FILE_BYTES:
@@ -1937,9 +2103,17 @@ def _staged_audio_file_for_local_backend(
         )
         staging_path = staging_dir / audio_path.name
         try:
-            parent_fd = open_directory_without_following_symlinks(audio_path.parent, field_name="audio file directory")
-            source_fd = os.open(audio_path.name, os.O_RDONLY | nofollow_flag | nonblock_flag, dir_fd=parent_fd)
-            assert_fd_is_regular_private_file(source_fd, field_name="audio file for backend")
+            parent_fd = open_directory_without_following_symlinks(
+                audio_path.parent, field_name="audio file directory"
+            )
+            source_fd = os.open(
+                audio_path.name,
+                os.O_RDONLY | nofollow_flag | nonblock_flag,
+                dir_fd=parent_fd,
+            )
+            assert_fd_is_regular_private_file(
+                source_fd, field_name="audio file for backend"
+            )
             source_stat = os.fstat(source_fd)
             source_snapshot = (
                 source_stat.st_dev,
@@ -1950,10 +2124,16 @@ def _staged_audio_file_for_local_backend(
                 getattr(source_stat, "st_mtime_ns", 0),
             )
             if source_snapshot != expected_snapshot_metadata:
-                raise TranscriptionError("audio file changed between validation and copy")
+                raise TranscriptionError(
+                    "audio file changed between validation and copy"
+                )
             target_fd = os.open(
                 staging_path,
-                os.O_RDWR | os.O_CREAT | os.O_EXCL | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
+                os.O_RDWR
+                | os.O_CREAT
+                | os.O_EXCL
+                | nofollow_flag
+                | getattr(os, "O_CLOEXEC", 0),
                 0o600,
             )
             staging_stat = os.fstat(target_fd)
@@ -1974,10 +2154,14 @@ def _staged_audio_file_for_local_backend(
             if (
                 not _same_regular_file_identity(source_stat, final_source_stat)
                 or source_stat.st_size != final_source_stat.st_size
-                or getattr(source_stat, "st_mtime_ns", 0) != getattr(final_source_stat, "st_mtime_ns", 0)
-                or getattr(source_stat, "st_ctime_ns", 0) != getattr(final_source_stat, "st_ctime_ns", 0)
+                or getattr(source_stat, "st_mtime_ns", 0)
+                != getattr(final_source_stat, "st_mtime_ns", 0)
+                or getattr(source_stat, "st_ctime_ns", 0)
+                != getattr(final_source_stat, "st_ctime_ns", 0)
             ):
-                raise TranscriptionError("audio file changed between validation and copy")
+                raise TranscriptionError(
+                    "audio file changed between validation and copy"
+                )
             target_snapshot = _TargetSnapshot(
                 staging_stat.st_dev,
                 staging_stat.st_ino,
@@ -1994,8 +2178,13 @@ def _staged_audio_file_for_local_backend(
                 staging_hasher.digest(),
                 MAX_AUDIO_FILE_BYTES,
             )
-            if expected_snapshot_digest is not None and staging_hasher.hexdigest() != expected_snapshot_digest:
-                raise TranscriptionError("audio file changed between validation and copy")
+            if (
+                expected_snapshot_digest is not None
+                and staging_hasher.hexdigest() != expected_snapshot_digest
+            ):
+                raise TranscriptionError(
+                    "audio file changed between validation and copy"
+                )
             if staging_stat.st_size == 0:
                 raise TranscriptionError("audio file is missing or empty")
         except TranscriptionError:
@@ -2020,7 +2209,9 @@ def _staged_audio_file_for_local_backend(
             parent_fd = None
             release_fd(owned_parent_fd)
         if value_error or stage_error:
-            body_error = TranscriptionError("failed to stage audio file for backend access")
+            body_error = TranscriptionError(
+                "failed to stage audio file for backend access"
+            )
         if close_errors:
             if body_error is None:
                 _finish_fd_release_errors(
@@ -2079,7 +2270,9 @@ def _staged_audio_file_for_local_backend(
                         cleanup_errors.append(
                             (
                                 "staged audio file",
-                                TranscriptionError("failed to clean up staged audio file"),
+                                TranscriptionError(
+                                    "failed to clean up staged audio file"
+                                ),
                             )
                         )
                     else:
@@ -2104,7 +2297,11 @@ def _staged_audio_file_for_local_backend(
             )
             if body_error is None:
                 interrupt_error = next(
-                    (error for _label, error in cleanup_errors if _is_non_retryable_cleanup_error(error)),
+                    (
+                        error
+                        for _label, error in cleanup_errors
+                        if _is_non_retryable_cleanup_error(error)
+                    ),
                     None,
                 )
                 if interrupt_error is not None:
@@ -2126,10 +2323,14 @@ def _validate_expected_audio_snapshot(
     if (
         not isinstance(value, tuple)
         or len(value) not in (6, 7)
-        or any(isinstance(part, bool) or not isinstance(part, int) for part in value[:6])
+        or any(
+            isinstance(part, bool) or not isinstance(part, int) for part in value[:6]
+        )
     ):
         raise TranscriptionError(error_message)
-    if len(value) == 7 and (not isinstance(value[6], str) or isinstance(value[6], bool)):
+    if len(value) == 7 and (
+        not isinstance(value[6], str) or isinstance(value[6], bool)
+    ):
         raise TranscriptionError(error_message)
     return value
 
@@ -2137,11 +2338,15 @@ def _validate_expected_audio_snapshot(
 def _prepare_local_backend_audio(
     path: Path,
     *,
-    expected_snapshot: tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
-    | None,
+    expected_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ),
     field_name: str,
-) -> tuple[Path, tuple[int, int, int, int, int, int] | tuple[int, int, int, int, int, int, str]]:
+) -> tuple[
+    Path, tuple[int, int, int, int, int, int] | tuple[int, int, int, int, int, int, str]
+]:
     if expected_snapshot is None:
         normalized = validate_audio_file(path)
         snapshot = _snapshot_private_file(
@@ -2162,9 +2367,11 @@ def _prepare_local_backend_audio(
 def _validate_audio_file_for_upload(
     path: Path,
     *,
-    expected_snapshot: tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
-    | None = None,
+    expected_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ) = None,
     _metadata_only: bool = False,
 ) -> tuple[Path, _AudioSnapshot]:
     normalized = _validate_audio_path_shape(path)
@@ -2189,7 +2396,9 @@ def _validate_audio_file_for_upload(
     return normalized, snapshot
 
 
-def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = None) -> str:
+def _assert_text_length(
+    value: str, *, field_name: str, max_chars: int | None = None
+) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise TranscriptionError(f"{field_name} must be text")
     if max_chars is None:
@@ -2201,7 +2410,9 @@ def _assert_text_length(value: str, *, field_name: str, max_chars: int | None = 
     if _contains_escaped_null(value):
         raise TranscriptionError(f"{field_name} contains invalid null byte")
     if len(value) > max_chars:
-        raise TranscriptionError(f"{field_name} is too large (max {max_chars} characters)")
+        raise TranscriptionError(
+            f"{field_name} is too large (max {max_chars} characters)"
+        )
     try:
         encoded_value = value.encode("utf-8")
     except UnicodeEncodeError as exc:
@@ -2239,7 +2450,7 @@ def render_command_template(
     text_path: Path,
     personal_context: str = "",
     vocabulary: str = "",
-    ) -> str:
+) -> str:
     return _render_command_template(
         template,
         audio_path,
@@ -2281,11 +2492,15 @@ def _render_command_template(
             "output_dir": _quote(text_path.parent),
             "context": _quote(normalize_context(personal_context)),
             "vocabulary": _quote(normalize_vocabulary(vocabulary)),
-            "prompt": _quote(build_personalization_prompt(personal_context, vocabulary)),
+            "prompt": _quote(
+                build_personalization_prompt(personal_context, vocabulary)
+            ),
         }
     except ValueError as exc:
         raise TranscriptionError(str(exc)) from exc
-    return _COMMAND_TEMPLATE_PLACEHOLDER_RE.sub(lambda match: replacements[match.group(1)], template)
+    return _COMMAND_TEMPLATE_PLACEHOLDER_RE.sub(
+        lambda match: replacements[match.group(1)], template
+    )
 
 
 def _render_command_template_with_audio_provenance(
@@ -2319,9 +2534,11 @@ def transcribe_with_template(
     personal_context: str = "",
     vocabulary: str = "",
     *,
-    _expected_audio_snapshot: tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
-    | None = None,
+    _expected_audio_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ) = None,
     _preflight_command: _CommandPreflight | None = None,
 ) -> str:
     if isinstance(template, bool) or not isinstance(template, str):
@@ -2369,7 +2586,11 @@ def transcribe_with_template(
     elif "{output_dir}" in template:
         # OpenAI Whisper writes <audio stem>.txt when only --output_dir is supplied.
         generated_path = text_path.parent / f"{audio_path.stem}.txt"
-    generated_field_name = "transcript path" if generated_path == text_path else "generated transcript path"
+    generated_field_name = (
+        "transcript path"
+        if generated_path == text_path
+        else "generated transcript path"
+    )
     if generated_path is not None:
         try:
             assert_no_symlink_ancestors(generated_path, field_name=generated_field_name)
@@ -2387,13 +2608,17 @@ def transcribe_with_template(
             parent_fd = None
             _release_directory_fd(owned_parent_fd)
     existing_snapshot_with_state = (
-        _snapshot_existing_file_with_state(generated_path) if generated_path is not None else None
+        _snapshot_existing_file_with_state(generated_path)
+        if generated_path is not None
+        else None
     )
     if existing_snapshot_with_state is None:
         existing_snapshot = None
         existing_state = None
     else:
-        existing_snapshot, existing_state, _pre_backend_target = existing_snapshot_with_state
+        existing_snapshot, existing_state, _pre_backend_target = (
+            existing_snapshot_with_state
+        )
     cleanup_tracker = _OutputCleanupTracker(
         (generated_path,) if generated_path is not None else ()
     )
@@ -2422,8 +2647,12 @@ def transcribe_with_template(
 
     command_error: TranscriptionError | None = None
     try:
-        with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
-            staged_segments = _bind_staged_transcriber_command(command_preflight, staged_audio_path)
+        with _staged_audio_file_for_local_backend(
+            audio_path, expected_snapshot=audio_snapshot
+        ) as staged_audio_path:
+            staged_segments = _bind_staged_transcriber_command(
+                command_preflight, staged_audio_path
+            )
             output = run_command_chain(
                 staged_segments,
                 "",
@@ -2455,13 +2684,17 @@ def transcribe_with_template(
             current_state = _file_state(generated_path)
             if current_state is not None:
                 if existing_state is not None and current_state == existing_state:
-                    raise TranscriptionError("transcriber completed but did not update the transcript file")
+                    raise TranscriptionError(
+                        "transcriber completed but did not update the transcript file"
+                    )
                 output, output_stat, output_target = _read_text_file_with_target(
                     generated_path,
                     size_field_name="transcript file text",
                 )
                 cleanup_tracker.remember(generated_path, output_target)
-                output = _assert_text_length(output.strip(), field_name="transcript file text")
+                output = _assert_text_length(
+                    output.strip(), field_name="transcript file text"
+                )
                 if generated_path != text_path:
                     restore_text_path_for_success()
                 if generated_path == text_path:
@@ -2485,9 +2718,11 @@ def transcribe_with_openai_whisper(
     text_path: Path,
     write_transcript: bool = True,
     *,
-    _expected_audio_snapshot: tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
-    | None = None,
+    _expected_audio_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ) = None,
     _skip_backend_preflight: bool = False,
 ) -> str:
     write_transcript = _validate_write_transcript(write_transcript)
@@ -2505,7 +2740,9 @@ def transcribe_with_openai_whisper(
     if not _skip_backend_preflight:
         _require_whisper_command()
     try:
-        parent_fd = ensure_directory_without_following_symlinks(text_path.parent, field_name="transcript directory")
+        parent_fd = ensure_directory_without_following_symlinks(
+            text_path.parent, field_name="transcript directory"
+        )
     except OSError as exc:
         raise TranscriptionError("failed to prepare transcript directory") from exc
     else:
@@ -2519,10 +2756,14 @@ def transcribe_with_openai_whisper(
         existing_snapshot = None
         generated_state = None
     else:
-        existing_snapshot, generated_state, _pre_backend_target = existing_snapshot_with_state
+        existing_snapshot, generated_state, _pre_backend_target = (
+            existing_snapshot_with_state
+        )
     cleanup_tracker = _OutputCleanupTracker((generated,))
     cleanup_snapshots = {generated: existing_snapshot}
-    with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
+    with _staged_audio_file_for_local_backend(
+        audio_path, expected_snapshot=audio_snapshot
+    ) as staged_audio_path:
         primary_error: BaseException | None = None
         try:
             _run_limited_process(
@@ -2553,16 +2794,25 @@ def transcribe_with_openai_whisper(
             field_name="generated transcript",
         )
         if generated_target.kind is ExpectedTargetKind.CAPTURED:
-            if generated_state is not None and _file_state(generated) == generated_state:
-                raise TranscriptionError("whisper completed but did not produce a transcript")
+            if (
+                generated_state is not None
+                and _file_state(generated) == generated_state
+            ):
+                raise TranscriptionError(
+                    "whisper completed but did not produce a transcript"
+                )
             if generated == text_path:
                 try:
                     text, output_stat, output_target = _read_text_file_with_target(
                         generated,
                         size_field_name="transcript",
                     )
-                    if not _same_expected_target_evidence(output_target, generated_target):
-                        raise TranscriptionError("generated transcript changed before read")
+                    if not _same_expected_target_evidence(
+                        output_target, generated_target
+                    ):
+                        raise TranscriptionError(
+                            "generated transcript changed before read"
+                        )
                     text = text.strip()
                     _assert_text_length(text, field_name="transcript")
                 except BaseException as exc:
@@ -2593,7 +2843,9 @@ def transcribe_with_openai_whisper(
                     text_path,
                     field_name="transcript output",
                 )
-                if final_stat is None or not _same_regular_file_identity(output_stat, final_stat):
+                if final_stat is None or not _same_regular_file_identity(
+                    output_stat, final_stat
+                ):
                     raise TranscriptionError("transcript output changed before return")
                 final_target = _capture_expected_target(
                     text_path,
@@ -2700,9 +2952,11 @@ def transcribe_with_whisper_cpp(
     model_path: str,
     write_transcript: bool = True,
     *,
-    _expected_audio_snapshot: tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
-    | None = None,
+    _expected_audio_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ) = None,
     _resolved_command: str | None = None,
 ) -> str:
     write_transcript = _validate_write_transcript(write_transcript)
@@ -2717,24 +2971,34 @@ def transcribe_with_whisper_cpp(
         assert_no_symlink_ancestors(text_path, field_name="transcript path")
     except RuntimeError as exc:
         raise TranscriptionError(str(exc)) from exc
-    model_path = _validate_local_model_path(model_path, field_name="whisper.cpp model path", directory=False)
+    model_path = _validate_local_model_path(
+        model_path, field_name="whisper.cpp model path", directory=False
+    )
     _require_verified_catalog_model(model_path, field_name="whisper.cpp model")
     if not model_supports_language(model_path, language):
         raise TranscriptionError(
             f"English-only whisper.cpp model does not support language {language}; use a multilingual model"
         )
-    command = _resolved_command if _resolved_command is not None else resolve_whisper_cpp_command()
+    command = (
+        _resolved_command
+        if _resolved_command is not None
+        else resolve_whisper_cpp_command()
+    )
     if not command:
         raise TranscriptionError("whisper.cpp command is not installed")
     try:
-        parent_fd = ensure_directory_without_following_symlinks(text_path.parent, field_name="transcript directory")
+        parent_fd = ensure_directory_without_following_symlinks(
+            text_path.parent, field_name="transcript directory"
+        )
     except OSError as exc:
         raise TranscriptionError("failed to prepare transcript directory") from exc
     else:
         owned_parent_fd = parent_fd
         parent_fd = None
         _release_directory_fd(owned_parent_fd)
-    with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
+    with _staged_audio_file_for_local_backend(
+        audio_path, expected_snapshot=audio_snapshot
+    ) as staged_audio_path:
         invocation, generated_path = _whisper_cpp_invocation(
             command,
             staged_audio_path,
@@ -2794,7 +3058,10 @@ def transcribe_with_whisper_cpp(
                 current_state = _file_state(candidate)
                 if current_state is None:
                     continue
-                if generated_states[candidate] is None or current_state != generated_states[candidate]:
+                if (
+                    generated_states[candidate] is None
+                    or current_state != generated_states[candidate]
+                ):
                     active_generated_path = candidate
                     break
         except BaseException as exc:
@@ -2860,7 +3127,9 @@ def transcribe_with_whisper_cpp(
         )
         if cleanup_errors:
             _raise_cleanup_errors(cleanup_errors)
-        raise TranscriptionError("whisper.cpp completed but did not produce a transcript")
+        raise TranscriptionError(
+            "whisper.cpp completed but did not produce a transcript"
+        )
 
 
 def faster_whisper_available() -> bool:
@@ -2916,9 +3185,11 @@ def _transcribe_with_faster_whisper_in_process(
     model_path: str,
     write_transcript: bool = True,
     *,
-    _expected_audio_snapshot: tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
-    | None = None,
+    _expected_audio_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ) = None,
 ) -> str:
     write_transcript = _validate_write_transcript(write_transcript)
     language = _validate_language_code(language)
@@ -2928,7 +3199,9 @@ def _transcribe_with_faster_whisper_in_process(
         field_name="audio file for backend",
     )
     text_path = _normalize_transcript_path(text_path)
-    model_path = _validate_local_model_path(model_path, field_name="CTranslate2 model path", directory=True)
+    model_path = _validate_local_model_path(
+        model_path, field_name="CTranslate2 model path", directory=True
+    )
     _require_verified_catalog_model(model_path, field_name="CTranslate2 model")
     _require_ctranslate2_tokenizer(model_path)
     if not model_supports_language(model_path, language):
@@ -2948,7 +3221,9 @@ def _transcribe_with_faster_whisper_in_process(
         if time.monotonic() >= deadline:
             raise TranscriptionError("faster-whisper timed out")
 
-    with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
+    with _staged_audio_file_for_local_backend(
+        audio_path, expected_snapshot=audio_snapshot
+    ) as staged_audio_path:
         try:
             ensure_deadline()
             model = WhisperModel(
@@ -2972,8 +3247,12 @@ def _transcribe_with_faster_whisper_in_process(
                 for segment in segments:
                     ensure_deadline()
                     raw_segment_text = getattr(segment, "text", None)
-                    if raw_segment_text is not None and not isinstance(raw_segment_text, str):
-                        raise TranscriptionError("faster-whisper returned invalid segment text")
+                    if raw_segment_text is not None and not isinstance(
+                        raw_segment_text, str
+                    ):
+                        raise TranscriptionError(
+                            "faster-whisper returned invalid segment text"
+                        )
                     segment_text = (raw_segment_text or "").strip()
                     if not segment_text:
                         continue
@@ -2995,7 +3274,9 @@ def _transcribe_with_faster_whisper_in_process(
         except Exception as exc:
             if isinstance(exc, TranscriptionError):
                 raise
-            raise TranscriptionError("faster-whisper failed: error detail redacted") from exc
+            raise TranscriptionError(
+                "faster-whisper failed: error detail redacted"
+            ) from exc
     if not text:
         raise TranscriptionError("transcriber completed without transcript")
     _assert_text_length(text, field_name="transcript")
@@ -3007,7 +3288,9 @@ def _transcribe_with_faster_whisper_in_process(
 def _faster_whisper_worker_path() -> Path:
     worker_path = Path(__file__).with_name("faster_whisper_worker.py")
     try:
-        assert_no_symlink_ancestors(worker_path, field_name="faster-whisper worker path")
+        assert_no_symlink_ancestors(
+            worker_path, field_name="faster-whisper worker path"
+        )
         worker_stat = worker_path.stat(follow_symlinks=False)
     except (OSError, RuntimeError) as exc:
         raise TranscriptionError("faster-whisper worker is unavailable") from exc
@@ -3066,7 +3349,13 @@ def _parse_faster_whisper_runtime_diagnostic(payload_bytes: bytes) -> dict[str, 
             object_pairs_hook=_reject_duplicate_json_keys,
             parse_constant=_reject_non_finite_json_number,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, MemoryError) as exc:
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        ValueError,
+        MemoryError,
+    ) as exc:
         raise ValueError("invalid runtime diagnostic response") from exc
     if not isinstance(payload, dict) or set(payload) != {
         "schema_version",
@@ -3075,7 +3364,10 @@ def _parse_faster_whisper_runtime_diagnostic(payload_bytes: bytes) -> dict[str, 
     }:
         raise ValueError("invalid runtime diagnostic response")
     schema_version = payload["schema_version"]
-    if type(schema_version) is not int or schema_version != _FASTER_WHISPER_RUNTIME_DIAGNOSTIC_SCHEMA_VERSION:
+    if (
+        type(schema_version) is not int
+        or schema_version != _FASTER_WHISPER_RUNTIME_DIAGNOSTIC_SCHEMA_VERSION
+    ):
         raise ValueError("invalid runtime diagnostic response")
 
     ctranslate2 = payload["ctranslate2"]
@@ -3094,10 +3386,17 @@ def _parse_faster_whisper_runtime_diagnostic(payload_bytes: bytes) -> dict[str, 
 
     ctranslate2_available = ctranslate2["available"]
     faster_whisper_available_value = faster_whisper["available"]
-    if type(ctranslate2_available) is not bool or type(faster_whisper_available_value) is not bool:
+    if (
+        type(ctranslate2_available) is not bool
+        or type(faster_whisper_available_value) is not bool
+    ):
         raise ValueError("invalid runtime diagnostic response")
-    ctranslate2_version = _validated_faster_whisper_runtime_version(ctranslate2["version"])
-    faster_whisper_version = _validated_faster_whisper_runtime_version(faster_whisper["version"])
+    ctranslate2_version = _validated_faster_whisper_runtime_version(
+        ctranslate2["version"]
+    )
+    faster_whisper_version = _validated_faster_whisper_runtime_version(
+        faster_whisper["version"]
+    )
 
     raw_compute_types = ctranslate2["supported_compute_types"]
     if raw_compute_types is None:
@@ -3120,7 +3419,9 @@ def _parse_faster_whisper_runtime_diagnostic(payload_bytes: bytes) -> dict[str, 
             compute_types.append(compute_type)
         compute_types.sort()
 
-    if not ctranslate2_available and (ctranslate2_version is not None or compute_types is not None):
+    if not ctranslate2_available and (
+        ctranslate2_version is not None or compute_types is not None
+    ):
         raise ValueError("invalid runtime diagnostic response")
     if not faster_whisper_available_value and faster_whisper_version is not None:
         raise ValueError("invalid runtime diagnostic response")
@@ -3261,11 +3562,22 @@ def _run_faster_whisper_worker(
             object_pairs_hook=_reject_duplicate_json_keys,
             parse_constant=_reject_non_finite_json_number,
         )
-    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError, ValueError, MemoryError):
-        raise TranscriptionError("faster-whisper worker returned invalid response") from None
+    except (
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+        RecursionError,
+        ValueError,
+        MemoryError,
+    ):
+        raise TranscriptionError(
+            "faster-whisper worker returned invalid response"
+        ) from None
     if result.returncode != 0:
         error_code = payload.get("error_code") if isinstance(payload, dict) else ""
-        if isinstance(error_code, str) and error_code in _FASTER_WHISPER_WORKER_ERROR_MESSAGES:
+        if (
+            isinstance(error_code, str)
+            and error_code in _FASTER_WHISPER_WORKER_ERROR_MESSAGES
+        ):
             raise TranscriptionError(_FASTER_WHISPER_WORKER_ERROR_MESSAGES[error_code])
         raise TranscriptionError("faster-whisper worker failed")
     if not isinstance(payload, dict) or payload.get("status") != "done":
@@ -3283,9 +3595,11 @@ def transcribe_with_faster_whisper(
     model_path: str,
     write_transcript: bool = True,
     *,
-    _expected_audio_snapshot: tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
-    | None = None,
+    _expected_audio_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ) = None,
 ) -> str:
     deadline = time.monotonic() + TRANSCRIBE_COMMAND_TIMEOUT_SECONDS
 
@@ -3301,7 +3615,9 @@ def transcribe_with_faster_whisper(
         field_name="audio file for backend",
     )
     text_path = _normalize_transcript_path(text_path)
-    model_path = _validate_local_model_path(model_path, field_name="CTranslate2 model path", directory=True)
+    model_path = _validate_local_model_path(
+        model_path, field_name="CTranslate2 model path", directory=True
+    )
     _require_verified_catalog_model(model_path, field_name="CTranslate2 model")
     _require_ctranslate2_tokenizer(model_path)
     if not model_supports_language(model_path, language):
@@ -3310,7 +3626,9 @@ def transcribe_with_faster_whisper(
         )
     _require_faster_whisper_available()
     _require_faster_whisper_worker_available()
-    with _staged_audio_file_for_local_backend(audio_path, expected_snapshot=audio_snapshot) as staged_audio_path:
+    with _staged_audio_file_for_local_backend(
+        audio_path, expected_snapshot=audio_snapshot
+    ) as staged_audio_path:
         text = _run_faster_whisper_worker(
             staged_audio_path,
             language,
@@ -3333,7 +3651,11 @@ def _openai_compatible_endpoint(url: str, path: str) -> str:
     normalized_path = "/" + path.strip("/")
     base_parts = [part for part in urllib.parse.urlparse(base).path.split("/") if part]
     target_parts = [part for part in normalized_path.split("/") if part]
-    if target_parts and len(base_parts) >= len(target_parts) and base_parts[-len(target_parts):] == target_parts:
+    if (
+        target_parts
+        and len(base_parts) >= len(target_parts)
+        and base_parts[-len(target_parts) :] == target_parts
+    ):
         return base
     return base + normalized_path
 
@@ -3348,10 +3670,25 @@ def _is_openai_api_endpoint(endpoint: str) -> bool:
 
 def _is_flex_service_tier_rejected(detail: str) -> bool:
     normalized = detail.lower().replace("-", "_")
-    mentions_service_tier = any(marker in normalized for marker in ("service_tier", "service tier", "servicetier"))
+    mentions_service_tier = any(
+        marker in normalized
+        for marker in ("service_tier", "service tier", "servicetier")
+    )
     rejects_service_tier = any(
         marker in normalized
-        for marker in ("invalid", "unsupported", "not available", "not enabled", "rejected", "unrecognized", "unknown")
+        for marker in (
+            "bad",
+            "disabled",
+            "invalid",
+            "not available",
+            "not enabled",
+            "not recognized",
+            "not supported",
+            "rejected",
+            "unknown",
+            "unrecognized",
+            "unsupported",
+        )
     )
     return mentions_service_tier and rejects_service_tier
 
@@ -3365,7 +3702,9 @@ def _validate_openai_compatible_api_url(
         raise TranscriptionError(f"{field_name} contains invalid null byte")
     if _contains_http_header_control_chars(url):
         raise TranscriptionError(f"{field_name} contains invalid control character")
-    base = _assert_text_length(url, field_name=field_name, max_chars=MAX_OPENAI_URL_CHARS).strip()
+    base = _assert_text_length(
+        url, field_name=field_name, max_chars=MAX_OPENAI_URL_CHARS
+    ).strip()
     if not base:
         raise TranscriptionError(f"{field_name} is required")
     if any(char.isspace() for char in base):
@@ -3379,12 +3718,18 @@ def _validate_openai_compatible_api_url(
     if not parsed.hostname:
         raise TranscriptionError(f"{field_name} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
-        raise TranscriptionError(f"{field_name} must use https:// unless host is local loopback")
+        raise TranscriptionError(
+            f"{field_name} must use https:// unless host is local loopback"
+        )
     try:
         parsed.port
     except ValueError as exc:
         raise TranscriptionError(f"{field_name} has invalid port") from exc
-    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
+    if (
+        "@" in parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise TranscriptionError(f"{field_name} must not contain userinfo")
     if not allow_query_fragment and (parsed.query or parsed.fragment):
         raise TranscriptionError(f"{field_name} must not contain query or fragment")
@@ -3413,15 +3758,23 @@ def _validate_openai_compatible_transcribe_options(
     if not isinstance(flex_processing, bool):
         raise TranscriptionError("OpenAI-compatible flex processing must be a boolean")
     if not isinstance(service_tier_fallback, bool):
-        raise TranscriptionError("OpenAI-compatible service tier fallback must be a boolean")
+        raise TranscriptionError(
+            "OpenAI-compatible service tier fallback must be a boolean"
+        )
     if _contains_escaped_null(model):
-        raise TranscriptionError("OpenAI-compatible speech model contains invalid null byte")
+        raise TranscriptionError(
+            "OpenAI-compatible speech model contains invalid null byte"
+        )
     if _contains_escaped_null(api_key):
         raise TranscriptionError("OpenAI-compatible API key contains invalid null byte")
     if _contains_http_header_control_chars(api_key):
-        raise TranscriptionError("openai-compatible API key contains invalid control character")
+        raise TranscriptionError(
+            "openai-compatible API key contains invalid control character"
+        )
     if _contains_http_header_control_chars(model):
-        raise TranscriptionError("multipart form field contains invalid control character")
+        raise TranscriptionError(
+            "multipart form field contains invalid control character"
+        )
     model = _assert_text_length(
         model,
         field_name="OpenAI-compatible speech model",
@@ -3465,7 +3818,11 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, ob
 
 
 def _openai_compatible_error_detail(raw: str) -> str:
-    raw = _assert_text_length(raw or "", field_name="OpenAI-compatible API error", max_chars=MAX_TRANSCRIBER_ERROR_CHARS).strip()
+    raw = _assert_text_length(
+        raw or "",
+        field_name="OpenAI-compatible API error",
+        max_chars=MAX_TRANSCRIBER_ERROR_CHARS,
+    ).strip()
     if not raw:
         return ""
     try:
@@ -3480,9 +3837,10 @@ def _openai_compatible_error_detail(raw: str) -> str:
         error = payload["error"]
         if isinstance(error, dict):
             message = str(error.get("message") or "").strip()
+            param = str(error.get("param") or "").strip()
             code = str(error.get("code") or "").strip()
             error_type = str(error.get("type") or "").strip()
-            parts = [part for part in (message, code, error_type) if part]
+            parts = [part for part in (message, param, code, error_type) if part]
             return " - ".join(parts) if parts else str(error)
         return str(error)
     return raw
@@ -3503,7 +3861,10 @@ def _openai_compatible_error_category(raw: str) -> str:
     error = payload["error"]
     error_type = str(error.get("type") or "").strip()
     code = str(error.get("code") or "").strip()
-    if error_type == "insufficient_quota" or code == "organization_spend_limit_exceeded":
+    if (
+        error_type == "insufficient_quota"
+        or code == "organization_spend_limit_exceeded"
+    ):
         return "quota-exhausted"
     return ""
 
@@ -3513,7 +3874,9 @@ def _sanitize_local_command_error(message: str) -> str:
     if not message:
         return "transcriber command failed: [redacted command error]"
     lowered = message.lower()
-    if message.startswith("invalid transcriber") or message.startswith("unsupported shell operator in transcriber"):
+    if message.startswith("invalid transcriber") or message.startswith(
+        "unsupported shell operator in transcriber"
+    ):
         return message
     if (
         message.startswith("transcriber command ended")
@@ -3521,7 +3884,11 @@ def _sanitize_local_command_error(message: str) -> str:
         or message.startswith("transcriber command chain is empty")
     ):
         return message
-    if "path separators" in lowered or "must be text" in lowered or "must not contain" in lowered:
+    if (
+        "path separators" in lowered
+        or "must be text" in lowered
+        or "must not contain" in lowered
+    ):
         return message
     if lowered.startswith("local model priority"):
         return message
@@ -3584,7 +3951,9 @@ def _preflight_transcriber_command(
             unavailable = True
             break
         executable = segment[0]
-        if os.path.sep in executable or (os.path.altsep and os.path.altsep in executable):
+        if os.path.sep in executable or (
+            os.path.altsep and os.path.altsep in executable
+        ):
             invalid_executable = True
             break
         try:
@@ -3593,12 +3962,18 @@ def _preflight_transcriber_command(
             unavailable = True
             break
     if invalid_executable:
-        raise TranscriptionError("command must be a bare command name without path separators")
+        raise TranscriptionError(
+            "command must be a bare command name without path separators"
+        )
     if unavailable:
         raise TranscriptionError("custom transcriber executable is not available")
     audio_positions: list[tuple[int, int]] = []
     if audio_marker is not None:
-        if isinstance(audio_marker, bool) or not isinstance(audio_marker, str) or not audio_marker:
+        if (
+            isinstance(audio_marker, bool)
+            or not isinstance(audio_marker, str)
+            or not audio_marker
+        ):
             raise TranscriptionError("transcriber command audio provenance is invalid")
         audio_positions = [
             (segment_index, token_index)
@@ -3615,7 +3990,9 @@ def _preflight_transcriber_command(
             if token == audio_text
         ]
     if require_audio_binding and not audio_positions:
-        raise TranscriptionError("audio placeholder must be a standalone command argument")
+        raise TranscriptionError(
+            "audio placeholder must be a standalone command argument"
+        )
     return _CommandPreflight(
         tuple(tuple(token for token in segment) for segment in segments),
         tuple(audio_positions),
@@ -3644,7 +4021,9 @@ def _bind_staged_transcriber_command(
                     staged_audio_text,
                 )
         except (IndexError, TypeError):
-            raise TranscriptionError("transcriber command preflight is invalid") from None
+            raise TranscriptionError(
+                "transcriber command preflight is invalid"
+            ) from None
     return bound
 
 
@@ -3664,12 +4043,18 @@ def _openai_compatible_check_node(
     state: _OpenAICompatibleTranscriptState, value: object, depth: int
 ) -> None:
     if type(value) in (dict, list) and id(value) in state.active_containers:
-        raise TranscriptionError("OpenAI-compatible speech API response contains a cycle")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API response contains a cycle"
+        )
     state.nodes_seen += 1
     if state.nodes_seen > MAX_OPENAI_COMPATIBLE_RESPONSE_NODES:
-        raise TranscriptionError("OpenAI-compatible speech API response contains too many nodes")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API response contains too many nodes"
+        )
     if depth > MAX_OPENAI_COMPATIBLE_RESPONSE_DEPTH:
-        raise TranscriptionError("OpenAI-compatible speech API response nesting is too deep")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API response nesting is too deep"
+        )
 
 
 def _openai_compatible_validate_object_keys(
@@ -3682,9 +4067,13 @@ def _openai_compatible_validate_object_keys(
     for key in value:
         state.object_keys_seen += 1
         if state.object_keys_seen > MAX_OPENAI_COMPATIBLE_RESPONSE_NODES:
-            raise TranscriptionError("OpenAI-compatible speech API response contains too many object keys")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API response contains too many object keys"
+            )
         if type(key) is not str:
-            raise TranscriptionError("OpenAI-compatible speech API response object keys must be text")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API response object keys must be text"
+            )
     state.validated_object_keys.add(object_id)
 
 
@@ -3701,19 +4090,38 @@ def _openai_compatible_read_text(
     if value is None and not exact:
         return None
     if type(value) is not str:
-        message = "OpenAI-compatible speech API response text must be text" if field_name == "transcript" else f"OpenAI-compatible speech API {field_name} must be text"
+        message = (
+            "OpenAI-compatible speech API response text must be text"
+            if field_name == "transcript"
+            else f"OpenAI-compatible speech API {field_name} must be text"
+        )
         raise TranscriptionError(message)
     return _assert_text_length(value, field_name=field_name, max_chars=max_chars)
 
 
-def _openai_compatible_typed_policy(item_type: str | None, context: str | None) -> str | None:
+def _openai_compatible_typed_policy(
+    item_type: str | None, context: str | None
+) -> str | None:
     if item_type in _OPENAI_COMPATIBLE_TEXT_ITEM_TYPES:
         return "text" if context in _OPENAI_COMPATIBLE_TYPED_TEXT_CONTEXTS else None
     if item_type == "message":
-        return "message" if context is None or context in _OPENAI_COMPATIBLE_MESSAGE_CONTEXTS else "nontext" if context == "choices" else None
+        return (
+            "message"
+            if context is None or context in _OPENAI_COMPATIBLE_MESSAGE_CONTEXTS
+            else "nontext" if context == "choices" else None
+        )
     if item_type == "response":
-        return "wrapper" if context is None or context in _OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS else None
-    return "nontext" if item_type in _OPENAI_COMPATIBLE_NON_TEXT_ITEM_TYPES and (context is None or context in _OPENAI_COMPATIBLE_TYPED_CONTEXTS) else None
+        return (
+            "wrapper"
+            if context is None or context in _OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS
+            else None
+        )
+    return (
+        "nontext"
+        if item_type in _OPENAI_COMPATIBLE_NON_TEXT_ITEM_TYPES
+        and (context is None or context in _OPENAI_COMPATIBLE_TYPED_CONTEXTS)
+        else None
+    )
 
 
 def _openai_compatible_validate_metadata(
@@ -3734,16 +4142,24 @@ def _openai_compatible_validate_metadata(
             exact=value[key] is not None,
         )
         if key == "role" and field is not None and not field.strip():
-            raise TranscriptionError(f"OpenAI-compatible speech API response {label}.role must be text")
+            raise TranscriptionError(
+                f"OpenAI-compatible speech API response {label}.role must be text"
+            )
     if "tool_calls" in value:
-        _openai_compatible_validate_tool_calls(state, value["tool_calls"], depth + 1, label)
+        _openai_compatible_validate_tool_calls(
+            state, value["tool_calls"], depth + 1, label
+        )
     if "function_call" in value:
-        _openai_compatible_validate_function_call(state, value["function_call"], depth + 1, label)
+        _openai_compatible_validate_function_call(
+            state, value["function_call"], depth + 1, label
+        )
     if "audio" not in value:
         return
     audio = value["audio"]
     if audio is not None and type(audio) is not dict:
-        raise TranscriptionError(f"OpenAI-compatible speech API response {label}.audio must be an object")
+        raise TranscriptionError(
+            f"OpenAI-compatible speech API response {label}.audio must be an object"
+        )
     if audio is not None:
         _openai_compatible_validate_object_keys(state, audio)
     if label != "delta":
@@ -3761,8 +4177,12 @@ def _openai_compatible_validate_metadata(
             max_chars=MAX_OPENAI_COMPATIBLE_RESPONSE_TYPE_CHARS,
         )
         if _openai_compatible_typed_policy(item_type, "audio") != "nontext":
-            raise TranscriptionError("OpenAI-compatible speech API response item type is unsupported")
-        _openai_compatible_validate_typed_requirements(state, audio, depth + 1, item_type)
+            raise TranscriptionError(
+                "OpenAI-compatible speech API response item type is unsupported"
+            )
+        _openai_compatible_validate_typed_requirements(
+            state, audio, depth + 1, item_type
+        )
     if "transcript" in audio:
         _openai_compatible_read_text(
             state,
@@ -3784,13 +4204,19 @@ def _openai_compatible_validate_function_call(
     _openai_compatible_check_node(state, value, depth)
     if value is None:
         if not allow_none:
-            raise TranscriptionError(f"OpenAI-compatible speech API response {label}.function must be an object")
+            raise TranscriptionError(
+                f"OpenAI-compatible speech API response {label}.function must be an object"
+            )
         return
     if type(value) is not dict:
-        raise TranscriptionError(f"OpenAI-compatible speech API response {label}.function_call must be an object")
+        raise TranscriptionError(
+            f"OpenAI-compatible speech API response {label}.function_call must be an object"
+        )
     _openai_compatible_validate_object_keys(state, value)
     if "name" not in value or "arguments" not in value:
-        raise TranscriptionError(f"OpenAI-compatible speech API response {label}.function_call is malformed")
+        raise TranscriptionError(
+            f"OpenAI-compatible speech API response {label}.function_call is malformed"
+        )
     for key in ("name", "arguments"):
         _openai_compatible_read_text(
             state,
@@ -3811,14 +4237,20 @@ def _openai_compatible_validate_tool_calls(
     if value is None:
         return
     if type(value) is not list:
-        raise TranscriptionError(f"OpenAI-compatible speech API response {label}.tool_calls must be a list")
+        raise TranscriptionError(
+            f"OpenAI-compatible speech API response {label}.tool_calls must be a list"
+        )
     for member in value:
         _openai_compatible_check_node(state, member, depth + 1)
         if type(member) is not dict:
-            raise TranscriptionError(f"OpenAI-compatible speech API response {label}.tool_calls member is invalid")
+            raise TranscriptionError(
+                f"OpenAI-compatible speech API response {label}.tool_calls member is invalid"
+            )
         _openai_compatible_validate_object_keys(state, member)
         if not any(key in member for key in ("id", "type", "function")):
-            raise TranscriptionError(f"OpenAI-compatible speech API response {label}.tool_calls member is malformed")
+            raise TranscriptionError(
+                f"OpenAI-compatible speech API response {label}.tool_calls member is malformed"
+            )
         for key in ("id", "type"):
             if key in member:
                 _openai_compatible_read_text(
@@ -3855,25 +4287,39 @@ def _openai_compatible_validate_logprob_list(
         for member in value:
             _openai_compatible_check_node(state, member, depth + 1)
             if type(member) is not dict:
-                raise TranscriptionError(f"OpenAI-compatible speech API {label} member is invalid")
+                raise TranscriptionError(
+                    f"OpenAI-compatible speech API {label} member is invalid"
+                )
             _openai_compatible_validate_object_keys(state, member)
             if "token" not in member or "logprob" not in member:
-                raise TranscriptionError(f"OpenAI-compatible speech API {label} member is malformed")
-            _openai_compatible_read_text(state, member["token"], depth + 2, f"{label}.token", exact=True)
+                raise TranscriptionError(
+                    f"OpenAI-compatible speech API {label} member is malformed"
+                )
+            _openai_compatible_read_text(
+                state, member["token"], depth + 2, f"{label}.token", exact=True
+            )
             logprob = member["logprob"]
             _openai_compatible_check_node(state, logprob, depth + 2)
-            if type(logprob) not in (int, float) or (type(logprob) is float and not math.isfinite(logprob)):
-                raise TranscriptionError(f"OpenAI-compatible speech API {label}.logprob is invalid")
+            if type(logprob) not in (int, float) or (
+                type(logprob) is float and not math.isfinite(logprob)
+            ):
+                raise TranscriptionError(
+                    f"OpenAI-compatible speech API {label}.logprob is invalid"
+                )
             if "bytes" in member:
                 bytes_value = member["bytes"]
                 _openai_compatible_check_node(state, bytes_value, depth + 2)
                 if bytes_value is not None and type(bytes_value) is not list:
-                    raise TranscriptionError(f"OpenAI-compatible speech API {label}.bytes is invalid")
+                    raise TranscriptionError(
+                        f"OpenAI-compatible speech API {label}.bytes is invalid"
+                    )
                 if bytes_value is not None:
                     for byte in bytes_value:
                         _openai_compatible_check_node(state, byte, depth + 3)
                         if type(byte) is not int or byte < 0 or byte > 255:
-                            raise TranscriptionError(f"OpenAI-compatible speech API {label}.bytes is invalid")
+                            raise TranscriptionError(
+                                f"OpenAI-compatible speech API {label}.bytes is invalid"
+                            )
             if "top_logprobs" in member:
                 _openai_compatible_validate_logprob_list(
                     state,
@@ -3894,13 +4340,19 @@ def _openai_compatible_validate_logprobs(
     if value is None:
         return
     if type(value) is not dict:
-        raise TranscriptionError("OpenAI-compatible speech API choice logprobs is invalid")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API choice logprobs is invalid"
+        )
     _openai_compatible_validate_object_keys(state, value)
     if not any(key in value for key in ("content", "refusal")):
-        raise TranscriptionError("OpenAI-compatible speech API choice logprobs is malformed")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API choice logprobs is malformed"
+        )
     for key in ("content", "refusal"):
         if key in value:
-            _openai_compatible_validate_logprob_list(state, value[key], depth + 1, f"choice logprobs.{key}")
+            _openai_compatible_validate_logprob_list(
+                state, value[key], depth + 1, f"choice logprobs.{key}"
+            )
 
 
 def _openai_compatible_validate_image(
@@ -3912,17 +4364,27 @@ def _openai_compatible_validate_image(
     image = value["image_url"]
     _openai_compatible_check_node(state, image, depth + 1)
     if type(image) is not dict:
-        raise TranscriptionError("OpenAI-compatible speech API image_url.image_url must be an object")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API image_url.image_url must be an object"
+        )
     _openai_compatible_validate_object_keys(state, image)
     if "url" not in image:
-        raise TranscriptionError("OpenAI-compatible speech API image_url.url is required")
-    url = _openai_compatible_read_text(state, image["url"], depth + 2, "image_url.url", exact=True)
+        raise TranscriptionError(
+            "OpenAI-compatible speech API image_url.url is required"
+        )
+    url = _openai_compatible_read_text(
+        state, image["url"], depth + 2, "image_url.url", exact=True
+    )
     if url is None or not url.strip():
-        raise TranscriptionError("OpenAI-compatible speech API image_url.url must be text")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API image_url.url must be text"
+        )
     if "detail" in image and _openai_compatible_read_text(
         state, image["detail"], depth + 2, "image_url.detail", exact=True
     ) not in {"auto", "low", "high"}:
-        raise TranscriptionError("OpenAI-compatible speech API image_url.detail is invalid")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API image_url.detail is invalid"
+        )
 
 
 def _openai_compatible_validate_typed_requirements(
@@ -3934,7 +4396,9 @@ def _openai_compatible_validate_typed_requirements(
     _openai_compatible_validate_object_keys(state, value)
     if item_type == "refusal":
         if "refusal" not in value:
-            raise TranscriptionError("OpenAI-compatible speech API refusal.refusal is required")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API refusal.refusal is required"
+            )
         refusal = _openai_compatible_read_text(
             state,
             value["refusal"],
@@ -3943,10 +4407,14 @@ def _openai_compatible_validate_typed_requirements(
             exact=True,
         )
         if not refusal.strip():
-            raise TranscriptionError("OpenAI-compatible speech API refusal.refusal must be text")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API refusal.refusal must be text"
+            )
     elif item_type == "image_url":
         if "image_url" not in value:
-            raise TranscriptionError("OpenAI-compatible speech API image_url.image_url is required")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API image_url.image_url is required"
+            )
         _openai_compatible_validate_image(state, value, depth)
 
 
@@ -3962,7 +4430,9 @@ def _openai_compatible_validate_choice_metadata(
         field = value["index"]
         _openai_compatible_check_node(state, field, depth + 1)
         if type(field) is not int or field < 0:
-            raise TranscriptionError("OpenAI-compatible speech API choice index is invalid")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API choice index is invalid"
+            )
     if "finish_reason" in value:
         saw_metadata = True
         field = value["finish_reason"]
@@ -3975,7 +4445,9 @@ def _openai_compatible_validate_choice_metadata(
             max_chars=MAX_OPENAI_COMPATIBLE_RESPONSE_TYPE_CHARS,
         )
         if finish_reason is not None and not finish_reason.strip():
-            raise TranscriptionError("OpenAI-compatible speech API choice finish reason must be text")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API choice finish reason must be text"
+            )
     if "logprobs" in value:
         saw_metadata = True
         _openai_compatible_validate_logprobs(state, value["logprobs"], depth + 1)
@@ -4002,14 +4474,20 @@ def _openai_compatible_read_direct(
         if candidate is None or not candidate.strip():
             continue
         if selected is not None and candidate.strip() != selected.strip():
-            raise TranscriptionError("OpenAI-compatible speech API response contains ambiguous transcript sources")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API response contains ambiguous transcript sources"
+            )
         selected = candidate
     return selected, text_field, saw_value
 
 
-def _openai_compatible_append_text(parts: list[str], totals: list[int], value: str) -> None:
+def _openai_compatible_append_text(
+    parts: list[str], totals: list[int], value: str
+) -> None:
     if type(value) is not str:
-        raise TranscriptionError("OpenAI-compatible speech API response text must be text")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API response text must be text"
+        )
     text = value.strip()
     if not text:
         return
@@ -4018,9 +4496,13 @@ def _openai_compatible_append_text(parts: list[str], totals: list[int], value: s
     next_chars = totals[0] + separator + len(text)
     next_bytes = totals[1] + separator + text_bytes
     if next_chars > MAX_TRANSCRIPT_TEXT_CHARS:
-        raise TranscriptionError(f"transcript is too large (max {MAX_TRANSCRIPT_TEXT_CHARS} characters)")
+        raise TranscriptionError(
+            f"transcript is too large (max {MAX_TRANSCRIPT_TEXT_CHARS} characters)"
+        )
     if next_bytes > MAX_TRANSCRIPT_TEXT_CHARS:
-        raise TranscriptionError(f"transcript is too large (max {MAX_TRANSCRIPT_TEXT_CHARS} bytes)")
+        raise TranscriptionError(
+            f"transcript is too large (max {MAX_TRANSCRIPT_TEXT_CHARS} bytes)"
+        )
     parts.append(text)
     totals[0], totals[1] = next_chars, next_bytes
 
@@ -4044,14 +4526,18 @@ def _openai_compatible_choose(
     selected = ranked[0]
     selected_text = " ".join(selected[0])
     if any(" ".join(source[0]) != selected_text for source in ranked[1:]):
-        raise TranscriptionError("OpenAI-compatible speech API response contains ambiguous transcript sources")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API response contains ambiguous transcript sources"
+        )
     return selected
 
 
 def _openai_compatible_bad(ordered: bool, element: bool) -> NoReturn:
     kind = "ordered" if ordered else "alternative"
     thing = "element" if element else "value"
-    raise TranscriptionError(f"OpenAI-compatible speech API {kind} response {thing} has no text shape")
+    raise TranscriptionError(
+        f"OpenAI-compatible speech API {kind} response {thing} has no text shape"
+    )
 
 
 _OPENAI_COMPATIBLE_TEXT_ITEM_KEYS = frozenset({"content", "output", "parts"})
@@ -4062,25 +4548,51 @@ _OPENAI_COMPATIBLE_TYPED_CONTEXTS = _OPENAI_COMPATIBLE_TYPED_TEXT_CONTEXTS | fro
     {"audio", "choices", "data", "delta", "message", "response", "results"}
 )
 _OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS = frozenset({"data", "results", "response"})
-_OPENAI_COMPATIBLE_MESSAGE_CONTEXTS = frozenset({"data", "message", "output", "response", "results"})
+_OPENAI_COMPATIBLE_MESSAGE_CONTEXTS = frozenset(
+    {"data", "message", "output", "response", "results"}
+)
 
 
 def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
     """Extract transcript text from common OpenAI-compatible response shapes."""
     if type(payload) is not dict:
-        raise TranscriptionError("OpenAI-compatible speech API response root must be an object")
+        raise TranscriptionError(
+            "OpenAI-compatible speech API response root must be an object"
+        )
 
     direct_keys = ("text", "transcript", "output_text")
     ordered_sequence = ("content", "output", "parts", "segments", "chunks")
     ordered_keys = frozenset(ordered_sequence)
     nested_keys = (
-        "audio", "choices", "content", "data", "delta", "message", "output", "parts",
-        "response", "results", "segments", "chunks",
+        "audio",
+        "choices",
+        "content",
+        "data",
+        "delta",
+        "message",
+        "output",
+        "parts",
+        "response",
+        "results",
+        "segments",
+        "chunks",
     )
-    choice_nested_keys = ("content", "delta", "message", "output", "parts", "segments", "chunks")
+    choice_nested_keys = (
+        "content",
+        "delta",
+        "message",
+        "output",
+        "parts",
+        "segments",
+        "chunks",
+    )
     child_modes = {
-        "audio": "audio", "delta": "delta", "message": "message", "data": "fallback",
-        "results": "fallback", "response": "wrapper",
+        "audio": "audio",
+        "delta": "delta",
+        "message": "message",
+        "data": "fallback",
+        "results": "fallback",
+        "response": "wrapper",
     }
     ordered_direct_keys = {
         "output": ("text", "output_text"),
@@ -4103,35 +4615,64 @@ def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
     ) -> Source | None:
         _openai_compatible_check_node(state, value, depth)
         choice_context = choice_context or list_key == "choices"
-        if mode in {"audio", "delta", "message"} and value is not None and type(value) is not dict:
-            raise TranscriptionError("OpenAI-compatible speech API audio value has invalid type")
-        if mode in {"fallback", "wrapper"} and type(value) is not list and type(value) is not dict:
-            raise TranscriptionError("OpenAI-compatible speech API wrapper value has invalid type")
+        if (
+            mode in {"audio", "delta", "message"}
+            and value is not None
+            and type(value) is not dict
+        ):
+            raise TranscriptionError(
+                "OpenAI-compatible speech API audio value has invalid type"
+            )
+        if (
+            mode in {"fallback", "wrapper"}
+            and type(value) is not list
+            and type(value) is not dict
+        ):
+            raise TranscriptionError(
+                "OpenAI-compatible speech API wrapper value has invalid type"
+            )
         if list_key == "choices" and not list_item and type(value) is not list:
-            raise TranscriptionError("OpenAI-compatible speech API choices must be a list")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API choices must be a list"
+            )
         if list_key == "choices" and list_item and type(value) is not dict:
-            raise TranscriptionError("OpenAI-compatible speech API response choice must be an object")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API response choice must be an object"
+            )
         source_rank = (
-            2 if mode == "ordered" or list_key in _OPENAI_COMPATIBLE_TEXT_ITEM_KEYS
-            else 1 if mode in {"audio", "delta", "fallback", "wrapper"} or list_key in _OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS
-            else 3 if depth == 0 else 2
+            2
+            if mode == "ordered" or list_key in _OPENAI_COMPATIBLE_TEXT_ITEM_KEYS
+            else (
+                1
+                if mode in {"audio", "delta", "fallback", "wrapper"}
+                or list_key in _OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS
+                else 3 if depth == 0 else 2
+            )
         )
         if type(value) is str:
             if mode in {"audio", "delta", "message", "fallback", "wrapper"}:
-                raise TranscriptionError("OpenAI-compatible speech API response value has invalid type")
-            return _openai_compatible_single(_assert_text_length(value, field_name="transcript"), source_rank, seed)
+                raise TranscriptionError(
+                    "OpenAI-compatible speech API response value has invalid type"
+                )
+            return _openai_compatible_single(
+                _assert_text_length(value, field_name="transcript"), source_rank, seed
+            )
         if value is None:
             if list_item:
                 _openai_compatible_bad(ordered, True)
             if choice_context and ordered and list_key == "content":
                 return ([], 0)
             if ordered:
-                raise TranscriptionError("OpenAI-compatible speech API ordered response value has invalid type")
+                raise TranscriptionError(
+                    "OpenAI-compatible speech API ordered response value has invalid type"
+                )
             return None
         if type(value) is not list and type(value) is not dict:
             if list_item:
                 _openai_compatible_bad(ordered, True)
-            raise TranscriptionError("OpenAI-compatible speech API response value has invalid type")
+            raise TranscriptionError(
+                "OpenAI-compatible speech API response value has invalid type"
+            )
         container_id = id(value)
         if list_item and type(value) is list:
             _openai_compatible_bad(ordered, True)
@@ -4143,7 +4684,15 @@ def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
                     totals = [seed[0], seed[1]]
                     rank = 0
                     for item in value:
-                        source = walk(item, depth + 1, True, list_item=True, list_key=list_key, choice_context=choice_context, seed=tuple(totals))
+                        source = walk(
+                            item,
+                            depth + 1,
+                            True,
+                            list_item=True,
+                            list_key=list_key,
+                            choice_context=choice_context,
+                            seed=tuple(totals),
+                        )
                         if source is None:
                             _openai_compatible_bad(True, True)
                         for part in source[0]:
@@ -4152,7 +4701,16 @@ def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
                             rank = 2
                     return parts, rank
                 for item in value:
-                    source = walk(item, depth + 1, False, list_item=True, list_key=list_key, choice_context=choice_context, mode=mode, seed=seed)
+                    source = walk(
+                        item,
+                        depth + 1,
+                        False,
+                        list_item=True,
+                        list_key=list_key,
+                        choice_context=choice_context,
+                        mode=mode,
+                        seed=seed,
+                    )
                     if source is None:
                         _openai_compatible_bad(False, True)
                     if source[0]:
@@ -4167,23 +4725,40 @@ def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
                 _openai_compatible_validate_metadata(state, value, depth, mode)
             choice_metadata = False
             if list_key == "choices":
-                choice_metadata = _openai_compatible_validate_choice_metadata(state, value, depth)
-            typed_scope = list_key in _OPENAI_COMPATIBLE_TYPED_CONTEXTS or (list_key is None and depth == 0)
+                choice_metadata = _openai_compatible_validate_choice_metadata(
+                    state, value, depth
+                )
+            typed_scope = list_key in _OPENAI_COMPATIBLE_TYPED_CONTEXTS or (
+                list_key is None and depth == 0
+            )
             if typed_scope and "type" in value:
                 item_type = _openai_compatible_read_text(
                     state,
-                    value["type"], depth + 1, "response item type", exact=True,
+                    value["type"],
+                    depth + 1,
+                    "response item type",
+                    exact=True,
                     max_chars=MAX_OPENAI_COMPATIBLE_RESPONSE_TYPE_CHARS,
                 )
                 policy = _openai_compatible_typed_policy(item_type, list_key)
                 if policy is None:
-                    raise TranscriptionError("OpenAI-compatible speech API response item type is unsupported")
+                    raise TranscriptionError(
+                        "OpenAI-compatible speech API response item type is unsupported"
+                    )
                 typed_text = None
                 if policy in {"text", "nontext"}:
-                    _, typed_text, _ = _openai_compatible_read_direct(state, value, depth, direct_keys)
+                    _, typed_text, _ = _openai_compatible_read_direct(
+                        state, value, depth, direct_keys
+                    )
                 if policy == "text":
-                    if "text" not in value or typed_text is None or not typed_text.strip():
-                        raise TranscriptionError("OpenAI-compatible speech API text item has no text")
+                    if (
+                        "text" not in value
+                        or typed_text is None
+                        or not typed_text.strip()
+                    ):
+                        raise TranscriptionError(
+                            "OpenAI-compatible speech API text item has no text"
+                        )
                     return _openai_compatible_single(typed_text, source_rank, seed)
                 if policy == "message":
                     schema = "message"
@@ -4191,11 +4766,20 @@ def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
                 elif policy == "wrapper":
                     schema = "wrapper"
                 else:
-                    _openai_compatible_validate_typed_requirements(state, value, depth, item_type)
+                    _openai_compatible_validate_typed_requirements(
+                        state, value, depth, item_type
+                    )
                     for key in ordered_sequence:
                         if key not in value or value[key] is None:
                             continue
-                        source = walk(value[key], depth + 1, True, list_key=key, choice_context=choice_context, mode="ordered")
+                        source = walk(
+                            value[key],
+                            depth + 1,
+                            True,
+                            list_key=key,
+                            choice_context=choice_context,
+                            mode="ordered",
+                        )
                         if source is None:
                             _openai_compatible_bad(True, False)
                     return ([], 0)
@@ -4211,7 +4795,9 @@ def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
                 fields = ordered_direct_keys.get(list_key, ("text",))
             else:
                 fields = direct_keys
-            direct_text, _, saw_direct = _openai_compatible_read_direct(state, value, depth, fields)
+            direct_text, _, saw_direct = _openai_compatible_read_direct(
+                state, value, depth, fields
+            )
             if direct_text is not None and schema != "message":
                 return _openai_compatible_single(direct_text, source_rank, seed)
             if mode == "audio":
@@ -4220,7 +4806,13 @@ def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
                 current_keys = ("content",)
             elif schema == "message":
                 current_keys = ("content", "audio", "delta")
-            elif mode == "ordered" or (list_item and (list_key in ordered_keys or list_key in _OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS)):
+            elif mode == "ordered" or (
+                list_item
+                and (
+                    list_key in ordered_keys
+                    or list_key in _OPENAI_COMPATIBLE_ALTERNATIVE_WRAPPER_KEYS
+                )
+            ):
                 current_keys = ordered_sequence
             elif list_key == "choices":
                 current_keys = choice_nested_keys
@@ -4229,8 +4821,16 @@ def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
             nested_sources: list[Source | None] = []
             selected: Source | None = None
             groups = (
-                tuple(key for key in ("output", "content", "parts", "message", "choices") if key in current_keys),
-                tuple(key for key in ("data", "results", "response", "audio", "delta") if key in current_keys),
+                tuple(
+                    key
+                    for key in ("output", "content", "parts", "message", "choices")
+                    if key in current_keys
+                ),
+                tuple(
+                    key
+                    for key in ("data", "results", "response", "audio", "delta")
+                    if key in current_keys
+                ),
                 tuple(key for key in ("segments", "chunks") if key in current_keys),
             )
             for group_index, group in enumerate(groups):
@@ -4238,24 +4838,50 @@ def _openai_compatible_transcript_text(payload: dict[str, object]) -> str:
                     if key not in value:
                         continue
                     child_ordered = key in ordered_keys
-                    source = walk(value[key], depth + 1, child_ordered, list_key=key, choice_context=choice_context, mode="ordered" if child_ordered else child_modes.get(key), seed=seed)
+                    source = walk(
+                        value[key],
+                        depth + 1,
+                        child_ordered,
+                        list_key=key,
+                        choice_context=choice_context,
+                        mode="ordered" if child_ordered else child_modes.get(key),
+                        seed=seed,
+                    )
                     if source is None:
-                        if (schema == "message" and key == "content") or mode == "delta" or child_ordered or key == "choices":
+                        if (
+                            (schema == "message" and key == "content")
+                            or mode == "delta"
+                            or child_ordered
+                            or key == "choices"
+                        ):
                             _openai_compatible_bad(child_ordered, False)
                         continue
                     if key in {"segments", "chunks"}:
                         source = (source[0], 0)
                     nested_sources.append(source)
                 selected = _openai_compatible_choose(nested_sources)
-                if group_index < 2 and selected is not None and selected[0] and selected[1] >= 2 - group_index and schema != "message":
+                if (
+                    group_index < 2
+                    and selected is not None
+                    and selected[0]
+                    and selected[1] >= 2 - group_index
+                    and schema != "message"
+                ):
                     return selected
-            if selected is not None and selected[0] and mode == "ordered" and list_key in _OPENAI_COMPATIBLE_TEXT_ITEM_KEYS:
+            if (
+                selected is not None
+                and selected[0]
+                and mode == "ordered"
+                and list_key in _OPENAI_COMPATIBLE_TEXT_ITEM_KEYS
+            ):
                 selected = (selected[0], max(selected[1], 2))
             if schema == "message":
                 if selected is not None and selected[0]:
                     return selected
                 if typed_schema:
-                    raise TranscriptionError("OpenAI-compatible speech API response message has no text shape")
+                    raise TranscriptionError(
+                        "OpenAI-compatible speech API response message has no text shape"
+                    )
                 return ([], 0) if choice_context else None
             if selected is not None:
                 return selected
@@ -4275,16 +4901,20 @@ def _multipart_form_data(
     fields: dict[str, str],
     file_field: str,
     file_path: Path,
-    expected_file_snapshot: tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
-    | None = None,
+    expected_file_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ) = None,
     *,
     file_bytes: bytes | None = None,
 ) -> tuple[bytearray, str]:
     if isinstance(file_field, bool) or not isinstance(file_field, str):
         raise TranscriptionError("multipart file field must be text")
     if _contains_multipart_control_chars(file_field):
-        raise TranscriptionError("multipart file field contains invalid control character")
+        raise TranscriptionError(
+            "multipart file field contains invalid control character"
+        )
     file_field_utf8_valid = True
     try:
         file_field.encode("utf-8")
@@ -4304,8 +4934,12 @@ def _multipart_form_data(
     if file_bytes is not None and type(file_bytes) is not bytes:
         raise TranscriptionError("audio bytes must be bytes")
     for key, value in fields.items():
-        if _contains_multipart_control_chars(key) or _contains_multipart_control_chars(value):
-            raise TranscriptionError("multipart form field contains invalid control character")
+        if _contains_multipart_control_chars(key) or _contains_multipart_control_chars(
+            value
+        ):
+            raise TranscriptionError(
+                "multipart form field contains invalid control character"
+            )
         encoded_key: bytes | None = None
         encoded_value: bytes | None = None
         try:
@@ -4354,9 +4988,11 @@ def transcribe_with_openai_compatible_api(
     write_transcript: bool = True,
     openai_compatible_service_tier_fallback: bool = False,
     *,
-    _expected_audio_snapshot: tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
-    | None = None,
+    _expected_audio_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ) = None,
 ) -> str:
     write_transcript = _validate_write_transcript(write_transcript)
     option_error: TranscriptionError | None = None
@@ -4398,7 +5034,9 @@ def transcribe_with_openai_compatible_api(
     use_flex_processing = flex_processing and is_openai_api
     if use_flex_processing:
         fields["service_tier"] = "flex"
-    allow_service_tier_fallback = use_flex_processing and openai_compatible_service_tier_fallback
+    allow_service_tier_fallback = (
+        use_flex_processing and openai_compatible_service_tier_fallback
+    )
     request_deadline = time.monotonic() + TRANSCRIBE_COMMAND_TIMEOUT_SECONDS
 
     def _request_transcription(request_fields: dict[str, str]) -> str:
@@ -4417,7 +5055,9 @@ def transcribe_with_openai_compatible_api(
         }
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
-        request = urllib.request.Request(endpoint, data=body, headers=headers, method="POST")
+        request = urllib.request.Request(
+            endpoint, data=body, headers=headers, method="POST"
+        )
         remaining_seconds = request_deadline - time.monotonic()
         if remaining_seconds <= 0:
             raise TranscriptionError("OpenAI-compatible speech API timed out")
@@ -4449,7 +5089,9 @@ def transcribe_with_openai_compatible_api(
             _release_owned_closer(exc.close, response_close_errors)
             if response_close_errors:
                 _safe_add_note(exc, "HTTP response cleanup failed")
-        raw_detail = _openai_compatible_error_detail(raw_error) or str(exc.reason or exc)
+        raw_detail = _openai_compatible_error_detail(raw_error) or str(
+            exc.reason or exc
+        )
         if allow_service_tier_fallback and _is_flex_service_tier_rejected(raw_detail):
             fallback_fields = dict(fields)
             fallback_fields.pop("service_tier", None)
@@ -4475,11 +5117,14 @@ def transcribe_with_openai_compatible_api(
                         _safe_add_note(fallback_exc, "HTTP response cleanup failed")
                 fallback_category = _openai_compatible_error_category(raw_error)
                 fallback_detail = _sanitize_remote_error_detail(
-                    _openai_compatible_error_detail(raw_error) or fallback_exc.reason or str(fallback_exc)
+                    _openai_compatible_error_detail(raw_error)
+                    or fallback_exc.reason
+                    or str(fallback_exc)
                 )
                 fallback_code = (
                     fallback_exc.code
-                    if isinstance(fallback_exc.code, int) and not isinstance(fallback_exc.code, bool)
+                    if isinstance(fallback_exc.code, int)
+                    and not isinstance(fallback_exc.code, bool)
                     else "unknown"
                 )
                 fallback_marker = f"; {fallback_category}" if fallback_category else ""
@@ -4494,7 +5139,11 @@ def transcribe_with_openai_compatible_api(
         else:
             category = _openai_compatible_error_category(raw_error)
             detail = _sanitize_remote_error_detail(raw_detail)
-            status_code = exc.code if isinstance(exc.code, int) and not isinstance(exc.code, bool) else "unknown"
+            status_code = (
+                exc.code
+                if isinstance(exc.code, int) and not isinstance(exc.code, bool)
+                else "unknown"
+            )
             marker = f"; {category}" if category else ""
             pending_remote_error = TranscriptionError(
                 f"OpenAI-compatible speech API failed ({status_code}{marker}): {detail}"
@@ -4521,7 +5170,11 @@ def transcribe_with_openai_compatible_api(
         raise TranscriptionError("OpenAI-compatible speech API returned invalid JSON")
     if payload.get("error"):
         error = payload["error"]
-        detail = _sanitize_remote_error_detail(str(error.get("message") or error) if isinstance(error, dict) else str(error))
+        detail = _sanitize_remote_error_detail(
+            str(error.get("message") or error)
+            if isinstance(error, dict)
+            else str(error)
+        )
         raise TranscriptionError(f"OpenAI-compatible speech API failed: {detail}")
     text = _openai_compatible_transcript_text(payload)
     if not text:
@@ -4561,9 +5214,13 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
     if not isinstance(config, TranscriberConfig):
         raise TranscriptionError("config must be TranscriberConfig")
     backend = normalize_backend(config.backend)
-    if isinstance(config.command_template, bool) or not isinstance(config.command_template, str):
+    if isinstance(config.command_template, bool) or not isinstance(
+        config.command_template, str
+    ):
         raise TranscriptionError("command template must be text")
-    if isinstance(config.whisper_model, bool) or not isinstance(config.whisper_model, str):
+    if isinstance(config.whisper_model, bool) or not isinstance(
+        config.whisper_model, str
+    ):
         raise TranscriptionError("whisper model must be text")
     language = _validate_language_code(config.language)
     if backend not in _SUPPORTED_TRANSCRIBER_BACKENDS:
@@ -4580,7 +5237,9 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
         if _contains_http_header_control_chars(raw_whisper_model):
             raise TranscriptionError("whisper model contains invalid control character")
     has_configured_model = bool(configured_model)
-    configured_model_backend = model_backend_for_path(configured_model) if configured_model else ""
+    configured_model_backend = (
+        model_backend_for_path(configured_model) if configured_model else ""
+    )
     configured_model_is_dir = False
     configured_model_exists = False
     configured_model_path = None
@@ -4588,10 +5247,16 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
         try:
             configured_model_path = Path(configured_model).expanduser()
         except (OSError, RuntimeError, ValueError) as exc:
-            raise TranscriptionError("configured whisper model path is invalid") from exc
+            raise TranscriptionError(
+                "configured whisper model path is invalid"
+            ) from exc
         try:
-            assert_no_symlink_ancestors(configured_model_path, field_name="configured whisper model path")
-            configured_model_kind = _local_model_path_kind(configured_model_path, field_name="configured whisper model path")
+            assert_no_symlink_ancestors(
+                configured_model_path, field_name="configured whisper model path"
+            )
+            configured_model_kind = _local_model_path_kind(
+                configured_model_path, field_name="configured whisper model path"
+            )
             configured_model_exists = configured_model_kind is not None
             configured_model_is_dir = configured_model_kind == "directory"
         except (OSError, ValueError):
@@ -4608,15 +5273,22 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             if configured_model_backend == "faster-whisper" or configured_model_is_dir:
                 if _faster_whisper_backend_available():
                     return "faster-whisper"
-                raise TranscriptionError("configured CTranslate2 model requires faster-whisper")
+                raise TranscriptionError(
+                    "configured CTranslate2 model requires faster-whisper"
+                )
             if configured_model_backend == "whisper-cpp":
                 if resolve_whisper_cpp_command():
                     return "whisper-cpp"
-                raise TranscriptionError("configured whisper model requires whisper.cpp")
+                raise TranscriptionError(
+                    "configured whisper model requires whisper.cpp"
+                )
             if resolve_whisper_cpp_command():
                 return "whisper-cpp"
             raise TranscriptionError("configured model requires whisper.cpp")
-        if configured_model_backend == "faster-whisper" and _faster_whisper_backend_available():
+        if (
+            configured_model_backend == "faster-whisper"
+            and _faster_whisper_backend_available()
+        ):
             return "faster-whisper"
         if configured_model_backend == "whisper-cpp" and resolve_whisper_cpp_command():
             return "whisper-cpp"
@@ -4624,7 +5296,10 @@ def resolve_transcriber(config: TranscriberConfig) -> str:
             return "whisper"
         local_model = default_ctranslate2_model_path(language)
         local_model_backend = model_backend_for_path(local_model) if local_model else ""
-        if local_model_backend == "faster-whisper" and _faster_whisper_backend_available():
+        if (
+            local_model_backend == "faster-whisper"
+            and _faster_whisper_backend_available()
+        ):
             return "faster-whisper"
         local_model = default_whisper_cpp_model_path(language)
         local_model_backend = model_backend_for_path(local_model) if local_model else ""
@@ -4651,9 +5326,11 @@ def _transcribe_locked(
     openai_compatible_api_key: str,
     openai_compatible_flex_processing: bool,
     openai_compatible_service_tier_fallback: bool,
-    _expected_audio_snapshot: tuple[int, int, int, int, int, int]
-    | tuple[int, int, int, int, int, int, str]
-    | None = None,
+    _expected_audio_snapshot: (
+        tuple[int, int, int, int, int, int]
+        | tuple[int, int, int, int, int, int, str]
+        | None
+    ) = None,
     _preflight: _TranscriberPreflight | None = None,
 ) -> str:
     config = TranscriberConfig(
@@ -4720,7 +5397,9 @@ def _transcribe_locked(
             whisper_model or default_whisper_cpp_model_path(language),
             write_transcript=False,
             _expected_audio_snapshot=locked_audio_snapshot,
-            _resolved_command=_preflight.resolved_command if _preflight is not None else None,
+            _resolved_command=(
+                _preflight.resolved_command if _preflight is not None else None
+            ),
         )
     elif resolved_backend == "faster-whisper":
         text = transcribe_with_faster_whisper(
@@ -4732,7 +5411,9 @@ def _transcribe_locked(
             _expected_audio_snapshot=locked_audio_snapshot,
         )
     elif resolved_backend == "openai-compatible":
-        openai_compatible_url = _validate_openai_compatible_api_url(openai_compatible_url)
+        openai_compatible_url = _validate_openai_compatible_api_url(
+            openai_compatible_url
+        )
         text = transcribe_with_openai_compatible_api(
             audio_path,
             language,
@@ -4757,7 +5438,11 @@ def _transcribe_locked(
         if trusted_output.output_path != text_path:
             raise TranscriptionError("transcript output is unsafe")
         output_stat = trusted_output.output_stat
-        if output_stat is None or not stat_module.S_ISREG(output_stat.st_mode) or getattr(output_stat, "st_nlink", 1) != 1:
+        if (
+            output_stat is None
+            or not stat_module.S_ISREG(output_stat.st_mode)
+            or getattr(output_stat, "st_nlink", 1) != 1
+        ):
             raise TranscriptionError("transcript output is unsafe")
         current_stat = _regular_file_stat(text_path, field_name="transcript output")
         if current_stat is None:
@@ -4841,7 +5526,9 @@ def transcribe(
             openai_compatible_service_tier_fallback,
         )
     audio_path = validate_audio_file(audio_path)
-    if backend == "openai-compatible" and ("\r" in audio_path.name or "\n" in audio_path.name):
+    if backend == "openai-compatible" and (
+        "\r" in audio_path.name or "\n" in audio_path.name
+    ):
         raise TranscriptionError("audio file name contains invalid newline")
     text_path = _normalize_transcript_path(text_path)
     try:
@@ -4876,7 +5563,7 @@ def transcribe(
         preflight_audio_snapshot = _snapshot_private_file(
             audio_path,
             field_name="audio file for backend",
-                    include_hash=True,
+            include_hash=True,
         )
     elif preflight_backend == "whisper":
         _require_whisper_command()
@@ -4940,7 +5627,9 @@ def transcribe(
         output_namespace = nullcontext()
     else:
         try:
-            parent_fd = ensure_directory_without_following_symlinks(text_path.parent, field_name="transcript directory")
+            parent_fd = ensure_directory_without_following_symlinks(
+                text_path.parent, field_name="transcript directory"
+            )
         except OSError as exc:
             raise TranscriptionError("failed to prepare transcript directory") from exc
         owned_parent_fd = parent_fd

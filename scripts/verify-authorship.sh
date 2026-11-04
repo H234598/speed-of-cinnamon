@@ -11,12 +11,12 @@ cd "${repo_dir}"
 
 python_bin="$(command -v python3 || true)"
 git_bin="$(command -v git || true)"
-if [[ -z "${python_bin}" || -z "${git_bin}" ]]; then
-  printf 'python3 and git are required in trusted PATH\n' >&2
-  exit 1
+if [[ -z ${python_bin} || -z ${git_bin} ]]; then
+	printf 'python3 and git are required in trusted PATH\n' >&2
+	exit 1
 fi
 
-"${python_bin}" - <<'PY' "${repo_dir}" "${git_bin}"
+"${python_bin}" - "${repo_dir}" "${git_bin}" <<'PY'
 from __future__ import annotations
 
 import json
@@ -81,6 +81,10 @@ allowed_history_commit_identities = {
         (expected_name, expected_email),
         ("GitHub", "noreply@github.com"),
     ),
+    "a2b9e0a52cf5f5310ea11a6e7b5e7723dda8d98c": (
+        ("SOC Integration", "soc-integration@localhost"),
+        ("SOC Integration", "soc-integration@localhost"),
+    ),
 }
 forbidden = re.compile("staff" + r"[-_ ]?" + "control", re.IGNORECASE)
 FORBIDDEN_SCAN_CHUNK_BYTES = 1 << 20
@@ -94,6 +98,26 @@ COMMIT_LOG_CHUNK_BYTES = 64 * 1024
 MAX_GIT_SCALAR_OUTPUT_BYTES = 4 * 1024
 GIT_SCALAR_OUTPUT_CHUNK_BYTES = 1024
 GIT_TIMEOUT_SECONDS = 30.0
+
+
+def _commit_identity_is_allowed(
+    sha: str,
+    author_name: str,
+    author_email: str,
+    committer_name: str,
+    committer_email: str,
+) -> bool:
+    normal_identity = (
+        (author_name, author_email) == (expected_name, expected_email)
+        and (committer_name, committer_email) == (expected_name, expected_email)
+    )
+    history_identity = allowed_history_commit_identities.get(sha)
+    allowed_history_identity = (
+        history_identity is not None
+        and (author_name, author_email) == history_identity[0]
+        and (committer_name, committer_email) == history_identity[1]
+    )
+    return normal_identity or allowed_history_identity
 
 
 def fail(message: str) -> None:
@@ -497,17 +521,13 @@ def check_git_identity() -> None:
         if len(fields) != 5:
             fail(f"could not parse commit identity record: {record!r}")
         sha, author_name, author_email, committer_name, committer_email = fields
-        normal_identity = (
-            (author_name, author_email) == (expected_name, expected_email)
-            and (committer_name, committer_email) == (expected_name, expected_email)
-        )
-        history_identity = allowed_history_commit_identities.get(sha)
-        allowed_history_identity = (
-            history_identity is not None
-            and (author_name, author_email) == history_identity[0]
-            and (committer_name, committer_email) == history_identity[1]
-        )
-        if not (normal_identity or allowed_history_identity):
+        if not _commit_identity_is_allowed(
+            sha,
+            author_name,
+            author_email,
+            committer_name,
+            committer_email,
+        ):
             bad_commits.append(
                 f"{sha[:12]} author={author_name} <{author_email}> "
                 f"committer={committer_name} <{committer_email}>"

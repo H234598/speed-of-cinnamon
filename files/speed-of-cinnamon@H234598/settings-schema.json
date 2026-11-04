@@ -1,10 +1,7 @@
 {
   "layout": {
     "type": "layout",
-    "pages": [
-      "main-page",
-      "about-page"
-    ],
+    "pages": ["main-page", "about-page"],
     "main-page": {
       "type": "page",
       "title": "Speed of Cinnamon",
@@ -26,30 +23,22 @@
     "about-page": {
       "type": "page",
       "title": "About",
-      "sections": [
-        "about-section"
-      ]
+      "sections": ["about-section"]
     },
     "main-menu-map-section": {
       "type": "section",
       "title": "Main menu settings",
-      "keys": [
-        "main-menu-settings-map"
-      ]
+      "keys": ["main-menu-settings-map"]
     },
     "settings-logo-header-section": {
       "type": "section",
       "title": "",
-      "keys": [
-        "settings-logo-header"
-      ]
+      "keys": ["settings-logo-header"]
     },
     "settings-logo-footer-section": {
       "type": "section",
       "title": "",
-      "keys": [
-        "settings-logo-footer"
-      ]
+      "keys": ["settings-logo-footer"]
     },
     "activation-section": {
       "type": "section",
@@ -196,9 +185,7 @@
     "about-section": {
       "type": "section",
       "title": "Speed of Cinnamon",
-      "keys": [
-        "about-version"
-      ]
+      "keys": ["about-version"]
     }
   },
   "about-version": {

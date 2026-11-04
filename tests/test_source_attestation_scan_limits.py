@@ -15,8 +15,12 @@ class SourceAttestationScanLimitTests(unittest.TestCase):
             (source / "one.py").write_text("one", encoding="utf-8")
             (source / "two.py").write_text("two", encoding="utf-8")
             with (
-                mock.patch.object(models, "_LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS", ("src",)),
-                mock.patch.object(models, "MAX_SOURCE_ATTESTATION_DIRECTORY_ENTRIES", 1),
+                mock.patch.object(
+                    models, "_LOCAL_MODEL_ATTESTATION_SOURCE_ROOTS", ("src",)
+                ),
+                mock.patch.object(
+                    models, "MAX_SOURCE_ATTESTATION_DIRECTORY_ENTRIES", 1
+                ),
             ):
                 with self.assertRaisesRegex(models.ModelError, "directory entries"):
                     models.source_attestation_snapshot(root)

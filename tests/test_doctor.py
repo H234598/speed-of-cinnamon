@@ -38,7 +38,9 @@ def gna_lstat(overrides: dict[str, object] | None = None) -> mock.Mock:
 
 def which_from(names: set[str]) -> mock.Mock:
     return mock.Mock(
-        side_effect=lambda name, path=None: f"/usr/bin/{name}" if name in names or name == "printf" else None
+        side_effect=lambda name, path=None: (
+            f"/usr/bin/{name}" if name in names or name == "printf" else None
+        )
     )
 
 
@@ -70,14 +72,30 @@ def ctranslate2_diagnostic(
 class DoctorTest(unittest.TestCase):
     def test_default_pipeline_reports_missing_asr(self) -> None:
         tools = {"python3", "pw-record", "pactl", "xdotool"}
-        env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}
+        env = {
+            "XDG_CURRENT_DESKTOP": "X-Cinnamon",
+            "XDG_SESSION_TYPE": "x11",
+            "DESKTOP_SESSION": "cinnamon",
+        }
         with (
-            mock.patch("speed_of_cinnamon.doctor.default_ctranslate2_model_path", return_value=""),
-            mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=""),
+            mock.patch(
+                "speed_of_cinnamon.doctor.default_ctranslate2_model_path",
+                return_value="",
+            ),
+            mock.patch(
+                "speed_of_cinnamon.doctor.default_whisper_cpp_model_path",
+                return_value="",
+            ),
             mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
             mock.patch.dict(os.environ, env),
         ):
-            payload = doctor.report({"recorder": "auto", "transcriber": "auto", "insert-method": "clipboard-paste"})
+            payload = doctor.report(
+                {
+                    "recorder": "auto",
+                    "transcriber": "auto",
+                    "insert-method": "clipboard-paste",
+                }
+            )
         self.assertFalse(payload["ok"])
         self.assertTrue(payload["desktop"]["cinnamon"])
         self.assertTrue(payload["configured"]["recorder"]["ok"])
@@ -86,43 +104,77 @@ class DoctorTest(unittest.TestCase):
 
     def test_report_converts_default_model_resolution_error_to_status(self) -> None:
         with (
-            mock.patch.object(doctor, "default_ctranslate2_model_path", side_effect=RuntimeError("unsafe model path")),
-            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})),
+            mock.patch.object(
+                doctor,
+                "default_ctranslate2_model_path",
+                side_effect=RuntimeError("unsafe model path"),
+            ),
+            mock.patch(
+                "speed_of_cinnamon.doctor.shutil.which",
+                which_from({"python3", "pw-record"}),
+            ),
         ):
-            payload = doctor.report({"recorder": "auto", "transcriber": "auto", "insert-method": "none"})
+            payload = doctor.report(
+                {"recorder": "auto", "transcriber": "auto", "insert-method": "none"}
+            )
 
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
-        self.assertEqual(payload["configured"]["transcriber"]["detail"], "voice model path is invalid")
+        self.assertEqual(
+            payload["configured"]["transcriber"]["detail"],
+            "voice model path is invalid",
+        )
 
     def test_desktop_environment_values_are_field_limited(self) -> None:
-        with mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "X" * (doctor.MAX_DOCTOR_FIELD_CHARS + 100)}, clear=True):
+        with mock.patch.dict(
+            os.environ,
+            {"XDG_CURRENT_DESKTOP": "X" * (doctor.MAX_DOCTOR_FIELD_CHARS + 100)},
+            clear=True,
+        ):
             value = doctor._coerce_desktop_env("XDG_CURRENT_DESKTOP")
 
         self.assertEqual(len(value), doctor.MAX_DOCTOR_FIELD_CHARS + 3)
 
     def test_settings_values_are_field_limited(self) -> None:
-        value = doctor._setting({"insert-method": "x" * (doctor.MAX_DOCTOR_FIELD_CHARS + 100)}, "insert-method")
+        value = doctor._setting(
+            {"insert-method": "x" * (doctor.MAX_DOCTOR_FIELD_CHARS + 100)},
+            "insert-method",
+        )
 
         self.assertEqual(len(value), doctor.MAX_DOCTOR_FIELD_CHARS + 3)
 
-    def test_legacy_dot_output_method_is_reported_as_clipboard_paste_submit(self) -> None:
+    def test_legacy_dot_output_method_is_reported_as_clipboard_paste_submit(
+        self,
+    ) -> None:
         tools = {"python3", "pw-record", "pactl", "xdotool", "xsel"}
-        env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}
+        env = {
+            "XDG_CURRENT_DESKTOP": "X-Cinnamon",
+            "XDG_SESSION_TYPE": "x11",
+            "DESKTOP_SESSION": "cinnamon",
+        }
         settings = {
             "recorder": "auto",
             "transcriber": "command",
             "transcriber-command": "printf ok",
             "insert-method": "clipboard-paste.submit",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+        with (
+            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
+            mock.patch.dict(os.environ, env),
+        ):
             payload = doctor.report(settings, applet=True)
 
         self.assertTrue(payload["configured"]["output"]["ok"])
-        self.assertEqual(payload["configured"]["output"]["value"], "clipboard-paste-submit")
+        self.assertEqual(
+            payload["configured"]["output"]["value"], "clipboard-paste-submit"
+        )
 
     def test_custom_command_pipeline_warns_copy_only_without_xdotool(self) -> None:
         tools = {"python3", "pw-record", "pactl"}
-        env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}
+        env = {
+            "XDG_CURRENT_DESKTOP": "X-Cinnamon",
+            "XDG_SESSION_TYPE": "x11",
+            "DESKTOP_SESSION": "cinnamon",
+        }
         for insert_method in ("clipboard-paste", "clipboard-paste-submit"):
             with self.subTest(insert_method=insert_method):
                 settings = {
@@ -131,25 +183,42 @@ class DoctorTest(unittest.TestCase):
                     "transcriber-command": "printf ok",
                     "insert-method": insert_method,
                 }
-                with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+                with (
+                    mock.patch(
+                        "speed_of_cinnamon.doctor.shutil.which", which_from(tools)
+                    ),
+                    mock.patch.dict(os.environ, env),
+                ):
                     payload = doctor.report(settings, applet=True)
                 self.assertTrue(payload["ok"])
                 self.assertTrue(payload["configured"]["output"]["ok"])
                 self.assertFalse(payload["configured"]["output"]["paste_ok"])
-                self.assertEqual(payload["configured"]["warnings"], ["automatic paste is unavailable; Cinnamon clipboard copy still works"])
+                self.assertEqual(
+                    payload["configured"]["warnings"],
+                    [
+                        "automatic paste is unavailable; Cinnamon clipboard copy still works"
+                    ],
+                )
 
     def test_transcriber_rejects_language_values_transcriber_rejects(self) -> None:
         checks = {"whisper": doctor.Check("whisper", True, "/usr/bin/whisper")}
         cases = (
             ("", "language must not be empty"),
-            ("x" * (doctor.MAX_LANGUAGE_CODE_CHARS + 1), "language is too large (max 64 characters)"),
+            (
+                "x" * (doctor.MAX_LANGUAGE_CODE_CHARS + 1),
+                "language is too large (max 64 characters)",
+            ),
             ("😀" * 17, "language is too large (max 64 bytes)"),
             ("\ud800", "language contains invalid UTF-8"),
         )
         for language, detail in cases:
             with self.subTest(language=repr(language)):
                 status = doctor._transcriber_status(
-                    {"language": language, "transcriber": "command", "transcriber-command": "printf ok"},
+                    {
+                        "language": language,
+                        "transcriber": "command",
+                        "transcriber-command": "printf ok",
+                    },
                     checks,
                 )
                 self.assertFalse(status["ok"])
@@ -182,14 +251,21 @@ class DoctorTest(unittest.TestCase):
 
     def test_applet_pipeline_requires_cinnamon_session(self) -> None:
         tools = {"python3", "pw-record", "pactl", "xdotool"}
-        env = {"XDG_CURRENT_DESKTOP": "GNOME", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "gnome"}
+        env = {
+            "XDG_CURRENT_DESKTOP": "GNOME",
+            "XDG_SESSION_TYPE": "x11",
+            "DESKTOP_SESSION": "gnome",
+        }
         settings = {
             "recorder": "auto",
             "transcriber": "command",
             "transcriber-command": "printf ok",
             "insert-method": "none",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+        with (
+            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
+            mock.patch.dict(os.environ, env),
+        ):
             payload = doctor.report(settings, applet=True)
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["desktop"]["cinnamon"])
@@ -199,14 +275,21 @@ class DoctorTest(unittest.TestCase):
 
     def test_cli_clipboard_paste_requires_keyboard_helper(self) -> None:
         tools = {"python3", "pw-record", "pactl", "xsel"}
-        env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}
+        env = {
+            "XDG_CURRENT_DESKTOP": "X-Cinnamon",
+            "XDG_SESSION_TYPE": "x11",
+            "DESKTOP_SESSION": "cinnamon",
+        }
         settings = {
             "recorder": "auto",
             "transcriber": "command",
             "transcriber-command": "printf ok",
             "insert-method": "clipboard-paste",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+        with (
+            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
+            mock.patch.dict(os.environ, env),
+        ):
             payload = doctor.report(settings)
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["configured"]["output"]["ok"])
@@ -225,7 +308,9 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(payload["configured"]["output"]["ok"])
         self.assertIn("xclip or xsel", payload["configured"]["output"]["detail"])
 
-    def test_cli_clipboard_paste_accepts_display_when_session_type_missing(self) -> None:
+    def test_cli_clipboard_paste_accepts_display_when_session_type_missing(
+        self,
+    ) -> None:
         tools = {"python3", "pw-record", "pactl", "xdotool", "xsel"}
         env = {
             "DISPLAY": ":0",
@@ -239,7 +324,10 @@ class DoctorTest(unittest.TestCase):
             "transcriber-command": "printf ok",
             "insert-method": "clipboard-paste",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+        with (
+            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
+            mock.patch.dict(os.environ, env),
+        ):
             payload = doctor.report(settings)
         self.assertTrue(payload["desktop"]["x11"])
         self.assertTrue(payload["configured"]["output"]["ok"])
@@ -259,7 +347,10 @@ class DoctorTest(unittest.TestCase):
             "transcriber-command": "printf ok",
             "insert-method": "clipboard-paste",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+        with (
+            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
+            mock.patch.dict(os.environ, env),
+        ):
             payload = doctor.report(settings)
         self.assertFalse(payload["desktop"]["x11"])
         self.assertFalse(payload["configured"]["output"]["paste_ok"])
@@ -277,7 +368,10 @@ class DoctorTest(unittest.TestCase):
             "transcriber-command": "printf ok",
             "insert-method": "clipboard-paste",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+        with (
+            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
+            mock.patch.dict(os.environ, env),
+        ):
             payload = doctor.report(settings)
 
         self.assertFalse(payload["configured"]["output"]["ok"])
@@ -286,14 +380,21 @@ class DoctorTest(unittest.TestCase):
 
     def test_direct_typing_requires_xdotool_on_x11(self) -> None:
         tools = {"python3", "pw-record", "pactl"}
-        env = {"XDG_CURRENT_DESKTOP": "X-Cinnamon", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon"}
+        env = {
+            "XDG_CURRENT_DESKTOP": "X-Cinnamon",
+            "XDG_SESSION_TYPE": "x11",
+            "DESKTOP_SESSION": "cinnamon",
+        }
         settings = {
             "recorder": "auto",
             "transcriber": "command",
             "transcriber-command": "printf ok",
             "insert-method": "type",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)), mock.patch.dict(os.environ, env):
+        with (
+            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
+            mock.patch.dict(os.environ, env),
+        ):
             payload = doctor.report(settings)
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["configured"]["output"]["ok"])
@@ -313,7 +414,9 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["configured"]["recorder"]["ok"])
         self.assertIn("arecord", payload["configured"]["recorder"]["detail"])
 
-    def test_explicit_arecord_without_input_source_recommends_pipewire_recorder(self) -> None:
+    def test_explicit_arecord_without_input_source_recommends_pipewire_recorder(
+        self,
+    ) -> None:
         status = doctor._recorder_status(
             {"recorder": "arecord", "input-device": ""},
             {"arecord": doctor.Check("arecord", True, "/usr/bin/arecord")},
@@ -336,11 +439,15 @@ class DoctorTest(unittest.TestCase):
             "parecord": doctor.Check("parecord", True, "/usr/bin/parecord"),
             "timeout": doctor.Check("timeout", False, "missing"),
         }
-        status = doctor._recorder_status({"recorder": "parecord", "max-seconds": 30}, checks)
+        status = doctor._recorder_status(
+            {"recorder": "parecord", "max-seconds": 30}, checks
+        )
         self.assertFalse(status["ok"])
         self.assertIn("timeout is required", status["detail"])
 
-        status = doctor._recorder_status({"recorder": "parecord", "max-seconds": 0}, checks)
+        status = doctor._recorder_status(
+            {"recorder": "parecord", "max-seconds": 0}, checks
+        )
         self.assertTrue(status["ok"])
 
     def test_recorder_status_rejects_invalid_recording_limit(self) -> None:
@@ -423,7 +530,10 @@ class DoctorTest(unittest.TestCase):
             whisper_cpp_model = Path(tmp) / "ggml-base.bin"
             whisper_cpp_model.write_bytes(b"model")
             status = doctor._transcriber_status(
-                {"transcriber": "faster-whisper", "whisper-model": str(whisper_cpp_model)},
+                {
+                    "transcriber": "faster-whisper",
+                    "whisper-model": str(whisper_cpp_model),
+                },
                 checks,
             )
             self.assertFalse(status["ok"])
@@ -439,10 +549,18 @@ class DoctorTest(unittest.TestCase):
             whisper_cpp_model = Path(tmp) / "ggml-base.bin"
             whisper_cpp_model.write_bytes(b"model")
             with (
-                mock.patch("speed_of_cinnamon.doctor.default_ctranslate2_model_path", return_value=str(ctranslate2_model)),
-                mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=str(whisper_cpp_model)),
+                mock.patch(
+                    "speed_of_cinnamon.doctor.default_ctranslate2_model_path",
+                    return_value=str(ctranslate2_model),
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.doctor.default_whisper_cpp_model_path",
+                    return_value=str(whisper_cpp_model),
+                ),
             ):
-                status = doctor._transcriber_status({"transcriber": "whisper-cpp"}, checks)
+                status = doctor._transcriber_status(
+                    {"transcriber": "whisper-cpp"}, checks
+                )
         self.assertTrue(status["ok"])
         self.assertEqual(status["resolved"], "whisper-cpp")
 
@@ -457,15 +575,25 @@ class DoctorTest(unittest.TestCase):
                 "insert-method": "none",
             }
             with (
-                mock.patch("speed_of_cinnamon.doctor.default_ctranslate2_model_path", return_value=""),
-                mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=str(model)),
+                mock.patch(
+                    "speed_of_cinnamon.doctor.default_ctranslate2_model_path",
+                    return_value="",
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.doctor.default_whisper_cpp_model_path",
+                    return_value=str(model),
+                ),
                 mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)),
             ):
                 payload = doctor.report(settings)
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["configured"]["transcriber"]["resolved"], "whisper-cpp")
+        self.assertEqual(
+            payload["configured"]["transcriber"]["resolved"], "whisper-cpp"
+        )
 
-    def test_english_only_whisper_cpp_model_fails_for_non_english_language(self) -> None:
+    def test_english_only_whisper_cpp_model_fails_for_non_english_language(
+        self,
+    ) -> None:
         tools = {"python3", "pw-record", "pwcpp"}
         with tempfile.TemporaryDirectory() as tmp:
             model = Path(tmp) / "ggml-tiny.en.bin"
@@ -493,8 +621,14 @@ class DoctorTest(unittest.TestCase):
                 "insert-method": "none",
             }
             with (
-                mock.patch("speed_of_cinnamon.doctor.default_ctranslate2_model_path", return_value=""),
-                mock.patch("speed_of_cinnamon.doctor.default_whisper_cpp_model_path", return_value=str(model)),
+                mock.patch(
+                    "speed_of_cinnamon.doctor.default_ctranslate2_model_path",
+                    return_value="",
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.doctor.default_whisper_cpp_model_path",
+                    return_value=str(model),
+                ),
                 mock.patch(
                     "speed_of_cinnamon.doctor._ctranslate2_diagnostics",
                     return_value=ctranslate2_diagnostic(
@@ -510,8 +644,19 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         check_names = [check["name"] for check in payload["checks"]]
         self.assertIn("pwcpp", check_names)
-        self.assertTrue(next((check["ok"] for check in payload["checks"] if check["name"] == "pwcpp"), False))
-        self.assertEqual(payload["configured"]["transcriber"]["resolved"], "whisper-cpp")
+        self.assertTrue(
+            next(
+                (
+                    check["ok"]
+                    for check in payload["checks"]
+                    if check["name"] == "pwcpp"
+                ),
+                False,
+            )
+        )
+        self.assertEqual(
+            payload["configured"]["transcriber"]["resolved"], "whisper-cpp"
+        )
 
     def test_auto_asr_accepts_downloaded_ctranslate2_directory_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -528,11 +673,16 @@ class DoctorTest(unittest.TestCase):
                     "speed_of_cinnamon.doctor._ctranslate2_diagnostics",
                     return_value=ctranslate2_diagnostic(),
                 ),
-                mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})),
+                mock.patch(
+                    "speed_of_cinnamon.doctor.shutil.which",
+                    which_from({"python3", "pw-record"}),
+                ),
             ):
                 payload = doctor.report(settings)
         self.assertTrue(payload["configured"]["transcriber"]["ok"])
-        self.assertEqual(payload["configured"]["transcriber"]["resolved"], "faster-whisper")
+        self.assertEqual(
+            payload["configured"]["transcriber"]["resolved"], "faster-whisper"
+        )
 
     def test_command_checks_use_trusted_command_path(self) -> None:
         with mock.patch("speed_of_cinnamon.doctor.shutil.which") as mocked_which:
@@ -545,10 +695,15 @@ class DoctorTest(unittest.TestCase):
             args, kwargs = mocked_which.call_args
             self.assertEqual(args, ("python3",))
             if "path" in kwargs:
-                self.assertEqual(kwargs["path"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+                self.assertEqual(
+                    kwargs["path"],
+                    "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+                )
 
     def test_command_check_contains_probe_resource_failure(self) -> None:
-        with mock.patch.object(doctor, "_which", side_effect=MemoryError("probe exhausted")):
+        with mock.patch.object(
+            doctor, "_which", side_effect=MemoryError("probe exhausted")
+        ):
             check = doctor.command_check("python3", "python3")
 
         self.assertFalse(check.ok)
@@ -578,9 +733,13 @@ class DoctorTest(unittest.TestCase):
 
         faster_check = next(check for check in checks if check.name == "faster-whisper")
         self.assertFalse(faster_check.ok)
-        self.assertEqual(faster_check.detail, "faster-whisper child worker is missing or unsafe")
+        self.assertEqual(
+            faster_check.detail, "faster-whisper child worker is missing or unsafe"
+        )
 
-    def test_audio_diagnostics_reports_bounded_sof_pipewire_and_package_evidence(self) -> None:
+    def test_audio_diagnostics_reports_bounded_sof_pipewire_and_package_evidence(
+        self,
+    ) -> None:
         outputs = {
             "lspci": (
                 "ok",
@@ -608,7 +767,7 @@ class DoctorTest(unittest.TestCase):
             ),
             "wpctl": (
                 "ok",
-                'id 55, type PipeWire:Interface:Node\n'
+                "id 55, type PipeWire:Interface:Node\n"
                 '  node.description = "Private user label that must not escape"\n'
                 '  node.name = "alsa_input.platform-sof_sdw.HiFi__Mic1__source"\n',
             ),
@@ -623,8 +782,12 @@ class DoctorTest(unittest.TestCase):
 
         self.assertEqual(audio["schema_version"], 2)
         self.assertEqual(audio["pci_drivers"], ["sof-audio-pci-intel-tgl"])
-        self.assertEqual(audio["sof_modules"], ["snd_soc_intel_sof_sdw", "snd_sof_pci_intel_tgl"])
-        self.assertEqual(audio["soundwire_modules"], ["snd_soc_intel_sof_sdw", "soundwire_bus"])
+        self.assertEqual(
+            audio["sof_modules"], ["snd_soc_intel_sof_sdw", "snd_sof_pci_intel_tgl"]
+        )
+        self.assertEqual(
+            audio["soundwire_modules"], ["snd_soc_intel_sof_sdw", "soundwire_bus"]
+        )
         self.assertTrue(audio["sof_active"])
         self.assertIsNone(audio["soundwire_active"])
         self.assertEqual(audio["pipewire_source_class"], "alsa")
@@ -643,7 +806,9 @@ class DoctorTest(unittest.TestCase):
             {"pci": "ok", "modules": "ok", "packages": "ok", "pipewire": "ok"},
         )
         self.assertNotIn("Private user label", json.dumps(audio))
-        self.assertNotIn("alsa_input.platform-sof_sdw.HiFi__Mic1__source", json.dumps(audio))
+        self.assertNotIn(
+            "alsa_input.platform-sof_sdw.HiFi__Mic1__source", json.dumps(audio)
+        )
 
     def test_audio_diagnostics_warns_for_internal_platform_dmic_evidence(self) -> None:
         outputs = {
@@ -661,7 +826,7 @@ class DoctorTest(unittest.TestCase):
             "rpm": ("ok", ""),
             "wpctl": (
                 "ok",
-                'id 61, type PipeWire:Interface:Node\n'
+                "id 61, type PipeWire:Interface:Node\n"
                 '  node.name = "alsa_input.pci-0000_00_1f.3-platform-dmic.stereo"\n'
                 '  node.description = "Built-in source"\n',
             ),
@@ -678,10 +843,14 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(audio["legacy_hda_warning"])
         self.assertEqual(
             audio["warnings"],
-            ["Legacy HDA is active on a DSP/DMIC-capable audio path; forcing it can disable the digital microphone."],
+            [
+                "Legacy HDA is active on a DSP/DMIC-capable audio path; forcing it can disable the digital microphone."
+            ],
         )
 
-    def test_audio_diagnostics_does_not_treat_external_dmic_or_global_soundwire_as_internal(self) -> None:
+    def test_audio_diagnostics_does_not_treat_external_dmic_or_global_soundwire_as_internal(
+        self,
+    ) -> None:
         outputs = {
             "lspci": (
                 "ok",
@@ -712,7 +881,9 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(audio["legacy_hda_warning"])
         self.assertEqual(audio["warnings"], [])
 
-    def test_audio_diagnostics_does_not_infer_soundwire_activity_from_module_probe(self) -> None:
+    def test_audio_diagnostics_does_not_infer_soundwire_activity_from_module_probe(
+        self,
+    ) -> None:
         cases = (
             ("ok", "Module Size Used by\nsnd_hda_intel 65536 1\n"),
             ("failed", ""),
@@ -724,10 +895,13 @@ class DoctorTest(unittest.TestCase):
                 "rpm": ("unavailable", ""),
                 "wpctl": ("unavailable", ""),
             }
-            with self.subTest(modules_status=modules_status), mock.patch.object(
-                doctor,
-                "_run_audio_probe",
-                side_effect=lambda command, *_args, **_kwargs: outputs[command],
+            with (
+                self.subTest(modules_status=modules_status),
+                mock.patch.object(
+                    doctor,
+                    "_run_audio_probe",
+                    side_effect=lambda command, *_args, **_kwargs: outputs[command],
+                ),
             ):
                 audio = doctor._audio_diagnostics()
 
@@ -735,7 +909,9 @@ class DoctorTest(unittest.TestCase):
             self.assertIsNone(audio["soundwire_active"])
             self.assertEqual(audio["probes"]["modules"], modules_status)
 
-    def test_audio_diagnostics_does_not_trust_free_labels_or_dspcfg_as_dmic_evidence(self) -> None:
+    def test_audio_diagnostics_does_not_trust_free_labels_or_dspcfg_as_dmic_evidence(
+        self,
+    ) -> None:
         outputs = {
             "lspci": (
                 "ok",
@@ -751,7 +927,7 @@ class DoctorTest(unittest.TestCase):
             "rpm": ("ok", ""),
             "wpctl": (
                 "ok",
-                'id 61, type PipeWire:Interface:Node\n'
+                "id 61, type PipeWire:Interface:Node\n"
                 '  node.name = "alsa_input.pci-0000_00_1f.3.analog-stereo"\n'
                 '  node.description = "DMIC Digital Microphone"\n'
                 '  port.alias = "dmic-user-label"\n',
@@ -768,7 +944,9 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(audio["legacy_hda_warning"])
         self.assertEqual(audio["warnings"], [])
 
-    def test_audio_diagnostics_redacts_bluetooth_mac_and_usb_serial_source_names(self) -> None:
+    def test_audio_diagnostics_redacts_bluetooth_mac_and_usb_serial_source_names(
+        self,
+    ) -> None:
         cases = (
             ("bluez_input.11_22_33_44_55_66.0", "bluetooth"),
             ("alsa_input.usb-Vendor_Microphone_SECRET-SERIAL-00.analog-stereo", "alsa"),
@@ -780,10 +958,13 @@ class DoctorTest(unittest.TestCase):
                 "rpm": ("unavailable", ""),
                 "wpctl": ("ok", f'node.name = "{source_name}"\n'),
             }
-            with self.subTest(source_name=source_name), mock.patch.object(
-                doctor,
-                "_run_audio_probe",
-                side_effect=lambda command, *_args, **_kwargs: outputs[command],
+            with (
+                self.subTest(source_name=source_name),
+                mock.patch.object(
+                    doctor,
+                    "_run_audio_probe",
+                    side_effect=lambda command, *_args, **_kwargs: outputs[command],
+                ),
             ):
                 audio = doctor._audio_diagnostics()
 
@@ -800,10 +981,16 @@ class DoctorTest(unittest.TestCase):
             mock.patch.object(
                 doctor,
                 "run_process_bounded_output",
-                return_value=(0, b'node.name = "alsa_input.safe"\n', b"private failure detail"),
+                return_value=(
+                    0,
+                    b'node.name = "alsa_input.safe"\n',
+                    b"private failure detail",
+                ),
             ) as bounded,
         ):
-            status, output = doctor._run_audio_probe("wpctl", "inspect", "@DEFAULT_AUDIO_SOURCE@")
+            status, output = doctor._run_audio_probe(
+                "wpctl", "inspect", "@DEFAULT_AUDIO_SOURCE@"
+            )
 
         self.assertEqual((status, output), ("ok", 'node.name = "alsa_input.safe"'))
         bounded.assert_called_once_with(
@@ -850,9 +1037,9 @@ class DoctorTest(unittest.TestCase):
             "pipewire-utils": "1.4.7-1.fc43",
             "wireplumber": "0.5.10-1.fc43",
         }
-        installed_output = "".join(f"{name}={version}\n" for name, version in installed.items()).encode(
-            "ascii"
-        )
+        installed_output = "".join(
+            f"{name}={version}\n" for name, version in installed.items()
+        ).encode("ascii")
         missing_output = "".join(
             f"package {name} is not installed\n" for name in doctor.AUDIO_PACKAGE_NAMES
         ).encode("ascii")
@@ -860,7 +1047,9 @@ class DoctorTest(unittest.TestCase):
         partial["alsa-ucm-utils"] = None
         partial["pipewire-utils"] = None
         partial_stdout = "".join(
-            f"{name}={version}\n" for name, version in partial.items() if version is not None
+            f"{name}={version}\n"
+            for name, version in partial.items()
+            if version is not None
         ).encode("ascii")
         partial_stderr = (
             b"package alsa-ucm-utils is not installed\n"
@@ -873,7 +1062,10 @@ class DoctorTest(unittest.TestCase):
                 (0, installed_output + b"pipewire=1.4.7-1.fc43\n", b""),
                 installed,
             ),
-            "fully missing": ((1, b"", missing_output), dict.fromkeys(doctor.AUDIO_PACKAGE_NAMES)),
+            "fully missing": (
+                (1, b"", missing_output),
+                dict.fromkeys(doctor.AUDIO_PACKAGE_NAMES),
+            ),
         }
 
         for label, (result, expected) in cases.items():
@@ -930,7 +1122,9 @@ class DoctorTest(unittest.TestCase):
             with (
                 self.subTest(label=label),
                 mock.patch.object(doctor, "_which", return_value="/usr/bin/rpm"),
-                mock.patch.object(doctor, "run_process_bounded_output", return_value=result),
+                mock.patch.object(
+                    doctor, "run_process_bounded_output", return_value=result
+                ),
             ):
                 self.assertEqual(
                     doctor._run_audio_probe("rpm", *doctor._AUDIO_RPM_ARGS),
@@ -989,7 +1183,9 @@ class DoctorTest(unittest.TestCase):
 
         with (
             mock.patch.object(doctor.sys, "platform", "linux"),
-            mock.patch.object(doctor.os, "uname", return_value=mock.Mock(release=release)),
+            mock.patch.object(
+                doctor.os, "uname", return_value=mock.Mock(release=release)
+            ),
             mock.patch.object(doctor, "_read_affinity_file", side_effect=read_file),
         ):
             return doctor._cpu_diagnostics(), calls
@@ -1022,7 +1218,9 @@ class DoctorTest(unittest.TestCase):
                 "hfi_available": None,
             },
         )
-        self.assertEqual(calls.count((doctor._CPU_ONLINE, doctor.MAX_CPU_SCALAR_BYTES)), 2)
+        self.assertEqual(
+            calls.count((doctor._CPU_ONLINE, doctor.MAX_CPU_SCALAR_BYTES)), 2
+        )
         self.assertIn((doctor._PROC_CPUINFO, doctor.MAX_CPUINFO_BYTES), calls)
         self.assertIn(
             (
@@ -1032,10 +1230,17 @@ class DoctorTest(unittest.TestCase):
             calls,
         )
         topology_calls = [
-            call for call in calls if call[0].name in {"thread_siblings_list", "core_type"}
+            call
+            for call in calls
+            if call[0].name in {"thread_siblings_list", "core_type"}
         ]
         self.assertEqual(len(topology_calls), 24)
-        self.assertTrue(all(max_bytes == doctor.MAX_CPU_SCALAR_BYTES for _, max_bytes in topology_calls))
+        self.assertTrue(
+            all(
+                max_bytes == doctor.MAX_CPU_SCALAR_BYTES
+                for _, max_bytes in topology_calls
+            )
+        )
 
     def test_cpu_diagnostics_requires_avx_flags_on_every_online_cpu(self) -> None:
         cpu, _calls = self._cpu_diagnostics_fixture(
@@ -1046,7 +1251,9 @@ class DoctorTest(unittest.TestCase):
         self.assertFalse(cpu["avx2"])
         self.assertTrue(cpu["avx_vnni"])
 
-    def test_cpu_diagnostics_missing_cpu_record_invalidates_cpuinfo_values(self) -> None:
+    def test_cpu_diagnostics_missing_cpu_record_invalidates_cpuinfo_values(
+        self,
+    ) -> None:
         cpu, _calls = self._cpu_diagnostics_fixture(cpuinfo_cpus=(0,))
 
         self.assertEqual(cpu["probe_status"], "partial")
@@ -1075,9 +1282,13 @@ class DoctorTest(unittest.TestCase):
                 cpu, _calls = self._cpu_diagnostics_fixture(core_types=core_types)
 
             self.assertIs(cpu["hybrid"], expected)
-            self.assertEqual(cpu["probe_status"], "partial" if expected is None else "ok")
+            self.assertEqual(
+                cpu["probe_status"], "partial" if expected is None else "ok"
+            )
 
-    def test_cpu_diagnostics_hfi_evidence_never_claims_runtime_availability(self) -> None:
+    def test_cpu_diagnostics_hfi_evidence_never_claims_runtime_availability(
+        self,
+    ) -> None:
         hardware_cases = (
             (True, {}),
             (False, {1: "fpu avx2 avx_vnni"}),
@@ -1123,8 +1334,7 @@ class DoctorTest(unittest.TestCase):
             ),
             "malformed": ("CONFIG_INTEL_HFI_THERMAL=m\n", None),
             "valid plus malformed": (
-                "CONFIG_INTEL_HFI_THERMAL=y\n"
-                "CONFIG_INTEL_HFI_THERMAL=m\n",
+                "CONFIG_INTEL_HFI_THERMAL=y\n" "CONFIG_INTEL_HFI_THERMAL=m\n",
                 None,
             ),
         }
@@ -1138,7 +1348,9 @@ class DoctorTest(unittest.TestCase):
         for release in (None, "", "../private", "6.8.0\nprivate", "6.8.0-ä", "x" * 65):
             with (
                 self.subTest(release=release),
-                mock.patch.object(doctor.os, "uname", return_value=mock.Mock(release=release)),
+                mock.patch.object(
+                    doctor.os, "uname", return_value=mock.Mock(release=release)
+                ),
                 mock.patch.object(doctor, "_read_affinity_file") as read_file,
             ):
                 result = doctor._kernel_hfi_state()
@@ -1330,7 +1542,9 @@ class DoctorTest(unittest.TestCase):
         self.assertIsNone(diagnostic["faster_whisper"]["ready"])
         self.assertNotIn("private", json.dumps(diagnostic))
 
-    def test_gna_diagnostics_has_exact_policy_and_snapshot_fields_without_subprocess(self) -> None:
+    def test_gna_diagnostics_has_exact_policy_and_snapshot_fields_without_subprocess(
+        self,
+    ) -> None:
         lstat = gna_lstat()
         with (
             mock.patch.object(doctor.sys, "platform", "linux"),
@@ -1381,7 +1595,9 @@ class DoctorTest(unittest.TestCase):
 
                 self.assertIs(diagnostic["hardware_advertised_by_cpu_model"], expected)
 
-    def test_gna_driver_detects_each_historical_alias_without_directory_scan(self) -> None:
+    def test_gna_driver_detects_each_historical_alias_without_directory_scan(
+        self,
+    ) -> None:
         aliases = (
             "/sys/module/intel_gna",
             "/sys/bus/pci/drivers/intel_gna",
@@ -1397,7 +1613,9 @@ class DoctorTest(unittest.TestCase):
                 mock.patch.object(
                     Path,
                     "iterdir",
-                    side_effect=AssertionError("GNA diagnostics must not scan directories"),
+                    side_effect=AssertionError(
+                        "GNA diagnostics must not scan directories"
+                    ),
                 ) as iterdir,
             ):
                 diagnostic = doctor._gna_diagnostics({"model": None})
@@ -1424,16 +1642,46 @@ class DoctorTest(unittest.TestCase):
             ("driver base error", "/sys/module", OSError("private"), "driver_detected"),
             ("driver base symlink", "/sys/module", "symlink", "driver_detected"),
             ("driver base wrong type", "/sys/module", "regular", "driver_detected"),
-            ("driver candidate error", "/sys/module/intel_gna", OSError("private"), "driver_detected"),
-            ("driver candidate symlink", "/sys/module/intel_gna", "symlink", "driver_detected"),
-            ("driver candidate wrong type", "/sys/module/intel_gna", "regular", "driver_detected"),
+            (
+                "driver candidate error",
+                "/sys/module/intel_gna",
+                OSError("private"),
+                "driver_detected",
+            ),
+            (
+                "driver candidate symlink",
+                "/sys/module/intel_gna",
+                "symlink",
+                "driver_detected",
+            ),
+            (
+                "driver candidate wrong type",
+                "/sys/module/intel_gna",
+                "regular",
+                "driver_detected",
+            ),
             ("device base missing", "/dev", "missing", "device_node_detected"),
             ("device base error", "/dev", OSError("private"), "device_node_detected"),
             ("device base symlink", "/dev", "symlink", "device_node_detected"),
             ("device base wrong type", "/dev", "regular", "device_node_detected"),
-            ("device candidate error", "/dev/intel_gna0", OSError("private"), "device_node_detected"),
-            ("device candidate symlink", "/dev/intel_gna0", "symlink", "device_node_detected"),
-            ("device candidate wrong type", "/dev/intel_gna0", "regular", "device_node_detected"),
+            (
+                "device candidate error",
+                "/dev/intel_gna0",
+                OSError("private"),
+                "device_node_detected",
+            ),
+            (
+                "device candidate symlink",
+                "/dev/intel_gna0",
+                "symlink",
+                "device_node_detected",
+            ),
+            (
+                "device candidate wrong type",
+                "/dev/intel_gna0",
+                "regular",
+                "device_node_detected",
+            ),
         )
         for label, path, outcome, field in cases:
             with (
@@ -1456,7 +1704,9 @@ class DoctorTest(unittest.TestCase):
         self.assertIsNone(diagnostic["device_node_detected"])
         lstat.assert_not_called()
 
-    def test_report_includes_audio_diagnostics_without_changing_required_ok(self) -> None:
+    def test_report_includes_audio_diagnostics_without_changing_required_ok(
+        self,
+    ) -> None:
         audio = {
             "schema_version": 2,
             "soundwire_active": None,
@@ -1487,16 +1737,25 @@ class DoctorTest(unittest.TestCase):
             },
         }
         with (
-            mock.patch.object(doctor, "_audio_diagnostics", return_value=audio) as audio_probe,
-            mock.patch.object(doctor, "_cpu_diagnostics", return_value=cpu) as cpu_probe,
+            mock.patch.object(
+                doctor, "_audio_diagnostics", return_value=audio
+            ) as audio_probe,
+            mock.patch.object(
+                doctor, "_cpu_diagnostics", return_value=cpu
+            ) as cpu_probe,
             mock.patch.object(
                 doctor,
                 "_ctranslate2_diagnostics",
                 return_value=ctranslate2,
             ) as ctranslate2_probe,
-            mock.patch.object(doctor, "_gna_diagnostics", return_value=gna) as gna_policy,
+            mock.patch.object(
+                doctor, "_gna_diagnostics", return_value=gna
+            ) as gna_policy,
             mock.patch.object(doctor, "run_process_bounded_output") as run_process,
-            mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})),
+            mock.patch(
+                "speed_of_cinnamon.doctor.shutil.which",
+                which_from({"python3", "pw-record"}),
+            ),
         ):
             payload = doctor.report(
                 {
@@ -1526,15 +1785,36 @@ class DoctorTest(unittest.TestCase):
         run_process.assert_not_called()
 
     def test_env_desktop_rejects_control_characters(self) -> None:
-        with mock.patch.dict("speed_of_cinnamon.doctor.os.environ", {"XDG_CURRENT_DESKTOP": "x-cinnamon\n", "XDG_SESSION_TYPE": "x11", "DESKTOP_SESSION": "cinnamon\\x00"}):
-            payload = doctor.report({"recorder": "auto", "transcriber": "auto", "insert-method": "clipboard"})
+        with mock.patch.dict(
+            "speed_of_cinnamon.doctor.os.environ",
+            {
+                "XDG_CURRENT_DESKTOP": "x-cinnamon\n",
+                "XDG_SESSION_TYPE": "x11",
+                "DESKTOP_SESSION": "cinnamon\\x00",
+            },
+        ):
+            payload = doctor.report(
+                {
+                    "recorder": "auto",
+                    "transcriber": "auto",
+                    "insert-method": "clipboard",
+                }
+            )
         self.assertEqual(payload["desktop"]["current_desktop"], "")
         self.assertEqual(payload["desktop"]["desktop_session"], "")
         self.assertEqual(payload["desktop"]["session_type"], "x11")
 
     def test_env_desktop_ignores_non_text_values(self) -> None:
-        with mock.patch("speed_of_cinnamon.doctor.os.environ.__getitem__", return_value=123):
-            payload = doctor.report({"recorder": "auto", "transcriber": "auto", "insert-method": "clipboard"})
+        with mock.patch(
+            "speed_of_cinnamon.doctor.os.environ.__getitem__", return_value=123
+        ):
+            payload = doctor.report(
+                {
+                    "recorder": "auto",
+                    "transcriber": "auto",
+                    "insert-method": "clipboard",
+                }
+            )
         self.assertEqual(payload["desktop"]["current_desktop"], "")
         self.assertEqual(payload["desktop"]["desktop_session"], "")
         self.assertEqual(payload["desktop"]["session_type"], "")
@@ -1548,11 +1828,16 @@ class DoctorTest(unittest.TestCase):
                 "whisper-model": str(model),
                 "insert-method": "none",
             }
-            with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})):
+            with mock.patch(
+                "speed_of_cinnamon.doctor.shutil.which",
+                which_from({"python3", "pw-record"}),
+            ):
                 payload = doctor.report(settings)
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
-        self.assertIn("voice model not found", payload["configured"]["transcriber"]["detail"])
+        self.assertIn(
+            "voice model not found", payload["configured"]["transcriber"]["detail"]
+        )
 
     def test_auto_asr_reports_resolved_backend_for_missing_catalog_model(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -1635,7 +1920,10 @@ class DoctorTest(unittest.TestCase):
                 "whisper-model": str(model),
             }
             for label, runtime, expected_detail in cases:
-                with self.subTest(label=label), mock.patch.object(doctor, "_which", return_value=None):
+                with (
+                    self.subTest(label=label),
+                    mock.patch.object(doctor, "_which", return_value=None),
+                ):
                     checks = {check.name: check for check in doctor.run_checks(runtime)}
                     status = doctor._transcriber_status(settings, checks)
 
@@ -1675,8 +1963,14 @@ class DoctorTest(unittest.TestCase):
                 return "whisper-cpp"
 
             with (
-                mock.patch("speed_of_cinnamon.doctor._local_model_path_kind", side_effect=classify) as classify_mock,
-                mock.patch("speed_of_cinnamon.doctor.model_backend_for_path", side_effect=classify_backend),
+                mock.patch(
+                    "speed_of_cinnamon.doctor._local_model_path_kind",
+                    side_effect=classify,
+                ) as classify_mock,
+                mock.patch(
+                    "speed_of_cinnamon.doctor.model_backend_for_path",
+                    side_effect=classify_backend,
+                ),
             ):
                 status = doctor._transcriber_status(
                     {"transcriber": "whisper-cpp", "whisper-model": str(model)},
@@ -1702,10 +1996,15 @@ class DoctorTest(unittest.TestCase):
                     "speed_of_cinnamon.doctor._ctranslate2_diagnostics",
                     return_value=ctranslate2_diagnostic(),
                 ),
-                mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record", "whisper", "whisper-cli"})),
+                mock.patch(
+                    "speed_of_cinnamon.doctor.shutil.which",
+                    which_from({"python3", "pw-record", "whisper", "whisper-cli"}),
+                ),
             ):
                 payload = doctor.report(settings)
-        self.assertEqual(payload["configured"]["transcriber"]["resolved"], "faster-whisper")
+        self.assertEqual(
+            payload["configured"]["transcriber"]["resolved"], "faster-whisper"
+        )
 
     def test_report_treats_openai_whisper_alias_as_whisper(self) -> None:
         tools = {"python3", "pw-record", "whisper"}
@@ -1727,7 +2026,10 @@ class DoctorTest(unittest.TestCase):
             "transcriber-command": "printf ok",
             "insert-method": "none",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})):
+        with mock.patch(
+            "speed_of_cinnamon.doctor.shutil.which",
+            which_from({"python3", "pw-record"}),
+        ):
             payload = doctor.report(settings)
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["configured"]["transcriber"]["ok"])
@@ -1753,19 +2055,27 @@ class DoctorTest(unittest.TestCase):
             "transcriber-command": "printf ok",
             "insert-method": "none",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})):
+        with mock.patch(
+            "speed_of_cinnamon.doctor.shutil.which",
+            which_from({"python3", "pw-record"}),
+        ):
             payload = doctor.report(settings)
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["configured"]["transcriber"]["ok"])
         self.assertEqual(payload["configured"]["transcriber"]["value"], "command")
 
-    def test_report_treats_template_alias_as_command_and_requires_template(self) -> None:
+    def test_report_treats_template_alias_as_command_and_requires_template(
+        self,
+    ) -> None:
         settings = {
             "recorder": "auto",
             "transcriber": "template",
             "insert-method": "none",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})):
+        with mock.patch(
+            "speed_of_cinnamon.doctor.shutil.which",
+            which_from({"python3", "pw-record"}),
+        ):
             payload = doctor.report(settings)
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
@@ -1775,13 +2085,18 @@ class DoctorTest(unittest.TestCase):
             "custom transcriber command is empty",
         )
 
-    def test_report_treats_openai_alias_as_whisper_and_reports_missing_binary(self) -> None:
+    def test_report_treats_openai_alias_as_whisper_and_reports_missing_binary(
+        self,
+    ) -> None:
         settings = {
             "recorder": "auto",
             "transcriber": "openai",
             "insert-method": "none",
         }
-        with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from({"python3", "pw-record"})):
+        with mock.patch(
+            "speed_of_cinnamon.doctor.shutil.which",
+            which_from({"python3", "pw-record"}),
+        ):
             payload = doctor.report(settings)
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
@@ -1789,29 +2104,41 @@ class DoctorTest(unittest.TestCase):
         self.assertIn("whisper", payload["configured"]["transcriber"]["detail"])
 
     def test_external_api_transcriber_requires_model(self) -> None:
-        payload = doctor.report({
-            "recorder": "auto",
-            "transcriber": "openai-compatible",
-            "openai-compatible-model": "",
-            "insert-method": "none",
-        })
+        payload = doctor.report(
+            {
+                "recorder": "auto",
+                "transcriber": "openai-compatible",
+                "openai-compatible-model": "",
+                "insert-method": "none",
+            }
+        )
 
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
-        self.assertEqual(payload["configured"]["transcriber"]["value"], "openai-compatible")
-        self.assertIn("speech model is required", payload["configured"]["transcriber"]["detail"])
+        self.assertEqual(
+            payload["configured"]["transcriber"]["value"], "openai-compatible"
+        )
+        self.assertIn(
+            "speech model is required", payload["configured"]["transcriber"]["detail"]
+        )
 
     def test_external_api_transcriber_is_ready_when_model_is_configured(self) -> None:
-        payload = doctor.report({
-            "recorder": "auto",
-            "transcriber": "external-api",
-            "openai-compatible-model": "whisper-large-v3",
-            "openai-compatible-url": "https://api.example.test/v1",
-            "insert-method": "none",
-        })
+        payload = doctor.report(
+            {
+                "recorder": "auto",
+                "transcriber": "external-api",
+                "openai-compatible-model": "whisper-large-v3",
+                "openai-compatible-url": "https://api.example.test/v1",
+                "insert-method": "none",
+            }
+        )
 
         self.assertTrue(payload["configured"]["transcriber"]["ok"])
-        self.assertEqual(payload["configured"]["transcriber"]["value"], "openai-compatible")
-        self.assertIn("https://api.example.test", payload["configured"]["transcriber"]["detail"])
+        self.assertEqual(
+            payload["configured"]["transcriber"]["value"], "openai-compatible"
+        )
+        self.assertIn(
+            "https://api.example.test", payload["configured"]["transcriber"]["detail"]
+        )
         self.assertIn("/v1", payload["configured"]["transcriber"]["detail"])
 
     def test_external_api_transcriber_rejects_invalid_model_text(self) -> None:
@@ -1821,50 +2148,68 @@ class DoctorTest(unittest.TestCase):
         ):
             with self.subTest(model=repr(model)):
                 status = doctor._transcriber_status(
-                    {"transcriber": "openai-compatible", "openai-compatible-model": model},
+                    {
+                        "transcriber": "openai-compatible",
+                        "openai-compatible-model": model,
+                    },
                     {},
                 )
                 self.assertFalse(status["ok"])
                 self.assertIn(detail, status["detail"])
 
     def test_external_api_transcriber_rejects_invalid_url(self) -> None:
-        payload = doctor.report({
-            "recorder": "auto",
-            "transcriber": "openai-compatible",
-            "openai-compatible-model": "whisper-large-v3",
-            "openai-compatible-url": "ftp://api.example.test/v1",
-            "insert-method": "none",
-        })
+        payload = doctor.report(
+            {
+                "recorder": "auto",
+                "transcriber": "openai-compatible",
+                "openai-compatible-model": "whisper-large-v3",
+                "openai-compatible-url": "ftp://api.example.test/v1",
+                "insert-method": "none",
+            }
+        )
 
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
-        self.assertIn("must use http:// or https://", payload["configured"]["transcriber"]["detail"])
+        self.assertIn(
+            "must use http:// or https://",
+            payload["configured"]["transcriber"]["detail"],
+        )
 
-    def test_external_api_transcriber_rejects_url_userinfo_without_echoing_secret(self) -> None:
-        payload = doctor.report({
-            "recorder": "auto",
-            "transcriber": "openai-compatible",
-            "openai-compatible-model": "whisper-large-v3",
-            "openai-compatible-url": "https://user:secret-token@api.example.test/v1",
-            "insert-method": "none",
-        })
+    def test_external_api_transcriber_rejects_url_userinfo_without_echoing_secret(
+        self,
+    ) -> None:
+        payload = doctor.report(
+            {
+                "recorder": "auto",
+                "transcriber": "openai-compatible",
+                "openai-compatible-model": "whisper-large-v3",
+                "openai-compatible-url": "https://user:secret-token@api.example.test/v1",
+                "insert-method": "none",
+            }
+        )
 
         serialized = json.dumps(payload)
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
-        self.assertIn("must not contain userinfo", payload["configured"]["transcriber"]["detail"])
+        self.assertIn(
+            "must not contain userinfo", payload["configured"]["transcriber"]["detail"]
+        )
         self.assertNotIn("secret-token", serialized)
         self.assertNotIn("user:secret-token", serialized)
 
     def test_external_api_transcriber_rejects_empty_url_userinfo(self) -> None:
-        payload = doctor.report({
-            "recorder": "auto",
-            "transcriber": "openai-compatible",
-            "openai-compatible-model": "whisper-large-v3",
-            "openai-compatible-url": "https://@api.example.test/v1",
-            "insert-method": "none",
-        })
+        payload = doctor.report(
+            {
+                "recorder": "auto",
+                "transcriber": "openai-compatible",
+                "openai-compatible-model": "whisper-large-v3",
+                "openai-compatible-url": "https://@api.example.test/v1",
+                "insert-method": "none",
+            }
+        )
 
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
-        self.assertIn("must not contain userinfo", payload["configured"]["transcriber"]["detail"])
+        self.assertIn(
+            "must not contain userinfo", payload["configured"]["transcriber"]["detail"]
+        )
 
     def test_ollama_postprocessor_requires_model(self) -> None:
         tools = {"python3", "pw-record"}
@@ -1910,9 +2255,13 @@ class DoctorTest(unittest.TestCase):
             payload = doctor.report(settings)
         self.assertTrue(payload["ok"])
         self.assertTrue(payload["configured"]["postprocessor"]["ok"])
-        self.assertEqual(payload["configured"]["postprocessor"]["value"], "openai-compatible")
+        self.assertEqual(
+            payload["configured"]["postprocessor"]["value"], "openai-compatible"
+        )
 
-    def test_openai_compatible_postprocessor_is_ready_when_model_is_configured(self) -> None:
+    def test_openai_compatible_postprocessor_is_ready_when_model_is_configured(
+        self,
+    ) -> None:
         tools = {"python3", "pw-record"}
         settings = {
             "recorder": "auto",
@@ -1928,7 +2277,9 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
 
     def test_openai_compatible_postprocessor_accepts_long_endpoint_path(self) -> None:
-        endpoint = "http://127.0.0.1:8000/" + ("v" * (doctor.MAX_DOCTOR_FIELD_CHARS + 20))
+        endpoint = "http://127.0.0.1:8000/" + (
+            "v" * (doctor.MAX_DOCTOR_FIELD_CHARS + 20)
+        )
         result = doctor._postprocessor_status(
             {
                 "post-process-backend": "openai-compatible",
@@ -1939,7 +2290,9 @@ class DoctorTest(unittest.TestCase):
         self.assertTrue(result["ok"])
 
     def test_openai_compatible_transcriber_accepts_long_endpoint_path(self) -> None:
-        endpoint = "http://127.0.0.1:8000/" + ("v" * (doctor.MAX_DOCTOR_FIELD_CHARS + 20))
+        endpoint = "http://127.0.0.1:8000/" + (
+            "v" * (doctor.MAX_DOCTOR_FIELD_CHARS + 20)
+        )
         result = doctor._transcriber_status(
             {
                 "transcriber": "openai-compatible",
@@ -1950,7 +2303,9 @@ class DoctorTest(unittest.TestCase):
         )
         self.assertTrue(result["ok"])
 
-    def test_openai_compatible_postprocessor_does_not_echo_url_path_secret(self) -> None:
+    def test_openai_compatible_postprocessor_does_not_echo_url_path_secret(
+        self,
+    ) -> None:
         tools = {"python3", "pw-record"}
         settings = {
             "recorder": "auto",
@@ -1966,12 +2321,16 @@ class DoctorTest(unittest.TestCase):
 
         serialized = json.dumps(payload)
         self.assertTrue(payload["ok"])
-        self.assertIn("http://127.0.0.1:8000", payload["configured"]["postprocessor"]["detail"])
+        self.assertIn(
+            "http://127.0.0.1:8000", payload["configured"]["postprocessor"]["detail"]
+        )
         self.assertIn("/v1/...", payload["configured"]["postprocessor"]["detail"])
         self.assertNotIn("secret-token", serialized)
         self.assertNotIn("/v1/secret-token", serialized)
 
-    def test_ollama_postprocessor_rejects_url_userinfo_without_echoing_secret(self) -> None:
+    def test_ollama_postprocessor_rejects_url_userinfo_without_echoing_secret(
+        self,
+    ) -> None:
         tools = {"python3", "pw-record"}
         settings = {
             "recorder": "auto",
@@ -1988,7 +2347,10 @@ class DoctorTest(unittest.TestCase):
         serialized = json.dumps(payload)
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["configured"]["postprocessor"]["ok"])
-        self.assertIn("must not contain userinfo", payload["configured"]["postprocessor"]["detail"])
+        self.assertIn(
+            "must not contain userinfo",
+            payload["configured"]["postprocessor"]["detail"],
+        )
         self.assertNotIn("secret-token", serialized)
         self.assertNotIn("user:secret-token", serialized)
 
@@ -2008,16 +2370,26 @@ class DoctorTest(unittest.TestCase):
 
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["configured"]["postprocessor"]["ok"])
-        self.assertIn("must not contain userinfo", payload["configured"]["postprocessor"]["detail"])
+        self.assertIn(
+            "must not contain userinfo",
+            payload["configured"]["postprocessor"]["detail"],
+        )
 
     def test_postprocessor_rejects_invalid_model_text(self) -> None:
         for backend, key, model, detail in (
             ("ollama", "ollama-model", "x" * 241, "too large"),
             ("ollama", "ollama-model", "\ud800", "invalid UTF-8"),
-            ("openai-compatible", "openai-compatible-text-model", "whisper-1", "not allowed"),
+            (
+                "openai-compatible",
+                "openai-compatible-text-model",
+                "whisper-1",
+                "not allowed",
+            ),
         ):
             with self.subTest(backend=backend, model=repr(model)):
-                status = doctor._postprocessor_status({"post-process-backend": backend, key: model})
+                status = doctor._postprocessor_status(
+                    {"post-process-backend": backend, key: model}
+                )
                 self.assertFalse(status["ok"])
                 self.assertIn(detail, status["detail"])
 
@@ -2034,7 +2406,9 @@ class DoctorTest(unittest.TestCase):
                 self.assertFalse(status["ok"])
                 self.assertIn("simple language code", status["detail"])
 
-    def test_postprocessor_command_without_language_placeholder_ignores_language_format(self) -> None:
+    def test_postprocessor_command_without_language_placeholder_ignores_language_format(
+        self,
+    ) -> None:
         status = doctor._postprocessor_status(
             {
                 "post-process-backend": "command",
@@ -2051,7 +2425,9 @@ class DoctorTest(unittest.TestCase):
 
                 self.assertFalse(status["ok"])
                 self.assertEqual(status["value"], "command")
-                self.assertEqual(status["detail"], "custom post-process command is empty")
+                self.assertEqual(
+                    status["detail"], "custom post-process command is empty"
+                )
 
     def test_postprocessor_rejects_command_chain_oversized_template(self) -> None:
         status = doctor._postprocessor_status(
@@ -2071,12 +2447,17 @@ class DoctorTest(unittest.TestCase):
         ):
             with self.subTest(command=command):
                 status = doctor._postprocessor_status(
-                    {"post-process-backend": "command", "post-process-command": command},
+                    {
+                        "post-process-backend": "command",
+                        "post-process-command": command,
+                    },
                 )
                 self.assertFalse(status["ok"])
                 self.assertIn(detail, status["detail"])
 
-    def test_openai_compatible_postprocessor_rejects_url_query_without_echoing_secret(self) -> None:
+    def test_openai_compatible_postprocessor_rejects_url_query_without_echoing_secret(
+        self,
+    ) -> None:
         tools = {"python3", "pw-record"}
         settings = {
             "recorder": "auto",
@@ -2093,10 +2474,15 @@ class DoctorTest(unittest.TestCase):
         serialized = json.dumps(payload)
         self.assertFalse(payload["ok"])
         self.assertFalse(payload["configured"]["postprocessor"]["ok"])
-        self.assertIn("must not contain query or fragment", payload["configured"]["postprocessor"]["detail"])
+        self.assertIn(
+            "must not contain query or fragment",
+            payload["configured"]["postprocessor"]["detail"],
+        )
         self.assertNotIn("secret-token", serialized)
 
-    def test_openai_compatible_postprocessor_uses_separate_text_model_when_configured(self) -> None:
+    def test_openai_compatible_postprocessor_uses_separate_text_model_when_configured(
+        self,
+    ) -> None:
         tools = {"python3", "pw-record"}
         settings = {
             "recorder": "auto",
@@ -2111,8 +2497,12 @@ class DoctorTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
             payload = doctor.report(settings)
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["configured"]["postprocessor"]["value"], "openai-compatible")
-        self.assertIn("OpenAI-compatible API", payload["configured"]["postprocessor"]["detail"])
+        self.assertEqual(
+            payload["configured"]["postprocessor"]["value"], "openai-compatible"
+        )
+        self.assertIn(
+            "OpenAI-compatible API", payload["configured"]["postprocessor"]["detail"]
+        )
         self.assertNotIn("local", payload["configured"]["postprocessor"]["detail"])
 
     def test_report_rejects_invalid_whisper_model_path(self) -> None:
@@ -2171,7 +2561,10 @@ class DoctorTest(unittest.TestCase):
             with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
                 payload = doctor.report(settings)
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
-        self.assertIn("voice model path is invalid", payload["configured"]["transcriber"]["detail"])
+        self.assertIn(
+            "voice model path is invalid",
+            payload["configured"]["transcriber"]["detail"],
+        )
         self.assertNotIn(str(model_link), json.dumps(payload))
 
     def test_report_does_not_echo_missing_whisper_model_path(self) -> None:
@@ -2186,12 +2579,14 @@ class DoctorTest(unittest.TestCase):
         with mock.patch("speed_of_cinnamon.doctor.shutil.which", which_from(tools)):
             payload = doctor.report(settings)
         self.assertFalse(payload["configured"]["transcriber"]["ok"])
-        self.assertEqual(payload["configured"]["transcriber"]["detail"], "voice model not found")
+        self.assertEqual(
+            payload["configured"]["transcriber"]["detail"], "voice model not found"
+        )
         self.assertNotIn(secret_path, json.dumps(payload))
 
     def test_parse_settings_json_rejects_null_byte(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
-            doctor.parse_settings_json('{\"language\":\"en\x00\"}')
+            doctor.parse_settings_json('{"language":"en\x00"}')
 
     def test_parse_settings_json_rejects_escaped_null_byte(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid null byte"):
@@ -2209,7 +2604,9 @@ class DoctorTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
             doctor.parse_settings_json('{"language":"\\ud800"}')
 
-    def test_parse_settings_json_accepts_formatted_multiline_personalization(self) -> None:
+    def test_parse_settings_json_accepts_formatted_multiline_personalization(
+        self,
+    ) -> None:
         raw = json.dumps(
             {
                 "personal-context": "Use project terminology.\nKeep code unchanged.",
@@ -2236,27 +2633,53 @@ class DoctorTest(unittest.TestCase):
 
     def test_validate_remote_http_url_rejects_leading_control_character(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid control character"):
-            doctor._validate_remote_http_url("\x85https://api.example.test/v1", field_name="remote endpoint URL")
+            doctor._validate_remote_http_url(
+                "\x85https://api.example.test/v1", field_name="remote endpoint URL"
+            )
 
-    def test_validate_remote_http_url_rejects_inner_whitespace_and_invalid_port(self) -> None:
-        for value in ("https://api.example.test/v1 with-space", "https://api.example.test/v1\u2003with-space"):
+    def test_validate_remote_http_url_rejects_inner_whitespace_and_invalid_port(
+        self,
+    ) -> None:
+        for value in (
+            "https://api.example.test/v1 with-space",
+            "https://api.example.test/v1\u2003with-space",
+        ):
             with self.subTest(value=repr(value)):
-                with self.assertRaisesRegex(ValueError, "contains invalid control character"):
-                    doctor._validate_remote_http_url(value, field_name="remote endpoint URL")
+                with self.assertRaisesRegex(
+                    ValueError, "contains invalid control character"
+                ):
+                    doctor._validate_remote_http_url(
+                        value, field_name="remote endpoint URL"
+                    )
         with self.assertRaisesRegex(ValueError, "invalid port"):
-            doctor._validate_remote_http_url("https://api.example.test:not-a-port/v1", field_name="remote endpoint URL")
+            doctor._validate_remote_http_url(
+                "https://api.example.test:not-a-port/v1",
+                field_name="remote endpoint URL",
+            )
 
     def test_validate_remote_http_url_normalizes_outer_ascii_spaces_only(self) -> None:
         self.assertEqual(
-            doctor._validate_remote_http_url("  https://api.example.test/v1  ", field_name="remote endpoint URL"),
+            doctor._validate_remote_http_url(
+                "  https://api.example.test/v1  ", field_name="remote endpoint URL"
+            ),
             "https://api.example.test/v1",
         )
-        for value in ("\thttps://api.example.test/v1", "https://api.example.test/v1\t", "\u2003https://api.example.test/v1"):
+        for value in (
+            "\thttps://api.example.test/v1",
+            "https://api.example.test/v1\t",
+            "\u2003https://api.example.test/v1",
+        ):
             with self.subTest(value=repr(value)):
-                with self.assertRaisesRegex(ValueError, "contains invalid control character"):
-                    doctor._validate_remote_http_url(value, field_name="remote endpoint URL")
+                with self.assertRaisesRegex(
+                    ValueError, "contains invalid control character"
+                ):
+                    doctor._validate_remote_http_url(
+                        value, field_name="remote endpoint URL"
+                    )
 
-    def test_validate_remote_http_url_raw_character_limit_counts_outer_ascii_space(self) -> None:
+    def test_validate_remote_http_url_raw_character_limit_counts_outer_ascii_space(
+        self,
+    ) -> None:
         prefix = "https://api.example.test/"
         normalized = prefix + ("x" * (doctor.MAX_REMOTE_URL_CHARS - len(prefix)))
         raw = " " + normalized
@@ -2275,38 +2698,60 @@ class DoctorTest(unittest.TestCase):
             value = f"https://api.example.test/{marker}{suffix}"
             with self.subTest(marker=repr(marker)):
                 with self.assertRaisesRegex(ValueError, expected):
-                    doctor._validate_remote_http_url(value, field_name="remote endpoint URL")
+                    doctor._validate_remote_http_url(
+                        value, field_name="remote endpoint URL"
+                    )
 
-    def test_validate_remote_http_url_probe_bounds_diagnostics_before_size_limit(self) -> None:
+    def test_validate_remote_http_url_probe_bounds_diagnostics_before_size_limit(
+        self,
+    ) -> None:
         prefix = "https://api.example.test/"
         far_surrogate = prefix + ("x" * (doctor.MAX_REMOTE_URL_CHARS + 10)) + "\ud800"
         near_surrogate = prefix + "\ud800" + ("x" * doctor.MAX_REMOTE_URL_CHARS)
         with self.assertRaisesRegex(ValueError, "remote endpoint URL is too large"):
-            doctor._validate_remote_http_url(far_surrogate, field_name="remote endpoint URL")
+            doctor._validate_remote_http_url(
+                far_surrogate, field_name="remote endpoint URL"
+            )
         with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
-            doctor._validate_remote_http_url(near_surrogate, field_name="remote endpoint URL")
+            doctor._validate_remote_http_url(
+                near_surrogate, field_name="remote endpoint URL"
+            )
 
     def test_validate_remote_http_url_rejects_surrogate_character(self) -> None:
         with self.assertRaisesRegex(ValueError, "contains invalid UTF-8"):
-            doctor._validate_remote_http_url("https://api.example.test/\ud800", field_name="remote endpoint URL")
+            doctor._validate_remote_http_url(
+                "https://api.example.test/\ud800", field_name="remote endpoint URL"
+            )
 
     def test_validate_remote_http_url_rejects_remote_plain_http(self) -> None:
-        with self.assertRaisesRegex(ValueError, "must use https:// unless host is local loopback"):
-            doctor._validate_remote_http_url("http://api.example.test/v1", field_name="remote endpoint URL")
+        with self.assertRaisesRegex(
+            ValueError, "must use https:// unless host is local loopback"
+        ):
+            doctor._validate_remote_http_url(
+                "http://api.example.test/v1", field_name="remote endpoint URL"
+            )
 
     def test_validate_remote_http_url_rejects_malformed_url(self) -> None:
         with self.assertRaisesRegex(ValueError, "remote endpoint URL is invalid"):
-            doctor._validate_remote_http_url("https://[::1", field_name="remote endpoint URL")
+            doctor._validate_remote_http_url(
+                "https://[::1", field_name="remote endpoint URL"
+            )
 
     def test_validate_remote_http_url_rejects_missing_hostname(self) -> None:
         for value in ("https://:", "https://:123", "https://@"):
             with self.subTest(value=value):
-                with self.assertRaisesRegex(ValueError, "remote endpoint URL is missing hostname"):
-                    doctor._validate_remote_http_url(value, field_name="remote endpoint URL")
+                with self.assertRaisesRegex(
+                    ValueError, "remote endpoint URL is missing hostname"
+                ):
+                    doctor._validate_remote_http_url(
+                        value, field_name="remote endpoint URL"
+                    )
 
     def test_parse_settings_json_rejects_large_payload(self) -> None:
         with self.assertRaisesRegex(ValueError, "settings JSON is too large"):
-            doctor.parse_settings_json(json.dumps({"payload": "x" * (doctor.MAX_SETTINGS_JSON_CHARS + 1)}))
+            doctor.parse_settings_json(
+                json.dumps({"payload": "x" * (doctor.MAX_SETTINGS_JSON_CHARS + 1)})
+            )
 
     def test_parse_settings_json_rejects_large_payload_bytes(self) -> None:
         with mock.patch("speed_of_cinnamon.doctor.MAX_SETTINGS_JSON_CHARS", 4):
@@ -2331,7 +2776,7 @@ class DoctorTest(unittest.TestCase):
 
     def test_parse_settings_json_rejects_non_object_root(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be an object"):
-            doctor.parse_settings_json("[\"en\"]")
+            doctor.parse_settings_json('["en"]')
 
     def test_parse_settings_json_rejects_non_finite_numbers(self) -> None:
         cases = (
@@ -2360,18 +2805,33 @@ class DoctorTest(unittest.TestCase):
             doctor.parse_settings_json('{"language":"en","language":"de"}')
 
     def test_parse_settings_json_wraps_json_recursion_error(self) -> None:
-        with mock.patch("speed_of_cinnamon.doctor.json.loads", side_effect=RecursionError("too deep")):
-            with self.assertRaisesRegex(ValueError, "settings JSON could not be parsed"):
+        with mock.patch(
+            "speed_of_cinnamon.doctor.json.loads",
+            side_effect=RecursionError("too deep"),
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "settings JSON could not be parsed"
+            ):
                 doctor.parse_settings_json('{"language":"en"}')
 
     def test_parse_settings_json_wraps_json_memory_error(self) -> None:
-        with mock.patch("speed_of_cinnamon.doctor.json.loads", side_effect=MemoryError("too large")):
-            with self.assertRaisesRegex(ValueError, "settings JSON could not be parsed"):
+        with mock.patch(
+            "speed_of_cinnamon.doctor.json.loads", side_effect=MemoryError("too large")
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "settings JSON could not be parsed"
+            ):
                 doctor.parse_settings_json('{"language":"en"}')
 
     def test_parse_settings_json_wraps_validation_memory_error(self) -> None:
-        with mock.patch.object(doctor, "_validate_json_string_encoding", side_effect=MemoryError("too large")):
-            with self.assertRaisesRegex(ValueError, "settings JSON could not be parsed"):
+        with mock.patch.object(
+            doctor,
+            "_validate_json_string_encoding",
+            side_effect=MemoryError("too large"),
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "settings JSON could not be parsed"
+            ):
                 doctor.parse_settings_json('{"language":"en"}')
 
     def test_parse_settings_json_wraps_validation_recursion_error(self) -> None:
@@ -2432,9 +2892,21 @@ class DoctorTest(unittest.TestCase):
             ]
 
         with (
-            mock.patch("speed_of_cinnamon.doctor._env_desktop", return_value={"cinnamon": "false"}),
-            mock.patch("speed_of_cinnamon.doctor.run_checks", side_effect=checks_with_python3),
-            mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "", "XDG_SESSION_TYPE": "", "DESKTOP_SESSION": ""}),
+            mock.patch(
+                "speed_of_cinnamon.doctor._env_desktop",
+                return_value={"cinnamon": "false"},
+            ),
+            mock.patch(
+                "speed_of_cinnamon.doctor.run_checks", side_effect=checks_with_python3
+            ),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "XDG_CURRENT_DESKTOP": "",
+                    "XDG_SESSION_TYPE": "",
+                    "DESKTOP_SESSION": "",
+                },
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "cinnamon must be a boolean"):
                 doctor.report({}, applet=True)
@@ -2457,7 +2929,9 @@ class DoctorTest(unittest.TestCase):
         )
         for settings, checks, desktop, field_name in cases:
             with self.subTest(field_name=field_name):
-                with self.assertRaisesRegex(RuntimeError, f"{field_name} must be an object"):
+                with self.assertRaisesRegex(
+                    RuntimeError, f"{field_name} must be an object"
+                ):
                     doctor.configured_status(settings, checks, desktop)  # type: ignore[arg-type]
 
     def test_configured_status_rejects_non_boolean_applet(self) -> None:
@@ -2471,7 +2945,14 @@ class DoctorTest(unittest.TestCase):
         ]
         with (
             mock.patch("speed_of_cinnamon.doctor.run_checks", return_value=checks),
-            mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "", "XDG_SESSION_TYPE": "", "DESKTOP_SESSION": ""}),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "XDG_CURRENT_DESKTOP": "",
+                    "XDG_SESSION_TYPE": "",
+                    "DESKTOP_SESSION": "",
+                },
+            ),
         ):
             with self.assertRaisesRegex(RuntimeError, "python3\\.ok must be a boolean"):
                 doctor.report(
@@ -2483,13 +2964,20 @@ class DoctorTest(unittest.TestCase):
                     }
                 )
 
-    def test_configured_status_rejects_non_boolean_output_flags_for_warning(self) -> None:
+    def test_configured_status_rejects_non_boolean_output_flags_for_warning(
+        self,
+    ) -> None:
         with mock.patch(
             "speed_of_cinnamon.doctor._output_status",
             return_value={"ok": True, "value": "clipboard-paste", "paste_ok": "false"},
         ):
             with self.assertRaisesRegex(RuntimeError, "paste_ok must be a boolean"):
-                doctor.configured_status({"insert-method": "clipboard-paste"}, {}, {"cinnamon": True}, applet=True)
+                doctor.configured_status(
+                    {"insert-method": "clipboard-paste"},
+                    {},
+                    {"cinnamon": True},
+                    applet=True,
+                )
 
     def test_configured_status_rejects_non_boolean_output_ok_for_warning(self) -> None:
         with mock.patch(
@@ -2497,14 +2985,23 @@ class DoctorTest(unittest.TestCase):
             return_value={"ok": "yes", "value": "clipboard-paste", "paste_ok": False},
         ):
             with self.assertRaisesRegex(RuntimeError, "ok must be a boolean"):
-                doctor.configured_status({"insert-method": "clipboard-paste"}, {}, {"cinnamon": True}, applet=True)
+                doctor.configured_status(
+                    {"insert-method": "clipboard-paste"},
+                    {},
+                    {"cinnamon": True},
+                    applet=True,
+                )
 
     def test_configured_status_output_fallback_has_boolean_paste_ok(self) -> None:
         with (
-            mock.patch("speed_of_cinnamon.doctor._ctranslate2_diagnostics", return_value={}),
+            mock.patch(
+                "speed_of_cinnamon.doctor._ctranslate2_diagnostics", return_value={}
+            ),
             mock.patch(
                 "speed_of_cinnamon.doctor.run_checks",
-                return_value=[doctor.Check(name="python3", ok=True, detail="available")],
+                return_value=[
+                    doctor.Check(name="python3", ok=True, detail="available")
+                ],
             ),
             mock.patch(
                 "speed_of_cinnamon.doctor._env_desktop",
@@ -2525,9 +3022,22 @@ class DoctorTest(unittest.TestCase):
         checks = [doctor.Check(name="arecord", ok=True, detail="/usr/bin/arecord")]
         with (
             mock.patch("speed_of_cinnamon.doctor.run_checks", return_value=checks),
-            mock.patch.dict(os.environ, {"XDG_CURRENT_DESKTOP": "", "XDG_SESSION_TYPE": "", "DESKTOP_SESSION": ""}),
+            mock.patch.dict(
+                os.environ,
+                {
+                    "XDG_CURRENT_DESKTOP": "",
+                    "XDG_SESSION_TYPE": "",
+                    "DESKTOP_SESSION": "",
+                },
+            ),
         ):
-            payload = doctor.report({"recorder": "arecord", "transcriber": "command", "transcriber-command": "printf ok"})
+            payload = doctor.report(
+                {
+                    "recorder": "arecord",
+                    "transcriber": "command",
+                    "transcriber-command": "printf ok",
+                }
+            )
         self.assertFalse(payload["ok"])
 
 

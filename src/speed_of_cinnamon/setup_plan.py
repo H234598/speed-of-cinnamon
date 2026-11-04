@@ -23,7 +23,14 @@ def _sanitize_setup_text(value: object, fallback: str = "") -> str:
     for pattern in _SECRET_PATTERNS:
         text = _sub_with_ignored_projection(text, pattern, "[redacted]")
     text = sanitize_text(text, max_chars=MAX_SETUP_DETAIL_CHARS)
-    text = "".join(" " if ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F else char for char in text)
+    text = "".join(
+        (
+            " "
+            if ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F
+            else char
+        )
+        for char in text
+    )
     text = " ".join(text.split())
     if not text:
         return fallback
@@ -142,17 +149,25 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
             "recorder-tools",
             "Install recorder tools",
             _sanitize_setup_text(
-                recorder.get("detail"), "Install PipeWire, PulseAudio, or ALSA recording tools."
+                recorder.get("detail"),
+                "Install PipeWire, PulseAudio, or ALSA recording tools.",
             ),
-            ["sudo dnf install -y pipewire-utils pulseaudio-utils alsa-utils coreutils"],
+            [
+                "sudo dnf install -y pipewire-utils pulseaudio-utils alsa-utils coreutils"
+            ],
         )
 
     transcriber = _section(configured, "transcriber")
     if not _coerce_plan_bool(transcriber, "ok"):
         value = normalize_backend(str(transcriber.get("value") or "auto"))
-        detail = _sanitize_setup_text(transcriber.get("detail"), "Configure a local ASR backend.")
+        detail = _sanitize_setup_text(
+            transcriber.get("detail"), "Configure a local ASR backend."
+        )
         detail_lower = detail.casefold()
-        model_language_mismatch = "model does not support language" in detail_lower or "english-only" in detail_lower
+        model_language_mismatch = (
+            "model does not support language" in detail_lower
+            or "english-only" in detail_lower
+        )
         language_error = any(
             marker in detail_lower
             for marker in (
@@ -166,7 +181,9 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
             value in {"whisper-cpp", "faster-whisper", "auto"}
             and ("model not found" in detail_lower or "model path" in detail_lower)
         ):
-            resolved_backend = normalize_backend(str(transcriber.get("resolved") or value))
+            resolved_backend = normalize_backend(
+                str(transcriber.get("resolved") or value)
+            )
             model_download_command = (
                 "speed-of-cinnamon download-model base --json"
                 if resolved_backend == "whisper-cpp"
@@ -240,7 +257,9 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
     postprocessor = _section(configured, "postprocessor")
     if not _coerce_plan_bool(postprocessor, "ok"):
         value = str(postprocessor.get("value") or "")
-        detail = _sanitize_setup_text(postprocessor.get("detail"), "Configure text polishing.")
+        detail = _sanitize_setup_text(
+            postprocessor.get("detail"), "Configure text polishing."
+        )
         detail_lower = detail.casefold()
         language_error = any(
             marker in detail_lower
@@ -258,7 +277,8 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 steps,
                 "ollama-text-model",
                 "Select a local Ollama text model",
-                detail + " Use the applet's Text model menu, or disable text polishing.",
+                detail
+                + " Use the applet's Text model menu, or disable text polishing.",
                 ["speed-of-cinnamon text-models --json"],
             )
         elif value == "openai-compatible":
@@ -266,7 +286,8 @@ def build_setup_plan(doctor_payload: Mapping[str, Any]) -> dict[str, object]:
                 steps,
                 "openai-compatible-text-model",
                 "Select an OpenAI-compatible text model",
-                detail + " Use the applet's Text model menu, or disable text polishing.",
+                detail
+                + " Use the applet's Text model menu, or disable text polishing.",
                 ["speed-of-cinnamon text-models --backend openai-compatible --json"],
             )
         else:

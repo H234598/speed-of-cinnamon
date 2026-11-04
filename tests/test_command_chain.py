@@ -3,7 +3,6 @@ from __future__ import annotations
 import errno
 import os
 import json
-import resource
 import shutil
 import signal
 import subprocess
@@ -35,7 +34,10 @@ from speed_of_cinnamon.command_chain import (
     run_command_chain,
     split_command_chain,
 )
-from speed_of_cinnamon.personalization import MAX_PERSONAL_CONTEXT_CHARS, MAX_VOCABULARY_CHARS
+from speed_of_cinnamon.personalization import (
+    MAX_PERSONAL_CONTEXT_CHARS,
+    MAX_VOCABULARY_CHARS,
+)
 
 
 def _scope_manager_unavailable(stderr: bytes) -> bool:
@@ -73,10 +75,14 @@ class CommandChainTest(unittest.TestCase):
             split_command_chain("printf hello", label=123)
 
     def test_split_command_chain_rejects_control_characters_in_label(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "label contains invalid control character"):
+        with self.assertRaisesRegex(
+            CommandChainError, "label contains invalid control character"
+        ):
             split_command_chain("printf hello", label="command\nspoof")
 
-    def test_split_command_chain_supports_and_and_rejects_unsupported_operators(self) -> None:
+    def test_split_command_chain_supports_and_and_rejects_unsupported_operators(
+        self,
+    ) -> None:
         self.assertEqual(
             split_command_chain("printf hello && printf world"),
             [["printf", "hello"], ["printf", "world"]],
@@ -88,7 +94,7 @@ class CommandChainTest(unittest.TestCase):
             split_command_chain("printf hello ; printf world")
 
         with self.assertRaisesRegex(CommandChainError, "unsupported shell operator"):
-            split_command_chain("python3 -c \"print(1)\" 2> /tmp/log")
+            split_command_chain('python3 -c "print(1)" 2> /tmp/log')
 
     def test_split_command_chain_preserves_quoted_and_escaped_and_and(self) -> None:
         self.assertEqual(split_command_chain('printf "&&"'), [["printf", "&&"]])
@@ -98,15 +104,21 @@ class CommandChainTest(unittest.TestCase):
             split_command_chain('printf "a && b" && printf c'),
             [["printf", "a && b"], ["printf", "c"]],
         )
-        with self.assertRaisesRegex(CommandChainError, "empty command command segment before &&"):
+        with self.assertRaisesRegex(
+            CommandChainError, "empty command command segment before &&"
+        ):
             split_command_chain("printf && && printf c")
 
     def test_split_command_chain_rejects_null_bytes(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "invalid command command: contains invalid null byte"):
+        with self.assertRaisesRegex(
+            CommandChainError, "invalid command command: contains invalid null byte"
+        ):
             split_command_chain("printf hello\x00world")
 
     def test_split_command_chain_rejects_escaped_null(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "invalid command command: contains control characters"):
+        with self.assertRaisesRegex(
+            CommandChainError, "invalid command command: contains control characters"
+        ):
             split_command_chain("printf hello\\\\x00world")
 
     def test_split_command_chain_rejects_control_characters(self) -> None:
@@ -120,15 +132,24 @@ class CommandChainTest(unittest.TestCase):
         )
 
     def test_split_command_chain_rejects_escaped_control_characters(self) -> None:
-        for command in ("printf hello\\r\\nworld", "printf hello\\x1bworld", "printf hello\\u001bworld", "printf hello\\x85world"):
+        for command in (
+            "printf hello\\r\\nworld",
+            "printf hello\\x1bworld",
+            "printf hello\\u001bworld",
+            "printf hello\\x85world",
+        ):
             with self.subTest(command=command):
-                with self.assertRaisesRegex(CommandChainError, "contains control characters"):
+                with self.assertRaisesRegex(
+                    CommandChainError, "contains control characters"
+                ):
                     split_command_chain(command)
 
     def test_split_command_chain_rejects_other_control_characters(self) -> None:
         for command in ("printf hello\x1bworld", "printf hello\x85world"):
             with self.subTest(command=repr(command)):
-                with self.assertRaisesRegex(CommandChainError, "contains control characters"):
+                with self.assertRaisesRegex(
+                    CommandChainError, "contains control characters"
+                ):
                     split_command_chain(command)
 
     def test_split_command_chain_rejects_too_long_command(self) -> None:
@@ -159,7 +180,9 @@ class CommandChainTest(unittest.TestCase):
     def test_run_command_chain_executes_segments_with_stdin(self) -> None:
         calls: list[tuple[list[str], str | None]] = []
 
-        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+        def fake_run(
+            argv: list[str], input_bytes: bytes, **kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             del kwargs
             cmd_text = input_bytes.decode("utf-8")
             calls.append((argv, cmd_text))
@@ -171,14 +194,26 @@ class CommandChainTest(unittest.TestCase):
             return {"first": "first", "second": "second"}.get(command)
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.command_environment", return_value={"SPEED_OF_CINNAMON_CONTEXT": "test"}),
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", side_effect=which),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.command_environment",
+                return_value={"SPEED_OF_CINNAMON_CONTEXT": "test"},
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", side_effect=which
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=fake_run,
+            ),
         ):
-            output = run_command_chain([
-                ("first",),
-                ("second",),
-            ], "seed", label="chain")
+            output = run_command_chain(
+                [
+                    ("first",),
+                    ("second",),
+                ],
+                "seed",
+                label="chain",
+            )
 
         self.assertEqual(output, "segment-1")
         self.assertEqual(calls[0][0][0], "first")
@@ -194,7 +229,9 @@ class CommandChainTest(unittest.TestCase):
             wrapped.append(argv)
             return ["nice", "--adjustment", "10", *argv]
 
-        def fake_run(argv: list[str], *_args: object, **_kwargs: object) -> tuple[int, bytes, bytes]:
+        def fake_run(
+            argv: list[str], *_args: object, **_kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             started.append(argv)
             return 0, b"", b""
 
@@ -236,7 +273,9 @@ class CommandChainTest(unittest.TestCase):
             ],
         )
 
-    def test_scope_probe_failure_uses_direct_priority_once_and_cleans_environment(self) -> None:
+    def test_scope_probe_failure_uses_direct_priority_once_and_cleans_environment(
+        self,
+    ) -> None:
         calls: list[tuple[list[str], bytes, dict[str, object]]] = []
 
         def fake_run(
@@ -263,9 +302,7 @@ class CommandChainTest(unittest.TestCase):
                 "speed_of_cinnamon.command_chain.local_model_scope_probe_command",
                 return_value=["scope-probe"],
             ),
-            mock.patch(
-                "speed_of_cinnamon.command_chain.local_model_command"
-            ) as scoped,
+            mock.patch("speed_of_cinnamon.command_chain.local_model_command") as scoped,
             mock.patch(
                 "speed_of_cinnamon.command_chain.local_model_direct_command",
                 return_value=["direct", "/usr/bin/tool"],
@@ -341,10 +378,14 @@ class CommandChainTest(unittest.TestCase):
         scoped.assert_called_once()
         direct.assert_not_called()
 
-    def test_scope_probe_timeout_signal_or_unclear_cleanup_never_falls_back(self) -> None:
+    def test_scope_probe_timeout_signal_or_unclear_cleanup_never_falls_back(
+        self,
+    ) -> None:
         failures: tuple[BaseException, ...] = (
             CommandChainError("local model priority probe timed out"),
-            CommandChainError("local model priority probe process cleanup was not confirmed"),
+            CommandChainError(
+                "local model priority probe process cleanup was not confirmed"
+            ),
             KeyboardInterrupt(),
         )
         for failure in failures:
@@ -378,7 +419,9 @@ class CommandChainTest(unittest.TestCase):
     def test_run_command_chain_real_local_priority_preserves_json_stdout(self) -> None:
         ionice = shutil.which("ionice", path=command_chain_module._TRUSTED_COMMAND_PATH)
         nice = shutil.which("nice", path=command_chain_module._TRUSTED_COMMAND_PATH)
-        systemd_run = shutil.which("systemd-run", path=command_chain_module._TRUSTED_COMMAND_PATH)
+        systemd_run = shutil.which(
+            "systemd-run", path=command_chain_module._TRUSTED_COMMAND_PATH
+        )
         if not ionice or not nice or not systemd_run:
             self.skipTest("trusted local-priority helpers are unavailable")
         probe = (
@@ -469,6 +512,9 @@ class CommandChainTest(unittest.TestCase):
                         max_output_bytes=1024,
                         env={},
                         label="local model direct capability probe",
+                        _local_model_direct_supervisor=(
+                            _LOCAL_MODEL_DIRECT_SUPERVISOR_CAPABILITY
+                        ),
                     )
                     if (
                         direct_returncode > 0
@@ -509,21 +555,34 @@ class CommandChainTest(unittest.TestCase):
                 self.assertEqual(payload["cgroup"], parent_cgroup)
 
     def test_scope_preflight_does_not_skip_unrelated_nonzero_host_error(self) -> None:
-        self.assertFalse(_scope_manager_unavailable(b"systemd-run: operation not supported\n"))
+        self.assertFalse(
+            _scope_manager_unavailable(b"systemd-run: operation not supported\n")
+        )
         self.assertFalse(_scope_manager_unavailable(b"systemd-run: not supported\n"))
 
-    def test_run_command_chain_fails_closed_before_spawn_when_priority_is_unavailable(self) -> None:
+    def test_run_command_chain_fails_closed_before_spawn_when_priority_is_unavailable(
+        self,
+    ) -> None:
         from speed_of_cinnamon.process_priority import LocalModelPriorityError
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain._command_path", return_value="/usr/bin/tool"),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._command_path",
+                return_value="/usr/bin/tool",
+            ),
             mock.patch(
                 "speed_of_cinnamon.command_chain.local_model_scope_probe_command",
-                side_effect=LocalModelPriorityError("local model priority helper is unavailable: nice"),
+                side_effect=LocalModelPriorityError(
+                    "local model priority helper is unavailable: nice"
+                ),
             ),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output") as run_process,
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output"
+            ) as run_process,
         ):
-            with self.assertRaisesRegex(CommandChainError, "local model priority helper is unavailable: nice"):
+            with self.assertRaisesRegex(
+                CommandChainError, "local model priority helper is unavailable: nice"
+            ):
                 run_command_chain(
                     [("tool",)],
                     "input",
@@ -534,7 +593,9 @@ class CommandChainTest(unittest.TestCase):
         run_process.assert_not_called()
 
     def test_run_command_chain_rejects_non_boolean_local_model_priority(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "local_model_priority must be a boolean"):
+        with self.assertRaisesRegex(
+            CommandChainError, "local_model_priority must be a boolean"
+        ):
             run_command_chain(
                 [("printf",)],
                 "",
@@ -545,14 +606,24 @@ class CommandChainTest(unittest.TestCase):
     def test_run_command_chain_uses_one_total_deadline(self) -> None:
         calls: list[list[str]] = []
 
-        def fake_run(argv: list[str], *_args: object, **_kwargs: object) -> tuple[int, bytes, bytes]:
+        def fake_run(
+            argv: list[str], *_args: object, **_kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             calls.append(argv)
             return 0, b"next\n", b""
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
-            mock.patch("speed_of_cinnamon.command_chain.time.monotonic", side_effect=[100.0, 100.0, 101.1]),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=fake_run,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.time.monotonic",
+                side_effect=[100.0, 100.0, 101.1],
+            ),
         ):
             with self.assertRaisesRegex(CommandChainError, "timed out after 1s"):
                 run_command_chain(
@@ -567,7 +638,9 @@ class CommandChainTest(unittest.TestCase):
     def test_run_command_chain_strips_dangerous_environment_variables(self) -> None:
         captured_env: dict[str, str] = {}
 
-        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+        def fake_run(
+            argv: list[str], input_bytes: bytes, **kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             del argv, input_bytes
             env = kwargs.get("env")
             if isinstance(env, dict):
@@ -584,9 +657,16 @@ class CommandChainTest(unittest.TestCase):
                     "PYTHONPATH": "/tmp/evil",
                 },
             ),
-            mock.patch.dict(os.environ, {"XDG_RUNTIME_DIR": "/run/user/1000"}, clear=False),
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="command"),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+            mock.patch.dict(
+                os.environ, {"XDG_RUNTIME_DIR": "/run/user/1000"}, clear=False
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="command"
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=fake_run,
+            ),
         ):
             run_command_chain([("command",)], "", label="command-chain")
 
@@ -595,9 +675,14 @@ class CommandChainTest(unittest.TestCase):
         self.assertNotIn("SPEED_OF_CINNAMON_CONTEXT", captured_env)
         self.assertNotIn("XDG_RUNTIME_DIR", captured_env)
         self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", captured_env)
-        self.assertEqual(captured_env["PATH"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+        self.assertEqual(
+            captured_env["PATH"],
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
 
-    def test_bounded_runner_preserves_only_user_systemd_connection_environment_when_requested(self) -> None:
+    def test_bounded_runner_preserves_only_user_systemd_connection_environment_when_requested(
+        self,
+    ) -> None:
         probe = (
             "import os; print(os.environ.get('DBUS_SESSION_BUS_ADDRESS', '')); "
             "print(os.environ.get('XDG_RUNTIME_DIR', ''))"
@@ -620,7 +705,9 @@ class CommandChainTest(unittest.TestCase):
             )
 
         self.assertEqual(returncode, 0)
-        self.assertEqual(stdout.decode("utf-8"), "unix:path=/run/user/1000/bus\n/run/user/1000\n")
+        self.assertEqual(
+            stdout.decode("utf-8"), "unix:path=/run/user/1000/bus\n/run/user/1000\n"
+        )
         self.assertEqual(stderr, b"")
 
     def test_command_environment_strips_shell_state_variables(self) -> None:
@@ -667,12 +754,24 @@ class CommandChainTest(unittest.TestCase):
             },
             clear=True,
         ):
-            from speed_of_cinnamon.cli import _filtered_environment as cli_filtered_environment
-            from speed_of_cinnamon.command_chain import _filtered_environment as chain_filtered_environment
-            from speed_of_cinnamon.output import _filtered_environment as output_filtered_environment
-            from speed_of_cinnamon.personalization import _filtered_environment as personalization_filtered_environment
-            from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
-            from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
+            from speed_of_cinnamon.cli import (
+                _filtered_environment as cli_filtered_environment,
+            )
+            from speed_of_cinnamon.command_chain import (
+                _filtered_environment as chain_filtered_environment,
+            )
+            from speed_of_cinnamon.output import (
+                _filtered_environment as output_filtered_environment,
+            )
+            from speed_of_cinnamon.personalization import (
+                _filtered_environment as personalization_filtered_environment,
+            )
+            from speed_of_cinnamon.recorder import (
+                _filtered_environment as recorder_filtered_environment,
+            )
+            from speed_of_cinnamon.transcriber import (
+                _filtered_environment as transcriber_filtered_environment,
+            )
 
             envs = [
                 cli_filtered_environment(),
@@ -697,7 +796,9 @@ class CommandChainTest(unittest.TestCase):
         self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", envs[2])
         self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", envs[3])
         for env in [envs[0], envs[4], envs[5]]:
-            self.assertEqual(env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus")
+            self.assertEqual(
+                env["DBUS_SESSION_BUS_ADDRESS"], "unix:path=/run/user/1000/bus"
+            )
 
     def test_command_path_ignores_trusted_path_environment_override(self) -> None:
         captured_path: dict[str, str | None] = {}
@@ -707,70 +808,116 @@ class CommandChainTest(unittest.TestCase):
             return f"/usr/bin/{command_name}"
 
         with (
-            mock.patch.dict(os.environ, {"SPEED_OF_CINNAMON_TRUSTED_PATH": "/tmp/evil"}),
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", side_effect=fake_which),
+            mock.patch.dict(
+                os.environ, {"SPEED_OF_CINNAMON_TRUSTED_PATH": "/tmp/evil"}
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", side_effect=fake_which
+            ),
         ):
             resolved = _command_path("printf")
 
         self.assertEqual(resolved, "/usr/bin/printf")
-        self.assertEqual(captured_path["path"], "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+        self.assertEqual(
+            captured_path["path"],
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        )
 
     def test_run_command_chain_rejects_large_output(self) -> None:
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
             mock.patch(
                 "speed_of_cinnamon.command_chain.run_process_bounded_output",
-                side_effect=CommandChainError("post-process command output exceeded 5 bytes"),
+                side_effect=CommandChainError(
+                    "post-process command output exceeded 5 bytes"
+                ),
             ),
         ):
             with self.assertRaisesRegex(CommandChainError, "output exceeded"):
-                run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
+                run_command_chain(
+                    [("cmd",)], "", label="post-process", max_output_chars=5
+                )
 
-    def test_run_command_chain_allows_multibyte_output_within_character_limit(self) -> None:
+    def test_run_command_chain_allows_multibyte_output_within_character_limit(
+        self,
+    ) -> None:
         captured: dict[str, int] = {}
         output_text = "\U0001f600" * 4
         raw_output_text = f"{output_text}\n"
 
-        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+        def fake_run(
+            argv: list[str], input_bytes: bytes, **kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             del argv, input_bytes
             captured["max_output_bytes"] = int(kwargs["max_output_bytes"])
             return 0, raw_output_text.encode("utf-8"), b""
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=fake_run,
+            ),
         ):
-            result = run_command_chain([("cmd",)], "", label="post-process", max_output_chars=4)
+            result = run_command_chain(
+                [("cmd",)], "", label="post-process", max_output_chars=4
+            )
 
         self.assertEqual(result, output_text)
-        self.assertGreaterEqual(captured["max_output_bytes"], len(raw_output_text.encode("utf-8")))
+        self.assertGreaterEqual(
+            captured["max_output_bytes"], len(raw_output_text.encode("utf-8"))
+        )
 
     def test_run_command_chain_preserves_leading_and_trailing_spaces(self) -> None:
-        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+        def fake_run(
+            argv: list[str], input_bytes: bytes, **kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             del argv, input_bytes, kwargs
             return 0, b"  spaced \t\r\n", b""
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=fake_run,
+            ),
         ):
             result = run_command_chain([("cmd",)], "", label="post-process")
 
         self.assertEqual(result, "  spaced \t")
 
-    def test_run_command_chain_rejects_multibyte_output_over_character_limit(self) -> None:
+    def test_run_command_chain_rejects_multibyte_output_over_character_limit(
+        self,
+    ) -> None:
         output_text = "\U0001f600" * 5
 
-        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+        def fake_run(
+            argv: list[str], input_bytes: bytes, **kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             del argv, input_bytes, kwargs
             return 0, output_text.encode("utf-8"), b""
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=fake_run,
+            ),
         ):
-            with self.assertRaisesRegex(CommandChainError, "output exceeded 4 characters"):
-                run_command_chain([("cmd",)], "", label="post-process", max_output_chars=4)
+            with self.assertRaisesRegex(
+                CommandChainError, "output exceeded 4 characters"
+            ):
+                run_command_chain(
+                    [("cmd",)], "", label="post-process", max_output_chars=4
+                )
 
     def test_run_command_chain_bounded_runner_rejects_large_live_output(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "output exceeded"):
@@ -787,64 +934,111 @@ class CommandChainTest(unittest.TestCase):
 
     def test_run_command_chain_rejects_large_stderr_output(self) -> None:
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
             mock.patch(
                 "speed_of_cinnamon.command_chain.run_process_bounded_output",
-                side_effect=CommandChainError("post-process command output exceeded 5 bytes"),
+                side_effect=CommandChainError(
+                    "post-process command output exceeded 5 bytes"
+                ),
             ),
         ):
             with self.assertRaisesRegex(CommandChainError, "output exceeded"):
-                run_command_chain([("cmd",)], "", label="post-process", max_output_chars=5)
+                run_command_chain(
+                    [("cmd",)], "", label="post-process", max_output_chars=5
+                )
 
     def test_run_command_chain_redacts_failed_command_output(self) -> None:
-        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+        def fake_run(
+            argv: list[str], input_bytes: bytes, **kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             del argv, input_bytes, kwargs
             return 2, b"transcript with sk-secret-token\n", b"Bearer private-token\n"
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=fake_run,
+            ),
         ):
             with self.assertRaises(CommandChainError) as cm:
                 run_command_chain([("cmd",)], "", label="post-process")
 
         message = str(cm.exception)
-        self.assertIn("post-process command failed: exit code 2; command output redacted", message)
+        self.assertIn(
+            "post-process command failed: exit code 2; command output redacted", message
+        )
         self.assertNotIn("sk-secret-token", message)
         self.assertNotIn("private-token", message)
 
-    def test_run_command_chain_allows_multibyte_input_within_character_limit(self) -> None:
+    def test_run_command_chain_allows_multibyte_input_within_character_limit(
+        self,
+    ) -> None:
         input_text = "\U0001f600" * 4
         captured: dict[str, bytes] = {}
 
-        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+        def fake_run(
+            argv: list[str], input_bytes: bytes, **kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             del argv, kwargs
             captured["input_bytes"] = input_bytes
             return 0, b"ok", b""
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=fake_run,
+            ),
         ):
-            result = run_command_chain([("cmd",)], input_text, label="post-process", max_input_chars=4)
+            result = run_command_chain(
+                [("cmd",)], input_text, label="post-process", max_input_chars=4
+            )
 
         self.assertEqual(result, "ok")
         self.assertEqual(captured["input_bytes"], input_text.encode("utf-8"))
 
-    def test_run_command_chain_rejects_multibyte_input_over_character_limit(self) -> None:
+    def test_run_command_chain_rejects_multibyte_input_over_character_limit(
+        self,
+    ) -> None:
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output") as mocked_run,
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output"
+            ) as mocked_run,
         ):
-            with self.assertRaisesRegex(CommandChainError, "input exceeded 4 characters"):
-                run_command_chain([("cmd",)], "\U0001f600" * 5, label="post-process", max_input_chars=4)
+            with self.assertRaisesRegex(
+                CommandChainError, "input exceeded 4 characters"
+            ):
+                run_command_chain(
+                    [("cmd",)],
+                    "\U0001f600" * 5,
+                    label="post-process",
+                    max_input_chars=4,
+                )
 
         mocked_run.assert_not_called()
 
     def test_run_command_chain_redacts_timed_out_command_argv(self) -> None:
         with self.assertRaises(CommandChainError) as cm:
             run_command_chain(
-                [("python3", "-c", "import time; time.sleep(5)", "--api-key", "SECRET_TOKEN")],
+                [
+                    (
+                        "python3",
+                        "-c",
+                        "import time; time.sleep(5)",
+                        "--api-key",
+                        "SECRET_TOKEN",
+                    )
+                ],
                 "seed",
                 label="post-process",
                 timeout_seconds=1,
@@ -855,7 +1049,9 @@ class CommandChainTest(unittest.TestCase):
         self.assertNotIn("--api-key", message)
         self.assertNotIn("SECRET_TOKEN", message)
 
-    def test_run_process_bounded_output_kills_descendant_that_changes_session(self) -> None:
+    def test_run_process_bounded_output_kills_descendant_that_changes_session(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / "escaped-child.pid"
             code = (
@@ -898,7 +1094,10 @@ class CommandChainTest(unittest.TestCase):
         real_cleanup = command_chain_module._terminate_bounded_process
         cases = (
             ([sys.executable, "-c", "import time; time.sleep(30)"], "timed out"),
-            ([sys.executable, "-c", "import sys; sys.stdout.write('x' * 4096)"], "output exceeded"),
+            (
+                [sys.executable, "-c", "import sys; sys.stdout.write('x' * 4096)"],
+                "output exceeded",
+            ),
         )
         for argv, expected_text in cases:
             with self.subTest(expected_text=expected_text):
@@ -916,10 +1115,15 @@ class CommandChainTest(unittest.TestCase):
                             label="post-process",
                         )
                 self.assertEqual(mocked_cleanup.call_count, 1)
-                self.assertTrue(mocked_cleanup.call_args.kwargs["require_complete_scan"])
+                self.assertTrue(
+                    mocked_cleanup.call_args.kwargs["require_complete_scan"]
+                )
 
     def test_run_process_bounded_output_starts_new_session(self) -> None:
-        with mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen", side_effect=FileNotFoundError) as mocked_popen:
+        with mock.patch(
+            "speed_of_cinnamon.command_chain.subprocess.Popen",
+            side_effect=FileNotFoundError,
+        ) as mocked_popen:
             with self.assertRaises(FileNotFoundError):
                 run_process_bounded_output(
                     ["/usr/bin/missing"],
@@ -932,8 +1136,12 @@ class CommandChainTest(unittest.TestCase):
         self.assertTrue(mocked_popen.call_args.kwargs["start_new_session"])
 
     def test_run_process_bounded_output_rejects_dangerous_environment(self) -> None:
-        with mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen") as mocked_popen:
-            with self.assertRaisesRegex(CommandChainError, "environment key is not allowed: LD_PRELOAD"):
+        with mock.patch(
+            "speed_of_cinnamon.command_chain.subprocess.Popen"
+        ) as mocked_popen:
+            with self.assertRaisesRegex(
+                CommandChainError, "environment key is not allowed: LD_PRELOAD"
+            ):
                 run_process_bounded_output(
                     ["command"],
                     timeout_seconds=1,
@@ -944,9 +1152,15 @@ class CommandChainTest(unittest.TestCase):
 
         mocked_popen.assert_not_called()
 
-    def test_run_process_bounded_output_rejects_unbounded_input_and_output(self) -> None:
-        with mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen") as mocked_popen:
-            with self.assertRaisesRegex(CommandChainError, "input bytes must not exceed"):
+    def test_run_process_bounded_output_rejects_unbounded_input_and_output(
+        self,
+    ) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.command_chain.subprocess.Popen"
+        ) as mocked_popen:
+            with self.assertRaisesRegex(
+                CommandChainError, "input bytes must not exceed"
+            ):
                 run_process_bounded_output(
                     ["command"],
                     b"x" * (command_chain_module.MAX_BOUNDED_PROCESS_INPUT_BYTES + 1),
@@ -955,15 +1169,20 @@ class CommandChainTest(unittest.TestCase):
                     env={},
                     label="post-process",
                 )
-            with self.assertRaisesRegex(CommandChainError, "max_output_bytes must not exceed"):
+            with self.assertRaisesRegex(
+                CommandChainError, "max_output_bytes must not exceed"
+            ):
                 run_process_bounded_output(
                     ["command"],
                     timeout_seconds=1,
-                    max_output_bytes=command_chain_module.MAX_BOUNDED_PROCESS_OUTPUT_BYTES + 1,
+                    max_output_bytes=command_chain_module.MAX_BOUNDED_PROCESS_OUTPUT_BYTES
+                    + 1,
                     env={},
                     label="post-process",
                 )
-            with self.assertRaisesRegex(CommandChainError, "timeout_seconds must not exceed"):
+            with self.assertRaisesRegex(
+                CommandChainError, "timeout_seconds must not exceed"
+            ):
                 run_process_bounded_output(
                     ["command"],
                     timeout_seconds=MAX_COMMAND_TIMEOUT_SECONDS + 1,
@@ -974,9 +1193,15 @@ class CommandChainTest(unittest.TestCase):
 
         mocked_popen.assert_not_called()
 
-    def test_run_process_bounded_output_rejects_control_characters_in_label(self) -> None:
-        with mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen") as mocked_popen:
-            with self.assertRaisesRegex(CommandChainError, "label contains invalid control character"):
+    def test_run_process_bounded_output_rejects_control_characters_in_label(
+        self,
+    ) -> None:
+        with mock.patch(
+            "speed_of_cinnamon.command_chain.subprocess.Popen"
+        ) as mocked_popen:
+            with self.assertRaisesRegex(
+                CommandChainError, "label contains invalid control character"
+            ):
                 run_process_bounded_output(
                     ["command"],
                     timeout_seconds=1,
@@ -987,7 +1212,9 @@ class CommandChainTest(unittest.TestCase):
 
         mocked_popen.assert_not_called()
 
-    def test_run_process_bounded_output_cleans_process_tree_when_identity_is_missing(self) -> None:
+    def test_run_process_bounded_output_cleans_process_tree_when_identity_is_missing(
+        self,
+    ) -> None:
         proc = mock.Mock()
         proc.pid = 1234
         with (
@@ -1000,10 +1227,18 @@ class CommandChainTest(unittest.TestCase):
                     None,
                 ),
             ),
-            mock.patch("speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid", return_value=None),
-            mock.patch("speed_of_cinnamon.command_chain._terminate_bounded_process", return_value=True) as mocked_cleanup,
+            mock.patch(
+                "speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid",
+                return_value=None,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._terminate_bounded_process",
+                return_value=True,
+            ) as mocked_cleanup,
         ):
-            with self.assertRaisesRegex(CommandChainError, "process identity could not be verified"):
+            with self.assertRaisesRegex(
+                CommandChainError, "process identity could not be verified"
+            ):
                 run_process_bounded_output(
                     ["command"],
                     timeout_seconds=1,
@@ -1014,7 +1249,9 @@ class CommandChainTest(unittest.TestCase):
 
         mocked_cleanup.assert_called_once_with(proc, require_complete_scan=True)
 
-    def test_run_process_bounded_output_terminates_real_process_when_identity_is_missing(self) -> None:
+    def test_run_process_bounded_output_terminates_real_process_when_identity_is_missing(
+        self,
+    ) -> None:
         started: list[subprocess.Popen[bytes]] = []
         real_popen = subprocess.Popen
 
@@ -1024,10 +1261,18 @@ class CommandChainTest(unittest.TestCase):
             return process
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen", side_effect=capture_popen),
-            mock.patch("speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid", return_value=None),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.subprocess.Popen",
+                side_effect=capture_popen,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid",
+                return_value=None,
+            ),
         ):
-            with self.assertRaisesRegex(CommandChainError, "process identity could not be verified"):
+            with self.assertRaisesRegex(
+                CommandChainError, "process identity could not be verified"
+            ):
                 run_process_bounded_output(
                     [sys.executable, "-c", "import time; time.sleep(60)"],
                     timeout_seconds=1,
@@ -1067,11 +1312,26 @@ class CommandChainTest(unittest.TestCase):
                     None,
                 ),
             ),
-            mock.patch("speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid", return_value="boot:123"),
-            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
-            mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value=None),
-            mock.patch("speed_of_cinnamon.command_chain._kill_output_process_with_pidfd", return_value=True) as mocked_pidfd,
-            mock.patch("speed_of_cinnamon.command_chain.selectors.DefaultSelector", return_value=selector),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._clipboard_lock_identity_for_pid",
+                return_value="boot:123",
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_identity_is_current",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._process_tree_descendant_identities",
+                return_value=None,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._kill_output_process_with_pidfd",
+                return_value=True,
+            ) as mocked_pidfd,
+            mock.patch(
+                "speed_of_cinnamon.command_chain.selectors.DefaultSelector",
+                return_value=selector,
+            ),
         ):
             with self.assertRaisesRegex(OSError, "selector failed") as caught:
                 run_process_bounded_output(
@@ -1089,7 +1349,9 @@ class CommandChainTest(unittest.TestCase):
             " ".join(getattr(caught.exception, "__notes__", ())),
         )
 
-    def test_run_process_bounded_output_cleans_real_process_when_selector_constructor_fails(self) -> None:
+    def test_run_process_bounded_output_cleans_real_process_when_selector_constructor_fails(
+        self,
+    ) -> None:
         started: list[subprocess.Popen[bytes]] = []
         real_popen = subprocess.Popen
 
@@ -1099,10 +1361,22 @@ class CommandChainTest(unittest.TestCase):
             return process
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen", side_effect=capture_popen),
-            mock.patch("speed_of_cinnamon.command_chain.selectors.DefaultSelector", side_effect=OSError("selector constructor failed")),
-            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
-            mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value={}),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.subprocess.Popen",
+                side_effect=capture_popen,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.selectors.DefaultSelector",
+                side_effect=OSError("selector constructor failed"),
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_identity_is_current",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._process_tree_descendant_identities",
+                return_value={},
+            ),
         ):
             with self.assertRaisesRegex(OSError, "selector constructor failed"):
                 run_process_bounded_output(
@@ -1119,7 +1393,9 @@ class CommandChainTest(unittest.TestCase):
         self.assertTrue(process.stdout is None or process.stdout.closed)
         self.assertTrue(process.stderr is None or process.stderr.closed)
 
-    def test_selector_baseexception_marks_incomplete_descendant_and_pipe_scans(self) -> None:
+    def test_selector_baseexception_marks_incomplete_descendant_and_pipe_scans(
+        self,
+    ) -> None:
         started: list[subprocess.Popen[bytes]] = []
         real_popen = subprocess.Popen
 
@@ -1129,14 +1405,26 @@ class CommandChainTest(unittest.TestCase):
             return process
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.subprocess.Popen", side_effect=capture_popen),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.subprocess.Popen",
+                side_effect=capture_popen,
+            ),
             mock.patch(
                 "speed_of_cinnamon.command_chain.selectors.DefaultSelector",
                 side_effect=KeyboardInterrupt("selector interrupted"),
             ),
-            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
-            mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value=None),
-            mock.patch("speed_of_cinnamon.command_chain._process_pipe_holder_identities", return_value=None),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_identity_is_current",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._process_tree_descendant_identities",
+                return_value=None,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._process_pipe_holder_identities",
+                return_value=None,
+            ),
         ):
             with self.assertRaises(KeyboardInterrupt) as caught:
                 run_process_bounded_output(
@@ -1179,8 +1467,12 @@ class CommandChainTest(unittest.TestCase):
             return process
 
         with (
-            mock.patch.object(command_chain_module.os, "read", side_effect=interrupted_once),
-            mock.patch.object(command_chain_module.subprocess, "Popen", side_effect=start_process),
+            mock.patch.object(
+                command_chain_module.os, "read", side_effect=interrupted_once
+            ),
+            mock.patch.object(
+                command_chain_module.subprocess, "Popen", side_effect=start_process
+            ),
         ):
             returncode, stdout, stderr = run_process_bounded_output(
                 [sys.executable, "-c", "print('ok')"],
@@ -1195,7 +1487,9 @@ class CommandChainTest(unittest.TestCase):
         self.assertEqual(stderr, b"")
         self.assertGreaterEqual(attempts, 2)
 
-    def test_run_process_bounded_output_does_not_wait_for_inherited_pipe_after_root_exit(self) -> None:
+    def test_run_process_bounded_output_does_not_wait_for_inherited_pipe_after_root_exit(
+        self,
+    ) -> None:
         code = (
             "import os, time\n"
             "child = os.fork()\n"
@@ -1225,7 +1519,9 @@ class CommandChainTest(unittest.TestCase):
 
         self.assertEqual(result, {1234: "4567"})
 
-    def test_run_process_bounded_output_cleans_pipe_holder_after_root_exit_race(self) -> None:
+    def test_run_process_bounded_output_cleans_pipe_holder_after_root_exit_race(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / "child.pid"
             code = (
@@ -1267,7 +1563,9 @@ class CommandChainTest(unittest.TestCase):
             else:
                 self.fail("pipe-holder descendant survived root-exit cleanup")
 
-    def test_run_process_bounded_output_cleans_session_descendant_after_pipes_close(self) -> None:
+    def test_run_process_bounded_output_cleans_session_descendant_after_pipes_close(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / "child.pid"
             code = (
@@ -1308,7 +1606,9 @@ class CommandChainTest(unittest.TestCase):
             else:
                 self.fail("session descendant survived after output pipes closed")
 
-    def test_run_process_bounded_output_fails_closed_when_root_tree_scan_is_incomplete(self) -> None:
+    def test_run_process_bounded_output_fails_closed_when_root_tree_scan_is_incomplete(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / "child.pid"
             code = (
@@ -1325,7 +1625,9 @@ class CommandChainTest(unittest.TestCase):
                 "speed_of_cinnamon.command_chain._process_tree_descendant_identities",
                 return_value=None,
             ):
-                with self.assertRaisesRegex(CommandChainError, "descendant cleanup scan was incomplete"):
+                with self.assertRaisesRegex(
+                    CommandChainError, "descendant cleanup scan was incomplete"
+                ):
                     run_process_bounded_output(
                         [sys.executable, "-c", code, str(marker)],
                         timeout_seconds=2,
@@ -1349,7 +1651,9 @@ class CommandChainTest(unittest.TestCase):
             else:
                 self.fail("pipe-holder survived incomplete tree-scan cleanup")
 
-    def test_run_process_bounded_output_cleans_session_escaped_descendant_after_root_exit(self) -> None:
+    def test_run_process_bounded_output_cleans_session_escaped_descendant_after_root_exit(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             marker = Path(tmp) / "escaped-child.pid"
             code = (
@@ -1401,9 +1705,18 @@ class CommandChainTest(unittest.TestCase):
         proc._soc_process_identity = "boot:123"
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
-            mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value={}),
-            mock.patch("speed_of_cinnamon.command_chain._kill_output_process_with_pidfd", return_value=True) as mocked_pidfd,
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_identity_is_current",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._process_tree_descendant_identities",
+                return_value={},
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._kill_output_process_with_pidfd",
+                return_value=True,
+            ) as mocked_pidfd,
         ):
             self.assertTrue(command_chain_module._terminate_bounded_process(proc))
 
@@ -1427,7 +1740,9 @@ class CommandChainTest(unittest.TestCase):
         mocked_killpg.assert_not_called()
         proc.kill.assert_not_called()
 
-    def test_terminate_bounded_process_fails_closed_when_real_identity_is_missing(self) -> None:
+    def test_terminate_bounded_process_fails_closed_when_real_identity_is_missing(
+        self,
+    ) -> None:
         class UnknownPopen:
             __module__ = "subprocess"
 
@@ -1436,7 +1751,9 @@ class CommandChainTest(unittest.TestCase):
                 self.returncode = None
 
             def wait(self, timeout: int | None = None) -> None:
-                raise AssertionError("unverified process must not be waited after cleanup abort")
+                raise AssertionError(
+                    "unverified process must not be waited after cleanup abort"
+                )
 
             def kill(self) -> None:
                 raise AssertionError("unverified process must not be killed")
@@ -1447,7 +1764,9 @@ class CommandChainTest(unittest.TestCase):
 
         mocked_killpg.assert_not_called()
 
-    def test_terminate_bounded_process_cleans_captured_tree_after_root_exit_identity_change(self) -> None:
+    def test_terminate_bounded_process_cleans_captured_tree_after_root_exit_identity_change(
+        self,
+    ) -> None:
         proc = mock.Mock()
         proc.pid = 1234
         proc.returncode = 0
@@ -1483,7 +1802,9 @@ class CommandChainTest(unittest.TestCase):
         proc.kill.assert_not_called()
         proc.wait.assert_called_once_with(timeout=1)
 
-    def test_terminate_bounded_process_does_not_kill_reused_pid_after_group_failure(self) -> None:
+    def test_terminate_bounded_process_does_not_kill_reused_pid_after_group_failure(
+        self,
+    ) -> None:
         proc = mock.Mock()
         proc.pid = 1234
         proc.returncode = None
@@ -1505,7 +1826,10 @@ class CommandChainTest(unittest.TestCase):
                 "speed_of_cinnamon.command_chain._wait_for_output_process_tree_stop",
                 return_value=True,
             ),
-            mock.patch("speed_of_cinnamon.command_chain.os.killpg", side_effect=OSError("permission denied")),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.os.killpg",
+                side_effect=OSError("permission denied"),
+            ),
         ):
             self.assertFalse(
                 command_chain_module._terminate_bounded_process(
@@ -1520,27 +1844,48 @@ class CommandChainTest(unittest.TestCase):
         proc = mock.Mock()
         proc.pid = 1234
         with (
-            mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value=None),
-            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
-            mock.patch("speed_of_cinnamon.command_chain._kill_output_process_with_pidfd") as mocked_pidfd,
+            mock.patch(
+                "speed_of_cinnamon.command_chain._process_tree_descendant_identities",
+                return_value=None,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_identity_is_current",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._kill_output_process_with_pidfd"
+            ) as mocked_pidfd,
         ):
             self.assertFalse(command_chain_module._terminate_bounded_process(proc))
 
         mocked_pidfd.assert_not_called()
         proc.kill.assert_not_called()
+
     def test_terminate_bounded_process_does_not_signal_reaped_root_group(self) -> None:
         proc = mock.Mock()
         proc.pid = 1234
         proc.returncode = 0
         with (
-            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
-            mock.patch("speed_of_cinnamon.command_chain._output_process_is_reaped", return_value=True),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_identity_is_current",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_is_reaped",
+                return_value=True,
+            ),
             mock.patch(
                 "speed_of_cinnamon.command_chain._process_tree_descendant_identities",
                 return_value={5678: "child-identity"},
             ),
-            mock.patch("speed_of_cinnamon.command_chain._kill_output_process_tree", return_value=True),
-            mock.patch("speed_of_cinnamon.command_chain._wait_for_output_process_tree_stop", return_value=True),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._kill_output_process_tree",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._wait_for_output_process_tree_stop",
+                return_value=True,
+            ),
             mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg,
         ):
             self.assertTrue(command_chain_module._terminate_bounded_process(proc))
@@ -1548,14 +1893,25 @@ class CommandChainTest(unittest.TestCase):
         mocked_killpg.assert_not_called()
         proc.wait.assert_called_once_with(timeout=1)
 
-    def test_terminate_bounded_process_fails_closed_for_reaped_root_with_unknown_tree(self) -> None:
+    def test_terminate_bounded_process_fails_closed_for_reaped_root_with_unknown_tree(
+        self,
+    ) -> None:
         proc = mock.Mock()
         proc.pid = 1234
         proc.returncode = 0
         with (
-            mock.patch("speed_of_cinnamon.command_chain._output_process_identity_is_current", return_value=True),
-            mock.patch("speed_of_cinnamon.command_chain._output_process_is_reaped", return_value=True),
-            mock.patch("speed_of_cinnamon.command_chain._process_tree_descendant_identities", return_value=None),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_identity_is_current",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._output_process_is_reaped",
+                return_value=True,
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain._process_tree_descendant_identities",
+                return_value=None,
+            ),
             mock.patch("speed_of_cinnamon.command_chain.os.killpg") as mocked_killpg,
         ):
             self.assertFalse(command_chain_module._terminate_bounded_process(proc))
@@ -1568,41 +1924,71 @@ class CommandChainTest(unittest.TestCase):
             run_command_chain([("cmd",)], "\udcff", label="post-process")
 
     def test_run_command_chain_rejects_invalid_command_output_utf8(self) -> None:
-        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+        def fake_run(
+            argv: list[str], input_bytes: bytes, **kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             del argv, input_bytes, kwargs
             return 0, b"\xff", b""
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=fake_run,
+            ),
         ):
             with self.assertRaisesRegex(CommandChainError, "not valid UTF-8"):
                 run_command_chain([("cmd",)], "seed", label="post-process")
 
-    def test_run_command_chain_rejects_control_characters_in_command_output(self) -> None:
-        def fake_run(argv: list[str], input_bytes: bytes, **kwargs: object) -> tuple[int, bytes, bytes]:
+    def test_run_command_chain_rejects_control_characters_in_command_output(
+        self,
+    ) -> None:
+        def fake_run(
+            argv: list[str], input_bytes: bytes, **kwargs: object
+        ) -> tuple[int, bytes, bytes]:
             del argv, input_bytes, kwargs
             return 0, b"ok\x1b[31mred\x1b[0m", b""
 
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
-            mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=fake_run),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=fake_run,
+            ),
         ):
-            with self.assertRaisesRegex(CommandChainError, "invalid control character") as cm:
+            with self.assertRaisesRegex(
+                CommandChainError, "invalid control character"
+            ) as cm:
                 run_command_chain([("cmd",)], "seed", label="post-process")
 
         self.assertNotIn("\x1b", str(cm.exception))
 
     def test_run_command_chain_rejects_too_many_segments(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "too many segments"):
-            run_command_chain([("cmd",)] * (MAX_COMMAND_SEGMENTS + 1), "", label="post-process")
+            run_command_chain(
+                [("cmd",)] * (MAX_COMMAND_SEGMENTS + 1), "", label="post-process"
+            )
 
     def test_filtered_environment_rejects_non_mapping_inputs(self) -> None:
-        from speed_of_cinnamon.cli import _filtered_environment as cli_filtered_environment
-        from speed_of_cinnamon.command_chain import _filtered_environment as chain_filtered_environment
-        from speed_of_cinnamon.output import _filtered_environment as output_filtered_environment
-        from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
-        from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
+        from speed_of_cinnamon.cli import (
+            _filtered_environment as cli_filtered_environment,
+        )
+        from speed_of_cinnamon.command_chain import (
+            _filtered_environment as chain_filtered_environment,
+        )
+        from speed_of_cinnamon.output import (
+            _filtered_environment as output_filtered_environment,
+        )
+        from speed_of_cinnamon.recorder import (
+            _filtered_environment as recorder_filtered_environment,
+        )
+        from speed_of_cinnamon.transcriber import (
+            _filtered_environment as transcriber_filtered_environment,
+        )
 
         validators = [
             cli_filtered_environment,
@@ -1613,17 +1999,31 @@ class CommandChainTest(unittest.TestCase):
         ]
         for validate_env in validators:
             with self.subTest(func=validate_env.__module__):
-                with self.assertRaisesRegex(RuntimeError, "environment base must be a mapping"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "environment base must be a mapping"
+                ):
                     validate_env(base={"k": 1})  # type: ignore[arg-type]
-                with self.assertRaisesRegex(RuntimeError, "environment base must be a mapping"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "environment base must be a mapping"
+                ):
                     validate_env(["bad"])  # type: ignore[arg-type]
 
     def test_filtered_environment_rejects_invalid_items(self) -> None:
-        from speed_of_cinnamon.cli import _filtered_environment as cli_filtered_environment
-        from speed_of_cinnamon.command_chain import _filtered_environment as chain_filtered_environment
-        from speed_of_cinnamon.output import _filtered_environment as output_filtered_environment
-        from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
-        from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
+        from speed_of_cinnamon.cli import (
+            _filtered_environment as cli_filtered_environment,
+        )
+        from speed_of_cinnamon.command_chain import (
+            _filtered_environment as chain_filtered_environment,
+        )
+        from speed_of_cinnamon.output import (
+            _filtered_environment as output_filtered_environment,
+        )
+        from speed_of_cinnamon.recorder import (
+            _filtered_environment as recorder_filtered_environment,
+        )
+        from speed_of_cinnamon.transcriber import (
+            _filtered_environment as transcriber_filtered_environment,
+        )
 
         validators = [
             cli_filtered_environment,
@@ -1634,23 +2034,43 @@ class CommandChainTest(unittest.TestCase):
         ]
         for validate_env in validators:
             with self.subTest(func=validate_env.__module__):
-                with self.assertRaisesRegex(RuntimeError, "environment keys must be text"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "environment keys must be text"
+                ):
                     validate_env(base={1: "value"})  # type: ignore[dict-key]
-                with self.assertRaisesRegex(RuntimeError, "environment values must be text"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "environment values must be text"
+                ):
                     validate_env(base={"key": False})  # type: ignore[arg-type]
-                with self.assertRaisesRegex(RuntimeError, "environment key contains invalid control character"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "environment key contains invalid control character"
+                ):
                     validate_env(base={"BAD\nKEY": "value"})
-                with self.assertRaisesRegex(RuntimeError, "environment value contains invalid control character"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "environment value contains invalid control character"
+                ):
                     validate_env(base={"SAFE_KEY": "bad\x00value"})
-                with self.assertRaisesRegex(RuntimeError, "environment key is not allowed: LD_PRELOAD"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "environment key is not allowed: LD_PRELOAD"
+                ):
                     validate_env(base={"LD_PRELOAD": "x"})
 
     def test_filtered_environment_skips_non_text_environment_values(self) -> None:
-        from speed_of_cinnamon.cli import _filtered_environment as cli_filtered_environment
-        from speed_of_cinnamon.command_chain import _filtered_environment as chain_filtered_environment
-        from speed_of_cinnamon.output import _filtered_environment as output_filtered_environment
-        from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
-        from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
+        from speed_of_cinnamon.cli import (
+            _filtered_environment as cli_filtered_environment,
+        )
+        from speed_of_cinnamon.command_chain import (
+            _filtered_environment as chain_filtered_environment,
+        )
+        from speed_of_cinnamon.output import (
+            _filtered_environment as output_filtered_environment,
+        )
+        from speed_of_cinnamon.recorder import (
+            _filtered_environment as recorder_filtered_environment,
+        )
+        from speed_of_cinnamon.transcriber import (
+            _filtered_environment as transcriber_filtered_environment,
+        )
 
         validators = [
             cli_filtered_environment,
@@ -1661,17 +2081,32 @@ class CommandChainTest(unittest.TestCase):
         ]
         for validate_env in validators:
             with self.subTest(func=validate_env.__module__):
-                with mock.patch(f"{validate_env.__module__}.os.environ.__getitem__", return_value=123):
+                with mock.patch(
+                    f"{validate_env.__module__}.os.environ.__getitem__",
+                    return_value=123,
+                ):
                     env = validate_env()
                 self.assertNotIn("HOME", env)
                 self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)
 
-    def test_filtered_environment_skips_inherited_control_character_values(self) -> None:
-        from speed_of_cinnamon.cli import _filtered_environment as cli_filtered_environment
-        from speed_of_cinnamon.command_chain import _filtered_environment as chain_filtered_environment
-        from speed_of_cinnamon.output import _filtered_environment as output_filtered_environment
-        from speed_of_cinnamon.recorder import _filtered_environment as recorder_filtered_environment
-        from speed_of_cinnamon.transcriber import _filtered_environment as transcriber_filtered_environment
+    def test_filtered_environment_skips_inherited_control_character_values(
+        self,
+    ) -> None:
+        from speed_of_cinnamon.cli import (
+            _filtered_environment as cli_filtered_environment,
+        )
+        from speed_of_cinnamon.command_chain import (
+            _filtered_environment as chain_filtered_environment,
+        )
+        from speed_of_cinnamon.output import (
+            _filtered_environment as output_filtered_environment,
+        )
+        from speed_of_cinnamon.recorder import (
+            _filtered_environment as recorder_filtered_environment,
+        )
+        from speed_of_cinnamon.transcriber import (
+            _filtered_environment as transcriber_filtered_environment,
+        )
 
         validators = [
             cli_filtered_environment,
@@ -1682,14 +2117,19 @@ class CommandChainTest(unittest.TestCase):
         ]
         for validate_env in validators:
             with self.subTest(func=validate_env.__module__):
-                with mock.patch(f"{validate_env.__module__}.os.environ.__getitem__", return_value="bad\nhome"):
+                with mock.patch(
+                    f"{validate_env.__module__}.os.environ.__getitem__",
+                    return_value="bad\nhome",
+                ):
                     env = validate_env()
                 self.assertNotIn("HOME", env)
                 self.assertNotIn("DBUS_SESSION_BUS_ADDRESS", env)
 
     def test_run_command_chain_accepts_max_tokens_per_segment(self) -> None:
         segment: list[str] = ["cmd"] + ["a"] * (MAX_COMMAND_SEGMENT_TOKENS - 1)
-        with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
+        with mock.patch(
+            "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+        ):
             with mock.patch(
                 "speed_of_cinnamon.command_chain.run_process_bounded_output",
                 return_value=(0, b"", b""),
@@ -1699,41 +2139,59 @@ class CommandChainTest(unittest.TestCase):
 
     def test_run_command_chain_rejects_max_plus_one_tokens_in_segment(self) -> None:
         segment: list[str] = ["cmd"] + ["a"] * MAX_COMMAND_SEGMENT_TOKENS
-        with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"):
+        with mock.patch(
+            "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+        ):
             with self.assertRaisesRegex(CommandChainError, "segment is too long"):
                 run_command_chain([tuple(segment)], "", label="post-process")
 
     def test_run_command_chain_reports_command_not_found(self) -> None:
-        with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="missing"):
-            with mock.patch("speed_of_cinnamon.command_chain.run_process_bounded_output", side_effect=FileNotFoundError("missing")):
+        with mock.patch(
+            "speed_of_cinnamon.command_chain.shutil.which", return_value="missing"
+        ):
+            with mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=FileNotFoundError("missing"),
+            ):
                 with self.assertRaisesRegex(CommandChainError, "command not found"):
                     run_command_chain([("missing",)], "", label="transcriber")
 
     def test_run_command_chain_rejects_missing_command(self) -> None:
-        with mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value=None):
+        with mock.patch(
+            "speed_of_cinnamon.command_chain.shutil.which", return_value=None
+        ):
             with self.assertRaisesRegex(CommandChainError, "is not available"):
                 run_command_chain([("missing",)], "", label="transcriber")
 
     def test_run_command_chain_reports_timeout(self) -> None:
-        with mock.patch(
-            "speed_of_cinnamon.command_chain.shutil.which",
-            return_value="slow",
-        ), mock.patch(
-            "speed_of_cinnamon.command_chain.run_process_bounded_output",
-            side_effect=subprocess.TimeoutExpired(cmd="cmd", timeout=0.01),
+        with (
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which",
+                return_value="slow",
+            ),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.run_process_bounded_output",
+                side_effect=subprocess.TimeoutExpired(cmd="cmd", timeout=0.01),
+            ),
         ):
             with self.assertRaisesRegex(CommandChainError, "timed out"):
-                run_command_chain([("slow",)], "", label="post-process", timeout_seconds=1)
+                run_command_chain(
+                    [("slow",)], "", label="post-process", timeout_seconds=1
+                )
 
     def test_run_command_chain_redacts_execution_error_detail(self) -> None:
         with (
-            mock.patch("speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"),
+            mock.patch(
+                "speed_of_cinnamon.command_chain.shutil.which", return_value="cmd"
+            ),
             mock.patch(
                 "speed_of_cinnamon.command_chain.run_process_bounded_output",
                 side_effect=OSError("/secret/transcript-token.txt"),
             ),
         ):
-            with self.assertRaisesRegex(CommandChainError, "command execution failed") as caught:
+            with self.assertRaisesRegex(
+                CommandChainError, "command execution failed"
+            ) as caught:
                 run_command_chain([("cmd",)], "", label="post-process")
 
         self.assertNotIn("/secret/transcript-token.txt", str(caught.exception))
@@ -1743,22 +2201,46 @@ class CommandChainTest(unittest.TestCase):
             run_command_chain([], "seed", label="post-process")
 
     def test_run_command_chain_rejects_control_characters_in_label(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "label contains invalid control character"):
+        with self.assertRaisesRegex(
+            CommandChainError, "label contains invalid control character"
+        ):
             run_command_chain([("printf", "ok")], "seed", label="post\nprocess")
 
     def test_run_command_chain_rejects_invalid_limits(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "max_output_chars must be positive"):
+        with self.assertRaisesRegex(
+            CommandChainError, "max_output_chars must be positive"
+        ):
             run_command_chain([("cmd",)], "", label="post-process", max_output_chars=0)
-        with self.assertRaisesRegex(CommandChainError, "max_output_chars must not exceed"):
-            run_command_chain([("cmd",)], "", label="post-process", max_output_chars=MAX_COMMAND_OUTPUT_CHARS + 1)
-        with self.assertRaisesRegex(CommandChainError, "max_output_chars must be positive"):
+        with self.assertRaisesRegex(
+            CommandChainError, "max_output_chars must not exceed"
+        ):
+            run_command_chain(
+                [("cmd",)],
+                "",
+                label="post-process",
+                max_output_chars=MAX_COMMAND_OUTPUT_CHARS + 1,
+            )
+        with self.assertRaisesRegex(
+            CommandChainError, "max_output_chars must be positive"
+        ):
             run_command_chain([("cmd",)], "", label="post-process", max_output_chars=-1)
-        with self.assertRaisesRegex(CommandChainError, "max_input_chars must not exceed"):
-            run_command_chain([("cmd",)], "", label="post-process", max_input_chars=MAX_COMMAND_INPUT_CHARS + 1)
+        with self.assertRaisesRegex(
+            CommandChainError, "max_input_chars must not exceed"
+        ):
+            run_command_chain(
+                [("cmd",)],
+                "",
+                label="post-process",
+                max_input_chars=MAX_COMMAND_INPUT_CHARS + 1,
+            )
 
-        with self.assertRaisesRegex(CommandChainError, "max_input_chars must be non-negative"):
+        with self.assertRaisesRegex(
+            CommandChainError, "max_input_chars must be non-negative"
+        ):
             run_command_chain([("cmd",)], "", label="post-process", max_input_chars=-1)
-        with self.assertRaisesRegex(CommandChainError, "timeout_seconds must not exceed"):
+        with self.assertRaisesRegex(
+            CommandChainError, "timeout_seconds must not exceed"
+        ):
             run_command_chain(
                 [("cmd",)],
                 "",
@@ -1766,14 +2248,26 @@ class CommandChainTest(unittest.TestCase):
                 timeout_seconds=MAX_COMMAND_TIMEOUT_SECONDS + 1,
             )
         with self.assertRaisesRegex(CommandChainError, "personal context is too large"):
-            run_command_chain([("cmd",)], "", label="post-process", personal_context="x" * (MAX_PERSONAL_CONTEXT_CHARS + 1))
+            run_command_chain(
+                [("cmd",)],
+                "",
+                label="post-process",
+                personal_context="x" * (MAX_PERSONAL_CONTEXT_CHARS + 1),
+            )
         with self.assertRaisesRegex(CommandChainError, "vocabulary is too large"):
-            run_command_chain([("cmd",)], "", label="post-process", vocabulary="x" * (MAX_VOCABULARY_CHARS + 1))
+            run_command_chain(
+                [("cmd",)],
+                "",
+                label="post-process",
+                vocabulary="x" * (MAX_VOCABULARY_CHARS + 1),
+            )
 
     def test_run_command_chain_rejects_non_text_values(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "segments must be a sequence"):
             run_command_chain("cmd", "", label="post-process")  # type: ignore[arg-type]
-        with self.assertRaisesRegex(CommandChainError, "segments must contain sequences"):
+        with self.assertRaisesRegex(
+            CommandChainError, "segments must contain sequences"
+        ):
             run_command_chain([("cmd",), 123], "", label="post-process")  # type: ignore[list-item]
         with self.assertRaisesRegex(CommandChainError, "input text must be text"):
             run_command_chain([("cmd",)], 123, label="post-process")  # type: ignore[arg-type]
@@ -1787,21 +2281,33 @@ class CommandChainTest(unittest.TestCase):
             run_command_chain([("cmd",)], "", label=True)  # type: ignore[arg-type]
 
     def test_run_command_chain_rejects_non_int_limits(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "max_output_chars must be an integer"):
+        with self.assertRaisesRegex(
+            CommandChainError, "max_output_chars must be an integer"
+        ):
             run_command_chain([("cmd",)], "", label="post-process", max_output_chars="1")  # type: ignore[arg-type]
-        with self.assertRaisesRegex(CommandChainError, "max_input_chars must be an integer"):
+        with self.assertRaisesRegex(
+            CommandChainError, "max_input_chars must be an integer"
+        ):
             run_command_chain([("cmd",)], "", label="post-process", max_input_chars=True)  # type: ignore[arg-type]
-        with self.assertRaisesRegex(CommandChainError, "timeout_seconds must be an integer"):
+        with self.assertRaisesRegex(
+            CommandChainError, "timeout_seconds must be an integer"
+        ):
             run_command_chain([("cmd",)], "", label="post-process", timeout_seconds=False)  # type: ignore[arg-type]
 
     def test_filtered_environment_rejects_control_characters_in_base(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "environment key contains invalid control character"):
+        with self.assertRaisesRegex(
+            CommandChainError, "environment key contains invalid control character"
+        ):
             _filtered_environment(base={"BAD\nKEY": "value"})
-        with self.assertRaisesRegex(CommandChainError, "environment value contains invalid control character"):
+        with self.assertRaisesRegex(
+            CommandChainError, "environment value contains invalid control character"
+        ):
             _filtered_environment(base={"SAFE_KEY": "bad\x00value"})
 
     def test_run_command_chain_rejects_non_positive_timeout(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "timeout_seconds must be positive"):
+        with self.assertRaisesRegex(
+            CommandChainError, "timeout_seconds must be positive"
+        ):
             run_command_chain([("cmd",)], "", label="post-process", timeout_seconds=0)
 
     def test_run_command_chain_rejects_null_bytes_in_input(self) -> None:
@@ -1810,9 +2316,13 @@ class CommandChainTest(unittest.TestCase):
 
     def test_run_command_chain_preserves_literal_null_escape_in_input(self) -> None:
         value = r"hello \x00"
-        self.assertEqual(run_command_chain([("cat",)], value, label="post-process"), value)
+        self.assertEqual(
+            run_command_chain([("cat",)], value, label="post-process"), value
+        )
 
-    def test_run_command_chain_preserves_literal_null_escapes_in_personalization_environment(self) -> None:
+    def test_run_command_chain_preserves_literal_null_escapes_in_personalization_environment(
+        self,
+    ) -> None:
         for value in (r"literal \x00 text", r"literal \u0000 text"):
             with self.subTest(value=value):
                 result = run_command_chain(
@@ -1825,39 +2335,64 @@ class CommandChainTest(unittest.TestCase):
                 self.assertEqual(result, value)
 
     def test_run_command_chain_rejects_null_bytes_in_command_segment(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "command contains invalid null byte"):
+        with self.assertRaisesRegex(
+            CommandChainError, "command contains invalid null byte"
+        ):
             run_command_chain([("cmd\x00",)], "", label="post-process")
 
     def test_run_command_chain_rejects_escaped_null_in_command_segment(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+        with self.assertRaisesRegex(
+            CommandChainError, "command contains invalid control character"
+        ):
             run_command_chain([("cmd\\\\x00",)], "", label="post-process")
 
     def test_run_command_chain_rejects_control_chars_in_command_segment(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+        with self.assertRaisesRegex(
+            CommandChainError, "command contains invalid control character"
+        ):
             run_command_chain([("cmd\nname",)], "", label="post-process")
 
     def test_run_command_chain_rejects_control_chars_in_command_argument(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+        with self.assertRaisesRegex(
+            CommandChainError, "command contains invalid control character"
+        ):
             run_command_chain([("cmd", "arg\rvalue")], "", label="post-process")
 
     def test_run_command_chain_rejects_direct_segment_that_is_too_long(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "command too long"):
-            run_command_chain([("cmd", "x" * MAX_COMMAND_LENGTH_CHARS)], "", label="post-process")
+            run_command_chain(
+                [("cmd", "x" * MAX_COMMAND_LENGTH_CHARS)], "", label="post-process"
+            )
 
-    def test_run_command_chain_rejects_direct_segment_invalid_utf8_argument(self) -> None:
+    def test_run_command_chain_rejects_direct_segment_invalid_utf8_argument(
+        self,
+    ) -> None:
         with self.assertRaisesRegex(CommandChainError, "not valid UTF-8"):
             run_command_chain([("cmd", "\udcff")], "", label="post-process")
 
-    def test_run_command_chain_rejects_escaped_control_chars_in_command_argument(self) -> None:
-        for argument in ("arg\\nvalue", "arg\\x1bvalue", "arg\\u001bvalue", "arg\\x85value"):
+    def test_run_command_chain_rejects_escaped_control_chars_in_command_argument(
+        self,
+    ) -> None:
+        for argument in (
+            "arg\\nvalue",
+            "arg\\x1bvalue",
+            "arg\\u001bvalue",
+            "arg\\x85value",
+        ):
             with self.subTest(argument=argument):
-                with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+                with self.assertRaisesRegex(
+                    CommandChainError, "command contains invalid control character"
+                ):
                     run_command_chain([("cmd", argument)], "", label="post-process")
 
-    def test_run_command_chain_rejects_other_control_characters_in_command_argument(self) -> None:
+    def test_run_command_chain_rejects_other_control_characters_in_command_argument(
+        self,
+    ) -> None:
         for argument in ("arg\x1fvalue", "arg\x85value"):
             with self.subTest(argument=repr(argument)):
-                with self.assertRaisesRegex(CommandChainError, "command contains invalid control character"):
+                with self.assertRaisesRegex(
+                    CommandChainError, "command contains invalid control character"
+                ):
                     run_command_chain([("cmd", argument)], "", label="post-process")
 
     def test_run_command_chain_rejects_command_with_path_separator(self) -> None:
@@ -1866,7 +2401,12 @@ class CommandChainTest(unittest.TestCase):
 
     def test_run_command_chain_rejects_too_large_input(self) -> None:
         with self.assertRaisesRegex(CommandChainError, "input exceeded"):
-            run_command_chain([("cmd",)], "x" * 1_000_001, label="post-process", max_input_chars=1_000_000)
+            run_command_chain(
+                [("cmd",)],
+                "x" * 1_000_001,
+                label="post-process",
+                max_input_chars=1_000_000,
+            )
 
     def test_read_file_head_rejects_invalid_utf8(self) -> None:
         with tempfile.TemporaryFile() as handle:
@@ -1882,16 +2422,22 @@ class CommandChainTest(unittest.TestCase):
             self.assertEqual(_read_file_head(handle, 1), "😀")
 
     def test_read_file_head_rejects_invalid_file(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "file must be a binary file handle"):
+        with self.assertRaisesRegex(
+            CommandChainError, "file must be a binary file handle"
+        ):
             _read_file_head(object(), 10)
 
     def test_read_file_head_rejects_invalid_max_chars(self) -> None:
         with tempfile.TemporaryFile() as handle:
-            with self.assertRaisesRegex(CommandChainError, "max_chars must be an integer"):
+            with self.assertRaisesRegex(
+                CommandChainError, "max_chars must be an integer"
+            ):
                 _read_file_head(handle, "10")  # type: ignore[arg-type]
 
     def test_filesize_rejects_invalid_file(self) -> None:
-        with self.assertRaisesRegex(CommandChainError, "file must be a binary file handle"):
+        with self.assertRaisesRegex(
+            CommandChainError, "file must be a binary file handle"
+        ):
             _filesize(object())  # type: ignore[arg-type]
 
     def test_read_file_head_preserves_literal_null_escape(self) -> None:
@@ -1901,7 +2447,9 @@ class CommandChainTest(unittest.TestCase):
 
     def _direct_wrapper(self, script: str, *arguments: str) -> list[str]:
         for helper in ("ionice", "nice"):
-            if not shutil.which(helper, path=command_chain_module._TRUSTED_COMMAND_PATH):
+            if not shutil.which(
+                helper, path=command_chain_module._TRUSTED_COMMAND_PATH
+            ):
                 self.skipTest(f"trusted {helper} helper is unavailable")
         if (
             sys.platform != "linux"
@@ -1930,8 +2478,10 @@ class CommandChainTest(unittest.TestCase):
             )
         popen.assert_not_called()
 
-    def test_direct_supervisor_enforces_limits_seccomp_and_fork_inheritance(self) -> None:
-        script = r'''
+    def test_direct_supervisor_enforces_limits_seccomp_and_fork_inheritance(
+        self,
+    ) -> None:
+        script = r"""
 import ctypes, errno, json, os, resource
 libc = ctypes.CDLL(None, use_errno=True)
 def set_io(number):
@@ -1965,7 +2515,7 @@ marker_fd = os.open(os.environ['SOC_TEST_MARKER'], os.O_WRONLY | os.O_CREAT | os
 os.write(marker_fd, b'once')
 os.close(marker_fd)
 print(json.dumps({'root': state(), 'child': json.loads(child_data)}))
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             marker = os.path.join(temporary_directory, "launched")
             command = self._direct_wrapper(script)
@@ -1988,17 +2538,65 @@ print(json.dumps({'root': state(), 'child': json.loads(child_data)}))
                 self.assertEqual(state["nice_limit"], [0, 0])
                 self.assertEqual(state["rt_limit"], [0, 0])
                 self.assertGreater(state["nproc_limit"][0], 0)
+                self.assertGreaterEqual(
+                    state["nproc_limit"][0],
+                    process_priority._LOCAL_MODEL_DIRECT_NPROC_LIMIT,
+                )
                 self.assertLessEqual(
                     state["nproc_limit"][0],
-                    process_priority._LOCAL_MODEL_DIRECT_MAX_CHILDREN,
+                    process_priority._LOCAL_MODEL_DIRECT_NPROC_MAX_LIMIT,
                 )
                 self.assertEqual(
                     state["nproc_limit"][0],
                     state["nproc_limit"][1],
                 )
 
+    def test_direct_target_can_start_threads_after_adaptive_nproc_limit(self) -> None:
+        before = process_priority._current_uid_task_count()
+        self.assertIsNotNone(before)
+        worker_count = 32
+        script = f"""
+import json, resource, threading
+release = threading.Event()
+workers = [threading.Thread(target=release.wait) for _ in range({worker_count})]
+for worker in workers:
+    worker.start()
+started = sum(worker.is_alive() for worker in workers)
+release.set()
+for worker in workers:
+    worker.join()
+print(json.dumps({{
+    "started": started,
+    "joined": sum(not worker.is_alive() for worker in workers),
+    "nproc": resource.getrlimit(resource.RLIMIT_NPROC),
+}}))
+"""
+        returncode, stdout, stderr = run_process_bounded_output(
+            self._direct_wrapper(script),
+            timeout_seconds=5,
+            max_output_bytes=4096,
+            env={},
+            label="local-model",
+            _local_model_direct_supervisor=(_LOCAL_MODEL_DIRECT_SUPERVISOR_CAPABILITY),
+        )
+
+        self.assertEqual(returncode, 0, stderr.decode(errors="replace"))
+        result = json.loads(stdout)
+        self.assertEqual(result["started"], worker_count)
+        self.assertEqual(result["joined"], worker_count)
+        self.assertEqual(result["nproc"][0], result["nproc"][1])
+        self.assertGreaterEqual(
+            result["nproc"][0],
+            process_priority._LOCAL_MODEL_DIRECT_NPROC_LIMIT,
+        )
+        if before > process_priority._LOCAL_MODEL_DIRECT_NPROC_LIMIT:
+            self.assertGreater(
+                result["nproc"][0],
+                process_priority._LOCAL_MODEL_DIRECT_NPROC_LIMIT,
+            )
+
     def test_direct_target_cannot_disable_or_signal_supervisor(self) -> None:
-        script = r'''
+        script = r"""
 import ctypes, errno, json, os, signal, sys, time
 libc = ctypes.CDLL(None, use_errno=True)
 supervisor = os.getppid()
@@ -2060,7 +2658,7 @@ print(json.dumps({
     'supervisor': supervisor,
     'root_group': os.getpgrp(),
 }))
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             unused = os.path.join(temporary_directory, "unused")
             marker = os.path.join(temporary_directory, "late")
@@ -2089,8 +2687,14 @@ print(json.dumps({
         cases = (
             ("pass", 0),
             ("raise SystemExit(7)", 7),
-            ("import os, signal; os.kill(os.getpid(), signal.SIGTERM)", -signal.SIGTERM),
-            ("import os, signal; os.kill(os.getpid(), signal.SIGKILL)", -signal.SIGKILL),
+            (
+                "import os, signal; os.kill(os.getpid(), signal.SIGTERM)",
+                -signal.SIGTERM,
+            ),
+            (
+                "import os, signal; os.kill(os.getpid(), signal.SIGKILL)",
+                -signal.SIGKILL,
+            ),
         )
         for script, expected in cases:
             with self.subTest(expected=expected):
@@ -2109,7 +2713,7 @@ print(json.dumps({
                 )
 
     def test_direct_supervisor_drains_controlled_fork_storm(self) -> None:
-        script = r'''
+        script = r"""
 import os, signal, sys, time
 count = 32
 pid_fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_APPEND, 0o600)
@@ -2137,7 +2741,7 @@ while len(ready) < count:
     if not chunk: os._exit(67)
     ready.extend(chunk)
 os.close(read_fd)
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             pid_file = os.path.join(temporary_directory, "pids")
             marker = os.path.join(temporary_directory, "late")
@@ -2158,11 +2762,126 @@ os.close(read_fd)
             time.sleep(1.0)
             self.assertFalse(os.path.exists(marker))
             self.assertTrue(
-                all(not os.path.exists(f"/proc/{process_id}") for process_id in process_ids)
+                all(
+                    not os.path.exists(f"/proc/{process_id}")
+                    for process_id in process_ids
+                )
+            )
+
+    def test_direct_supervisor_enforces_runtime_descendant_cap(self) -> None:
+        with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
+            marker = os.path.join(temporary_directory, "late")
+            read_fd, write_fd = os.pipe()
+            root_pid = os.fork()
+            if root_pid == 0:
+                try:
+                    os.close(read_fd)
+                    os.setsid()
+                    children = []
+                    for _ in range(4):
+                        child_pid = os.fork()
+                        if child_pid == 0:
+                            os.close(write_fd)
+                            time.sleep(1.2)
+                            fd = os.open(
+                                marker,
+                                os.O_WRONLY | os.O_CREAT | os.O_APPEND,
+                                0o600,
+                            )
+                            os.write(fd, b"x")
+                            os.close(fd)
+                            os._exit(0)
+                        children.append(child_pid)
+                    os.write(
+                        write_fd,
+                        (" ".join(str(pid) for pid in children) + "\n").encode("ascii"),
+                    )
+                    os.close(write_fd)
+                    time.sleep(3)
+                finally:
+                    os._exit(0)
+
+            os.close(write_fd)
+            os.set_blocking(read_fd, False)
+            payload = bytearray()
+            child_pids: list[int] = []
+            identities = []
+            try:
+                read_deadline = time.monotonic() + 2.0
+                while b"\n" not in payload and time.monotonic() < read_deadline:
+                    try:
+                        chunk = os.read(read_fd, 4096)
+                    except BlockingIOError:
+                        chunk = b""
+                    if chunk:
+                        payload.extend(chunk)
+                    else:
+                        time.sleep(0.005)
+                self.assertIn(b"\n", payload)
+                child_pids = [int(field) for field in payload.split()]
+                self.assertEqual(len(child_pids), 4)
+
+                identity_deadline = time.monotonic() + 1.0
+                root_identity = None
+                while root_identity is None and time.monotonic() < identity_deadline:
+                    root_identity = process_priority._canonical_process_identity(
+                        root_pid
+                    )
+                self.assertIsNotNone(root_identity)
+                identities.append(root_identity)
+                for child_pid in child_pids:
+                    identity = None
+                    while identity is None and time.monotonic() < identity_deadline:
+                        identity = process_priority._canonical_process_identity(
+                            child_pid
+                        )
+                    self.assertIsNotNone(identity)
+                    identities.append(identity)
+
+                self.assertFalse(
+                    process_priority._local_model_direct_descendants_within_limit(
+                        root_pid,
+                        root_identity.start_time,
+                        3,
+                        time.monotonic() + 2.0,
+                    )
+                )
+            finally:
+                os.close(read_fd)
+                for identity in reversed(identities):
+                    process_priority._local_model_direct_signal_identity(
+                        identity,
+                        signal.SIGKILL,
+                    )
+                reap_deadline = time.monotonic() + 2.0
+                root_reaped = False
+                while time.monotonic() < reap_deadline:
+                    try:
+                        waited_pid, _ = os.waitpid(root_pid, os.WNOHANG)
+                    except ChildProcessError:
+                        root_reaped = True
+                        break
+                    if waited_pid == root_pid:
+                        root_reaped = True
+                        break
+                    time.sleep(0.005)
+                self.assertTrue(root_reaped)
+
+            disappearance_deadline = time.monotonic() + 2.0
+            while time.monotonic() < disappearance_deadline and any(
+                os.path.exists(f"/proc/{process_id}") for process_id in child_pids
+            ):
+                time.sleep(0.01)
+            self.assertFalse(os.path.exists(marker))
+            self.assertTrue(
+                all(
+                    not os.path.exists(f"/proc/{process_id}")
+                    for process_id in child_pids
+                )
             )
 
     def test_signal_during_supervisor_finalization_is_not_swallowed(self) -> None:
-        script = r'''
+        script = r"""
 import os, signal, sys, time
 read_fd, write_fd = os.pipe()
 child = os.fork()
@@ -2182,7 +2901,7 @@ os.close(write_fd)
 if os.read(read_fd, 1) != b'R': os._exit(66)
 os.close(read_fd)
 fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.close(fd)
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             pid_file = os.path.join(temporary_directory, "pid")
             ready = os.path.join(temporary_directory, "ready")
@@ -2268,7 +2987,7 @@ fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.close
         wait_tree.assert_called_once_with(known_tree)
 
     def test_direct_supervisor_reaps_setsid_double_fork_before_return(self) -> None:
-        script = r'''
+        script = r"""
 import os, signal, sys, time
 child = os.fork()
 if child == 0:
@@ -2287,7 +3006,7 @@ if child == 0:
     os.close(fd)
     os._exit(0)
 os.waitpid(child, 0)
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             pid_file = os.path.join(temporary_directory, "pid")
             marker = os.path.join(temporary_directory, "late")
@@ -2309,7 +3028,7 @@ os.waitpid(child, 0)
             self.assertEqual(len(os.listdir("/proc/self/fd")), before_fds)
 
     def test_direct_supervisor_timeout_cleans_escaped_descendants(self) -> None:
-        script = r'''
+        script = r"""
 import os, signal, sys, time
 signal.signal(signal.SIGTERM, signal.SIG_IGN)
 child = os.fork()
@@ -2321,7 +3040,7 @@ if child == 0:
     fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.close(fd)
     os._exit(0)
 time.sleep(2)
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             pid_file = os.path.join(temporary_directory, "pid")
             marker = os.path.join(temporary_directory, "late")
@@ -2342,12 +3061,12 @@ time.sleep(2)
                 self.assertFalse(os.path.exists(f"/proc/{escaped_pid}"))
 
     def test_direct_supervisor_signal_and_keyboard_interrupt_cleanup(self) -> None:
-        script = r'''
+        script = r"""
 import os, sys, time
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.close(fd)
 time.sleep(1)
 fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.close(fd)
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             started = os.path.join(temporary_directory, "started")
             late = os.path.join(temporary_directory, "late")
@@ -2449,7 +3168,6 @@ fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.close
             self.assertFalse(os.path.exists(site_marker))
             self.assertFalse(os.path.exists(pth_marker))
 
-
     def _run_isolated_direct_controller(
         self,
         result_path: str,
@@ -2458,7 +3176,7 @@ fd = os.open(sys.argv[2], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600); os.close
     ) -> dict[str, object]:
         self._direct_wrapper("pass")
         source_root = str(Path(command_chain_module.__file__).resolve().parents[1])
-        controller_script = r'''
+        controller_script = r"""
 import json, os, resource, sys
 sys.path.insert(0, sys.argv[1])
 from speed_of_cinnamon import process_priority
@@ -2484,10 +3202,11 @@ except BaseException as error:
 result['after'] = {name: resource.getrlimit(getattr(resource, name)) for name in names}
 with open(sys.argv[2], 'x', encoding='ascii') as handle:
     json.dump(result, handle)
-'''
+"""
         environment = {
             "LANG": "C",
             "LC_ALL": "C",
+            "HOME": str(Path(result_path).parent),
             "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
             "PYTHONDONTWRITEBYTECODE": "1",
             "TMPDIR": "/tmp",
@@ -2528,7 +3247,7 @@ with open(sys.argv[2], 'x', encoding='ascii') as handle:
         return result
 
     def test_target_and_descendant_cannot_signal_controller(self) -> None:
-        target_script = r'''
+        target_script = r"""
 import ctypes, errno, json, os, signal, sys, time
 libc = ctypes.CDLL(None, use_errno=True)
 controller = int(sys.argv[1]); controller_group = int(sys.argv[2])
@@ -2577,7 +3296,7 @@ if child == 0:
 os.close(write_fd); child_data = os.read(read_fd, 65536); os.close(read_fd)
 os.waitpid(child, 0)
 print(json.dumps({'root': attacks(), 'child': json.loads(child_data)}))
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             result_path = os.path.join(temporary_directory, "result")
             pid_file = os.path.join(temporary_directory, "pid")
@@ -2601,7 +3320,7 @@ print(json.dumps({'root': attacks(), 'child': json.loads(child_data)}))
             self.assertFalse(os.path.exists(f"/proc/{escaped_pid}"))
 
     def test_prlimit_cannot_sabotage_supervisor_or_controller(self) -> None:
-        target_script = r'''
+        target_script = r"""
 import ctypes, json, os, resource, sys
 libc = ctypes.CDLL(None, use_errno=True)
 controller = int(sys.argv[1]); supervisor = os.getppid()
@@ -2634,7 +3353,7 @@ if child == 0:
 os.close(write_fd); child_data = os.read(read_fd, 65536); os.close(read_fd)
 os.waitpid(child, 0)
 print(json.dumps({'self': self_result, 'root': attacks(), 'child': json.loads(child_data)}))
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             result = self._run_isolated_direct_controller(
                 os.path.join(temporary_directory, "result"),
@@ -2653,12 +3372,12 @@ print(json.dumps({'self': self_result, 'root': attacks(), 'child': json.loads(ch
         token = process_priority._LOCAL_MODEL_DIRECT_EXEC_TOKEN
         runtime, entry = process_priority._scope_exec_wrapper_paths()
         decoy = (runtime, "-I", entry, token)
-        script = r'''
+        script = r"""
 import json, os, sys
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 os.write(fd, b'once'); os.close(fd)
 print(json.dumps(sys.argv[2:]))
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             for index, expected in enumerate(((), decoy, decoy + decoy)):
                 marker = os.path.join(temporary_directory, f"marker-{index}")
@@ -2674,12 +3393,14 @@ print(json.dumps(sys.argv[2:]))
                 self.assertEqual(json.loads(stdout), list(expected))
                 self.assertEqual(Path(marker).read_bytes(), b"once")
 
-    def test_structural_direct_argv_without_internal_signal_gets_no_status_fd(self) -> None:
-        script = r'''
+    def test_structural_direct_argv_without_internal_signal_gets_no_status_fd(
+        self,
+    ) -> None:
+        script = r"""
 import os, sys
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 os.write(fd, b'unexpected'); os.close(fd)
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             marker = os.path.join(temporary_directory, "marker")
             command = self._direct_wrapper(script, marker)
@@ -2707,12 +3428,12 @@ os.write(fd, b'unexpected'); os.close(fd)
             )
 
     def test_post_popen_interrupts_have_single_confirmed_cleanup(self) -> None:
-        script = r'''
+        script = r"""
 import os, sys, time
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 os.write(fd, str(os.getpid()).encode('ascii')); os.close(fd)
 time.sleep(5)
-'''
+"""
         stages = tuple(
             (stage, error_type)
             for stage in (
@@ -2724,7 +3445,10 @@ time.sleep(5)
             for error_type in (OSError, KeyboardInterrupt)
         )
         for stage, error_type in stages:
-            with self.subTest(stage=stage, error=error_type.__name__), tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
+            with (
+                self.subTest(stage=stage, error=error_type.__name__),
+                tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory,
+            ):
                 pid_file = os.path.join(temporary_directory, "pid")
                 command = self._direct_wrapper(script, pid_file)
                 before_fds = len(os.listdir("/proc/self/fd"))
@@ -2770,7 +3494,9 @@ time.sleep(5)
                         side_effect=error_type(stage),
                     )
                 real_terminate = command_chain_module._terminate_bounded_process
-                real_unidentified = command_chain_module._terminate_unidentified_bounded_process
+                real_unidentified = (
+                    command_chain_module._terminate_unidentified_bounded_process
+                )
                 with (
                     interruption,
                     mock.patch.object(
@@ -2804,24 +3530,20 @@ time.sleep(5)
                     1,
                 )
                 self.assertIsNotNone(launched[0].poll())
-                self.assertTrue(
-                    launched[0].stdout is None or launched[0].stdout.closed
-                )
-                self.assertTrue(
-                    launched[0].stderr is None or launched[0].stderr.closed
-                )
+                self.assertTrue(launched[0].stdout is None or launched[0].stdout.closed)
+                self.assertTrue(launched[0].stderr is None or launched[0].stderr.closed)
                 if os.path.exists(pid_file):
                     target_pid = int(Path(pid_file).read_text(encoding="ascii"))
                     self.assertFalse(os.path.exists(f"/proc/{target_pid}"))
                 self.assertEqual(len(os.listdir("/proc/self/fd")), before_fds)
 
     def test_popen_pending_sigint_after_real_return_cleans_owned_child(self) -> None:
-        script = r'''
+        script = r"""
 import os, sys, time
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 os.write(fd, str(os.getpid()).encode('ascii')); os.close(fd)
 time.sleep(5)
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             pid_file = os.path.join(temporary_directory, "pid")
             command = self._direct_wrapper(script, pid_file)
@@ -3038,7 +3760,9 @@ time.sleep(5)
             except BaseException as error:
                 result.append(error)
 
-        caller = threading.Thread(target=invoke, name="test-blocking-popen", daemon=False)
+        caller = threading.Thread(
+            target=invoke, name="test-blocking-popen", daemon=False
+        )
         before_threads = len(threading.enumerate())
         with mock.patch.object(
             command_chain_module.subprocess,
@@ -3165,7 +3889,9 @@ time.sleep(5)
         terminate.assert_not_called()
         self.assertEqual(len(os.listdir("/proc/self/fd")), before_fds)
 
-    def test_cleanup_interrupt_retries_once_and_preserves_original_exception(self) -> None:
+    def test_cleanup_interrupt_retries_once_and_preserves_original_exception(
+        self,
+    ) -> None:
         command = self._direct_wrapper("import time; time.sleep(5)")
         before_fds = len(os.listdir("/proc/self/fd"))
         real_terminate = command_chain_module._terminate_bounded_process
@@ -3265,12 +3991,12 @@ time.sleep(5)
                     self.assertEqual(len(os.listdir("/proc/self/fd")), before_fds)
 
     def test_direct_supervisor_capability_rejects_caller_values(self) -> None:
-        script = r'''
+        script = r"""
 import os, sys
 fd = os.open(sys.argv[1], os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
 os.write(fd, b'target-ran')
 os.close(fd)
-'''
+"""
         with tempfile.TemporaryDirectory(dir="/tmp") as temporary_directory:
             for forged in (True, False, object()):
                 with self.subTest(forged=repr(forged)):
@@ -3351,9 +4077,7 @@ os.close(fd)
             )
 
         direct_calls = [
-            call
-            for call in calls
-            if call.get("label") == "capability-test"
+            call for call in calls if call.get("label") == "capability-test"
         ]
         self.assertEqual(len(direct_calls), 1)
         self.assertIs(
@@ -3547,11 +4271,14 @@ os.close(fd)
 
     def test_fd_signal_mask_setup_failure_does_not_enter_launch_body(self) -> None:
         body_entered = False
-        with mock.patch.object(
-            command_chain_module.signal,
-            "pthread_sigmask",
-            side_effect=MemoryError("signal mask setup"),
-        ), mock.patch.object(command_chain_module.os, "pipe2") as pipe2:
+        with (
+            mock.patch.object(
+                command_chain_module.signal,
+                "pthread_sigmask",
+                side_effect=MemoryError("signal mask setup"),
+            ),
+            mock.patch.object(command_chain_module.os, "pipe2") as pipe2,
+        ):
             with self.assertRaises(MemoryError):
                 with command_chain_module._bounded_process_launch_resources(
                     direct_supervisor=True,
@@ -3586,7 +4313,10 @@ os.close(fd)
         self.assertEqual(calls[-1][0], command_chain_module.signal.SIG_SETMASK)
         self.assertIs(calls[-1][1], previous_mask)
         self.assertTrue(
-            any("signal-mask restore" in note for note in getattr(primary, "__notes__", ()))
+            any(
+                "signal-mask restore" in note
+                for note in getattr(primary, "__notes__", ())
+            )
         )
 
     def test_fd_signal_mask_restore_without_primary_exception_is_raised(self) -> None:
@@ -3652,13 +4382,17 @@ os.close(fd)
             "pthread_sigmask",
             side_effect=fake_pthread_sigmask,
         ):
-            cleanup_errors = command_chain_module._close_bounded_process_final_resources(
-                None,
-                selector,
+            cleanup_errors = (
+                command_chain_module._close_bounded_process_final_resources(
+                    None,
+                    selector,
+                )
             )
 
         self.assertEqual(len(cleanup_errors), 2)
-        self.assertTrue(all(isinstance(error, KeyboardInterrupt) for error in cleanup_errors))
+        self.assertTrue(
+            all(isinstance(error, KeyboardInterrupt) for error in cleanup_errors)
+        )
         self.assertEqual(stdout.calls, 1)
         self.assertEqual(stderr.calls, 1)
         self.assertEqual(selector.close_calls, 1)
@@ -3749,7 +4483,9 @@ os.close(fd)
                 finally:
                     os.close(replacement_fd)
 
-    def test_status_reader_rejects_numeric_structural_and_wrong_pair_owner(self) -> None:
+    def test_status_reader_rejects_numeric_structural_and_wrong_pair_owner(
+        self,
+    ) -> None:
         from types import SimpleNamespace
 
         owner_attribute = (
@@ -3813,14 +4549,17 @@ os.close(fd)
             real_close(fd)
 
         try:
-            with mock.patch.object(
-                command_chain_module.os,
-                "read",
-                side_effect=ValueError("status read"),
-            ), mock.patch.object(
-                command_chain_module.os,
-                "close",
-                side_effect=fail_close,
+            with (
+                mock.patch.object(
+                    command_chain_module.os,
+                    "read",
+                    side_effect=ValueError("status read"),
+                ),
+                mock.patch.object(
+                    command_chain_module.os,
+                    "close",
+                    side_effect=fail_close,
+                ),
             ):
                 with self.assertRaises(ValueError) as raised:
                     command_chain_module._local_model_direct_status(proc)
@@ -3907,9 +4646,11 @@ os.close(fd)
                 "close",
                 side_effect=fail_pipe_close,
             ):
-                cleanup_errors = command_chain_module._close_bounded_process_final_resources(
-                    proc,
-                    selector,
+                cleanup_errors = (
+                    command_chain_module._close_bounded_process_final_resources(
+                        proc,
+                        selector,
+                    )
                 )
         finally:
             try:
@@ -3987,9 +4728,11 @@ os.close(fd)
                 "close",
                 side_effect=close_status_fd,
             ):
-                cleanup_errors = command_chain_module._close_bounded_process_final_resources(
-                    proc,
-                    selector,
+                cleanup_errors = (
+                    command_chain_module._close_bounded_process_final_resources(
+                        proc,
+                        selector,
+                    )
                 )
         finally:
             try:
@@ -3998,7 +4741,9 @@ os.close(fd)
                 pass
 
         self.assertEqual(len(cleanup_errors), 4)
-        self.assertTrue(all(isinstance(error, KeyboardInterrupt) for error in cleanup_errors))
+        self.assertTrue(
+            all(isinstance(error, KeyboardInterrupt) for error in cleanup_errors)
+        )
         self.assertEqual(status_close_calls, 1)
         self.assertEqual(stdout.calls, 1)
         self.assertEqual(stderr.calls, 1)

@@ -4,6 +4,7 @@ umask 077
 IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH="${TRUSTED_COMMAND_PATH}"
+export LC_ALL=C
 readonly MAX_DIST_ARCHIVE_BYTES=$((128 * 1024 * 1024))
 readonly MAX_DIST_MEMBERS=2000
 readonly MAX_DIST_PATH_CHARS=240
@@ -20,7 +21,7 @@ readonly VERIFY_RESIDUE_MAX_AGE_SECONDS=$((60 * 60))
 readonly INTERNAL_LOCK_MARKER="__verify-dist-locked-v1"
 
 for python_env_name in ${!PYTHON@}; do
-  unset "${python_env_name}"
+	unset "${python_env_name}"
 done
 
 lock_handoff_mode=0
@@ -29,21 +30,21 @@ parent_lock_identity=""
 parent_lock_chain=""
 handoff_deadline=""
 if [[ $# -eq 1 ]]; then
-  tarball_input="$1"
+	tarball_input="$1"
 elif [[ $# -eq 6 ]]; then
-  if [[ "$2" != "${INTERNAL_LOCK_MARKER}" ]]; then
-    printf 'usage: %s dist/speed-of-cinnamon-VERSION.tar.gz\n' "$0" >&2
-    exit 2
-  fi
-  lock_handoff_mode=1
-  tarball_input="$1"
-  parent_lock_fd="$3"
-  parent_lock_identity="$4"
-  parent_lock_chain="$5"
-  handoff_deadline="$6"
+	if [[ $2 != "${INTERNAL_LOCK_MARKER}" ]]; then
+		printf 'usage: %s dist/speed-of-cinnamon-VERSION.tar.gz\n' "$0" >&2
+		exit 2
+	fi
+	lock_handoff_mode=1
+	tarball_input="$1"
+	parent_lock_fd="$3"
+	parent_lock_identity="$4"
+	parent_lock_chain="$5"
+	handoff_deadline="$6"
 else
-  printf 'usage: %s dist/speed-of-cinnamon-VERSION.tar.gz\n' "$0" >&2
-  exit 2
+	printf 'usage: %s dist/speed-of-cinnamon-VERSION.tar.gz\n' "$0" >&2
+	exit 2
 fi
 
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -51,21 +52,22 @@ safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 safe_fs_cmd=("${VERIFY_PYTHON_INTERPRETER}" -I -S -B "${safe_fs}")
 dist_dir="${repo_dir}/dist"
 
-if (( lock_handoff_mode == 0 )); then
-  verify_timeout_seconds="${VERIFY_DIST_TIMEOUT_SECONDS:-${DIST_VERIFY_TIMEOUT_SECONDS}}"
-  if [[ ! "${verify_timeout_seconds}" =~ ^[1-9][0-9]*$ ]] || (( verify_timeout_seconds > DIST_VERIFY_TIMEOUT_SECONDS )); then
-    printf 'verification timeout is outside allowed bounds\n' >&2
-    exit 2
-  fi
+if ((lock_handoff_mode == 0)); then
+	verify_timeout_seconds="${VERIFY_DIST_TIMEOUT_SECONDS:-${DIST_VERIFY_TIMEOUT_SECONDS}}"
+	if [[ ! ${verify_timeout_seconds} =~ ^[1-9][0-9]*$ ]] || ((verify_timeout_seconds > DIST_VERIFY_TIMEOUT_SECONDS)); then
+		printf 'verification timeout is outside allowed bounds\n' >&2
+		exit 2
+	fi
 else
-  verify_timeout_seconds="${DIST_VERIFY_TIMEOUT_SECONDS}"
-  verify_deadline_monotonic="${handoff_deadline}"
+	verify_timeout_seconds="${DIST_VERIFY_TIMEOUT_SECONDS}"
+	verify_deadline_monotonic="${handoff_deadline}"
 fi
 
 remaining_deadline() {
-  local deadline=${1:-}
-  local remaining
-  if ! remaining="$(timeout --signal=KILL "${DEADLINE_HELPER_TIMEOUT_SECONDS}s" "${VERIFY_PYTHON_INTERPRETER}" -I -S -B - "${deadline}" "${DIST_VERIFY_TIMEOUT_SECONDS}" <<'PY'
+	local deadline=${1:-}
+	local remaining
+	if ! remaining="$(
+		timeout --signal=KILL "${DEADLINE_HELPER_TIMEOUT_SECONDS}s" "${VERIFY_PYTHON_INTERPRETER}" -I -S -B - "${deadline}" "${DIST_VERIFY_TIMEOUT_SECONDS}" <<'PY'
 import math
 import sys
 import time
@@ -82,31 +84,31 @@ if deadline <= now or deadline > now + maximum:
     raise SystemExit("verification deadline exceeded")
 print(f"{deadline - now:.6f}")
 PY
-)"; then
-    return 124
-  fi
-  printf '%s\n' "${remaining}"
+	)"; then
+		return 124
+	fi
+	printf '%s\n' "${remaining}"
 }
 
 run_command_bounded() {
-  local remaining
-  local status=0
-  if ! remaining="$(remaining_deadline "${verify_deadline_monotonic}")"; then
-    return 124
-  fi
-  timeout --signal=KILL "${remaining}s" "$@" || status=$?
-  if ! remaining_deadline "${verify_deadline_monotonic}" >/dev/null; then
-    return 124
-  fi
-  return "${status}"
+	local remaining
+	local status=0
+	if ! remaining="$(remaining_deadline "${verify_deadline_monotonic}")"; then
+		return 124
+	fi
+	timeout --signal=KILL "${remaining}s" "$@" || status=$?
+	if ! remaining_deadline "${verify_deadline_monotonic}" >/dev/null; then
+		return 124
+	fi
+	return "${status}"
 }
 
 run_duplex_command_bounded() {
-  local command=$1
-  local stdout_limit=$2
-  local stderr_limit=$3
-  shift 3
-  run_command_bounded "${VERIFY_PYTHON_INTERPRETER}" -I -S -B - "${command}" "${stdout_limit}" "${stderr_limit}" "$@" <<'PY'
+	local command=$1
+	local stdout_limit=$2
+	local stderr_limit=$3
+	shift 3
+	run_command_bounded "${VERIFY_PYTHON_INTERPRETER}" -I -S -B - "${command}" "${stdout_limit}" "${stderr_limit}" "$@" <<'PY'
 import ctypes
 import os
 import selectors
@@ -980,27 +982,28 @@ PY
 }
 
 run_tar_bounded() {
-  # Legacy static contract: timeout --signal=TERM --kill-after=10s "${DIST_VERIFY_TIMEOUT_SECONDS}s" tar "$@"
-  run_duplex_command_bounded tar "${MAX_DIST_LISTING_BYTES}" "${MAX_TAR_STDERR_BYTES}" "$@"
+	# Legacy static contract: timeout --signal=TERM --kill-after=10s "${DIST_VERIFY_TIMEOUT_SECONDS}s" tar "$@"
+	run_duplex_command_bounded tar "${MAX_DIST_LISTING_BYTES}" "${MAX_TAR_STDERR_BYTES}" "$@"
 }
 
 run_find_bounded() {
-  run_duplex_command_bounded find "${MAX_DIST_LISTING_BYTES}" "${MAX_TAR_STDERR_BYTES}" "$@"
+	run_duplex_command_bounded find "${MAX_DIST_LISTING_BYTES}" "${MAX_TAR_STDERR_BYTES}" "$@"
 }
 
 run_python_bounded() {
-  # Legacy static contract: timeout --signal=TERM --kill-after=10s "${DIST_VERIFY_TIMEOUT_SECONDS}s" python3 "$@"
-  run_command_bounded "${VERIFY_PYTHON_INTERPRETER}" -I -S -B "$@"
+	# Legacy static contract: timeout --signal=TERM --kill-after=10s "${DIST_VERIFY_TIMEOUT_SECONDS}s" python3 "$@"
+	run_command_bounded "${VERIFY_PYTHON_INTERPRETER}" -I -S -B "$@"
 }
 
 run_safe_fs_bounded() {
-  run_command_bounded "${safe_fs_cmd[@]}" "$@"
+	run_command_bounded "${safe_fs_cmd[@]}" "$@"
 }
 
 sweep_stale_verification_dirs() {
-  local root=$1
-  local candidates
-  if ! candidates="$(run_python_bounded - "${root}" "${MAX_VERIFY_SWEEP_ENTRIES}" "${VERIFY_RESIDUE_MAX_AGE_SECONDS}" <<'PY'
+	local root=$1
+	local candidates
+	if ! candidates="$(
+		run_python_bounded - "${root}" "${MAX_VERIFY_SWEEP_ENTRIES}" "${VERIFY_RESIDUE_MAX_AGE_SECONDS}" <<'PY'
 import os
 import re
 import stat
@@ -1063,22 +1066,22 @@ try:
 finally:
     os.close(root_fd)
 PY
-)"; then
-    return 1
-  fi
-  while IFS=$'\t' read -r path identity; do
-    [[ -z "${path}" ]] && continue
-    if ! run_safe_fs_bounded remove verify-dist "${path}" --kind dir \
-      --expected-identity "${identity}"; then
-      printf 'failed to remove stale dist verification residue: %s\n' "${path}" >&2
-      return 1
-    fi
-  done <<< "${candidates}"
+	)"; then
+		return 1
+	fi
+	while IFS=$'\t' read -r path identity; do
+		[[ -z ${path} ]] && continue
+		if ! run_safe_fs_bounded remove verify-dist "${path}" --kind dir \
+			--expected-identity "${identity}"; then
+			printf 'failed to remove stale dist verification residue: %s\n' "${path}" >&2
+			return 1
+		fi
+	done <<<"${candidates}"
 }
 
 contains_control_chars() {
-  local value=$1
-  run_python_bounded - "${value}" <<'PY'
+	local value=$1
+	run_python_bounded - "${value}" <<'PY'
 import sys
 
 value = sys.argv[1]
@@ -1092,14 +1095,14 @@ PY
 }
 
 parent_lock_state() {
-  local operation=$1
-  if [[ "$operation" == "acquire" ]]; then
-    exec "${VERIFY_PYTHON_INTERPRETER}" -I -S -B - "$operation" "${dist_dir}" "${repo_dir}/scripts/verify-dist.sh" "${verify_timeout_seconds}" "$tarball_input" \
-      "" "" "" ""
-  else
-    "${VERIFY_PYTHON_INTERPRETER}" -I -S -B - "$operation" "${dist_dir}" "${repo_dir}/scripts/verify-dist.sh" "${verify_timeout_seconds}" "$tarball_input" \
-      "${parent_lock_fd}" "${parent_lock_identity}" "${parent_lock_chain}" "${verify_deadline_monotonic}"
-  fi <<'PY'
+	local operation=$1
+	if [[ $operation == "acquire" ]]; then
+		exec "${VERIFY_PYTHON_INTERPRETER}" -I -S -B - "$operation" "${dist_dir}" "${repo_dir}/scripts/verify-dist.sh" "${verify_timeout_seconds}" "$tarball_input" \
+			"" "" "" ""
+	else
+		"${VERIFY_PYTHON_INTERPRETER}" -I -S -B - "$operation" "${dist_dir}" "${repo_dir}/scripts/verify-dist.sh" "${verify_timeout_seconds}" "$tarball_input" \
+			"${parent_lock_fd}" "${parent_lock_identity}" "${parent_lock_chain}" "${verify_deadline_monotonic}"
+	fi <<'PY'
 import math
 import os
 import stat
@@ -1298,98 +1301,97 @@ finally:
 PY
 }
 
-if (( lock_handoff_mode == 0 )); then
-  parent_lock_state acquire
+if ((lock_handoff_mode == 0)); then
+	parent_lock_state acquire
 elif ! parent_lock_state revalidate; then
-  exit 1
+	exit 1
 fi
 export VERIFY_DIST_DEADLINE_MONOTONIC="${verify_deadline_monotonic}"
 
 for tool in realpath stat tar awk mktemp find grep python3 sha256sum timeout; do
-  if ! command -v -- "${tool}" >/dev/null 2>&1; then
-    printf '%s not found.\n' "${tool}" >&2
-    exit 1
-  fi
+	if ! command -v -- "${tool}" >/dev/null 2>&1; then
+		printf '%s not found.\n' "${tool}" >&2
+		exit 1
+	fi
 done
-if [[ ! -x "${VERIFY_PYTHON_INTERPRETER}" ]]; then
-  printf 'absolute Python interpreter is invalid: %s\n' "${VERIFY_PYTHON_INTERPRETER}" >&2
-  exit 1
+if [[ ! -x ${VERIFY_PYTHON_INTERPRETER} ]]; then
+	printf 'absolute Python interpreter is invalid: %s\n' "${VERIFY_PYTHON_INTERPRETER}" >&2
+	exit 1
 fi
 
-if [[ -L "${safe_fs}" || ! -f "${safe_fs}" || "$(run_command_bounded stat -c '%F' "${safe_fs}")" != "regular file" ]]; then
-  printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
-  exit 1
+if [[ -L ${safe_fs} || ! -f ${safe_fs} || "$(run_command_bounded stat -c '%F' "${safe_fs}")" != "regular file" ]]; then
+	printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
+	exit 1
 fi
 if [[ "$(run_command_bounded stat -c '%h' "${safe_fs}")" -ne 1 ]]; then
-  printf 'safe local filesystem helper must not be hardlinked: %s\n' "${safe_fs}" >&2
-  exit 1
+	printf 'safe local filesystem helper must not be hardlinked: %s\n' "${safe_fs}" >&2
+	exit 1
 fi
 
 if contains_control_chars "${tarball_input}"; then
-  printf 'archive path contains control characters\n' >&2
-  exit 1
+	printf 'archive path contains control characters\n' >&2
+	exit 1
 fi
 tarball_name="${tarball_input##*/}"
-if [[ -z "${tarball_name}" || "${tarball_name}" == "." || "${tarball_name}" == ".." || ! "${tarball_name}" == *.tar.gz ]]; then
-  printf 'archive name is invalid: %s\n' "${tarball_input}" >&2
-  exit 1
+if [[ -z ${tarball_name} || ${tarball_name} == "." || ${tarball_name} == ".." || ${tarball_name} != *.tar.gz ]]; then
+	printf 'archive name is invalid: %s\n' "${tarball_input}" >&2
+	exit 1
 fi
 
-
-if [[ "$tarball_input" == /* ]]; then
-  requested_tarball_input="$tarball_input"
+if [[ $tarball_input == /* ]]; then
+	requested_tarball_input="$tarball_input"
 else
-  requested_tarball_input="$repo_dir/$tarball_input"
+	requested_tarball_input="$repo_dir/$tarball_input"
 fi
 if ! requested_tarball="$(run_command_bounded realpath -m -- "$requested_tarball_input")"; then
-  printf 'failed to resolve archive path\n' >&2
-  exit 1
+	printf 'failed to resolve archive path\n' >&2
+	exit 1
 fi
 expected_tarball="$dist_dir/$tarball_name"
-if [[ "$requested_tarball" != "$expected_tarball" ]]; then
-  printf 'archive must be a direct dist artifact: %s\n' "$tarball_input" >&2
-  exit 1
+if [[ $requested_tarball != "$expected_tarball" ]]; then
+	printf 'archive must be a direct dist artifact: %s\n' "$tarball_input" >&2
+	exit 1
 fi
 
-if [[ -L "$dist_dir" || ! -d "$dist_dir" ]]; then
-  printf 'dist directory is invalid: %s\n' "$dist_dir" >&2
-  exit 1
+if [[ -L $dist_dir || ! -d $dist_dir ]]; then
+	printf 'dist directory is invalid: %s\n' "$dist_dir" >&2
+	exit 1
 fi
 
 tarball="./$tarball_name"
 expected_tarball="$dist_dir/$tarball_name"
-if [[ -L "$expected_tarball" || ! -f "$expected_tarball" ]]; then
-  printf 'archive missing or invalid: %s\n' "$expected_tarball" >&2
-  exit 1
+if [[ -L $expected_tarball || ! -f $expected_tarball ]]; then
+	printf 'archive missing or invalid: %s\n' "$expected_tarball" >&2
+	exit 1
 fi
 if [[ "$(run_command_bounded stat -c '%F' "$expected_tarball")" != "regular file" ]]; then
-  printf 'archive must be a regular file: %s\n' "$expected_tarball" >&2
-  exit 1
+	printf 'archive must be a regular file: %s\n' "$expected_tarball" >&2
+	exit 1
 fi
 if [[ "$(run_command_bounded stat -c '%h' "$expected_tarball")" -ne 1 ]]; then
-  printf 'archive must not be hardlinked: %s\n' "$expected_tarball" >&2
-  exit 1
+	printf 'archive must not be hardlinked: %s\n' "$expected_tarball" >&2
+	exit 1
 fi
 tarball_bytes="$(run_command_bounded stat -c '%s' "$expected_tarball")"
-if [[ "$tarball_bytes" -le 0 || "$tarball_bytes" -gt "$MAX_DIST_ARCHIVE_BYTES" ]]; then
-  printf 'archive size is outside allowed bounds: %s bytes\n' "$tarball_bytes" >&2
-  exit 1
+if [[ $tarball_bytes -le 0 || $tarball_bytes -gt $MAX_DIST_ARCHIVE_BYTES ]]; then
+	printf 'archive size is outside allowed bounds: %s bytes\n' "$tarball_bytes" >&2
+	exit 1
 fi
 
 checksum_path="$tarball.sha256"
-if [[ -L "$checksum_path" || ! -f "$checksum_path" ]]; then
-  printf 'archive checksum file missing or invalid: %s\n' "$checksum_path" >&2
-  exit 1
+if [[ -L $checksum_path || ! -f $checksum_path ]]; then
+	printf 'archive checksum file missing or invalid: %s\n' "$checksum_path" >&2
+	exit 1
 fi
 if [[ "$(run_command_bounded stat -c '%h' "$checksum_path")" -ne 1 ]]; then
-  printf 'archive checksum file must not be hardlinked: %s\n' "$checksum_path" >&2
-  exit 1
+	printf 'archive checksum file must not be hardlinked: %s\n' "$checksum_path" >&2
+	exit 1
 fi
 
 read_checksum_bounded() {
-  local checksum_name=$1
-  local expected_name=$2
-  run_python_bounded - "$checksum_name" "$expected_name" <<'PY'
+	local checksum_name=$1
+	local expected_name=$2
+	run_python_bounded - "$checksum_name" "$expected_name" <<'PY'
 import os
 import re
 import stat
@@ -1460,89 +1462,89 @@ PY
 }
 
 checksum_value="$(read_checksum_bounded "$checksum_path" "$tarball_name")" || {
-  printf 'archive checksum file has invalid format: %s\n' "$checksum_path" >&2
-  exit 1
+	printf 'archive checksum file has invalid format: %s\n' "$checksum_path" >&2
+	exit 1
 }
 
 tmp_root="${TMPDIR:-/tmp}"
 if contains_control_chars "${tmp_root}"; then
-  printf 'temporary root contains control characters\n' >&2
-  exit 1
+	printf 'temporary root contains control characters\n' >&2
+	exit 1
 fi
-if [[ ! "${tmp_root}" == /* ]]; then
-  printf 'temporary root must be an absolute path\n' >&2
-  exit 1
+if [[ ${tmp_root} != /* ]]; then
+	printf 'temporary root must be an absolute path\n' >&2
+	exit 1
 fi
-if [[ -L "${tmp_root}" ]]; then
-  printf 'temporary root must not be a symlink\n' >&2
-  exit 1
+if [[ -L ${tmp_root} ]]; then
+	printf 'temporary root must not be a symlink\n' >&2
+	exit 1
 fi
-if [[ ! -d "${tmp_root}" || ! -w "${tmp_root}" ]]; then
-  printf 'temporary root is not a writable directory\n' >&2
-  exit 1
+if [[ ! -d ${tmp_root} || ! -w ${tmp_root} ]]; then
+	printf 'temporary root is not a writable directory\n' >&2
+	exit 1
 fi
-if [[ -L "${tmp_root}" ]]; then
-  printf 'temporary root must not be a symlink\n' >&2
-  exit 1
+if [[ -L ${tmp_root} ]]; then
+	printf 'temporary root must not be a symlink\n' >&2
+	exit 1
 fi
 if ! tmp_root="$(run_command_bounded realpath "${tmp_root}")"; then
-  printf 'failed to resolve temporary root\n' >&2
-  exit 1
+	printf 'failed to resolve temporary root\n' >&2
+	exit 1
 fi
 if ! sweep_stale_verification_dirs "${tmp_root}"; then
-  printf 'failed to sweep stale dist verification residues\n' >&2
-  exit 1
+	printf 'failed to sweep stale dist verification residues\n' >&2
+	exit 1
 fi
 if ! tmp_dir="$(run_command_bounded mktemp -d "${tmp_root}/speed-of-cinnamon-dist-verify-XXXXXX")"; then
-  printf 'failed to create temporary dist verification directory\n' >&2
-  exit 1
+	printf 'failed to create temporary dist verification directory\n' >&2
+	exit 1
 fi
-if [[ -L "${tmp_dir}" ]]; then
-  printf 'temporary dist verification directory must not be a symlink: %s\n' "${tmp_dir}" >&2
-  exit 1
+if [[ -L ${tmp_dir} ]]; then
+	printf 'temporary dist verification directory must not be a symlink: %s\n' "${tmp_dir}" >&2
+	exit 1
 fi
 if ! tmp_dir_abs="$(run_command_bounded realpath "${tmp_dir}")"; then
-  printf 'failed to resolve temporary dist verification directory: %s\n' "${tmp_dir}" >&2
-  exit 1
+	printf 'failed to resolve temporary dist verification directory: %s\n' "${tmp_dir}" >&2
+	exit 1
 fi
-if [[ "${tmp_dir_abs}" != "${tmp_root}/speed-of-cinnamon-dist-verify-"* ]]; then
-  printf 'temporary dist verification directory escaped temporary root: %s\n' "${tmp_dir}" >&2
-  exit 1
+if [[ ${tmp_dir_abs} != "${tmp_root}/speed-of-cinnamon-dist-verify-"* ]]; then
+	printf 'temporary dist verification directory escaped temporary root: %s\n' "${tmp_dir}" >&2
+	exit 1
 fi
 tmp_dir="${tmp_dir_abs}"
 tmp_dir_identity=""
 cleanup_tmpdir() {
- # Existing static contract: tmp_dir_identity="$("${safe_fs_cmd[@]}" identity verify-dist "${tmp_dir}" --kind dir)"
-  local primary_status=$?
-  local cleanup_status=0
-  if [[ -n "${tmp_dir_identity}" ]]; then
-    if run_safe_fs_bounded remove verify-dist "${tmp_dir}" --kind dir \
-      --expected-identity "${tmp_dir_identity}"; then
-      :
-    else
-      cleanup_status=$?
-      printf 'dist verification cleanup failed for identity-bound path: %s\n' "${tmp_dir}" >&2
-    fi
-  else
-    printf 'refusing dist verification cleanup without verified identity: %s\n' "${tmp_dir}" >&2
-    cleanup_status=1
-  fi
-  if (( primary_status != 0 )); then
-    if (( cleanup_status != 0 )); then
-      printf 'dist verification cleanup also failed; primary status preserved: %d\n' "${primary_status}" >&2
-    fi
-    exit "${primary_status}"
-  fi
-  if (( cleanup_status != 0 )); then
-    exit 1
-  fi
-  exit 0
+	# Existing static contract: tmp_dir_identity="$("${safe_fs_cmd[@]}" identity verify-dist "${tmp_dir}" --kind dir)"
+	local primary_status=$?
+	local cleanup_status=0
+	if [[ -n ${tmp_dir_identity} ]]; then
+		if run_safe_fs_bounded remove verify-dist "${tmp_dir}" --kind dir \
+			--expected-identity "${tmp_dir_identity}"; then
+			:
+		else
+			cleanup_status=$?
+			printf 'dist verification cleanup failed for identity-bound path: %s\n' "${tmp_dir}" >&2
+		fi
+	else
+		printf 'refusing dist verification cleanup without verified identity: %s\n' "${tmp_dir}" >&2
+		cleanup_status=1
+	fi
+	if ((primary_status != 0)); then
+		if ((cleanup_status != 0)); then
+			printf 'dist verification cleanup also failed; primary status preserved: %d\n' "${primary_status}" >&2
+		fi
+		exit "${primary_status}"
+	fi
+	if ((cleanup_status != 0)); then
+		exit 1
+	fi
+	exit 0
 }
 trap cleanup_tmpdir EXIT
 
 if ! tmp_dir_identity="$(run_safe_fs_bounded identity verify-dist "${tmp_dir}" --kind dir)"; then
-  printf 'failed to capture dist verification directory identity: %s\n' "${tmp_dir}" >&2
-  exit 1
+	printf 'failed to capture dist verification directory identity: %s\n' "${tmp_dir}" >&2
+	exit 1
 fi
 
 tarball_snapshot="${tmp_dir}/speed-of-cinnamon-verify.tar.gz"
@@ -1550,11 +1552,11 @@ tarball_snapshot="${tmp_dir}/speed-of-cinnamon-verify.tar.gz"
   --max-bytes "${MAX_DIST_ARCHIVE_BYTES}"'
 
 snapshot_archive_bounded() {
-  local source_name=$1
-  local destination_path=$2
-  local max_bytes=$3
-  local destination_identity=$4
-  run_python_bounded - "${source_name}" "${destination_path}" "${max_bytes}" "${destination_identity}" <<'PY'
+	local source_name=$1
+	local destination_path=$2
+	local max_bytes=$3
+	local destination_identity=$4
+	run_python_bounded - "${source_name}" "${destination_path}" "${max_bytes}" "${destination_identity}" <<'PY'
 import os
 import stat
 import sys
@@ -1667,55 +1669,55 @@ PY
 }
 
 if ! snapshot_archive_bounded "${tarball}" "${tarball_snapshot}" "${MAX_DIST_ARCHIVE_BYTES}" "${tmp_dir_identity}"; then
-  printf 'failed to snapshot archive for verification: %s\n' "${tarball}" >&2
-  exit 1
+	printf 'failed to snapshot archive for verification: %s\n' "${tarball}" >&2
+	exit 1
 fi
-if [[ -L "${tarball_snapshot}" || ! -f "${tarball_snapshot}" || "$(run_command_bounded stat -c '%F' "${tarball_snapshot}")" != "regular file" ]]; then
-  printf 'archive snapshot must be a regular file: %s\n' "${tarball_snapshot}" >&2
-  exit 1
+if [[ -L ${tarball_snapshot} || ! -f ${tarball_snapshot} || "$(run_command_bounded stat -c '%F' "${tarball_snapshot}")" != "regular file" ]]; then
+	printf 'archive snapshot must be a regular file: %s\n' "${tarball_snapshot}" >&2
+	exit 1
 fi
 if [[ "$(run_command_bounded stat -c '%h' "${tarball_snapshot}")" -ne 1 ]]; then
-  printf 'archive snapshot must not be hardlinked: %s\n' "${tarball_snapshot}" >&2
-  exit 1
+	printf 'archive snapshot must not be hardlinked: %s\n' "${tarball_snapshot}" >&2
+	exit 1
 fi
 snapshot_bytes="$(run_command_bounded stat -c '%s' "${tarball_snapshot}")"
-if [[ "${snapshot_bytes}" -le 0 || "${snapshot_bytes}" -gt "${MAX_DIST_ARCHIVE_BYTES}" ]]; then
-  printf 'archive snapshot size is outside allowed bounds: %s bytes\n' "${snapshot_bytes}" >&2
-  exit 1
+if [[ ${snapshot_bytes} -le 0 || ${snapshot_bytes} -gt ${MAX_DIST_ARCHIVE_BYTES} ]]; then
+	printf 'archive snapshot size is outside allowed bounds: %s bytes\n' "${snapshot_bytes}" >&2
+	exit 1
 fi
 tarball_bytes="${snapshot_bytes}"
 
 # Existing static contract: sha256sum "${tarball}"
 if ! actual_checksum="$(run_command_bounded sha256sum "${tarball_snapshot}" | run_command_bounded awk '{print tolower($1)}')"; then
-  printf 'failed to hash archive snapshot within the verification budget: %s\n' "${tarball}" >&2
-  exit 1
+	printf 'failed to hash archive snapshot within the verification budget: %s\n' "${tarball}" >&2
+	exit 1
 fi
-if [[ "${actual_checksum}" != "${checksum_value}" ]]; then
-  printf 'archive checksum mismatch: %s\n' "${tarball}" >&2
-  exit 1
+if [[ ${actual_checksum} != "${checksum_value}" ]]; then
+	printf 'archive checksum mismatch: %s\n' "${tarball}" >&2
+	exit 1
 fi
 
 release_parent_lock() {
-  if [[ ! "${parent_lock_fd}" =~ ^[3-9][0-9]*$ ]]; then
-    printf 'dist parent lock descriptor is invalid during release\n' >&2
-    return 1
-  fi
-  if ! exec {parent_lock_fd}<&-; then
-    printf 'failed to release dist parent lock\n' >&2
-    return 1
-  fi
-  parent_lock_fd=""
+	if [[ ! ${parent_lock_fd} =~ ^([3-9]|[1-9][0-9]+)$ ]]; then
+		printf 'dist parent lock descriptor is invalid during release\n' >&2
+		return 1
+	fi
+	if ! exec {parent_lock_fd}<&-; then
+		printf 'failed to release dist parent lock\n' >&2
+		return 1
+	fi
+	parent_lock_fd=""
 }
 
 if ! release_parent_lock; then
-  exit 1
+	exit 1
 fi
 
 capture_bounded_stream() {
-  local destination=$1
-  local max_bytes=$2
-  local destination_identity=$3
-  run_python_bounded -c '
+	local destination=$1
+	local max_bytes=$2
+	local destination_identity=$3
+	run_python_bounded -c '
 import os
 import stat
 import sys
@@ -1785,22 +1787,22 @@ finally:
 }
 tar_listing="${tmp_dir}/tar-listing.txt"
 if ! run_tar_bounded -tzf "${tarball_snapshot}" |
-  capture_bounded_stream "${tar_listing}" "${MAX_DIST_LISTING_BYTES}" "${tmp_dir_identity}"; then
-  printf 'failed to list archive within the verification budget: %s\n' "${tarball}" >&2
-  exit 1
+	capture_bounded_stream "${tar_listing}" "${MAX_DIST_LISTING_BYTES}" "${tmp_dir_identity}"; then
+	printf 'failed to list archive within the verification budget: %s\n' "${tarball}" >&2
+	exit 1
 fi
 # Existing static contract: tar_listing_bytes="$(stat -c '%s' "${tar_listing}")"
 tar_listing_bytes="$(run_command_bounded stat -c '%s' "${tar_listing}")"
-if [[ "${tar_listing_bytes}" -gt "${MAX_DIST_LISTING_BYTES}" ]]; then
-  printf 'archive listing exceeds allowed bounds: %s bytes\n' "${tar_listing_bytes}" >&2
-  exit 1
+if [[ ${tar_listing_bytes} -gt ${MAX_DIST_LISTING_BYTES} ]]; then
+	printf 'archive listing exceeds allowed bounds: %s bytes\n' "${tar_listing_bytes}" >&2
+	exit 1
 fi
 if ! run_command_bounded awk -F'/' '
   /(^|\/)\.\.(\/|$)/ || /^\// { print; bad = 1 }
   END { exit bad ? 1 : 0 }
-' "${tar_listing}" > /dev/null; then
-  printf 'archive contains unsafe path entries (path traversal or absolute path): %s\n' "${tarball}" >&2
-  exit 1
+' "${tar_listing}" >/dev/null; then
+	printf 'archive contains unsafe path entries (path traversal or absolute path): %s\n' "${tarball}" >&2
+	exit 1
 fi
 
 run_python_bounded - "$tarball_snapshot" "$tmp_dir" "${MAX_DIST_MEMBERS}" "${MAX_DIST_PATH_CHARS}" "${MAX_DIST_PATH_DEPTH}" "${MAX_DIST_FILE_BYTES}" "${MAX_DIST_TOTAL_EXTRACTED_BYTES}" <<'PY'
@@ -1927,33 +1929,33 @@ PY
 package_dirs_file="${tmp_dir}/package-dirs.bin"
 # Existing static contract: find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d -print0
 if ! run_find_bounded "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d -print0 |
-  capture_bounded_stream "${package_dirs_file}" "${MAX_DIST_LISTING_BYTES}" "${tmp_dir_identity}"; then
-  printf 'failed to locate archive package directory within the verification budget.\n' >&2
-  exit 1
+	capture_bounded_stream "${package_dirs_file}" "${MAX_DIST_LISTING_BYTES}" "${tmp_dir_identity}"; then
+	printf 'failed to locate archive package directory within the verification budget.\n' >&2
+	exit 1
 fi
 package_dirs=()
 while IFS= read -r -d '' path; do
-  package_dirs+=("${path}")
-done < "${package_dirs_file}"
+	package_dirs+=("${path}")
+done <"${package_dirs_file}"
 
 if [[ ${#package_dirs[@]} -ne 1 ]]; then
-  printf 'archive should contain exactly one top-level directory, found %d\n' "${#package_dirs[@]}" >&2
-  exit 1
+	printf 'archive should contain exactly one top-level directory, found %d\n' "${#package_dirs[@]}" >&2
+	exit 1
 fi
 
 package_dir="${package_dirs[0]}"
-if [[ -z "${package_dir}" || ! -d "${package_dir}" ]]; then
-  printf 'archive did not contain a package directory: %s\n' "${tarball}" >&2
-  exit 1
+if [[ -z ${package_dir} || ! -d ${package_dir} ]]; then
+	printf 'archive did not contain a package directory: %s\n' "${tarball}" >&2
+	exit 1
 fi
 
 if ! unsupported_links="$(run_find_bounded "${package_dir}" -type l -print -quit)"; then
-  printf 'failed to inspect archive expansion for symlinks.\n' >&2
-  exit 1
+	printf 'failed to inspect archive expansion for symlinks.\n' >&2
+	exit 1
 fi
-if [[ -n "${unsupported_links}" ]]; then
-  printf 'archive expansion contains unsupported symlink entries.\n' >&2
-  exit 1
+if [[ -n ${unsupported_links} ]]; then
+	printf 'archive expansion contains unsupported symlink entries.\n' >&2
+	exit 1
 fi
 
 run_python_bounded - "${package_dir}" <<'PY'
@@ -2031,61 +2033,60 @@ while pending:
 PY
 
 if run_command_bounded grep -Fq 'command -v -- python3' "${package_dir}/scripts/safe-local-fs.py"; then
-  printf 'archive backend wrapper helper must not resolve python3 through PATH at runtime.\n' >&2
-  exit 1
+	printf 'archive backend wrapper helper must not resolve python3 through PATH at runtime.\n' >&2
+	exit 1
 fi
-if ! run_command_bounded grep -Fq 'python_executable = _validate_absolute(args.python_executable, "python executable path")' "${package_dir}/scripts/safe-local-fs.py" \
-  || ! run_command_bounded grep -Fq 'write_wrapper.add_argument("python_executable")' "${package_dir}/scripts/safe-local-fs.py" \
-  || ! run_command_bounded grep -Fq ' -m speed_of_cinnamon.cli \"$@\"' "${package_dir}/scripts/safe-local-fs.py"; then
-  printf 'archive backend wrapper helper does not invoke the expected CLI module.\n' >&2
-  exit 1
+if ! run_command_bounded grep -Fq 'python_executable = _validate_absolute(args.python_executable, "python executable path")' "${package_dir}/scripts/safe-local-fs.py" ||
+	! run_command_bounded grep -Fq 'write_wrapper.add_argument("python_executable")' "${package_dir}/scripts/safe-local-fs.py" ||
+	! run_command_bounded grep -Fq ' -m speed_of_cinnamon.cli \"$@\"' "${package_dir}/scripts/safe-local-fs.py"; then
+	printf 'archive backend wrapper helper does not invoke the expected CLI module.\n' >&2
+	exit 1
 fi
 
 for path in \
-  README.md \
-  LICENSE \
-  RELEASE-MANIFEST.txt \
-  Makefile \
-  pyproject.toml \
-  packaging/speed-of-cinnamon.spec \
-  docs/architecture.md \
-  docs/cli-reference.md \
-  docs/development.md \
-  docs/fedora-cinnamon-runbook.md \
-  docs/man/speed-of-cinnamon.1 \
-  docs/man/speed-of-cinnamon-alarms.1 \
-  docs/user-guide.md \
-  docs/wiki/Home.md \
-  files/speed-of-cinnamon@H234598/applet.js \
-  files/speed-of-cinnamon@H234598/metadata.json \
-  files/speed-of-cinnamon@H234598/settings-schema.json \
-  scripts/install-local.sh \
-  scripts/local-model-e2e-acceptance.sh \
-  scripts/export-release-attestations.sh \
-  scripts/real-e2e-acceptance.sh \
-  scripts/verify-release-attestation.py \
-  scripts/safe-local-fs.py \
-  scripts/verify-local-model-e2e-attestation.sh \
-  scripts/verify-real-e2e-attestation.sh \
-  scripts/publish-github-release.sh \
-  scripts/verify-authorship.sh \
-  scripts/verify-rpm.sh \
-  src/speed_of_cinnamon/alarms.py \
-  src/speed_of_cinnamon/cli.py \
-  src/speed_of_cinnamon/setup_plan.py \
-  tests/test_alarms.py \
-  tests/test_ci_static.py \
-  tests/test_cli.py
-do
-  if [[ ! -e "${package_dir}/${path}" ]]; then
-    printf 'archive is missing %s\n' "${path}" >&2
-    exit 1
-  fi
+	README.md \
+	LICENSE \
+	RELEASE-MANIFEST.txt \
+	Makefile \
+	pyproject.toml \
+	packaging/speed-of-cinnamon.spec \
+	docs/architecture.md \
+	docs/cli-reference.md \
+	docs/development.md \
+	docs/fedora-cinnamon-runbook.md \
+	docs/man/speed-of-cinnamon.1 \
+	docs/man/speed-of-cinnamon-alarms.1 \
+	docs/user-guide.md \
+	docs/wiki/Home.md \
+	files/speed-of-cinnamon@H234598/applet.js \
+	files/speed-of-cinnamon@H234598/metadata.json \
+	files/speed-of-cinnamon@H234598/settings-schema.json \
+	scripts/install-local.sh \
+	scripts/local-model-e2e-acceptance.sh \
+	scripts/export-release-attestations.sh \
+	scripts/real-e2e-acceptance.sh \
+	scripts/verify-release-attestation.py \
+	scripts/safe-local-fs.py \
+	scripts/verify-local-model-e2e-attestation.sh \
+	scripts/verify-real-e2e-attestation.sh \
+	scripts/publish-github-release.sh \
+	scripts/verify-authorship.sh \
+	scripts/verify-rpm.sh \
+	src/speed_of_cinnamon/alarms.py \
+	src/speed_of_cinnamon/cli.py \
+	src/speed_of_cinnamon/setup_plan.py \
+	tests/test_alarms.py \
+	tests/test_ci_static.py \
+	tests/test_cli.py; do
+	if [[ ! -e "${package_dir}/${path}" ]]; then
+		printf 'archive is missing %s\n' "${path}" >&2
+		exit 1
+	fi
 done
 
 if ! run_python_bounded -m compileall -q "${package_dir}"; then
-  printf 'archive Python package compilation failed or exceeded the verification budget\n' >&2
-  exit 1
+	printf 'archive Python package compilation failed or exceeded the verification budget\n' >&2
+	exit 1
 fi
 
 printf 'Verified %s\n' "${tarball}"

@@ -1,14 +1,110 @@
 from __future__ import annotations
 
+import ast
 import unittest
 from pathlib import Path
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 VERIFY_AUTHORSHIP = REPO_ROOT / "scripts" / "verify-authorship.sh"
+INTEGRATION_COMMIT = "a2b9e0a52cf5f5310ea11a6e7b5e7723dda8d98c"
+INTEGRATION_IDENTITY = ("SOC Integration", "soc-integration@localhost")
+
+
+def _load_identity_policy():
+    source = VERIFY_AUTHORSHIP.read_text(encoding="utf-8")
+    marker = "from __future__ import annotations\n"
+    _, separator, embedded = source.partition(marker)
+    if not separator:
+        raise AssertionError("authorship verifier Python block is missing")
+    embedded, separator, _ = embedded.rpartition("\nPY\n")
+    if not separator:
+        raise AssertionError("authorship verifier Python block is unterminated")
+
+    tree = ast.parse(marker + embedded)
+    required_assignments = {
+        "expected_name",
+        "expected_email",
+        "allowed_history_commit_identities",
+    }
+    selected_nodes = []
+    found_assignments = set()
+    found_policy = False
+    for node in tree.body:
+        if isinstance(node, ast.Assign):
+            assigned_names = {
+                target.id for target in node.targets if isinstance(target, ast.Name)
+            }
+            if assigned_names & required_assignments:
+                selected_nodes.append(node)
+                found_assignments.update(assigned_names & required_assignments)
+        elif (
+            isinstance(node, ast.FunctionDef)
+            and node.name == "_commit_identity_is_allowed"
+        ):
+            selected_nodes.append(node)
+            found_policy = True
+    if found_assignments != required_assignments or not found_policy:
+        raise AssertionError("authorship identity policy is incomplete")
+
+    namespace = {}
+    policy_module = ast.fix_missing_locations(
+        ast.Module(body=selected_nodes, type_ignores=[])
+    )
+    exec(compile(policy_module, "<verify-authorship-policy>", "exec"), namespace)
+    return (
+        namespace["allowed_history_commit_identities"],
+        namespace["_commit_identity_is_allowed"],
+    )
 
 
 class VerifyAuthorshipStaticTest(unittest.TestCase):
+    def test_exact_integration_commit_identity_is_allowed(self) -> None:
+        allowed_identities, identity_is_allowed = _load_identity_policy()
+
+        self.assertEqual(len(INTEGRATION_COMMIT), 40)
+        self.assertEqual(
+            allowed_identities[INTEGRATION_COMMIT],
+            (INTEGRATION_IDENTITY, INTEGRATION_IDENTITY),
+        )
+        self.assertTrue(
+            identity_is_allowed(
+                INTEGRATION_COMMIT,
+                *INTEGRATION_IDENTITY,
+                *INTEGRATION_IDENTITY,
+            )
+        )
+
+    def test_integration_commit_rejects_different_identity(self) -> None:
+        _, identity_is_allowed = _load_identity_policy()
+
+        for author, committer in (
+            (("Other", INTEGRATION_IDENTITY[1]), INTEGRATION_IDENTITY),
+            (INTEGRATION_IDENTITY, ("Other", INTEGRATION_IDENTITY[1])),
+        ):
+            with self.subTest(author=author, committer=committer):
+                self.assertFalse(
+                    identity_is_allowed(
+                        INTEGRATION_COMMIT,
+                        *author,
+                        *committer,
+                    )
+                )
+
+    def test_integration_identity_rejects_different_commit(self) -> None:
+        _, identity_is_allowed = _load_identity_policy()
+        different_commit = "b" + INTEGRATION_COMMIT[1:]
+
+        self.assertEqual(len(different_commit), 40)
+        self.assertNotEqual(different_commit, INTEGRATION_COMMIT)
+        self.assertFalse(
+            identity_is_allowed(
+                different_commit,
+                *INTEGRATION_IDENTITY,
+                *INTEGRATION_IDENTITY,
+            )
+        )
+
     def test_git_identity_output_is_deterministic(self) -> None:
         source = VERIFY_AUTHORSHIP.read_text(encoding="utf-8")
 
@@ -20,8 +116,8 @@ class VerifyAuthorshipStaticTest(unittest.TestCase):
 
         self.assertIn("FORBIDDEN_SCAN_CHUNK_BYTES = 1 << 20", source)
         self.assertIn("FORBIDDEN_SCAN_OVERLAP_CHARS = 64", source)
-        self.assertIn("getattr(os, \"O_NOFOLLOW\", 0)", source)
-        self.assertIn("getattr(os, \"O_NONBLOCK\", 0)", source)
+        self.assertIn('getattr(os, "O_NOFOLLOW", 0)', source)
+        self.assertIn('getattr(os, "O_NONBLOCK", 0)', source)
         self.assertIn("stat.S_ISREG(os.fstat(fd).st_mode)", source)
         self.assertIn("overlap = candidate[-FORBIDDEN_SCAN_OVERLAP_CHARS:]", source)
 

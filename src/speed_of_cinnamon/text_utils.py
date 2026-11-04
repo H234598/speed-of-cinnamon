@@ -31,11 +31,15 @@ SAFE_CHAR_MAP = {
 def sanitize_special_chars(text: str) -> str:
     if not isinstance(text, str) or isinstance(text, bool):
         raise ValueError("text must be text")
-    if text.isascii() and all((char >= " " and char != "\x7f") or char in "\n\t" for char in text):
+    if text.isascii() and all(
+        (char >= " " and char != "\x7f") or char in "\n\t" for char in text
+    ):
         return text
     parts: list[str] = []
     for char in text:
-        if char not in "\n\t" and (char < " " or unicodedata.category(char).startswith("C")):
+        if char not in "\n\t" and (
+            char < " " or unicodedata.category(char).startswith("C")
+        ):
             continue
         if unicodedata.category(char).startswith("M"):
             continue

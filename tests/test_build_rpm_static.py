@@ -69,7 +69,7 @@ class BuildRpmStaticTest(unittest.TestCase):
 
     def _spec_rewrite_program(self) -> str:
         return self._embedded_python_program(
-            '"${python_bin}" -I -B - <<\'PY\' "${spec_file}"'
+            '"${python_bin}" -I -B - "${spec_file}" "${version}" <<\'PY\''
         )
 
     def _rpmbuild_setup_program(self) -> str:
@@ -92,7 +92,9 @@ class BuildRpmStaticTest(unittest.TestCase):
     ) -> subprocess.CompletedProcess[str]:
         if stage_identity is None:
             stat_result = stage.stat()
-            stage_identity = f"{stat_result.st_dev}:{stat_result.st_ino}:{stat_result.st_mode}"
+            stage_identity = (
+                f"{stat_result.st_dev}:{stat_result.st_ino}:{stat_result.st_mode}"
+            )
         for root_name in ("RPMS", "SRPMS"):
             (stage / root_name).mkdir(exist_ok=True)
         if final.exists() and final.is_dir() and not final.is_symlink():
@@ -196,14 +198,17 @@ class BuildRpmStaticTest(unittest.TestCase):
         primary_error: BaseException | None = None
         try:
             before = os.fstat(descriptor)
-            if not stat.S_ISREG(before.st_mode) or before.st_size > _PID_RECORD_MAX_BYTES:
+            if (
+                not stat.S_ISREG(before.st_mode)
+                or before.st_size > _PID_RECORD_MAX_BYTES
+            ):
                 return _PID_RECORD_MALFORMED, None
             path_before = os.stat(record, follow_symlinks=False)
-            if (
-                not stat.S_ISREG(path_before.st_mode)
-                or (path_before.st_dev, path_before.st_ino, path_before.st_mode)
-                != (before.st_dev, before.st_ino, before.st_mode)
-            ):
+            if not stat.S_ISREG(path_before.st_mode) or (
+                path_before.st_dev,
+                path_before.st_ino,
+                path_before.st_mode,
+            ) != (before.st_dev, before.st_ino, before.st_mode):
                 return _PID_RECORD_MALFORMED, None
             payload = os.read(descriptor, _PID_RECORD_MAX_BYTES + 1)
             after = os.fstat(descriptor)
@@ -321,7 +326,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         except (FileNotFoundError, ProcessLookupError, ValueError):
             return None
         except OSError as error:
-            raise RuntimeError(f"could not read owned PID record identity: {record}") from error
+            raise RuntimeError(
+                f"could not read owned PID record identity: {record}"
+            ) from error
 
         try:
             try:
@@ -335,7 +342,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         except (FileNotFoundError, ProcessLookupError, ValueError):
             return None
         except OSError as error:
-            raise RuntimeError(f"could not revalidate owned PID record identity: {record}") from error
+            raise RuntimeError(
+                f"could not revalidate owned PID record identity: {record}"
+            ) from error
         except _PidfdBindingError:
             raise
         else:
@@ -393,7 +402,9 @@ class BuildRpmStaticTest(unittest.TestCase):
             raise
 
     @staticmethod
-    def _readline_bounded(stream: object, *, timeout: float, max_bytes: int = 4096) -> str:
+    def _readline_bounded(
+        stream: object, *, timeout: float, max_bytes: int = 4096
+    ) -> str:
         """Read one pipe line without allowing a partial line to block forever."""
         descriptor = stream.fileno()  # type: ignore[union-attr]
         deadline = time.monotonic() + timeout
@@ -461,11 +472,7 @@ class BuildRpmStaticTest(unittest.TestCase):
             except ProcessLookupError:
                 pass
             except BaseException as error:
-                errors.append(
-                    RuntimeError(
-                        f"{label}: {type(error).__name__}: {error}"
-                    )
-                )
+                errors.append(RuntimeError(f"{label}: {type(error).__name__}: {error}"))
 
         poll_errors: set[str] = set()
 
@@ -475,9 +482,7 @@ class BuildRpmStaticTest(unittest.TestCase):
             except BaseException as error:
                 if label not in poll_errors:
                     errors.append(
-                        RuntimeError(
-                            f"{label}: {type(error).__name__}: {error}"
-                        )
+                        RuntimeError(f"{label}: {type(error).__name__}: {error}")
                     )
                     poll_errors.add(label)
                 return False
@@ -518,16 +523,17 @@ class BuildRpmStaticTest(unittest.TestCase):
             exited = True
             for pidfd, label in [
                 (process_pidfd, "harness root exit poll"),
-                *((pidfd, f"harness child {pidfd} exit poll") for pidfd in owned_pidfds),
+                *(
+                    (pidfd, f"harness child {pidfd} exit poll")
+                    for pidfd in owned_pidfds
+                ),
             ]:
                 try:
                     if not self._pidfd_exited(pidfd, timeout=0):
                         exited = False
                 except BaseException as error:
                     errors.append(
-                        RuntimeError(
-                            f"{label}: {type(error).__name__}: {error}"
-                        )
+                        RuntimeError(f"{label}: {type(error).__name__}: {error}")
                     )
                     exited = False
             if exited:
@@ -574,7 +580,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         if root_unconfirmed:
             errors.append(RuntimeError("harness root exit remained unconfirmed"))
         for pidfd in sorted(unconfirmed):
-            errors.append(RuntimeError(f"harness child {pidfd} exit remained unconfirmed"))
+            errors.append(
+                RuntimeError(f"harness child {pidfd} exit remained unconfirmed")
+            )
         try:
             process.wait(timeout=max(0.25, cleanup_deadline - time.monotonic()))
         except subprocess.TimeoutExpired as error:
@@ -900,13 +908,17 @@ class BuildRpmStaticTest(unittest.TestCase):
             except BaseException as error:
                 errors.append(error)
 
-        def signal_owned(process_id: int, expected: tuple[int, int, int, int], signum: signal.Signals) -> None:
+        def signal_owned(
+            process_id: int, expected: tuple[int, int, int, int], signum: signal.Signals
+        ) -> None:
             try:
                 current = self._read_proc_identity(process_id)
             except (FileNotFoundError, ProcessLookupError, ValueError):
                 return
             if current[:2] != expected[:2] or current[1] != os.getpid():
-                errors.append(RuntimeError(f"unbound harness child {process_id} changed identity"))
+                errors.append(
+                    RuntimeError(f"unbound harness child {process_id} changed identity")
+                )
                 return
             try:
                 if current[2] == expected[2] and current[3] == expected[3]:
@@ -1160,7 +1172,10 @@ class BuildRpmStaticTest(unittest.TestCase):
                         primary_cleanup_error.add_note(
                             f"harness additional cleanup failed: {cleanup_error}"
                         )
-                    if completed_result is not None and completed_result.returncode != 0:
+                    if (
+                        completed_result is not None
+                        and completed_result.returncode != 0
+                    ):
                         for cleanup_error in cleanup_errors:
                             print(
                                 f"harness cleanup diagnostic: {cleanup_error}",
@@ -1175,7 +1190,10 @@ class BuildRpmStaticTest(unittest.TestCase):
                             f"harness ownership cleanup failed: {cleanup_error}"
                         )
                 else:
-                    if completed_result is not None and completed_result.returncode != 0:
+                    if (
+                        completed_result is not None
+                        and completed_result.returncode != 0
+                    ):
                         for cleanup_error in setup_cleanup_errors:
                             print(
                                 f"harness ownership cleanup diagnostic: {cleanup_error}",
@@ -1274,11 +1292,15 @@ class BuildRpmStaticTest(unittest.TestCase):
             message = f"{message}; cleanup close failed: {close_error}"
         self.fail(message)
 
-    def _run_outer_cleanup_harness(self, root: Path, mode: str) -> subprocess.CompletedProcess[str]:
+    def _run_outer_cleanup_harness(
+        self, root: Path, mode: str
+    ) -> subprocess.CompletedProcess[str]:
         root.mkdir(parents=True, mode=0o700)
         source = BUILD_RPM.read_text(encoding="utf-8")
         start = source.index("cleanup_now_ns() {")
-        end = source.index("trap cleanup_on_exit EXIT", start) + len("trap cleanup_on_exit EXIT")
+        end = source.index("trap cleanup_on_exit EXIT", start) + len(
+            "trap cleanup_on_exit EXIT"
+        )
         cleanup_block = source[start:end]
         log = root / "safe-fs.log"
         stub = root / "safe-fs-stub.sh"
@@ -1286,10 +1308,10 @@ class BuildRpmStaticTest(unittest.TestCase):
         stub.write_text(
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
-            "printf '%s\\n' \"$*\" >> \"${SAFE_FS_LOG}\"\n"
-            "if [[ -n \"${SAFE_FS_DELAY:-}\" ]]; then exec sleep \"${SAFE_FS_DELAY}\"; fi\n"
-            "if [[ -n \"${SAFE_FS_STATUS:-}\" ]]; then exit \"${SAFE_FS_STATUS}\"; fi\n"
-            f"exec python3 {str(real_helper)!r} \"$@\"\n",
+            'printf \'%s\\n\' "$*" >> "${SAFE_FS_LOG}"\n'
+            'if [[ -n "${SAFE_FS_DELAY:-}" ]]; then exec sleep "${SAFE_FS_DELAY}"; fi\n'
+            'if [[ -n "${SAFE_FS_STATUS:-}" ]]; then exit "${SAFE_FS_STATUS}"; fi\n'
+            f'exec python3 {str(real_helper)!r} "$@"\n',
             encoding="utf-8",
         )
         stub.chmod(0o700)
@@ -1297,8 +1319,7 @@ class BuildRpmStaticTest(unittest.TestCase):
         if mode == "clock-blocked":
             clock_stub = root / "clock-stub.sh"
             clock_stub.write_text(
-                "#!/usr/bin/env bash\n"
-                "exec sleep 60\n",
+                "#!/usr/bin/env bash\n" "exec sleep 60\n",
                 encoding="utf-8",
             )
             clock_stub.chmod(0o700)
@@ -1311,9 +1332,9 @@ class BuildRpmStaticTest(unittest.TestCase):
                 "set -euo pipefail\n"
                 "state=$1\n"
                 "count=0\n"
-                "if [[ -f \"$state\" ]]; then count=$(<\"$state\"); fi\n"
+                'if [[ -f "$state" ]]; then count=$(<"$state"); fi\n'
                 "count=$((count + 1))\n"
-                "printf '%s\\n' \"$count\" > \"$state\"\n"
+                'printf \'%s\\n\' "$count" > "$state"\n'
                 "if (( count == 1 )); then\n"
                 "  python3 -I -B -c 'import time; print(time.monotonic_ns() + 4950000000)'\n"
                 "elif (( count == 2 )); then\n"
@@ -1335,11 +1356,11 @@ class BuildRpmStaticTest(unittest.TestCase):
                 "state=$1\n"
                 "base_path=$2\n"
                 "count=0\n"
-                "if [[ -f \"$state\" ]]; then count=$(<\"$state\"); fi\n"
+                'if [[ -f "$state" ]]; then count=$(<"$state"); fi\n'
                 "count=$((count + 1))\n"
-                "printf '%s\\n' \"$count\" > \"$state\"\n"
+                'printf \'%s\\n\' "$count" > "$state"\n'
                 "if (( count == 1 )); then\n"
-                "  python3 - \"$base_path\" \"${4:-}\" <<'PY'\n"
+                '  python3 - "$base_path" "${4:-}" <<\'PY\'\n'
                 "import re\n"
                 "import sys\n"
                 "import time\n"
@@ -1356,7 +1377,7 @@ class BuildRpmStaticTest(unittest.TestCase):
                 "print(base + int(match.group(1)))\n"
                 "PY\n"
                 "elif (( count == 2 )); then\n"
-                "  base=$(<\"$base_path\")\n"
+                '  base=$(<"$base_path")\n'
                 "  printf '%s\\n' \"$((base + 4800000000))\"\n"
                 "else\n"
                 "  exit 1\n"
@@ -1364,7 +1385,9 @@ class BuildRpmStaticTest(unittest.TestCase):
                 encoding="utf-8",
             )
             clock_stub.chmod(0o700)
-            clock_command = f"(bash {str(clock_stub)!r} {str(clock_state)!r} {str(clock_base)!r})"
+            clock_command = (
+                f"(bash {str(clock_stub)!r} {str(clock_state)!r} {str(clock_base)!r})"
+            )
         elif mode == "clock-post-blocked":
             clock_stub = root / "clock-stub.sh"
             clock_state = root / "clock-state"
@@ -1374,10 +1397,10 @@ class BuildRpmStaticTest(unittest.TestCase):
                 "state=$1\n"
                 "shift\n"
                 "count=0\n"
-                "if [[ -f \"$state\" ]]; then count=$(<\"$state\"); fi\n"
+                'if [[ -f "$state" ]]; then count=$(<"$state"); fi\n'
                 "count=$((count + 1))\n"
-                "printf '%s\\n' \"$count\" > \"$state\"\n"
-                "if (( count == 3 )); then exec sleep 60; else python3 -I -B \"$@\"; fi\n",
+                'printf \'%s\\n\' "$count" > "$state"\n'
+                'if (( count == 3 )); then exec sleep 60; else python3 -I -B "$@"; fi\n',
                 encoding="utf-8",
             )
             clock_stub.chmod(0o700)
@@ -1392,7 +1415,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         stage_stat = stage.stat()
         stage_identity = f"{stage_stat.st_dev}:{stage_stat.st_ino}:{stage_stat.st_mode}"
         workspace_stat = workspace.stat()
-        workspace_identity = f"{workspace_stat.st_dev}:{workspace_stat.st_ino}:{workspace_stat.st_mode}"
+        workspace_identity = (
+            f"{workspace_stat.st_dev}:{workspace_stat.st_ino}:{workspace_stat.st_mode}"
+        )
         if mode == "normal":
             for path in (publish, recovery):
                 (path / "marker").unlink()
@@ -1421,11 +1446,7 @@ class BuildRpmStaticTest(unittest.TestCase):
             "printf 'ready\\n'\n"
         )
         if mode == "normal":
-            harness += (
-                "publish_workspace=''\n"
-                "publish_recovery=''\n"
-                "exit 0\n"
-            )
+            harness += "publish_workspace=''\n" "publish_recovery=''\n" "exit 0\n"
         elif mode == "blocked":
             harness += (
                 "publish_committed=0\n"
@@ -1438,11 +1459,7 @@ class BuildRpmStaticTest(unittest.TestCase):
         elif mode == "clock-blocked":
             harness += "exit 0\n"
         elif mode == "clock-post-blocked":
-            harness += (
-                "publish_committed=0\n"
-                "export SAFE_FS_STATUS=77\n"
-                "exit 7\n"
-            )
+            harness += "publish_committed=0\n" "export SAFE_FS_STATUS=77\n" "exit 7\n"
         elif mode == "stage-unverified":
             harness += (
                 "publish_committed=0\n"
@@ -1492,19 +1509,27 @@ class BuildRpmStaticTest(unittest.TestCase):
                     process,
                     baseline_children=baseline_children,
                 ):
-                    open_error.add_note(f"readiness launch cleanup failed: {cleanup_error}")
+                    open_error.add_note(
+                        f"readiness launch cleanup failed: {cleanup_error}"
+                    )
                 raise
             if mode == "term":
                 self.assertIsNotNone(process.stdout)
-                self.assertEqual(self._readline_bounded(process.stdout, timeout=2), "ready\n")
+                self.assertEqual(
+                    self._readline_bounded(process.stdout, timeout=2), "ready\n"
+                )
                 self._signal_pidfd(process_pidfd, signal.SIGTERM)
             elif mode == "kill":
                 self.assertIsNotNone(process.stdout)
-                self.assertEqual(self._readline_bounded(process.stdout, timeout=2), "ready\n")
+                self.assertEqual(
+                    self._readline_bounded(process.stdout, timeout=2), "ready\n"
+                )
                 self._signal_pidfd(process_pidfd, signal.SIGKILL)
             elif mode == "blocked":
                 self.assertIsNotNone(process.stdout)
-                self.assertEqual(self._readline_bounded(process.stdout, timeout=2), "ready\n")
+                self.assertEqual(
+                    self._readline_bounded(process.stdout, timeout=2), "ready\n"
+                )
             return self._communicate_bounded_process(
                 process,
                 process_pidfd=process_pidfd,
@@ -1536,7 +1561,9 @@ class BuildRpmStaticTest(unittest.TestCase):
             if cleanup_errors:
                 if primary_error is not None:
                     for cleanup_error in cleanup_errors:
-                        primary_error.add_note(f"readiness final cleanup failed: {cleanup_error}")
+                        primary_error.add_note(
+                            f"readiness final cleanup failed: {cleanup_error}"
+                        )
                 else:
                     deferred_cleanup_error = cleanup_errors[0]
             if subreaper_enabled:
@@ -1604,7 +1631,7 @@ class BuildRpmStaticTest(unittest.TestCase):
             f"{str(REPO_ROOT / 'scripts' / 'rpm-lifecycle-supervisor.py')!r}\n"
             "status=$?\n"
             "printf 'status=%s\\n' \"$status\"\n"
-            "exit \"$status\"\n"
+            'exit "$status"\n'
         )
         started = time.monotonic()
         result = self._run_bounded_harness(
@@ -1615,13 +1642,18 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertLess(time.monotonic() - started, 4)
         return result
 
-    def _run_post_commit_cleanup_harness(self, root: Path) -> subprocess.CompletedProcess[str]:
+    def _run_post_commit_cleanup_harness(
+        self, root: Path
+    ) -> subprocess.CompletedProcess[str]:
         root.mkdir(parents=True, exist_ok=True)
         source = BUILD_RPM.read_text(encoding="utf-8")
         helper_start = source.index("cleanup_now_ns() {")
         helper_end = source.index("trap cleanup_on_exit EXIT", helper_start)
         helper_block = source[helper_start:helper_end]
-        post_start = source.index("stage_cleanup_status=0\n", source.index("# RPM output enumeration stays bounded"))
+        post_start = source.index(
+            "stage_cleanup_status=0\n",
+            source.index("# RPM output enumeration stays bounded"),
+        )
         post_block = source[post_start:]
         log = root / "safe-fs.log"
         stub = root / "blocking-safe-fs.sh"
@@ -1629,9 +1661,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         stub.write_text(
             "#!/usr/bin/env bash\n"
             "set -euo pipefail\n"
-            "printf '%s\\n' \"$*\" >> \"${SAFE_FS_LOG}\"\n"
+            'printf \'%s\\n\' "$*" >> "${SAFE_FS_LOG}"\n'
             "exec sleep 60\n"
-            f"exec python3 {str(real_helper)!r} \"$@\"\n",
+            f'exec python3 {str(real_helper)!r} "$@"\n',
             encoding="utf-8",
         )
         stub.chmod(0o700)
@@ -1728,7 +1760,8 @@ class BuildRpmStaticTest(unittest.TestCase):
                 raise ValueError(f"unknown leaf race: {leaf_race}")
             output_program = output_program.replace(
                 "                output_bytes_for_path = len(os.fsencode(path)) + 1\n",
-                mutation + "                output_bytes_for_path = len(os.fsencode(path)) + 1\n",
+                mutation
+                + "                output_bytes_for_path = len(os.fsencode(path)) + 1\n",
                 1,
             )
         if output_root_race:
@@ -1745,16 +1778,18 @@ class BuildRpmStaticTest(unittest.TestCase):
             )
         if output_root_preopen_race is not None:
             if output_root_preopen_race not in {"RPMS", "SRPMS"}:
-                raise ValueError(f"unknown output root race: {output_root_preopen_race}")
+                raise ValueError(
+                    f"unknown output root race: {output_root_preopen_race}"
+                )
             output_program = output_program.replace(
-                "check_final_directory()\ncheck_output_roots()\nfor root_name in (\"RPMS\", \"SRPMS\"):\n",
+                'check_final_directory()\ncheck_output_roots()\nfor root_name in ("RPMS", "SRPMS"):\n',
                 "check_final_directory()\n"
                 f"os.rename(os.path.join(final_path, {output_root_preopen_race!r}), "
                 f"os.path.join(final_path, {output_root_preopen_race + '.pre-open-race'!r}))\n"
                 f"os.mkdir(os.path.join(final_path, {output_root_preopen_race!r}))\n"
                 f"with open(os.path.join(final_path, {output_root_preopen_race!r}, 'attacker.rpm'), 'w', encoding='utf-8') as handle:\n"
                 "    handle.write('attacker\\n')\n"
-                "check_output_roots()\nfor root_name in (\"RPMS\", \"SRPMS\"):\n",
+                'check_output_roots()\nfor root_name in ("RPMS", "SRPMS"):\n',
                 1,
             )
         output_start = source.index("# RPM output enumeration stays bounded")
@@ -1769,7 +1804,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         (final_contents / "RPMS" / "z.rpm").write_text("z\n", encoding="utf-8")
         (final_contents / "SRPMS" / "a.src.rpm").write_text("a\n", encoding="utf-8")
         for index in range(extra_entries):
-            (final_contents / "RPMS" / f"unrelated-{index}").write_text("x\n", encoding="utf-8")
+            (final_contents / "RPMS" / f"unrelated-{index}").write_text(
+                "x\n", encoding="utf-8"
+            )
         if final_symlink:
             final.symlink_to(final_contents.name, target_is_directory=True)
         final_stat = final_contents.stat()
@@ -1794,7 +1831,7 @@ class BuildRpmStaticTest(unittest.TestCase):
             f"final_topdir_identity={final_identity!r}\n"
             f"final_rpms_identity={rpms_identity!r}\n"
             f"final_srpms_identity={srpms_identity!r}\n"
-            "exec {final_topdir_fd}<\"${final_topdir}\"\n"
+            'exec {final_topdir_fd}<"${final_topdir}"\n'
             f"{replacement}"
             f"trap 'touch {str(cleanup)!r}' EXIT\n"
             f"{output_block}\n"
@@ -1812,7 +1849,11 @@ class BuildRpmStaticTest(unittest.TestCase):
             root = Path(tmp)
             normal = self._run_outer_cleanup_harness(root / "normal", "normal")
             self.assertEqual(normal.returncode, 0, normal.stderr)
-            normal_log = (root / "normal" / "safe-fs.log").read_text(encoding="utf-8").splitlines()
+            normal_log = (
+                (root / "normal" / "safe-fs.log")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
             self.assertEqual(len(normal_log), 2)
             self.assertIn("--kind dir", normal_log[0])
             self.assertFalse((root / "normal" / "stage").exists())
@@ -1884,7 +1925,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         original_exited = self._pidfd_exited
         root_pidfd: list[int] = []
 
-        def tracking_open(process: subprocess.Popen[str]) -> tuple[int, tuple[int, int, int, int]]:
+        def tracking_open(
+            process: subprocess.Popen[str],
+        ) -> tuple[int, tuple[int, int, int, int]]:
             pidfd, identity = original_open(process)
             root_pidfd.append(pidfd)
             return pidfd, identity
@@ -1958,7 +2001,9 @@ class BuildRpmStaticTest(unittest.TestCase):
 
                 for record in (missing, malformed, stale_record, foreign_record):
                     with self.subTest(record=record.name):
-                        self.assertFalse(self._pidfd_record_exited(record, timeout=0.05))
+                        self.assertFalse(
+                            self._pidfd_record_exited(record, timeout=0.05)
+                        )
 
                 signal_calls: list[int] = []
                 original_signal = self._signal_pidfd
@@ -2002,7 +2047,12 @@ class BuildRpmStaticTest(unittest.TestCase):
             original_open = os.open
             observed_flags: list[int] = []
 
-            def tracking_open(path: os.PathLike[str] | str, flags: int, *args: object, **kwargs: object) -> int:
+            def tracking_open(
+                path: os.PathLike[str] | str,
+                flags: int,
+                *args: object,
+                **kwargs: object,
+            ) -> int:
                 if Path(path) == valid:
                     observed_flags.append(flags)
                 return original_open(path, flags, *args, **kwargs)
@@ -2023,7 +2073,9 @@ class BuildRpmStaticTest(unittest.TestCase):
                 with self.subTest(record=name):
                     path = root / f"{name}.pid"
                     path.write_bytes(payload)
-                    self.assertEqual(self._read_pid_record(path)[0], _PID_RECORD_MALFORMED)
+                    self.assertEqual(
+                        self._read_pid_record(path)[0], _PID_RECORD_MALFORMED
+                    )
 
     def test_pidfd_open_failure_does_not_cache_record_ownership(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2046,7 +2098,9 @@ class BuildRpmStaticTest(unittest.TestCase):
 
                 os.pidfd_open = fail_pidfd_open
                 try:
-                    with self.assertRaisesRegex(_PidfdBindingError, "could not open owned PIDFD"):
+                    with self.assertRaisesRegex(
+                        _PidfdBindingError, "could not open owned PIDFD"
+                    ):
                         self._open_owned_pidfd(record, expected_parent_pid=os.getpid())
                 finally:
                     os.pidfd_open = original_pidfd_open
@@ -2126,7 +2180,11 @@ class BuildRpmStaticTest(unittest.TestCase):
         def tracking_popen(*args: object, **kwargs: object) -> subprocess.Popen[str]:
             process = original_popen(*args, **kwargs)
             launched.append(process)
-            streams.extend(stream for stream in (process.stdout, process.stderr) if stream is not None)
+            streams.extend(
+                stream
+                for stream in (process.stdout, process.stderr)
+                if stream is not None
+            )
             return process
 
         def fail_communicate(
@@ -2138,7 +2196,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         original_popen.communicate = fail_communicate  # type: ignore[method-assign]
         try:
             with tempfile.TemporaryDirectory() as tmp:
-                with self.assertRaisesRegex(OSError, "injected communicate failure") as raised:
+                with self.assertRaisesRegex(
+                    OSError, "injected communicate failure"
+                ) as raised:
                     self._run_bounded_harness(
                         [sys.executable, "-c", "import time; time.sleep(60)"],
                         cwd=Path(tmp),
@@ -2150,12 +2210,16 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertEqual(len(launched), 1)
         self.assertIsNotNone(launched[0].returncode)
         self.assertTrue(all(getattr(stream, "closed", False) for stream in streams))
-        self.assertEqual(str(raised.exception), "[Errno 5] injected communicate failure")
+        self.assertEqual(
+            str(raised.exception), "[Errno 5] injected communicate failure"
+        )
 
     def test_pid_record_reread_failure_cannot_escape_timeout_cleanup(self) -> None:
         original_reader = self._read_pid_record
 
-        def fail_reader(_record: Path) -> tuple[str, tuple[int, int, int, int, int] | None]:
+        def fail_reader(
+            _record: Path,
+        ) -> tuple[str, tuple[int, int, int, int, int] | None]:
             raise OSError(errno.EIO, "injected PID record reread failure")
 
         self._read_pid_record = fail_reader
@@ -2195,7 +2259,9 @@ class BuildRpmStaticTest(unittest.TestCase):
     def test_slow_many_pid_records_stop_at_one_absolute_deadline(self) -> None:
         original_reader = self._read_pid_record
 
-        def slow_missing(_record: Path) -> tuple[str, tuple[int, int, int, int, int] | None]:
+        def slow_missing(
+            _record: Path,
+        ) -> tuple[str, tuple[int, int, int, int, int] | None]:
             time.sleep(0.005)
             return _PID_RECORD_MISSING, None
 
@@ -2251,7 +2317,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         launched: list[subprocess.Popen[str]] = []
         streams: list[object] = []
 
-        def fail_open(_process: subprocess.Popen[str]) -> tuple[int, tuple[int, int, int, int]]:
+        def fail_open(
+            _process: subprocess.Popen[str],
+        ) -> tuple[int, tuple[int, int, int, int]]:
             raise RuntimeError("injected harness pidfd bind failure")
 
         def tracking_popen(*args: object, **kwargs: object) -> subprocess.Popen[str]:
@@ -2307,7 +2375,9 @@ class BuildRpmStaticTest(unittest.TestCase):
 
         def fail_root_identity(process_id: int) -> tuple[int, int, int, int]:
             if launched and process_id == launched[0].pid:
-                raise OSError(errno.EIO, "injected persistent root identity read failure")
+                raise OSError(
+                    errno.EIO, "injected persistent root identity read failure"
+                )
             return original_read_identity(process_id)
 
         os.pidfd_open = fail_pidfd_open
@@ -2332,10 +2402,10 @@ class BuildRpmStaticTest(unittest.TestCase):
                                 "time.sleep(60)"
                             ),
                             str(hidden_record),
-                            ],
-                            cwd=Path(tmp),
-                            timeout=2,
-                        )
+                        ],
+                        cwd=Path(tmp),
+                        timeout=2,
+                    )
                 self.assertTrue(hidden_record.exists())
                 hidden_pid = int(hidden_record.read_text(encoding="ascii"))
                 self.assertIsNone(self._process_state(hidden_pid))
@@ -2356,7 +2426,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertEqual(len(launched), 1)
         self.assertIsNotNone(launched[0].returncode)
 
-    def test_cleanup_launched_process_retains_popen_authority_after_waitpid_eio(self) -> None:
+    def test_cleanup_launched_process_retains_popen_authority_after_waitpid_eio(
+        self,
+    ) -> None:
         process = subprocess.Popen(
             [sys.executable, "-c", "import time; time.sleep(60)"],
             start_new_session=True,
@@ -2487,7 +2559,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout, "probe\n")
 
-    def test_rpm_privileged_watchdog_ignores_function_and_option_injection(self) -> None:
+    def test_rpm_privileged_watchdog_ignores_function_and_option_injection(
+        self,
+    ) -> None:
         environment = os.environ.copy()
         injected = "() { printf 'injected\\n' >&2; exit 77; }"
         for name in (
@@ -2498,7 +2572,9 @@ class BuildRpmStaticTest(unittest.TestCase):
             environment[name] = injected
         environment["SHELLOPTS"] = "errexit:nounset:xtrace"
         environment["BASHOPTS"] = "expand_aliases:extdebug"
-        environment["BASH_ENV"] = str(Path(tempfile.gettempdir()) / "missing-rpm-startup")
+        environment["BASH_ENV"] = str(
+            Path(tempfile.gettempdir()) / "missing-rpm-startup"
+        )
         environment["ENV"] = environment["BASH_ENV"]
 
         with tempfile.TemporaryDirectory() as tmp:
@@ -2513,7 +2589,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertNotIn("injected", result.stderr)
         self.assertNotIn("+ ", result.stderr)
 
-    def test_rpm_lifecycle_handoff_ignores_caller_marker_and_kills_descendant(self) -> None:
+    def test_rpm_lifecycle_handoff_ignores_caller_marker_and_kills_descendant(
+        self,
+    ) -> None:
         environment = os.environ.copy()
         environment["RPM_LIFECYCLE_WATCHDOG_ACTIVE"] = "1"
         with tempfile.TemporaryDirectory() as tmp:
@@ -2557,9 +2635,13 @@ class BuildRpmStaticTest(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertFalse((root / "rpmbuild-argv").exists())
                 if symlink == "SOURCES":
-                    self.assertIn("RPM SOURCES directory is not a directory", result.stderr)
+                    self.assertIn(
+                        "RPM SOURCES directory is not a directory", result.stderr
+                    )
                 else:
-                    self.assertIn("RPM spec is not a private regular file", result.stderr)
+                    self.assertIn(
+                        "RPM spec is not a private regular file", result.stderr
+                    )
 
     def test_rpm_spec_rewrite_uses_bound_fds(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2580,7 +2662,9 @@ class BuildRpmStaticTest(unittest.TestCase):
 
                 self.assertNotEqual(result.returncode, 0)
                 if symlink == "spec":
-                    self.assertTrue((root / "SPECS" / "speed-of-cinnamon.spec").is_symlink())
+                    self.assertTrue(
+                        (root / "SPECS" / "speed-of-cinnamon.spec").is_symlink()
+                    )
                     self.assertIn(
                         "Version:        external",
                         (root / "external.spec").read_text(encoding="utf-8"),
@@ -2589,7 +2673,9 @@ class BuildRpmStaticTest(unittest.TestCase):
                     self.assertTrue((root / "SPECS").is_symlink())
                     self.assertIn(
                         "Version:        external",
-                        (root / "external-SPECS" / "speed-of-cinnamon.spec").read_text(encoding="utf-8"),
+                        (root / "external-SPECS" / "speed-of-cinnamon.spec").read_text(
+                            encoding="utf-8"
+                        ),
                     )
 
     def test_rpm_cleanup_uses_one_absolute_deadline_for_safe_fs_calls(self) -> None:
@@ -2601,7 +2687,11 @@ class BuildRpmStaticTest(unittest.TestCase):
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertIn("RPM stage cleanup failed", result.stderr)
             self.assertLessEqual(elapsed, 5.0)
-            log = (Path(tmp) / "blocked" / "safe-fs.log").read_text(encoding="utf-8").splitlines()
+            log = (
+                (Path(tmp) / "blocked" / "safe-fs.log")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            )
             self.assertEqual(len(log), 1)
             self.assertTrue((Path(tmp) / "blocked" / "stage").exists())
             self.assertTrue((Path(tmp) / "blocked" / "workspace").exists())
@@ -2646,7 +2736,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertIn("RPM output enumeration exceeds max 256 entries", overflow.stderr)
         self.assertEqual(byte_overflow.returncode, 1, byte_overflow.stderr)
         self.assertIn("status=1\n", byte_overflow.stdout)
-        self.assertIn("RPM output enumeration exceeds max 1 bytes", byte_overflow.stderr)
+        self.assertIn(
+            "RPM output enumeration exceeds max 1 bytes", byte_overflow.stderr
+        )
 
     def test_rpm_output_enumeration_rejects_final_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2659,7 +2751,10 @@ class BuildRpmStaticTest(unittest.TestCase):
 
         self.assertEqual(process.returncode, 1, process.stderr)
         self.assertEqual(process.stdout, "status=1\n")
-        self.assertIn("RPM final build directory changed during output enumeration", process.stderr)
+        self.assertIn(
+            "RPM final build directory changed during output enumeration",
+            process.stderr,
+        )
 
     def test_rpm_output_enumeration_rejects_final_replacement(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -2672,9 +2767,14 @@ class BuildRpmStaticTest(unittest.TestCase):
 
         self.assertEqual(process.returncode, 1, process.stderr)
         self.assertEqual(process.stdout, "status=1\n")
-        self.assertIn("RPM final build directory changed during output enumeration", process.stderr)
+        self.assertIn(
+            "RPM final build directory changed during output enumeration",
+            process.stderr,
+        )
 
-    def test_rpm_output_enumeration_rejects_root_replacement_during_output(self) -> None:
+    def test_rpm_output_enumeration_rejects_root_replacement_during_output(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "output-root-race"
             process = self._run_post_commit_output_harness(
@@ -2686,11 +2786,15 @@ class BuildRpmStaticTest(unittest.TestCase):
 
         self.assertEqual(process.returncode, 1, process.stderr)
         self.assertEqual(process.stdout.splitlines()[-1], "status=1")
-        self.assertIn("RPM output root changed during output enumeration", process.stderr)
+        self.assertIn(
+            "RPM output root changed during output enumeration", process.stderr
+        )
 
     def test_rpm_output_rejects_root_replacement_before_first_open(self) -> None:
         for root_name in ("RPMS", "SRPMS"):
-            with self.subTest(root_name=root_name), tempfile.TemporaryDirectory() as tmp:
+            with self.subTest(
+                root_name=root_name
+            ), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp) / root_name.lower()
                 process = self._run_post_commit_output_harness(
                     root,
@@ -2701,12 +2805,16 @@ class BuildRpmStaticTest(unittest.TestCase):
                 self.assertEqual(process.returncode, 1, process.stderr)
                 self.assertEqual(process.stdout, "status=1\n")
                 self.assertNotIn("attacker.rpm", process.stdout)
-                self.assertIn("RPM output root changed during output enumeration", process.stderr)
+                self.assertIn(
+                    "RPM output root changed during output enumeration", process.stderr
+                )
 
     def test_rpm_same_uid_output_leaf_race_is_accepted_after_final_check(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "output-leaf-race"
-            process = self._run_post_commit_output_harness(root, leaf_race="replacement")
+            process = self._run_post_commit_output_harness(
+                root, leaf_race="replacement"
+            )
             self.assertTrue((root / "final" / "RPMS" / "z.rpm.race-old").exists())
 
         self.assertEqual(process.returncode, 0, process.stderr)
@@ -2728,8 +2836,14 @@ class BuildRpmStaticTest(unittest.TestCase):
             log = (root / "safe-fs.log").read_text(encoding="utf-8").splitlines()
             self.assertEqual(len(log), 1)
             self.assertEqual((root / "clock-state").read_text(encoding="utf-8"), "3\n")
-            self.assertIn("RPM stage cleanup failed after safe-FS invocation; safe-FS residue report is authoritative", result.stderr)
-            self.assertIn("RPM workspace cleanup skipped because stage cleanup is unconfirmed", result.stderr)
+            self.assertIn(
+                "RPM stage cleanup failed after safe-FS invocation; safe-FS residue report is authoritative",
+                result.stderr,
+            )
+            self.assertIn(
+                "RPM workspace cleanup skipped because stage cleanup is unconfirmed",
+                result.stderr,
+            )
             self.assertTrue((root / "stage").exists())
             self.assertTrue((root / "workspace").exists())
 
@@ -2808,7 +2922,8 @@ class BuildRpmStaticTest(unittest.TestCase):
                 [
                     line
                     for line in result.stderr.splitlines()
-                    if "stage cleanup not attempted" in line or "workspace cleanup skipped" in line
+                    if "stage cleanup not attempted" in line
+                    or "workspace cleanup skipped" in line
                 ],
                 [
                     "RPM stage cleanup not attempted; safe-FS was not invoked; residue path retained: "
@@ -2829,7 +2944,9 @@ class BuildRpmStaticTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertLess(elapsed, 3)
-            self.assertIn("RPM cleanup deadline exhausted before safe-FS call", result.stderr)
+            self.assertIn(
+                "RPM cleanup deadline exhausted before safe-FS call", result.stderr
+            )
             self.assertEqual((root / "clock-state").read_text(encoding="utf-8"), "2\n")
             self.assertFalse((root / "safe-fs.log").exists())
 
@@ -2842,12 +2959,16 @@ class BuildRpmStaticTest(unittest.TestCase):
 
             self.assertEqual(result.returncode, 1, result.stderr)
             self.assertLess(elapsed, 3)
-            self.assertIn("RPM cleanup deadline exhausted before safe-FS call", result.stderr)
+            self.assertIn(
+                "RPM cleanup deadline exhausted before safe-FS call", result.stderr
+            )
             self.assertEqual((root / "clock-state").read_text(encoding="utf-8"), "2\n")
             self.assertTrue((root / "clock-base").exists())
             self.assertFalse((root / "safe-fs.log").exists())
 
-    def test_post_commit_cleanup_is_bounded_and_not_retried_after_deadline(self) -> None:
+    def test_post_commit_cleanup_is_bounded_and_not_retried_after_deadline(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             result = self._run_post_commit_cleanup_harness(Path(tmp))
             log = (Path(tmp) / "safe-fs.log").read_text(encoding="utf-8").splitlines()
@@ -2876,7 +2997,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertRegex(result.stdout, r"status=(?:124|137)\n")
         self.assertLess(time.monotonic() - started, 4)
 
-    def _write_safe_fs_wrapper(self, path: Path, *, real: Path, failure: str, target: Path) -> None:
+    def _write_safe_fs_wrapper(
+        self, path: Path, *, real: Path, failure: str, target: Path
+    ) -> None:
         path.write_text(
             "import os, sys\n"
             f"real = {str(real)!r}\n"
@@ -2919,7 +3042,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         )
         path.chmod(0o700)
 
-    def _write_replacing_safe_fs_wrapper(self, path: Path, *, real: Path, target: Path) -> None:
+    def _write_replacing_safe_fs_wrapper(
+        self, path: Path, *, real: Path, target: Path
+    ) -> None:
         path.write_text(
             "import os, sys\n"
             "from pathlib import Path\n"
@@ -2934,7 +3059,9 @@ class BuildRpmStaticTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def _write_mutating_safe_fs_wrapper(self, path: Path, *, real: Path, target: Path) -> None:
+    def _write_mutating_safe_fs_wrapper(
+        self, path: Path, *, real: Path, target: Path
+    ) -> None:
         path.write_text(
             "import os, subprocess, sys\n"
             "from pathlib import Path\n"
@@ -2949,7 +3076,9 @@ class BuildRpmStaticTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def _write_renaming_safe_fs_wrapper(self, path: Path, *, real: Path, target: Path) -> None:
+    def _write_renaming_safe_fs_wrapper(
+        self, path: Path, *, real: Path, target: Path
+    ) -> None:
         path.write_text(
             "import os, sys\n"
             "from pathlib import Path\n"
@@ -2966,8 +3095,7 @@ class BuildRpmStaticTest(unittest.TestCase):
     def _inject_pinned_rename_failure(self, program: str, expression: str) -> str:
         marker = "def rename_pinned(source_fd, source_name, target_fd, target_name, *, flags, action):\n"
         injection = (
-            marker
-            + f"            if {expression}:\n"
+            marker + f"            if {expression}:\n"
             "                raise OSError('injected pinned rename failure')\n"
         )
         return program.replace(marker, injection, 1)
@@ -2980,7 +3108,7 @@ class BuildRpmStaticTest(unittest.TestCase):
             "                    publish_fd,\n"
             "                    publish_path,\n"
             "                    candidate_final_tuple,\n"
-            "                    \"RPM publish candidate before first publication\",\n"
+            '                    "RPM publish candidate before first publication",\n'
             "                )\n"
         )
         replacement = (
@@ -2989,9 +3117,13 @@ class BuildRpmStaticTest(unittest.TestCase):
             + "                os.mkdir(lock_parent, 0o700)\n"
             + "                rename_pinned(\n"
         )
-        return program.replace(tuple_call + "                rename_pinned(\n", replacement, 1)
+        return program.replace(
+            tuple_call + "                rename_pinned(\n", replacement, 1
+        )
 
-    def _inject_candidate_replacement_before_publication(self, program: str, *, exchange: bool) -> str:
+    def _inject_candidate_replacement_before_publication(
+        self, program: str, *, exchange: bool
+    ) -> str:
         phase = "exchange" if exchange else "first publication"
         tuple_call = (
             "                revalidate_output_tuple(\n"
@@ -3001,19 +3133,26 @@ class BuildRpmStaticTest(unittest.TestCase):
             f'                    "RPM publish candidate before {phase}",\n'
             "                )\n"
         )
-        marker = f'                revalidate_parent("RPM finalization parent before {phase}")\n' + tuple_call
+        marker = (
+            f'                revalidate_parent("RPM finalization parent before {phase}")\n'
+            + tuple_call
+        )
         replacement = (
             f'                revalidate_parent("RPM finalization parent before {phase}")\n'
             + tuple_call
-            + "                os.rename(publish_path, publish_path + \".replaced\")\n"
+            + '                os.rename(publish_path, publish_path + ".replaced")\n'
             + "                os.mkdir(publish_path, 0o700)\n"
             + '                with open(os.path.join(publish_path, "payload.txt"), "w", encoding="utf-8") as handle:\n'
             + '                    handle.write("attacker\\n")\n'
             + "                rename_pinned(\n"
         )
-        return program.replace(marker + "                rename_pinned(\n", replacement, 1)
+        return program.replace(
+            marker + "                rename_pinned(\n", replacement, 1
+        )
 
-    def _inject_candidate_root_replacement_before_publication(self, program: str) -> str:
+    def _inject_candidate_root_replacement_before_publication(
+        self, program: str
+    ) -> str:
         tuple_call = (
             "                revalidate_output_tuple(\n"
             "                    publish_fd,\n"
@@ -3043,8 +3182,8 @@ class BuildRpmStaticTest(unittest.TestCase):
             "                published_final_identity = identity_text(os.fstat(final_fd))\n"
             "                published_final_tuple = (\n"
             "                    published_final_identity,\n"
-            "                    expected_output_root_identities[\"RPMS\"],\n"
-            "                    expected_output_root_identities[\"SRPMS\"],\n"
+            '                    expected_output_root_identities["RPMS"],\n'
+            '                    expected_output_root_identities["SRPMS"],\n'
             "                )\n"
             "                if published_final_tuple != candidate_final_tuple:\n"
         )
@@ -3052,10 +3191,10 @@ class BuildRpmStaticTest(unittest.TestCase):
             "                published_final_identity = identity_text(os.fstat(final_fd))\n"
             "                published_final_tuple = (\n"
             "                    published_final_identity,\n"
-            "                    expected_output_root_identities[\"RPMS\"],\n"
-            "                    expected_output_root_identities[\"SRPMS\"],\n"
+            '                    expected_output_root_identities["RPMS"],\n'
+            '                    expected_output_root_identities["SRPMS"],\n'
             "                )\n"
-            "                for occupied_name in (recovery_name, f\"{recovery_name}.candidate-mismatch\"):\n"
+            '                for occupied_name in (recovery_name, f"{recovery_name}.candidate-mismatch"):\n'
             "                    os.mkdir(occupied_name, 0o700, dir_fd=parent_fd)\n"
             "                if published_final_tuple != candidate_final_tuple:\n"
         )
@@ -3064,9 +3203,8 @@ class BuildRpmStaticTest(unittest.TestCase):
     def _inject_late_final_replacement(self, program: str) -> str:
         marker = '            revalidate_parent("RPM finalization parent before completion")\n'
         replacement = (
-            marker +
-            '            os.rename(final_path, final_path + ".late-old")\n'
-            '            os.mkdir(final_path, 0o700)\n'
+            marker + '            os.rename(final_path, final_path + ".late-old")\n'
+            "            os.mkdir(final_path, 0o700)\n"
             '            with open(os.path.join(final_path, "payload.txt"), "w", encoding="utf-8") as handle:\n'
             '                handle.write("attacker\\n")\n'
         )
@@ -3075,18 +3213,19 @@ class BuildRpmStaticTest(unittest.TestCase):
     def _inject_rollback_final_replacement(self, program: str) -> str:
         marker = '                sync_directory(workspace_fd, "RPM exchange rollback workspace")\n'
         replacement = (
-            marker +
-            '                os.rename(final_path, final_path + ".rollback-old")\n'
-            '                os.mkdir(final_path, 0o700)\n'
+            marker
+            + '                os.rename(final_path, final_path + ".rollback-old")\n'
+            "                os.mkdir(final_path, 0o700)\n"
             '                with open(os.path.join(final_path, "payload.txt"), "w", encoding="utf-8") as handle:\n'
             '                    handle.write("attacker\\n")\n'
         )
         return program.replace(marker, replacement, 1)
 
-    def _inject_rollback_final_replacement_after_revalidation(self, program: str) -> str:
+    def _inject_rollback_final_replacement_after_revalidation(
+        self, program: str
+    ) -> str:
         marker = (
-            "                        )\n"
-            "                        if rolled_back:\n"
+            "                        )\n" "                        if rolled_back:\n"
         )
         replacement = (
             "                        )\n"
@@ -3100,8 +3239,7 @@ class BuildRpmStaticTest(unittest.TestCase):
 
     def _inject_rollback_root_replacement_after_revalidation(self, program: str) -> str:
         marker = (
-            "                        )\n"
-            "                        if rolled_back:\n"
+            "                        )\n" "                        if rolled_back:\n"
         )
         replacement = (
             "                        )\n"
@@ -3115,15 +3253,14 @@ class BuildRpmStaticTest(unittest.TestCase):
 
     def _inject_workspace_cleanup_replacement(self, program: str) -> str:
         marker = (
-            '            revalidate_bound_directory(workspace_fd, workspace_path, workspace_identity, '
+            "            revalidate_bound_directory(workspace_fd, workspace_path, workspace_identity, "
             '"RPM publish workspace")\n'
-            '            run_safe_fs(\n'
+            "            run_safe_fs(\n"
             '                "rmdir",\n'
         )
         replacement = (
             '            os.rename(workspace_path, workspace_path + ".replaced")\n'
-            '            os.mkdir(workspace_path, 0o700)\n'
-            + marker
+            "            os.mkdir(workspace_path, 0o700)\n" + marker
         )
         return program.replace(marker, replacement, 1)
 
@@ -3149,10 +3286,15 @@ class BuildRpmStaticTest(unittest.TestCase):
         watchdog = watchdog.replace(
             "RPM_LIFECYCLE_TIMEOUT_SECONDS=3600", "RPM_LIFECYCLE_TIMEOUT_SECONDS=2", 1
         ).replace(
-            "RPM_LIFECYCLE_KILL_AFTER_SECONDS=30", "RPM_LIFECYCLE_KILL_AFTER_SECONDS=1", 1
+            "RPM_LIFECYCLE_KILL_AFTER_SECONDS=30",
+            "RPM_LIFECYCLE_KILL_AFTER_SECONDS=1",
+            1,
         )
         script = root / "lifecycle-watchdog.sh"
-        shutil.copy2(REPO_ROOT / "scripts" / "rpm-lifecycle-supervisor.py", root / "rpm-lifecycle-supervisor.py")
+        shutil.copy2(
+            REPO_ROOT / "scripts" / "rpm-lifecycle-supervisor.py",
+            root / "rpm-lifecycle-supervisor.py",
+        )
         descendant_pid: Path | None = None
         if nested_timeout:
             descendant_pid = root / "nested-timeout.pid"
@@ -3186,7 +3328,7 @@ class BuildRpmStaticTest(unittest.TestCase):
                 "Path(sys.argv[2]).write_text(':'.join((str(pid), fields[19], fields[1], fields[2], fields[3]))+'\\n', encoding='ascii')\n"
                 "PY\n"
                 "trap '' TERM\n"
-                "wait \"$child_pid\"\n"
+                'wait "$child_pid"\n'
             )
         else:
             lifecycle_body = "trap '' TERM\nsleep 60\n"
@@ -3272,7 +3414,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         stage_stat = stage.stat()
         workspace_stat = workspace.stat()
         stage_identity = f"{stage_stat.st_dev}:{stage_stat.st_ino}:{stage_stat.st_mode}"
-        workspace_identity = f"{workspace_stat.st_dev}:{workspace_stat.st_ino}:{workspace_stat.st_mode}"
+        workspace_identity = (
+            f"{workspace_stat.st_dev}:{workspace_stat.st_ino}:{workspace_stat.st_mode}"
+        )
         return self._run_bounded_harness(
             [
                 sys.executable,
@@ -3301,11 +3445,15 @@ class BuildRpmStaticTest(unittest.TestCase):
         parent = root / "SPECS"
         parent.mkdir(mode=0o700)
         spec = parent / "speed-of-cinnamon.spec"
-        spec.write_text("Name: speed-of-cinnamon\nVersion:        0.0\n", encoding="utf-8")
+        spec.write_text(
+            "Name: speed-of-cinnamon\nVersion:        0.0\n", encoding="utf-8"
+        )
 
         if symlink == "spec":
             target = root / "external.spec"
-            target.write_text("Name: external\nVersion:        external\n", encoding="utf-8")
+            target.write_text(
+                "Name: external\nVersion:        external\n", encoding="utf-8"
+            )
             spec.unlink()
             spec.symlink_to(target)
         elif symlink == "parent":
@@ -3350,9 +3498,14 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertIn("pyproject.toml project.version is invalid", source)
         self.assertIn("RecursionError, MemoryError", source)
         self.assertIn("parent_fd = os.open(\n        spec_path.parent", source)
-        self.assertIn("os.fdopen(spec_fd, \"rb\", closefd=True)", source)
-        self.assertIn("os.stat(spec_path.name, dir_fd=parent_fd, follow_symlinks=False)", source)
-        self.assertIn("os.replace(tmp_name, spec_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)", source)
+        self.assertIn('os.fdopen(spec_fd, "rb", closefd=True)', source)
+        self.assertIn(
+            "os.stat(spec_path.name, dir_fd=parent_fd, follow_symlinks=False)", source
+        )
+        self.assertIn(
+            "os.replace(tmp_name, spec_path.name, src_dir_fd=parent_fd, dst_dir_fd=parent_fd)",
+            source,
+        )
         self.assertIn('require_parent_identity("before replace")', source)
         self.assertIn('require_parent_identity("after replace")', source)
 
@@ -3371,7 +3524,7 @@ class BuildRpmStaticTest(unittest.TestCase):
             line for line in source.splitlines() if '"${python_bin}"' in line
         ]
         self.assertGreaterEqual(len(python_invocations), 6)
-        self.assertTrue(all(' -I -B ' in line for line in python_invocations))
+        self.assertTrue(all(" -I -B " in line for line in python_invocations))
         self.assertIn('safe_fs_base = [sys.executable, "-I", "-B", safe_fs]', source)
         self.assertIn(
             'identity_helper_base = [sys.executable, "-I", "-B", lifecycle_supervisor]',
@@ -3398,7 +3551,9 @@ class BuildRpmStaticTest(unittest.TestCase):
                     "PYTHONWARNINGS": "error",
                 }
             )
-            result = self._run_spec_rewrite_harness(root / "rewrite", environment=environment)
+            result = self._run_spec_rewrite_harness(
+                root / "rewrite", environment=environment
+            )
             rewritten_spec = (
                 root / "rewrite" / "SPECS" / "speed-of-cinnamon.spec"
             ).read_text(encoding="utf-8")
@@ -3415,22 +3570,29 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertIn("RPM_LIFECYCLE_TIMEOUT_SECONDS=3600", source)
         self.assertIn("RPM_LIFECYCLE_KILL_AFTER_SECONDS=30", source)
         self.assertIn("RPM_LIFECYCLE_HANDOFF_FD=9", source)
-        self.assertIn("same-UID callers can forge inherited FDs, an accepted risk", source)
+        self.assertIn(
+            "same-UID callers can forge inherited FDs, an accepted risk", source
+        )
         self.assertNotIn("RPM_LIFECYCLE_WATCHDOG_ACTIVE", source)
         self.assertNotIn("export RPM_LIFECYCLE", source)
         self.assertNotIn("timeout --signal", source)
         self.assertNotIn("read -r -t", source)
         self.assertIn("--check-handoff-fd", source)
         self.assertIn("--handoff-max-bytes=256", source)
-        self.assertIn('lifecycle_supervisor="${lifecycle_script_dir}/rpm-lifecycle-supervisor.py"', source)
-        self.assertIn('exec "${lifecycle_python}" -I -B "${lifecycle_supervisor}"', source)
+        self.assertIn(
+            'lifecycle_supervisor="${lifecycle_script_dir}/rpm-lifecycle-supervisor.py"',
+            source,
+        )
+        self.assertIn(
+            'exec "${lifecycle_python}" -I -B "${lifecycle_supervisor}"', source
+        )
         self.assertIn('--timeout="${RPM_LIFECYCLE_TIMEOUT_SECONDS}"', source)
         self.assertIn('--kill-after="${RPM_LIFECYCLE_KILL_AFTER_SECONDS}"', source)
         self.assertIn('--handoff-fd="${RPM_LIFECYCLE_HANDOFF_FD}"', source)
-        self.assertIn('-- /bin/bash --noprofile --norc -p', source)
+        self.assertIn("-- /bin/bash --noprofile --norc -p", source)
         self.assertTrue(
             source.startswith(
-                '#!/usr/bin/env -S BASH_ENV= ENV= /bin/bash --noprofile --norc -p\n'
+                "#!/usr/bin/env -S BASH_ENV= ENV= /bin/bash --noprofile --norc -p\n"
             )
         )
         self.assertLess(
@@ -3444,24 +3606,34 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertIn("RPM_FINALIZE_TIMEOUT_SECONDS <= 0", source)
         self.assertIn("RPM_STARTUP_SWEEP_TIMEOUT_SECONDS <= 0", source)
         self.assertIn("RPM_OUTPUT_TIMEOUT_SECONDS <= 0", source)
-        self.assertIn('local staging_identity=$7', source)
-        self.assertIn('local lifecycle_supervisor_path=$8', source)
-        self.assertIn('require_cmd timeout', source)
+        self.assertIn("local staging_identity=$7", source)
+        self.assertIn("local lifecycle_supervisor_path=$8", source)
+        self.assertIn("require_cmd timeout", source)
         self.assertIn(
-            'timeout --foreground --signal=TERM --kill-after=30s "${RPM_BUILD_TIMEOUT_SECONDS}s" \\\n  "${python_bin}" -I -B - "${rpmbuild_bin}"',
+            'timeout --foreground --signal=TERM --kill-after=30s "${RPM_BUILD_TIMEOUT_SECONDS}s" \\\n\t"${python_bin}" -I -B - "${rpmbuild_bin}"',
             source,
         )
-        self.assertIn('timeout = remaining_finalize_timeout()', source)
+        self.assertIn("timeout = remaining_finalize_timeout()", source)
         self.assertIn('"--identity-max-bytes",', source)
-        self.assertIn('IDENTITY_PATTERN', (REPO_ROOT / "scripts" / "rpm-lifecycle-supervisor.py").read_text(encoding="utf-8"))
-        self.assertIn("global_deadline = time.monotonic() + finalize_timeout_seconds", source)
-        self.assertIn("lock_deadline = min(global_deadline, time.monotonic() + lock_timeout_seconds)", source)
+        self.assertIn(
+            "IDENTITY_PATTERN",
+            (REPO_ROOT / "scripts" / "rpm-lifecycle-supervisor.py").read_text(
+                encoding="utf-8"
+            ),
+        )
+        self.assertIn(
+            "global_deadline = time.monotonic() + finalize_timeout_seconds", source
+        )
+        self.assertIn(
+            "lock_deadline = min(global_deadline, time.monotonic() + lock_timeout_seconds)",
+            source,
+        )
         self.assertIn("finalize_deadline = global_deadline", source)
         self.assertIn(
             'timeout --foreground --signal=TERM --kill-after="${RPM_FINALIZE_KILL_AFTER_SECONDS}s"',
             source,
         )
-        self.assertIn('primary_error = sys.exc_info()[1]', source)
+        self.assertIn("primary_error = sys.exc_info()[1]", source)
         self.assertIn("safe_fs_invoked = False", source)
         self.assertIn("global safe_fs_invoked, safe_fs_result", source)
         self.assertIn(
@@ -3470,11 +3642,13 @@ class BuildRpmStaticTest(unittest.TestCase):
         )
         self.assertIn("operation_result is not None", source)
         self.assertIn("fcntl.flock(parent_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)", source)
-        self.assertIn('os.stat(lock_parent, follow_symlinks=False)', source)
-        self.assertIn('revalidate_parent("finalization lock parent after flock")', source)
-        self.assertIn('if lock_deadline - time.monotonic() <= 0:', source)
+        self.assertIn("os.stat(lock_parent, follow_symlinks=False)", source)
+        self.assertIn(
+            'revalidate_parent("finalization lock parent after flock")', source
+        )
+        self.assertIn("if lock_deadline - time.monotonic() <= 0:", source)
         self.assertIn('bind_directory_fd "${final_topdir}"', source)
-        self.assertIn('exec {final_topdir_fd}<&-', source)
+        self.assertIn("exec {final_topdir_fd}<&-", source)
         self.assertIn("rename_pinned(", source)
         self.assertIn("flags=2", source)
         self.assertIn("def rollback_exchange_if_needed", source)
@@ -3496,7 +3670,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertIn("def revalidate_output_tuple", source)
         self.assertIn("RPM exchange rollback final after recovery", source)
         self.assertIn('rpmbuild_bin="$(command -v -- rpmbuild)"', source)
-        self.assertIn("directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW", source)
+        self.assertIn(
+            "directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW", source
+        )
         self.assertIn("file_flags = os.O_RDONLY | os.O_NOFOLLOW", source)
         self.assertIn("def open_child_directory(parent_fd, name, path, label):", source)
         self.assertIn("def open_spec_file(specs_fd, name, path):", source)
@@ -3509,12 +3685,12 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertIn('f"_specdir {procfd(specs_fd)}"', source)
         self.assertIn('f"_srcrpmdir {procfd(srpms_fd)}"', source)
         self.assertIn('f"_tmppath {procfd(workspace_fd)}"', source)
-        self.assertIn('os.execv(rpmbuild_path, command)', source)
-        self.assertIn('procfd(spec_fd)', source)
-        self.assertNotIn('stage_topdir_fd_path', source)
-        self.assertNotIn('rpmbuild_tmpdir_fd_path', source)
-        self.assertNotIn('os.open(lock_name', source)
-        self.assertNotIn('lock.fileno()', source)
+        self.assertIn("os.execv(rpmbuild_path, command)", source)
+        self.assertIn("procfd(spec_fd)", source)
+        self.assertNotIn("stage_topdir_fd_path", source)
+        self.assertNotIn("rpmbuild_tmpdir_fd_path", source)
+        self.assertNotIn("os.open(lock_name", source)
+        self.assertNotIn("lock.fileno()", source)
         self.assertIn("RPM finalization lock timed out", source)
 
     def test_rpm_primary_error_survives_parent_close_failure(self) -> None:
@@ -3542,7 +3718,12 @@ class BuildRpmStaticTest(unittest.TestCase):
             previous = dist / "rpmbuild.previous"
             recovery = dist / ".rpmbuild.previous-recovery-close"
             failing = root / "safe-fs-fail-identity.py"
-            self._write_safe_fs_wrapper(failing, real=REPO_ROOT / "scripts" / "safe-local-fs.py", failure="identity", target=publish)
+            self._write_safe_fs_wrapper(
+                failing,
+                real=REPO_ROOT / "scripts" / "safe-local-fs.py",
+                failure="identity",
+                target=publish,
+            )
             result = self._run_finalize(
                 close_failure,
                 failing,
@@ -3556,7 +3737,10 @@ class BuildRpmStaticTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("could not verify RPM dir identity", result.stderr)
-        self.assertNotIn("SystemExit: build-rpm finalization descriptor cleanup failed", result.stderr)
+        self.assertNotIn(
+            "SystemExit: build-rpm finalization descriptor cleanup failed",
+            result.stderr,
+        )
 
     def test_publish_fd_close_failure_never_retries_reused_descriptor(self) -> None:
         program = self._finalize_program()
@@ -3587,8 +3771,7 @@ class BuildRpmStaticTest(unittest.TestCase):
             "                    os.close = _publish_close_real\n"
             "                    raise OSError(errno.EINTR, 'injected publish close EINTR')\n"
             "                return _publish_close_real(fd)\n"
-            "            os.close = _close_publish\n"
-            + marker
+            "            os.close = _close_publish\n" + marker
         )
         self.assertIn(marker, program)
         program = program.replace(marker, replacement, 1)
@@ -3619,11 +3802,15 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertNotEqual(result.returncode, 92)
         self.assertIn("injected publish close EINTR", result.stderr)
 
-    def test_embedded_bind_close_failures_keep_primary_and_concrete_diagnostic(self) -> None:
+    def test_embedded_bind_close_failures_keep_primary_and_concrete_diagnostic(
+        self,
+    ) -> None:
         finalize = self._finalize_program()
         rpmbuild = self._rpmbuild_setup_program()
         for program in (finalize, rpmbuild):
-            with self.subTest(program="finalize" if program is finalize else "rpmbuild"):
+            with self.subTest(
+                program="finalize" if program is finalize else "rpmbuild"
+            ):
                 self.assertIn("def close_descriptor_once", program)
                 self.assertNotIn("except BaseException:\n                pass", program)
                 self.assertIn("type(close_error).__name__", program)
@@ -3633,24 +3820,24 @@ class BuildRpmStaticTest(unittest.TestCase):
     def test_rpm_publish_is_candidate_exchange_and_recovery_bound(self) -> None:
         source = BUILD_RPM.read_text(encoding="utf-8")
 
-        self.assertIn('local publish_path=$4', source)
-        self.assertIn('local previous_path=$5', source)
-        self.assertIn('local previous_recovery_path=$6', source)
-        self.assertIn('local staging_identity=$7', source)
+        self.assertIn("local publish_path=$4", source)
+        self.assertIn("local previous_path=$5", source)
+        self.assertIn("local previous_recovery_path=$6", source)
+        self.assertIn("local staging_identity=$7", source)
         self.assertIn('"install-tree",', source)
-        self.assertIn('publish_path,', source)
+        self.assertIn("publish_path,", source)
         self.assertIn("flags=1", source)
         self.assertIn("flags=2", source)
         self.assertIn("atomic pinned rename is not supported", source)
         self.assertNotIn('"exchange",', source)
-        self.assertIn('previous_path,', source)
-        self.assertIn('previous_recovery_path,', source)
-        self.assertIn('previous-recovery-', source)
-        self.assertIn('publish-workspace-', source)
-        self.assertIn('PUBLISH_WORKSPACE_MAX_AGE_NS', source)
-        self.assertIn('RPM previous recovery requires manual recovery', source)
-        self.assertIn('unresolved RPM publish workspace', source)
-        self.assertIn('preserving RPM publish workspace after exchange', source)
+        self.assertIn("previous_path,", source)
+        self.assertIn("previous_recovery_path,", source)
+        self.assertIn("previous-recovery-", source)
+        self.assertIn("publish-workspace-", source)
+        self.assertIn("PUBLISH_WORKSPACE_MAX_AGE_NS", source)
+        self.assertIn("RPM previous recovery requires manual recovery", source)
+        self.assertIn("unresolved RPM publish workspace", source)
+        self.assertIn("preserving RPM publish workspace after exchange", source)
         self.assertIn('publish_workspace=""', source)
         publish_commit = source.index("publish_committed=1\n")
         self.assertLess(
@@ -3661,21 +3848,24 @@ class BuildRpmStaticTest(unittest.TestCase):
             publish_commit,
             source.index('publish_recovery=""', publish_commit),
         )
-        self.assertIn('open_bound_directory(staging_path, staging_identity', source)
-        self.assertIn('open_named_directory(\n            parent_fd,\n            workspace_name,\n            workspace_path,', source)
-        self.assertIn('revalidate_bound_directory(staging_fd', source)
-        self.assertIn('revalidate_bound_directory(workspace_fd', source)
+        self.assertIn("open_bound_directory(staging_path, staging_identity", source)
+        self.assertIn(
+            "open_named_directory(\n            parent_fd,\n            workspace_name,\n            workspace_path,",
+            source,
+        )
+        self.assertIn("revalidate_bound_directory(staging_fd", source)
+        self.assertIn("revalidate_bound_directory(workspace_fd", source)
         self.assertIn('rpmbuild_bin="$(command -v -- rpmbuild)"', source)
-        self.assertIn('os.open(name, directory_flags, dir_fd=parent_fd)', source)
-        self.assertIn('os.open(name, file_flags, dir_fd=specs_fd)', source)
-        self.assertIn('os.set_inheritable(descriptor, True)', source)
+        self.assertIn("os.open(name, directory_flags, dir_fd=parent_fd)", source)
+        self.assertIn("os.open(name, file_flags, dir_fd=specs_fd)", source)
+        self.assertIn("os.set_inheritable(descriptor, True)", source)
         self.assertIn('f"_topdir {procfd(stage_fd)}"', source)
         self.assertIn('f"_specdir {procfd(specs_fd)}"', source)
         self.assertIn('f"_tmppath {procfd(workspace_fd)}"', source)
-        self.assertIn('procfd(spec_fd)', source)
-        self.assertIn('os.execv(rpmbuild_path, command)', source)
-        self.assertNotIn('stage_topdir_fd_path', source)
-        self.assertNotIn('rpmbuild_tmpdir_fd_path', source)
+        self.assertIn("procfd(spec_fd)", source)
+        self.assertIn("os.execv(rpmbuild_path, command)", source)
+        self.assertNotIn("stage_topdir_fd_path", source)
+        self.assertNotIn("rpmbuild_tmpdir_fd_path", source)
         self.assertNotIn('install-tree", "build-rpm", staging_path, final_path', source)
 
     def test_rpm_finalizer_remove_calls_require_exact_directory_kind(self) -> None:
@@ -3685,8 +3875,16 @@ class BuildRpmStaticTest(unittest.TestCase):
                 continue
             if node.func.id != "run_safe_fs" or not node.args:
                 continue
-            if isinstance(node.args[0], ast.Constant) and node.args[0].value == "remove":
-                calls.append([arg.value if isinstance(arg, ast.Constant) else None for arg in node.args])
+            if (
+                isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == "remove"
+            ):
+                calls.append(
+                    [
+                        arg.value if isinstance(arg, ast.Constant) else None
+                        for arg in node.args
+                    ]
+                )
 
         self.assertGreaterEqual(len(calls), 2)
         for arguments in calls:
@@ -3743,11 +3941,15 @@ class BuildRpmStaticTest(unittest.TestCase):
             stage.mkdir()
             (stage / "payload.txt").write_text("original\n", encoding="utf-8")
             stage_stat = stage.stat()
-            stage_identity = f"{stage_stat.st_dev}:{stage_stat.st_ino}:{stage_stat.st_mode}"
+            stage_identity = (
+                f"{stage_stat.st_dev}:{stage_stat.st_ino}:{stage_stat.st_mode}"
+            )
             final = dist / "rpmbuild"
             publish = dist / ".rpmbuild.publish-workspace-stage-replace" / "candidate"
             replacement = root / "safe-fs-replace-stage.py"
-            self._write_replacing_safe_fs_wrapper(replacement, real=safe_fs, target=stage)
+            self._write_replacing_safe_fs_wrapper(
+                replacement, real=safe_fs, target=stage
+            )
             result = self._run_finalize(
                 program,
                 replacement,
@@ -3760,9 +3962,13 @@ class BuildRpmStaticTest(unittest.TestCase):
                 stage_identity=stage_identity,
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("RPM staging directory changed during finalization", result.stderr)
+            self.assertIn(
+                "RPM staging directory changed during finalization", result.stderr
+            )
             self.assertFalse(final.exists())
-            self.assertEqual((stage / "payload.txt").read_text(encoding="utf-8"), "replacement\n")
+            self.assertEqual(
+                (stage / "payload.txt").read_text(encoding="utf-8"), "replacement\n"
+            )
             self.assertTrue(stage.with_name("stage.replaced").exists())
 
     def test_rpm_install_tree_fails_closed_on_workspace_replacement(self) -> None:
@@ -3777,10 +3983,14 @@ class BuildRpmStaticTest(unittest.TestCase):
             stage.mkdir()
             (stage / "payload.txt").write_text("original\n", encoding="utf-8")
             final = dist / "rpmbuild"
-            publish = dist / ".rpmbuild.publish-workspace-workspace-replace" / "candidate"
+            publish = (
+                dist / ".rpmbuild.publish-workspace-workspace-replace" / "candidate"
+            )
             workspace = publish.parent
             replacement = root / "safe-fs-replace-workspace.py"
-            self._write_replacing_safe_fs_wrapper(replacement, real=safe_fs, target=workspace)
+            self._write_replacing_safe_fs_wrapper(
+                replacement, real=safe_fs, target=workspace
+            )
             result = self._run_finalize(
                 program,
                 replacement,
@@ -3792,9 +4002,13 @@ class BuildRpmStaticTest(unittest.TestCase):
                 dist / ".rpmbuild.previous-recovery-workspace-replace",
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("RPM publish workspace changed during finalization", result.stderr)
+            self.assertIn(
+                "RPM publish workspace changed during finalization", result.stderr
+            )
             self.assertFalse(final.exists())
-            self.assertEqual((workspace / "payload.txt").read_text(encoding="utf-8"), "replacement\n")
+            self.assertEqual(
+                (workspace / "payload.txt").read_text(encoding="utf-8"), "replacement\n"
+            )
             self.assertTrue(workspace.with_name(workspace.name + ".replaced").exists())
 
     def test_rpm_same_uid_candidate_content_mutation_is_accepted_risk(self) -> None:
@@ -3825,10 +4039,16 @@ class BuildRpmStaticTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "mutated\n")
+            self.assertEqual(
+                (final / "payload.txt").read_text(encoding="utf-8"), "mutated\n"
+            )
 
-    def test_rpm_parent_replacement_between_pin_and_publication_fails_closed(self) -> None:
-        program = self._inject_parent_replacement_before_first_publication(self._finalize_program())
+    def test_rpm_parent_replacement_between_pin_and_publication_fails_closed(
+        self,
+    ) -> None:
+        program = self._inject_parent_replacement_before_first_publication(
+            self._finalize_program()
+        )
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -3850,9 +4070,17 @@ class BuildRpmStaticTest(unittest.TestCase):
             )
             replaced_dist = root / "dist.replaced"
             self.assertNotEqual(result.returncode, 0)
-            self.assertIn("finalization parent after first publication changed during finalization", result.stderr)
+            self.assertIn(
+                "finalization parent after first publication changed during finalization",
+                result.stderr,
+            )
             self.assertFalse(final.exists())
-            self.assertEqual((replaced_dist / "rpmbuild" / "payload.txt").read_text(encoding="utf-8"), "new\n")
+            self.assertEqual(
+                (replaced_dist / "rpmbuild" / "payload.txt").read_text(
+                    encoding="utf-8"
+                ),
+                "new\n",
+            )
 
     def test_rpm_first_publication_quarantines_replaced_candidate(self) -> None:
         program = self._inject_quarantine_name_collision(
@@ -3869,7 +4097,9 @@ class BuildRpmStaticTest(unittest.TestCase):
             stage.mkdir(mode=0o700)
             (stage / "payload.txt").write_text("new\n", encoding="utf-8")
             final = dist / "rpmbuild"
-            publish = dist / ".rpmbuild.publish-workspace-candidate-replace" / "candidate"
+            publish = (
+                dist / ".rpmbuild.publish-workspace-candidate-replace" / "candidate"
+            )
             recovery = dist / ".rpmbuild.previous-recovery-candidate-replace"
             result = self._run_finalize(
                 program,
@@ -3885,7 +4115,9 @@ class BuildRpmStaticTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(final.exists())
             self.assertTrue(recovery.is_dir())
-            self.assertTrue(recovery.with_name(recovery.name + ".candidate-mismatch").is_dir())
+            self.assertTrue(
+                recovery.with_name(recovery.name + ".candidate-mismatch").is_dir()
+            )
             quarantined = sorted(dist.glob(recovery.name + ".candidate-mismatch-*"))
             self.assertEqual(len(quarantined), 1)
             self.assertEqual(
@@ -3893,14 +4125,16 @@ class BuildRpmStaticTest(unittest.TestCase):
                 "attacker\n",
             )
             self.assertEqual(
-                (publish.with_name(publish.name + ".replaced") / "payload.txt").read_text(
-                    encoding="utf-8"
-                ),
+                (
+                    publish.with_name(publish.name + ".replaced") / "payload.txt"
+                ).read_text(encoding="utf-8"),
                 "new\n",
             )
             self.assertIn("quarantined unexpected RPM final directory", result.stderr)
 
-    def test_rpm_candidate_root_replacement_after_snapshot_never_stays_final(self) -> None:
+    def test_rpm_candidate_root_replacement_after_snapshot_never_stays_final(
+        self,
+    ) -> None:
         program = self._inject_candidate_root_replacement_before_publication(
             self._finalize_program()
         )
@@ -3928,7 +4162,9 @@ class BuildRpmStaticTest(unittest.TestCase):
             self.assertTrue(
                 any(
                     (candidate / "RPMS" / "attacker.rpm").exists()
-                    for candidate in dist.glob(".rpmbuild.previous-recovery-root-replace.candidate-mismatch-*")
+                    for candidate in dist.glob(
+                        ".rpmbuild.previous-recovery-root-replace.candidate-mismatch-*"
+                    )
                 )
             )
 
@@ -3947,7 +4183,9 @@ class BuildRpmStaticTest(unittest.TestCase):
             final = dist / "rpmbuild"
             final.mkdir(mode=0o700)
             (final / "payload.txt").write_text("old\n", encoding="utf-8")
-            publish = dist / ".rpmbuild.publish-workspace-candidate-exchange" / "candidate"
+            publish = (
+                dist / ".rpmbuild.publish-workspace-candidate-exchange" / "candidate"
+            )
             result = self._run_finalize(
                 program,
                 safe_fs,
@@ -3960,16 +4198,22 @@ class BuildRpmStaticTest(unittest.TestCase):
             )
 
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "old\n")
-            self.assertEqual((publish / "payload.txt").read_text(encoding="utf-8"), "attacker\n")
             self.assertEqual(
-                (publish.with_name(publish.name + ".replaced") / "payload.txt").read_text(
-                    encoding="utf-8"
-                ),
+                (final / "payload.txt").read_text(encoding="utf-8"), "old\n"
+            )
+            self.assertEqual(
+                (publish / "payload.txt").read_text(encoding="utf-8"), "attacker\n"
+            )
+            self.assertEqual(
+                (
+                    publish.with_name(publish.name + ".replaced") / "payload.txt"
+                ).read_text(encoding="utf-8"),
                 "new\n",
             )
 
-    def test_rpm_exchange_rollback_revalidates_and_quarantines_replacement(self) -> None:
+    def test_rpm_exchange_rollback_revalidates_and_quarantines_replacement(
+        self,
+    ) -> None:
         program = self._inject_rollback_final_replacement(
             self._inject_candidate_replacement_before_publication(
                 self._finalize_program(), exchange=True
@@ -4002,12 +4246,14 @@ class BuildRpmStaticTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(final.exists())
             self.assertEqual(
-                (final.with_name(final.name + ".rollback-old") / "payload.txt").read_text(
-                    encoding="utf-8"
-                ),
+                (
+                    final.with_name(final.name + ".rollback-old") / "payload.txt"
+                ).read_text(encoding="utf-8"),
                 "old\n",
             )
-            self.assertEqual((publish / "payload.txt").read_text(encoding="utf-8"), "attacker\n")
+            self.assertEqual(
+                (publish / "payload.txt").read_text(encoding="utf-8"), "attacker\n"
+            )
             quarantined = sorted(dist.glob(recovery.name + ".candidate-mismatch-*"))
             self.assertEqual(len(quarantined), 1)
             self.assertEqual(
@@ -4048,9 +4294,9 @@ class BuildRpmStaticTest(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertFalse(final.exists())
             self.assertEqual(
-                (final.with_name(final.name + ".rollback-late-old") / "payload.txt").read_text(
-                    encoding="utf-8"
-                ),
+                (
+                    final.with_name(final.name + ".rollback-late-old") / "payload.txt"
+                ).read_text(encoding="utf-8"),
                 "old\n",
             )
             quarantined = sorted(dist.glob(recovery.name + ".candidate-mismatch-*"))
@@ -4137,37 +4383,46 @@ class BuildRpmStaticTest(unittest.TestCase):
     def test_rpm_startup_sweeps_are_bounded_and_private(self) -> None:
         source = BUILD_RPM.read_text(encoding="utf-8")
 
-        self.assertIn('MAX_SCAN_ENTRIES = 256', source)
-        self.assertIn('MAX_STALE_WORKSPACES = 32', source)
-        self.assertIn('RPM_STARTUP_SWEEP_TIMEOUT_SECONDS=30', source)
-        self.assertIn('RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS=1', source)
+        self.assertIn("MAX_SCAN_ENTRIES = 256", source)
+        self.assertIn("MAX_STALE_WORKSPACES = 32", source)
+        self.assertIn("RPM_STARTUP_SWEEP_TIMEOUT_SECONDS=30", source)
+        self.assertIn("RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS=1", source)
         self.assertIn(
             'timeout --foreground --signal=TERM --kill-after="${RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS}s"',
             source,
         )
-        self.assertIn('WORKSPACE_MAX_AGE_NS = 24 * 60 * 60 * 1_000_000_000', source)
+        self.assertIn("WORKSPACE_MAX_AGE_NS = 24 * 60 * 60 * 1_000_000_000", source)
         self.assertIn('PREFIX = "speed-of-cinnamon-rpm-tmp-"', source)
-        self.assertIn('rpm_runtime_root=', source)
-        self.assertIn('${HOME}/.cache/speed-of-cinnamon/rpm-${EUID}', source)
+        self.assertIn("rpm_runtime_root=", source)
+        self.assertIn("${HOME}/.cache/speed-of-cinnamon/rpm-${EUID}", source)
         self.assertIn('assert-private-chain build-rpm "${HOME}"', source)
         self.assertIn('assert-private-chain build-rpm "${rpm_runtime_root}"', source)
         self.assertIn('assert-private-chain build-rpm "${rpm_tmp_parent}"', source)
-        self.assertIn('assert-private-chain build-rpm "${rpm_runtime_root}" --allow-missing', source)
-        self.assertIn('assert-private-chain build-rpm "${rpm_tmp_parent}" --allow-missing', source)
-        self.assertIn('runtime root is not private to current user', source)
-        self.assertNotIn('direct_root=True', source)
-        self.assertNotIn('repo_tmp_root', source)
-        self.assertNotIn('${TMPDIR:-/tmp}', source)
-        self.assertIn('os.path.lexists(path)', source)
-        self.assertEqual(source.count('os.path.lexists(path)'), 1)
-        self.assertIn('RPM temporary workspace scan exceeds max', source)
-        self.assertIn('RPM temporary workspace snapshot is ambiguous', source)
-        self.assertNotIn('except FileNotFoundError:\n                    continue', source)
+        self.assertIn(
+            'assert-private-chain build-rpm "${rpm_runtime_root}" --allow-missing',
+            source,
+        )
+        self.assertIn(
+            'assert-private-chain build-rpm "${rpm_tmp_parent}" --allow-missing', source
+        )
+        self.assertIn("runtime root is not private to current user", source)
+        self.assertNotIn("direct_root=True", source)
+        self.assertNotIn("repo_tmp_root", source)
+        self.assertNotIn("${TMPDIR:-/tmp}", source)
+        self.assertIn("os.path.lexists(path)", source)
+        self.assertEqual(source.count("os.path.lexists(path)"), 1)
+        self.assertIn("RPM temporary workspace scan exceeds max", source)
+        self.assertIn("RPM temporary workspace snapshot is ambiguous", source)
+        self.assertNotIn(
+            "except FileNotFoundError:\n                    continue", source
+        )
 
     def test_rpm_runtime_accepts_private_xdg_without_home(self) -> None:
         source = BUILD_RPM.read_text(encoding="utf-8")
-        start = source.index('if [[ -n "${XDG_RUNTIME_DIR:-}" ]]; then')
-        end = source.index('\nfi\nif [[ ! "${rpm_runtime_root}" == /*', start) + len("\nfi")
+        start = source.index("if [[ -n ${XDG_RUNTIME_DIR:-} ]]; then")
+        end = source.index("\nfi\nif [[ ${rpm_runtime_root} != /*", start) + len(
+            "\nfi"
+        )
         runtime_block = source[start:end]
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -4220,7 +4475,10 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertNotIn("trap cleanup_tmpdir EXIT", source)
         self.assertLess(
             source.index("trap cleanup_on_exit EXIT"),
-            source.index('rpmbuild_tmpdir="$(mktemp -d', source.index("trap cleanup_on_exit EXIT")),
+            source.index(
+                'rpmbuild_tmpdir="$(mktemp -d',
+                source.index("trap cleanup_on_exit EXIT"),
+            ),
         )
         self.assertIn('"${term_timeout}s" "${safe_fs_cmd[@]}"', source)
         self.assertIn('"${kill_after_timeout}s"', source)
@@ -4238,7 +4496,9 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertNotRegex(cleanup_block, r"\[\[.*-L")
 
         post_start = source.index("publish_committed=1\n")
-        output_start = source.index("# RPM output enumeration stays bounded", post_start)
+        output_start = source.index(
+            "# RPM output enumeration stays bounded", post_start
+        )
         cleanup_start = source.index("stage_cleanup_status=0\n", output_start)
         self.assertLess(output_start, cleanup_start)
         self.assertIn("RPM_OUTPUT_TIMEOUT_SECONDS=30", source)
@@ -4252,14 +4512,17 @@ class BuildRpmStaticTest(unittest.TestCase):
         self.assertNotIn('find "${final_topdir}/RPMS"', source)
         self.assertNotIn("| sort", source)
         self.assertNotIn("if start_cleanup_deadline && cleanup_remaining_ns;", source)
-        self.assertNotIn('[[ ! -e "${publish_workspace}"', source)
-        self.assertNotIn('[[ ! -e "${publish_recovery}"', source)
+        self.assertNotIn("[[ ! -e ${publish_workspace}", source)
+        self.assertNotIn("[[ ! -e ${publish_recovery}", source)
         post_commit = source[cleanup_start:]
         self.assertIn("run_cleanup_safe_fs remove", post_commit)
         self.assertNotIn('"${safe_fs_cmd[@]}" remove', post_commit)
         self.assertIn("stage_cleanup_unconfirmed=1", cleanup_block)
         self.assertIn("cleanup_safe_fs_invoked=1", source)
-        self.assertIn("workspace cleanup skipped because stage cleanup is unconfirmed", cleanup_block)
+        self.assertIn(
+            "workspace cleanup skipped because stage cleanup is unconfirmed",
+            cleanup_block,
+        )
 
     def test_rpm_startup_sweep_handles_old_claim_and_preserves_recent(self) -> None:
         sweep = self._startup_sweep_program()
@@ -4336,14 +4599,14 @@ class BuildRpmStaticTest(unittest.TestCase):
                 "set +e\n"
                 "RPM_STARTUP_SWEEP_TIMEOUT_SECONDS=2\n"
                 "RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS=1\n"
-                f"timeout --foreground --signal=TERM --kill-after=\"${{RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS}}s\" "
-                f"\"${{RPM_STARTUP_SWEEP_TIMEOUT_SECONDS}}s\" python3 - {str(parent)!r} "
+                f'timeout --foreground --signal=TERM --kill-after="${{RPM_STARTUP_SWEEP_KILL_AFTER_SECONDS}}s" '
+                f'"${{RPM_STARTUP_SWEEP_TIMEOUT_SECONDS}}s" python3 - {str(parent)!r} '
                 f"{str(REPO_ROOT / 'scripts' / 'safe-local-fs.py')!r} <<'PY'\n"
                 f"{sweep}\n"
                 "PY\n"
                 "status=$?\n"
                 "printf 'status=%s\\n' \"$status\"\n"
-                "exit \"$status\"\n"
+                'exit "$status"\n'
             )
             started = time.monotonic()
             result = self._run_bounded_harness(
@@ -4404,7 +4667,12 @@ class BuildRpmStaticTest(unittest.TestCase):
             os.utime(stale, (old_time, old_time))
 
             result = self._run_bounded_harness(
-                [sys.executable, "-", str(private), str(REPO_ROOT / "scripts" / "safe-local-fs.py")],
+                [
+                    sys.executable,
+                    "-",
+                    str(private),
+                    str(REPO_ROOT / "scripts" / "safe-local-fs.py"),
+                ],
                 cwd=root,
                 timeout=8,
                 input_text=sweep,
@@ -4435,7 +4703,12 @@ class BuildRpmStaticTest(unittest.TestCase):
             os.utime(stale, (old_time, old_time))
 
             result = self._run_bounded_harness(
-                [sys.executable, "-", str(private), str(REPO_ROOT / "scripts" / "safe-local-fs.py")],
+                [
+                    sys.executable,
+                    "-",
+                    str(private),
+                    str(REPO_ROOT / "scripts" / "safe-local-fs.py"),
+                ],
                 cwd=root,
                 timeout=8,
                 input_text=sweep,
@@ -4467,7 +4740,12 @@ class BuildRpmStaticTest(unittest.TestCase):
             os.utime(stale, (old_time, old_time))
 
             result = self._run_bounded_harness(
-                [sys.executable, "-", str(private), str(REPO_ROOT / "scripts" / "safe-local-fs.py")],
+                [
+                    sys.executable,
+                    "-",
+                    str(private),
+                    str(REPO_ROOT / "scripts" / "safe-local-fs.py"),
+                ],
                 cwd=root,
                 timeout=8,
                 input_text=sweep,
@@ -4517,10 +4795,14 @@ class BuildRpmStaticTest(unittest.TestCase):
                 except BaseException as open_error:
                     primary_error = open_error
                     for cleanup_error in self._cleanup_launched_process(holder):
-                        open_error.add_note(f"holder launch cleanup failed: {cleanup_error}")
+                        open_error.add_note(
+                            f"holder launch cleanup failed: {cleanup_error}"
+                        )
                     raise
                 self.assertIsNotNone(holder.stdout)
-                self.assertEqual(self._readline_bounded(holder.stdout, timeout=2), "ready\n")
+                self.assertEqual(
+                    self._readline_bounded(holder.stdout, timeout=2), "ready\n"
+                )
                 lock.rename(renamed_lock)
                 started = time.monotonic()
                 global_deadline_blocked = self._run_finalize(
@@ -4537,7 +4819,9 @@ class BuildRpmStaticTest(unittest.TestCase):
                 )
                 self.assertLess(time.monotonic() - started, 3)
                 self.assertNotEqual(global_deadline_blocked.returncode, 0)
-                self.assertIn("RPM finalization lock timed out", global_deadline_blocked.stderr)
+                self.assertIn(
+                    "RPM finalization lock timed out", global_deadline_blocked.stderr
+                )
                 blocked = self._run_finalize(
                     program,
                     safe_fs,
@@ -4583,7 +4867,9 @@ class BuildRpmStaticTest(unittest.TestCase):
                 if cleanup_errors:
                     if primary_error is not None:
                         for cleanup_error in cleanup_errors:
-                            primary_error.add_note(f"holder cleanup failed: {cleanup_error}")
+                            primary_error.add_note(
+                                f"holder cleanup failed: {cleanup_error}"
+                            )
                     else:
                         raise cleanup_errors[0]
 
@@ -4591,7 +4877,9 @@ class BuildRpmStaticTest(unittest.TestCase):
                 program, safe_fs, lock, stage, final, publish, previous, recovery
             )
             self.assertEqual(completed.returncode, 0, completed.stderr)
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "locked\n")
+            self.assertEqual(
+                (final / "payload.txt").read_text(encoding="utf-8"), "locked\n"
+            )
 
     def test_rpm_finalize_lock_eintr_storm_rechecks_deadline(self) -> None:
         program = self._finalize_program()
@@ -4655,8 +4943,12 @@ class BuildRpmStaticTest(unittest.TestCase):
                 dist / ".rpmbuild.previous-recovery-new",
             )
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "old\n")
-            self.assertEqual((recovery / "payload.txt").read_text(encoding="utf-8"), "recovery\n")
+            self.assertEqual(
+                (final / "payload.txt").read_text(encoding="utf-8"), "old\n"
+            )
+            self.assertEqual(
+                (recovery / "payload.txt").read_text(encoding="utf-8"), "recovery\n"
+            )
 
     def test_rpm_cleanup_status_is_local_to_failed_operation(self) -> None:
         program = self._inject_workspace_cleanup_replacement(self._finalize_program())
@@ -4681,12 +4973,24 @@ class BuildRpmStaticTest(unittest.TestCase):
                 dist / ".rpmbuild.previous-recovery-status",
             )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn("publish workspace cleanup not attempted; safe-FS was not invoked", result.stderr)
-            self.assertNotIn("publish workspace cleanup failed after safe-FS invocation", result.stderr)
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "new\n")
-            self.assertTrue(publish.parent.with_name(publish.parent.name + ".replaced").exists())
+            self.assertIn(
+                "publish workspace cleanup not attempted; safe-FS was not invoked",
+                result.stderr,
+            )
+            self.assertNotIn(
+                "publish workspace cleanup failed after safe-FS invocation",
+                result.stderr,
+            )
+            self.assertEqual(
+                (final / "payload.txt").read_text(encoding="utf-8"), "new\n"
+            )
+            self.assertTrue(
+                publish.parent.with_name(publish.parent.name + ".replaced").exists()
+            )
 
-    def test_rpm_exchange_failure_preserves_old_final_and_candidate_recovery(self) -> None:
+    def test_rpm_exchange_failure_preserves_old_final_and_candidate_recovery(
+        self,
+    ) -> None:
         program = self._finalize_program()
         program = self._inject_pinned_rename_failure(program, "flags == 2")
         safe_fs = REPO_ROOT / "scripts" / "safe-local-fs.py"
@@ -4704,10 +5008,16 @@ class BuildRpmStaticTest(unittest.TestCase):
             previous = dist / "rpmbuild.previous"
             recovery = dist / ".rpmbuild.previous-recovery-exchange"
             publish = dist / ".rpmbuild.publish-workspace-exchange" / "candidate"
-            result = self._run_finalize(program, safe_fs, lock, stage, final, publish, previous, recovery)
+            result = self._run_finalize(
+                program, safe_fs, lock, stage, final, publish, previous, recovery
+            )
             self.assertNotEqual(result.returncode, 0)
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "old\n")
-            self.assertEqual((publish / "payload.txt").read_text(encoding="utf-8"), "new\n")
+            self.assertEqual(
+                (final / "payload.txt").read_text(encoding="utf-8"), "old\n"
+            )
+            self.assertEqual(
+                (publish / "payload.txt").read_text(encoding="utf-8"), "new\n"
+            )
             self.assertIn(str(publish), result.stderr)
 
     def test_rpm_post_commit_cleanup_failure_preserves_committed_state(self) -> None:
@@ -4737,12 +5047,23 @@ class BuildRpmStaticTest(unittest.TestCase):
                 log=safe_fs_log,
                 failure_target=recovery,
             )
-            result = self._run_finalize(program, failing, lock, stage, final, publish, previous, recovery)
+            result = self._run_finalize(
+                program, failing, lock, stage, final, publish, previous, recovery
+            )
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "new-final\n")
-            self.assertEqual((previous / "payload.txt").read_text(encoding="utf-8"), "old-final\n")
-            self.assertEqual((recovery / "payload.txt").read_text(encoding="utf-8"), "old-previous\n")
-            self.assertIn("previous recovery cleanup failed after safe-FS invocation", result.stderr)
+            self.assertEqual(
+                (final / "payload.txt").read_text(encoding="utf-8"), "new-final\n"
+            )
+            self.assertEqual(
+                (previous / "payload.txt").read_text(encoding="utf-8"), "old-final\n"
+            )
+            self.assertEqual(
+                (recovery / "payload.txt").read_text(encoding="utf-8"), "old-previous\n"
+            )
+            self.assertIn(
+                "previous recovery cleanup failed after safe-FS invocation",
+                result.stderr,
+            )
             remove_calls = [
                 line
                 for line in safe_fs_log.read_text(encoding="utf-8").splitlines()
@@ -4773,15 +5094,31 @@ class BuildRpmStaticTest(unittest.TestCase):
             (stale / "recovery.txt").write_text("keep\n", encoding="utf-8")
 
             blocked_by_stale = self._run_finalize(
-                program, safe_fs, lock, stage_one, final, publish_one, previous, recovery_one
+                program,
+                safe_fs,
+                lock,
+                stage_one,
+                final,
+                publish_one,
+                previous,
+                recovery_one,
             )
             self.assertNotEqual(blocked_by_stale.returncode, 0)
-            self.assertEqual((stale / "recovery.txt").read_text(encoding="utf-8"), "keep\n")
+            self.assertEqual(
+                (stale / "recovery.txt").read_text(encoding="utf-8"), "keep\n"
+            )
             stale.joinpath("recovery.txt").unlink()
             stale.rmdir()
 
             first = self._run_finalize(
-                program, safe_fs, lock, stage_one, final, publish_one, previous, recovery_one
+                program,
+                safe_fs,
+                lock,
+                stage_one,
+                final,
+                publish_one,
+                previous,
+                recovery_one,
             )
             self.assertEqual(first.returncode, 0, first.stderr)
             result_identities = first.stdout.strip().split()
@@ -4794,7 +5131,9 @@ class BuildRpmStaticTest(unittest.TestCase):
                 result_identities[2],
                 f"{(final / 'SRPMS').stat().st_dev}:{(final / 'SRPMS').stat().st_ino}:{(final / 'SRPMS').stat().st_mode}",
             )
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "old\n")
+            self.assertEqual(
+                (final / "payload.txt").read_text(encoding="utf-8"), "old\n"
+            )
             self.assertFalse(publish_one.parent.exists())
             self.assertFalse(previous.exists())
 
@@ -4806,12 +5145,25 @@ class BuildRpmStaticTest(unittest.TestCase):
             publish_two = dist / ".rpmbuild.publish-workspace-two" / "candidate"
             recovery_two = dist / ".rpmbuild.previous-recovery-two"
             second = self._run_finalize(
-                program, safe_fs, lock, stage_two, final, publish_two, previous, recovery_two
+                program,
+                safe_fs,
+                lock,
+                stage_two,
+                final,
+                publish_two,
+                previous,
+                recovery_two,
             )
             self.assertEqual(second.returncode, 0, second.stderr)
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "new\n")
-            self.assertEqual((previous / "payload.txt").read_text(encoding="utf-8"), "old\n")
-            self.assertEqual((previous / "SOURCES" / "old-source.rpm").read_bytes(), b"old-source\n")
+            self.assertEqual(
+                (final / "payload.txt").read_text(encoding="utf-8"), "new\n"
+            )
+            self.assertEqual(
+                (previous / "payload.txt").read_text(encoding="utf-8"), "old\n"
+            )
+            self.assertEqual(
+                (previous / "SOURCES" / "old-source.rpm").read_bytes(), b"old-source\n"
+            )
             self.assertFalse(publish_two.parent.exists())
 
             blocked_program = self._inject_pinned_rename_failure(
@@ -4831,8 +5183,12 @@ class BuildRpmStaticTest(unittest.TestCase):
                 dist / ".rpmbuild.previous-recovery-three",
             )
             self.assertNotEqual(blocked.returncode, 0)
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "new\n")
-            self.assertEqual((previous / "payload.txt").read_text(encoding="utf-8"), "old\n")
+            self.assertEqual(
+                (final / "payload.txt").read_text(encoding="utf-8"), "new\n"
+            )
+            self.assertEqual(
+                (previous / "payload.txt").read_text(encoding="utf-8"), "old\n"
+            )
 
             failed_after_exchange_program = self._inject_pinned_rename_failure(
                 program, "flags == 1 and target_name == previous_name"
@@ -4852,9 +5208,16 @@ class BuildRpmStaticTest(unittest.TestCase):
                 dist / ".rpmbuild.previous-recovery-four",
             )
             self.assertNotEqual(failed_after_exchange.returncode, 0)
-            self.assertEqual((final / "payload.txt").read_text(encoding="utf-8"), "later\n")
-            self.assertEqual((publish_four / "payload.txt").read_text(encoding="utf-8"), "new\n")
-            self.assertEqual((publish_four / "SOURCES" / "new-source.rpm").read_bytes(), b"new-source\n")
+            self.assertEqual(
+                (final / "payload.txt").read_text(encoding="utf-8"), "later\n"
+            )
+            self.assertEqual(
+                (publish_four / "payload.txt").read_text(encoding="utf-8"), "new\n"
+            )
+            self.assertEqual(
+                (publish_four / "SOURCES" / "new-source.rpm").read_bytes(),
+                b"new-source\n",
+            )
             self.assertIn(str(publish_four), failed_after_exchange.stderr)
 
 

@@ -38,7 +38,9 @@ MAX_CLEANUP_BACKUP_IDENTITY_VALUE = 18_446_744_073_709_551_615
 MAX_STATE_INT = 2_147_483_647
 STATE_LOCK_TIMEOUT_SECONDS = 5.0
 STATE_LOCK_RETRY_SECONDS = 0.01
-VALID_STATE_STATUSES = frozenset({"idle", "recording", "recorded", "processing", "finalizing", "done", "error"})
+VALID_STATE_STATUSES = frozenset(
+    {"idle", "recording", "recorded", "processing", "finalizing", "done", "error"}
+)
 _CLEANUP_BACKUP_BASENAME_PATTERN = re.compile(
     r"(?:"
     r"\.cleanup\.[0-9a-f]{16}\.[0-9a-f]{16}"
@@ -66,6 +68,7 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, ob
         result[key] = value
     return result
 
+
 _STATE_READ_ERRORS = frozenset(
     {
         "state file could not be read",
@@ -79,7 +82,9 @@ def is_state_read_error(error: object) -> bool:
     return isinstance(error, str) and error in _STATE_READ_ERRORS
 
 
-def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+def _note_lock_cleanup_failure(
+    primary: BaseException, cleanup_error: BaseException
+) -> None:
     primary.add_note("state lock cleanup failed")
 
 
@@ -97,10 +102,14 @@ def _preferred_lock_error(
     return cleanup_errors[0] if cleanup_errors else None
 
 
-def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
+def _flock_retry(
+    fd: int, operation: int, *, timeout_seconds: float | None = None
+) -> None:
     if timeout_seconds is None:
         raise RuntimeError("state lock timeout is required")
-    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+    if isinstance(timeout_seconds, bool) or not isinstance(
+        timeout_seconds, (int, float)
+    ):
         raise RuntimeError("state lock timeout is invalid")
     try:
         finite_timeout = math.isfinite(timeout_seconds)
@@ -149,9 +158,15 @@ def _contains_http_header_control_chars(value: str) -> bool:
         raise ValueError("value must be text")
     lowered = (value or "").lower()
     control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
-    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+    if any(
+        sequence in lowered
+        for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")
+    ):
         return True
-    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
+    if any(
+        f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered
+        for codepoint in control_codepoints
+    ):
         return True
     for char in lowered:
         codepoint = ord(char)
@@ -206,7 +221,10 @@ class StateStore:
         if not text or len(text) > MAX_STATE_PATH_CHARS:
             raise RuntimeError("state file path is invalid")
         try:
-            if _utf8_byte_count(text, field_name="state file path") > MAX_STATE_PATH_CHARS:
+            if (
+                _utf8_byte_count(text, field_name="state file path")
+                > MAX_STATE_PATH_CHARS
+            ):
                 raise RuntimeError("state file path is invalid")
         except ValueError as exc:
             raise RuntimeError("state file path is invalid") from exc
@@ -226,8 +244,14 @@ class StateStore:
         assert_safe_path_components(lock_path, field_name="state lock path")
         assert_no_symlink_ancestors(lock_path, field_name="state lock path")
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-            raise RuntimeError("secure state lock open is not supported on this platform")
+        if (
+            isinstance(nofollow_flag, bool)
+            or not isinstance(nofollow_flag, int)
+            or nofollow_flag <= 0
+        ):
+            raise RuntimeError(
+                "secure state lock open is not supported on this platform"
+            )
         nonblock_flag = getattr(os, "O_NONBLOCK", 0)
         parent_fd = ensure_directory_without_following_symlinks(
             lock_path.parent,
@@ -260,9 +284,7 @@ class StateStore:
                 ):
                     primary_error = exc
                 else:
-                    primary_error = RuntimeError(
-                        "failed to open state lock file"
-                    )
+                    primary_error = RuntimeError("failed to open state lock file")
                     primary_cause = exc
             if primary_error is None:
                 try:
@@ -308,23 +330,15 @@ class StateStore:
                 cleanup_errors,
             )
             if selected_error is not None:
-                if (
-                    primary_error is not None
-                    and selected_error is not primary_error
-                ):
-                    selected_error.add_note(
-                        "state lock primary operation failed"
-                    )
+                if primary_error is not None and selected_error is not primary_error:
+                    selected_error.add_note("state lock primary operation failed")
                 for additional_error in cleanup_errors:
                     if additional_error is not selected_error:
                         _note_lock_cleanup_failure(
                             selected_error,
                             additional_error,
                         )
-                if (
-                    selected_error is primary_error
-                    and primary_cause is not None
-                ):
+                if selected_error is primary_error and primary_cause is not None:
                     raise selected_error from primary_cause
                 raise selected_error from None
 
@@ -347,9 +361,16 @@ class StateStore:
         if _contains_http_header_control_chars(text):
             raise ValueError(f"state {field_name} contains invalid control character")
         if len(text) > MAX_STATE_STRING_CHARS:
-            raise ValueError(f"state {field_name} is too large (max {MAX_STATE_STRING_CHARS} characters)")
-        if _utf8_byte_count(text, field_name=f"state {field_name}") > MAX_STATE_STRING_CHARS:
-            raise ValueError(f"state {field_name} is too large (max {MAX_STATE_STRING_CHARS} bytes)")
+            raise ValueError(
+                f"state {field_name} is too large (max {MAX_STATE_STRING_CHARS} characters)"
+            )
+        if (
+            _utf8_byte_count(text, field_name=f"state {field_name}")
+            > MAX_STATE_STRING_CHARS
+        ):
+            raise ValueError(
+                f"state {field_name} is too large (max {MAX_STATE_STRING_CHARS} bytes)"
+            )
         return text
 
     @staticmethod
@@ -364,9 +385,16 @@ class StateStore:
         if _contains_transcript_control_chars(text):
             raise ValueError("state transcript contains invalid control character")
         if len(text) > MAX_STATE_STRING_CHARS:
-            raise ValueError(f"state transcript is too large (max {MAX_STATE_STRING_CHARS} characters)")
-        if _utf8_byte_count(text, field_name="state transcript") > MAX_STATE_STRING_CHARS:
-            raise ValueError(f"state transcript is too large (max {MAX_STATE_STRING_CHARS} bytes)")
+            raise ValueError(
+                f"state transcript is too large (max {MAX_STATE_STRING_CHARS} characters)"
+            )
+        if (
+            _utf8_byte_count(text, field_name="state transcript")
+            > MAX_STATE_STRING_CHARS
+        ):
+            raise ValueError(
+                f"state transcript is too large (max {MAX_STATE_STRING_CHARS} bytes)"
+            )
         return text
 
     @staticmethod
@@ -391,13 +419,9 @@ class StateStore:
                 field_name=f"{field_name} entry",
             )
             if text is None or not text:
-                raise ValueError(
-                    f"state {field_name} contains an empty path"
-                )
+                raise ValueError(f"state {field_name} contains an empty path")
             if len(text) > MAX_PENDING_CLEANUP_OWNER_PATH_CHARS:
-                raise ValueError(
-                    f"state {field_name} contains an oversized path"
-                )
+                raise ValueError(f"state {field_name} contains an oversized path")
             if (
                 _utf8_byte_count(
                     text,
@@ -405,9 +429,7 @@ class StateStore:
                 )
                 > MAX_PENDING_CLEANUP_OWNER_PATH_CHARS
             ):
-                raise ValueError(
-                    f"state {field_name} contains an oversized path"
-                )
+                raise ValueError(f"state {field_name} contains an oversized path")
 
             owner_path = Path(text)
             if (
@@ -416,13 +438,9 @@ class StateStore:
                 or ".." in owner_path.parts
                 or str(owner_path) != text
             ):
-                raise ValueError(
-                    f"state {field_name} contains an invalid path"
-                )
+                raise ValueError(f"state {field_name} contains an invalid path")
             if owner_path in seen:
-                raise ValueError(
-                    f"state {field_name} contains a duplicate path"
-                )
+                raise ValueError(f"state {field_name} contains a duplicate path")
             seen.add(owner_path)
             normalized.append(text)
 
@@ -433,9 +451,7 @@ class StateStore:
         value: Any,
     ) -> tuple[str, ...]:
         if not isinstance(value, (list, tuple)):
-            raise ValueError(
-                "state pending_cleanup_backup_entries must be a list"
-            )
+            raise ValueError("state pending_cleanup_backup_entries must be a list")
         if len(value) > MAX_PENDING_CLEANUP_BACKUP_ENTRIES:
             raise ValueError(
                 "state pending_cleanup_backup_entries contains too many "
@@ -461,18 +477,15 @@ class StateStore:
                 > MAX_PENDING_CLEANUP_BACKUP_ENTRY_CHARS
             ):
                 raise ValueError(
-                    "state pending_cleanup_backup_entries contains an "
-                    "invalid entry"
+                    "state pending_cleanup_backup_entries contains an " "invalid entry"
                 )
             parts = text.split("|")
             if (
                 len(parts) != 8
-                or _CLEANUP_BACKUP_BASENAME_PATTERN.fullmatch(parts[0])
-                is None
+                or _CLEANUP_BACKUP_BASENAME_PATTERN.fullmatch(parts[0]) is None
             ):
                 raise ValueError(
-                    "state pending_cleanup_backup_entries contains an "
-                    "invalid entry"
+                    "state pending_cleanup_backup_entries contains an " "invalid entry"
                 )
             for identity_value in parts[1:]:
                 if (
@@ -495,8 +508,7 @@ class StateStore:
                     )
             if text in seen or parts[0] in seen_basenames:
                 raise ValueError(
-                    "state pending_cleanup_backup_entries contains a "
-                    "duplicate entry"
+                    "state pending_cleanup_backup_entries contains a " "duplicate entry"
                 )
             seen.add(text)
             seen_basenames.add(parts[0])
@@ -511,9 +523,7 @@ class StateStore:
         field_name: str = "inserted",
     ) -> bool:
         if not isinstance(value, bool):
-            raise ValueError(
-                f"state {field_name} contains invalid boolean value"
-            )
+            raise ValueError(f"state {field_name} contains invalid boolean value")
         return value
 
     @staticmethod
@@ -560,7 +570,13 @@ class StateStore:
             if field_name not in raw:
                 continue
             value = raw[field_name]
-            optional_text_fields = {"audio_path", "log_path", "started_at", "stopped_at", "transcript_path"}
+            optional_text_fields = {
+                "audio_path",
+                "log_path",
+                "started_at",
+                "stopped_at",
+                "transcript_path",
+            }
             if field_name == "status":
                 status = StateStore._sanitize_text_field(value, field_name=field_name)
                 if status not in VALID_STATE_STATUSES:
@@ -575,7 +591,9 @@ class StateStore:
                 "updated_at",
                 "recorder_scope",
             }:
-                normalized[field_name] = StateStore._sanitize_text_field(value, field_name=field_name)
+                normalized[field_name] = StateStore._sanitize_text_field(
+                    value, field_name=field_name
+                )
             elif field_name == "transcript":
                 normalized[field_name] = StateStore._sanitize_transcript_field(value)
             elif field_name in {
@@ -597,12 +615,16 @@ class StateStore:
                     value, field_name=field_name, allow_null=True
                 )
             elif field_name == "pid":
-                normalized[field_name] = StateStore._coerce_state_int(
-                    value,
-                    field_name="state pid",
-                    min_value=1,
-                    max_value=MAX_STATE_INT,
-                ) if value is not None else None
+                normalized[field_name] = (
+                    StateStore._coerce_state_int(
+                        value,
+                        field_name="state pid",
+                        min_value=1,
+                        max_value=MAX_STATE_INT,
+                    )
+                    if value is not None
+                    else None
+                )
             elif field_name == "max_seconds":
                 normalized[field_name] = StateStore._coerce_state_int(
                     value,
@@ -646,14 +668,9 @@ class StateStore:
             or normalized["status"] not in {"finalizing", "error"}
             or normalized.get("pid") is not None
             or bool(normalized.get("process_identity", ""))
-            or not (
-                normalized.get("audio_path")
-                or normalized.get("log_path")
-            )
+            or not (normalized.get("audio_path") or normalized.get("log_path"))
         ):
-            raise ValueError(
-                "state cleanup backup restore owner journal is invalid"
-            )
+            raise ValueError("state cleanup backup restore owner journal is invalid")
         if normalized.get("cleanup_backup_journal_restore", False):
             pending_owners = normalized.get(
                 "pending_cleanup_owner_paths",
@@ -670,14 +687,9 @@ class StateStore:
                 or normalized["status"] not in {"finalizing", "error"}
                 or normalized.get("pid") is not None
                 or bool(normalized.get("process_identity", ""))
-                or not (
-                    normalized.get("audio_path")
-                    or normalized.get("log_path")
-                )
+                or not (normalized.get("audio_path") or normalized.get("log_path"))
             ):
-                raise ValueError(
-                    "state cleanup backup restore journal is invalid"
-                )
+                raise ValueError("state cleanup backup restore journal is invalid")
         return normalized
 
     def read(self) -> RecordingState:
@@ -718,7 +730,13 @@ class StateStore:
             if "too large" in str(exc):
                 return RecordingState(error="state file is too large")
             return RecordingState(error="state file could not be read")
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, RecursionError, MemoryError):
+        except (
+            json.JSONDecodeError,
+            UnicodeDecodeError,
+            ValueError,
+            RecursionError,
+            MemoryError,
+        ):
             return RecordingState(error="state file could not be read")
         return RecordingState(**normalized)
 
@@ -746,8 +764,8 @@ class StateStore:
     @staticmethod
     def write_would_fit(state: RecordingState) -> bool:
         try:
-            _payload, _rendered, rendered_size = (
-                StateStore._render_state_for_write(state)
+            _payload, _rendered, rendered_size = StateStore._render_state_for_write(
+                state
             )
         except (RuntimeError, TypeError, ValueError, MemoryError, RecursionError):
             return False

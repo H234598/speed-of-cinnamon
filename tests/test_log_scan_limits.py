@@ -13,7 +13,9 @@ class LogScanLimitTests(unittest.TestCase):
             directory = Path(tmp)
             path = directory / "speed-of-cinnamon-2026-08-01.log"
             path.touch()
-            self.assertEqual(app_logging._bounded_log_paths(directory, "*.log"), (path,))
+            self.assertEqual(
+                app_logging._bounded_log_paths(directory, "*.log"), (path,)
+            )
 
     def test_bounded_log_paths_fails_closed_at_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -21,7 +23,9 @@ class LogScanLimitTests(unittest.TestCase):
             for index in range(3):
                 (directory / f"log-{index}.log").touch()
             with mock.patch.object(app_logging, "MAX_LOG_MAINTENANCE_SCAN_ENTRIES", 2):
-                with self.assertRaisesRegex(RuntimeError, "log directory exceeds scan budget"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "log directory exceeds scan budget"
+                ):
                     app_logging._bounded_log_paths(directory, "*.log")
 
     def test_bounded_log_paths_fails_closed_on_iteration_error(self) -> None:

@@ -4,6 +4,7 @@ umask 077
 IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH="${TRUSTED_COMMAND_PATH}"
+export LC_ALL=C
 readonly MAX_RPM_ARCHIVE_BYTES=$((256 * 1024 * 1024))
 readonly MAX_RPM_FILES=5000
 readonly MAX_RPM_PATH_CHARS=260
@@ -17,49 +18,49 @@ repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
 cd "${repo_dir}"
 
 dist_dir="${repo_dir}/dist"
-if [[ -L "${dist_dir}" || ! -d "${dist_dir}" ]]; then
-  printf 'dist directory is invalid: %s\n' "${dist_dir}" >&2
-  exit 1
+if [[ -L ${dist_dir} || ! -d ${dist_dir} ]]; then
+	printf 'dist directory is invalid: %s\n' "${dist_dir}" >&2
+	exit 1
 fi
 
 if [[ $# -gt 1 ]]; then
-  printf 'usage: %s [dist/rpmbuild*/RPMS/noarch/speed-of-cinnamon-*.rpm]\n' "$0" >&2
-  exit 2
+	printf 'usage: %s [dist/rpmbuild*/RPMS/noarch/speed-of-cinnamon-*.rpm]\n' "$0" >&2
+	exit 2
 fi
 
 for tool in rpm rpm2cpio cpio find python3 realpath stat timeout; do
-  if ! command -v -- "${tool}" >/dev/null 2>&1; then
-    printf '%s not found. Install rpm and cpio tooling.\n' "${tool}" >&2
-    exit 1
-  fi
+	if ! command -v -- "${tool}" >/dev/null 2>&1; then
+		printf '%s not found. Install rpm and cpio tooling.\n' "${tool}" >&2
+		exit 1
+	fi
 done
 
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
-if [[ -L "${safe_fs}" || ! -f "${safe_fs}" || "$(stat -c '%F' "${safe_fs}")" != "regular file" ]]; then
-  printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
-  exit 1
+if [[ -L ${safe_fs} || ! -f ${safe_fs} || "$(stat -c '%F' "${safe_fs}")" != "regular file" ]]; then
+	printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
+	exit 1
 fi
 if [[ "$(stat -c '%h' "${safe_fs}")" -ne 1 ]]; then
-  printf 'safe local filesystem helper must not be hardlinked: %s\n' "${safe_fs}" >&2
-  exit 1
+	printf 'safe local filesystem helper must not be hardlinked: %s\n' "${safe_fs}" >&2
+	exit 1
 fi
 safe_fs_cmd=(python3 "${safe_fs}")
 
 run_rpm_bounded() {
-  timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" rpm "$@"
+	timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" rpm "$@"
 }
 
 run_rpm2cpio_bounded() {
-  timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" rpm2cpio "$@"
+	timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" rpm2cpio "$@"
 }
 
 run_cpio_bounded() {
-  timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" cpio "$@"
+	timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" cpio "$@"
 }
 
 contains_control_chars() {
-  local value=$1
-  python3 - "${value}" <<'PY'
+	local value=$1
+	python3 - "${value}" <<'PY'
 import sys
 
 value = sys.argv[1]
@@ -74,192 +75,192 @@ PY
 
 rpm_candidates=()
 if [[ $# -eq 1 ]]; then
-  rpm_path="${1}"
-  if contains_control_chars "${rpm_path}"; then
-    printf 'RPM package path contains control characters\n' >&2
-    exit 1
-  fi
-  if [[ -L "${rpm_path}" ]]; then
-    printf 'RPM package must not be a symlink: %s\n' "${rpm_path}" >&2
-    exit 1
-  fi
-  if [[ ! -f "${rpm_path}" ]]; then
-    printf 'RPM package not found\n' >&2
-    exit 1
-  fi
-  if ! rpm_path="$(realpath "${rpm_path}" 2>/dev/null)"; then
-    printf 'failed to resolve RPM path\n' >&2
-    exit 1
-  fi
+	rpm_path="${1}"
+	if contains_control_chars "${rpm_path}"; then
+		printf 'RPM package path contains control characters\n' >&2
+		exit 1
+	fi
+	if [[ -L ${rpm_path} ]]; then
+		printf 'RPM package must not be a symlink: %s\n' "${rpm_path}" >&2
+		exit 1
+	fi
+	if [[ ! -f ${rpm_path} ]]; then
+		printf 'RPM package not found\n' >&2
+		exit 1
+	fi
+	if ! rpm_path="$(realpath "${rpm_path}" 2>/dev/null)"; then
+		printf 'failed to resolve RPM path\n' >&2
+		exit 1
+	fi
 else
-  rpm_candidates=(
-    "${repo_dir}"/dist/rpmbuild/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm
-    "${repo_dir}"/dist/rpmbuild-generic/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm
-  )
-  shopt -s nullglob
-  filtered_rpms=()
-  for candidate in "${rpm_candidates[@]}"; do
-    if [[ -f "${candidate}" && ! -L "${candidate}" ]]; then
-      filtered_rpms+=("${candidate}")
-    fi
-  done
-  shopt -u nullglob
-  if [[ ${#filtered_rpms[@]} -ne 1 ]]; then
-    printf 'expected exactly one RPM package, found %d\n' "${#filtered_rpms[@]}" >&2
-    exit 1
-  fi
-  rpm_path="${filtered_rpms[0]}"
+	rpm_candidates=(
+		"${repo_dir}"/dist/rpmbuild/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm
+		"${repo_dir}"/dist/rpmbuild-generic/RPMS/noarch/speed-of-cinnamon-*.noarch.rpm
+	)
+	shopt -s nullglob
+	filtered_rpms=()
+	for candidate in "${rpm_candidates[@]}"; do
+		if [[ -f ${candidate} && ! -L ${candidate} ]]; then
+			filtered_rpms+=("${candidate}")
+		fi
+	done
+	shopt -u nullglob
+	if [[ ${#filtered_rpms[@]} -ne 1 ]]; then
+		printf 'expected exactly one RPM package, found %d\n' "${#filtered_rpms[@]}" >&2
+		exit 1
+	fi
+	rpm_path="${filtered_rpms[0]}"
 fi
 
-if [[ ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".rpm" || "${rpm_path}" == "${repo_dir}/dist/rpmbuild-generic/"*".rpm" ) ]]; then
-  printf 'RPM package not found: %s\n' "${rpm_path}" >&2
-  exit 1
+if [[ ! -f ${rpm_path} || ! (${rpm_path} == "${repo_dir}/dist/rpmbuild/"*".rpm" || ${rpm_path} == "${repo_dir}/dist/rpmbuild-generic/"*".rpm") ]]; then
+	printf 'RPM package not found: %s\n' "${rpm_path}" >&2
+	exit 1
 fi
-if [[ -L "${rpm_path}" || ! -f "${rpm_path}" || "$(stat -c '%F' "${rpm_path}")" != "regular file" ]]; then
-  printf 'RPM package must be a regular file: %s\n' "${rpm_path}" >&2
-  exit 1
+if [[ -L ${rpm_path} || ! -f ${rpm_path} || "$(stat -c '%F' "${rpm_path}")" != "regular file" ]]; then
+	printf 'RPM package must be a regular file: %s\n' "${rpm_path}" >&2
+	exit 1
 fi
 rpm_path="$(realpath "${rpm_path}" 2>/dev/null)"
-if [[ -L "${rpm_path}" || ! -f "${rpm_path}" || ! ( "${rpm_path}" == "${repo_dir}/dist/rpmbuild/"*".rpm" || "${rpm_path}" == "${repo_dir}/dist/rpmbuild-generic/"*".rpm" ) || "$(stat -c '%F' "${rpm_path}")" != "regular file" ]]; then
-  printf 'RPM package not valid: %s\n' "${rpm_path}" >&2
-  exit 1
+if [[ -L ${rpm_path} || ! -f ${rpm_path} || ! (${rpm_path} == "${repo_dir}/dist/rpmbuild/"*".rpm" || ${rpm_path} == "${repo_dir}/dist/rpmbuild-generic/"*".rpm") || "$(stat -c '%F' "${rpm_path}")" != "regular file" ]]; then
+	printf 'RPM package not valid: %s\n' "${rpm_path}" >&2
+	exit 1
 fi
 rpm_link_count="$(stat -c '%h' "${rpm_path}")"
-if [[ "${rpm_link_count}" -ne 1 ]]; then
-  printf 'RPM package must not be hardlinked: %s\n' "${rpm_path}" >&2
-  exit 1
+if [[ ${rpm_link_count} -ne 1 ]]; then
+	printf 'RPM package must not be hardlinked: %s\n' "${rpm_path}" >&2
+	exit 1
 fi
 rpm_filename="$(basename "${rpm_path}")"
-if [[ ! "${rpm_filename}" =~ ^speed-of-cinnamon-(.+)-[^-]+\.noarch\.rpm$ ]]; then
-  printf 'unexpected RPM package name: %s\n' "${rpm_filename}" >&2
-  exit 1
+if [[ ! ${rpm_filename} =~ ^speed-of-cinnamon-(.+)-[^-]+\.noarch\.rpm$ ]]; then
+	printf 'unexpected RPM package name: %s\n' "${rpm_filename}" >&2
+	exit 1
 fi
 rpm_filename_version="${BASH_REMATCH[1]}"
 rpm_bytes="$(stat -c '%s' "${rpm_path}")"
-if [[ "${rpm_bytes}" -le 0 || "${rpm_bytes}" -gt "${MAX_RPM_ARCHIVE_BYTES}" ]]; then
-  printf 'RPM package size is outside allowed bounds: %s bytes\n' "${rpm_bytes}" >&2
-  exit 1
+if [[ ${rpm_bytes} -le 0 || ${rpm_bytes} -gt ${MAX_RPM_ARCHIVE_BYTES} ]]; then
+	printf 'RPM package size is outside allowed bounds: %s bytes\n' "${rpm_bytes}" >&2
+	exit 1
 fi
 
 tmp_root="${TMPDIR:-/tmp}"
 if contains_control_chars "${tmp_root}"; then
-  printf 'temporary root contains control characters\n' >&2
-  exit 1
+	printf 'temporary root contains control characters\n' >&2
+	exit 1
 fi
-if [[ ! "${tmp_root}" == /* ]]; then
-  printf 'temporary root must be an absolute path\n' >&2
-  exit 1
+if [[ ${tmp_root} != /* ]]; then
+	printf 'temporary root must be an absolute path\n' >&2
+	exit 1
 fi
-if [[ -L "${tmp_root}" ]]; then
-  printf 'temporary root must not be a symlink\n' >&2
-  exit 1
+if [[ -L ${tmp_root} ]]; then
+	printf 'temporary root must not be a symlink\n' >&2
+	exit 1
 fi
-if [[ ! -d "${tmp_root}" || ! -w "${tmp_root}" ]]; then
-  printf 'temporary root is not a writable directory\n' >&2
-  exit 1
+if [[ ! -d ${tmp_root} || ! -w ${tmp_root} ]]; then
+	printf 'temporary root is not a writable directory\n' >&2
+	exit 1
 fi
-if [[ -L "${tmp_root}" ]]; then
-  printf 'temporary root must not be a symlink\n' >&2
-  exit 1
+if [[ -L ${tmp_root} ]]; then
+	printf 'temporary root must not be a symlink\n' >&2
+	exit 1
 fi
 if ! tmp_root="$(realpath "${tmp_root}" 2>/dev/null)"; then
-  printf 'failed to resolve temporary root\n' >&2
-  exit 1
+	printf 'failed to resolve temporary root\n' >&2
+	exit 1
 fi
 tmp_dir="$(mktemp -d "${tmp_root}/speed-of-cinnamon-rpm-verify-XXXXXX")"
-if [[ -L "${tmp_dir}" ]]; then
-  printf 'temporary RPM verification directory must not be a symlink: %s\n' "${tmp_dir}" >&2
-  exit 1
+if [[ -L ${tmp_dir} ]]; then
+	printf 'temporary RPM verification directory must not be a symlink: %s\n' "${tmp_dir}" >&2
+	exit 1
 fi
 if ! tmp_dir_abs="$(realpath "${tmp_dir}")"; then
-  printf 'failed to resolve temporary RPM verification directory: %s\n' "${tmp_dir}" >&2
-  exit 1
+	printf 'failed to resolve temporary RPM verification directory: %s\n' "${tmp_dir}" >&2
+	exit 1
 fi
-if [[ "${tmp_dir_abs}" != "${tmp_root}/speed-of-cinnamon-rpm-verify-"* ]]; then
-  printf 'temporary RPM verification directory escaped temporary root: %s\n' "${tmp_dir}" >&2
-  exit 1
+if [[ ${tmp_dir_abs} != "${tmp_root}/speed-of-cinnamon-rpm-verify-"* ]]; then
+	printf 'temporary RPM verification directory escaped temporary root: %s\n' "${tmp_dir}" >&2
+	exit 1
 fi
 tmp_dir="${tmp_dir_abs}"
 tmp_dir_identity=""
 cleanup_tmpdir() {
-  if [[ -n "${tmp_dir_identity}" ]]; then
-    "${safe_fs_cmd[@]}" remove verify-rpm "${tmp_dir}" --kind dir \
-      --expected-identity "${tmp_dir_identity}" >/dev/null 2>&1 || true
-  else
-    printf 'refusing RPM verification cleanup without verified identity: %s\n' "${tmp_dir}" >&2
-  fi
+	if [[ -n ${tmp_dir_identity} ]]; then
+		"${safe_fs_cmd[@]}" remove verify-rpm "${tmp_dir}" --kind dir \
+			--expected-identity "${tmp_dir_identity}" >/dev/null 2>&1 || true
+	else
+		printf 'refusing RPM verification cleanup without verified identity: %s\n' "${tmp_dir}" >&2
+	fi
 }
 trap cleanup_tmpdir EXIT
 
 if ! tmp_dir_identity="$("${safe_fs_cmd[@]}" identity verify-rpm "${tmp_dir}" --kind dir)"; then
-  printf 'failed to capture RPM verification directory identity: %s\n' "${tmp_dir}" >&2
-  exit 1
+	printf 'failed to capture RPM verification directory identity: %s\n' "${tmp_dir}" >&2
+	exit 1
 fi
 
 rpm_snapshot="${tmp_dir}/speed-of-cinnamon-verify.rpm"
 if ! "${safe_fs_cmd[@]}" copy-file verify-rpm "${rpm_path}" "${rpm_snapshot}" 0644 \
-  --max-bytes "${MAX_RPM_ARCHIVE_BYTES}"; then
-  printf 'failed to snapshot RPM package for verification: %s\n' "${rpm_path}" >&2
-  exit 1
+	--max-bytes "${MAX_RPM_ARCHIVE_BYTES}"; then
+	printf 'failed to snapshot RPM package for verification: %s\n' "${rpm_path}" >&2
+	exit 1
 fi
-if [[ -L "${rpm_snapshot}" || ! -f "${rpm_snapshot}" || "$(stat -c '%F' "${rpm_snapshot}")" != "regular file" ]]; then
-  printf 'RPM snapshot must be a regular file: %s\n' "${rpm_snapshot}" >&2
-  exit 1
+if [[ -L ${rpm_snapshot} || ! -f ${rpm_snapshot} || "$(stat -c '%F' "${rpm_snapshot}")" != "regular file" ]]; then
+	printf 'RPM snapshot must be a regular file: %s\n' "${rpm_snapshot}" >&2
+	exit 1
 fi
 if [[ "$(stat -c '%h' "${rpm_snapshot}")" -ne 1 ]]; then
-  printf 'RPM snapshot must not be hardlinked: %s\n' "${rpm_snapshot}" >&2
-  exit 1
+	printf 'RPM snapshot must not be hardlinked: %s\n' "${rpm_snapshot}" >&2
+	exit 1
 fi
 snapshot_bytes="$(stat -c '%s' "${rpm_snapshot}")"
-if [[ "${snapshot_bytes}" -le 0 || "${snapshot_bytes}" -gt "${MAX_RPM_ARCHIVE_BYTES}" ]]; then
-  printf 'RPM snapshot size is outside allowed bounds: %s bytes\n' "${snapshot_bytes}" >&2
-  exit 1
+if [[ ${snapshot_bytes} -le 0 || ${snapshot_bytes} -gt ${MAX_RPM_ARCHIVE_BYTES} ]]; then
+	printf 'RPM snapshot size is outside allowed bounds: %s bytes\n' "${snapshot_bytes}" >&2
+	exit 1
 fi
 rpm_bytes="${snapshot_bytes}"
 
 metadata_file="${tmp_dir}/rpm-metadata.txt"
 scriptlets_file="${tmp_dir}/rpm-scriptlets.txt"
 triggers_file="${tmp_dir}/rpm-triggers.txt"
-run_rpm_bounded -qp --qf 'name=%{NAME}\nversion=%{VERSION}\narch=%{ARCH}\npackager=%{PACKAGER}\nvendor=%{VENDOR}\nurl=%{URL}\n' "${rpm_snapshot}" > "${metadata_file}"
+run_rpm_bounded -qp --qf 'name=%{NAME}\nversion=%{VERSION}\narch=%{ARCH}\npackager=%{PACKAGER}\nvendor=%{VENDOR}\nurl=%{URL}\n' "${rpm_snapshot}" >"${metadata_file}"
 grep -Fxq 'name=speed-of-cinnamon' "${metadata_file}"
 grep -Fxq 'arch=noarch' "${metadata_file}"
 rpm_metadata_version="$(awk -F= '$1 == "version" { print substr($0, index($0, "=") + 1); exit }' "${metadata_file}")"
-if [[ -z "${rpm_metadata_version}" || "${rpm_metadata_version}" != "${rpm_filename_version}" ]]; then
-  printf 'RPM metadata version does not match package filename: %s\n' "${rpm_filename}" >&2
-  exit 1
+if [[ -z ${rpm_metadata_version} || ${rpm_metadata_version} != "${rpm_filename_version}" ]]; then
+	printf 'RPM metadata version does not match package filename: %s\n' "${rpm_filename}" >&2
+	exit 1
 fi
 grep -Fxq 'packager=H234598 <54270221+H234598@users.noreply.github.com>' "${metadata_file}"
 grep -Fxq 'vendor=H234598' "${metadata_file}"
 grep -Fxq 'url=https://github.com/H234598/speed-of-cinnamon' "${metadata_file}"
 
-if ! run_rpm_bounded -qp --scripts "${rpm_snapshot}" > "${scriptlets_file}"; then
-  printf 'failed to query RPM scriptlets: %s\n' "${rpm_snapshot}" >&2
-  exit 1
+if ! run_rpm_bounded -qp --scripts "${rpm_snapshot}" >"${scriptlets_file}"; then
+	printf 'failed to query RPM scriptlets: %s\n' "${rpm_snapshot}" >&2
+	exit 1
 fi
-if [[ -s "${scriptlets_file}" ]]; then
-  printf 'RPM scriptlets are not allowed for release packages: %s\n' "${rpm_snapshot}" >&2
-  exit 1
+if [[ -s ${scriptlets_file} ]]; then
+	printf 'RPM scriptlets are not allowed for release packages: %s\n' "${rpm_snapshot}" >&2
+	exit 1
 fi
-if ! run_rpm_bounded -qp --triggers "${rpm_snapshot}" > "${triggers_file}"; then
-  printf 'failed to query RPM triggers: %s\n' "${rpm_snapshot}" >&2
-  exit 1
+if ! run_rpm_bounded -qp --triggers "${rpm_snapshot}" >"${triggers_file}"; then
+	printf 'failed to query RPM triggers: %s\n' "${rpm_snapshot}" >&2
+	exit 1
 fi
-if [[ -s "${triggers_file}" ]]; then
-  printf 'RPM triggers are not allowed for release packages: %s\n' "${rpm_snapshot}" >&2
-  exit 1
+if [[ -s ${triggers_file} ]]; then
+	printf 'RPM triggers are not allowed for release packages: %s\n' "${rpm_snapshot}" >&2
+	exit 1
 fi
 
 required_files=(
-  /usr/bin/speed-of-cinnamon
-  /usr/share/cinnamon/applets/speed-of-cinnamon@H234598/applet.js
-  /usr/share/cinnamon/applets/speed-of-cinnamon@H234598/metadata.json
-  /usr/share/cinnamon/applets/speed-of-cinnamon@H234598/settings-schema.json
+	/usr/bin/speed-of-cinnamon
+	/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/applet.js
+	/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/metadata.json
+	/usr/share/cinnamon/applets/speed-of-cinnamon@H234598/settings-schema.json
 )
 file_list="${tmp_dir}/rpm-files.txt"
 file_metadata="${tmp_dir}/rpm-file-metadata.txt"
 
-run_rpm_bounded -qpl "${rpm_snapshot}" > "${file_list}"
-python3 - <<'PY' "${file_list}" "${MAX_RPM_FILES}" "${MAX_RPM_PATH_CHARS}" "${MAX_RPM_PATH_DEPTH}" "${MAX_RPM_LISTING_BYTES}"
+run_rpm_bounded -qpl "${rpm_snapshot}" >"${file_list}"
+python3 - "${file_list}" "${MAX_RPM_FILES}" "${MAX_RPM_PATH_CHARS}" "${MAX_RPM_PATH_DEPTH}" "${MAX_RPM_LISTING_BYTES}" <<'PY'
 from pathlib import Path
 import sys
 
@@ -313,8 +314,8 @@ for entry in read_bounded_utf8(file_list, "RPM file listing").split("\n"):
         raise SystemExit(f"RPM package contains unexpected path entry: {entry}")
 PY
 
-run_rpm_bounded -qp --qf '[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILECAPS}\t%{FILELINKTOS}\t%{FILESIZES}\n]' "${rpm_snapshot}" > "${file_metadata}"
-python3 - <<'PY' "${file_list}" "${file_metadata}" "${MAX_RPM_FILE_BYTES}" "${MAX_RPM_TOTAL_FILE_BYTES}" "${MAX_RPM_LISTING_BYTES}"
+run_rpm_bounded -qp --qf '[%{FILENAMES}\t%{FILEMODES:octal}\t%{FILECAPS}\t%{FILELINKTOS}\t%{FILESIZES}\n]' "${rpm_snapshot}" >"${file_metadata}"
+python3 - "${file_list}" "${file_metadata}" "${MAX_RPM_FILE_BYTES}" "${MAX_RPM_TOTAL_FILE_BYTES}" "${MAX_RPM_LISTING_BYTES}" <<'PY'
 from pathlib import Path
 import stat
 import sys
@@ -393,88 +394,86 @@ if metadata_entries != file_entries:
 PY
 
 for required in "${required_files[@]}"; do
-  if ! grep -Fxq "${required}" "${file_list}"; then
-    printf 'RPM is missing %s\n' "${required}" >&2
-    exit 1
-  fi
+	if ! grep -Fxq "${required}" "${file_list}"; then
+		printf 'RPM is missing %s\n' "${required}" >&2
+		exit 1
+	fi
 done
 for required in \
-  '^/usr/share/man/man1/speed-of-cinnamon\.1(\.gz)?$' \
-  '^/usr/share/man/man1/speed-of-cinnamon-alarms\.1(\.gz)?$' \
-; do
-  if ! grep -Eq "${required}" "${file_list}"; then
-    printf 'RPM is missing file matching %s\n' "${required}" >&2
-    exit 1
-  fi
+	'^/usr/share/man/man1/speed-of-cinnamon\.1(\.gz)?$' \
+	'^/usr/share/man/man1/speed-of-cinnamon-alarms\.1(\.gz)?$'; do
+	if ! grep -Eq "${required}" "${file_list}"; then
+		printf 'RPM is missing file matching %s\n' "${required}" >&2
+		exit 1
+	fi
 done
 if ! grep -Eq '^/usr/lib/python[^/]+/site-packages/speed_of_cinnamon/cli\.py$' "${file_list}"; then
-  printf 'RPM is missing speed_of_cinnamon/cli.py under site-packages\n' >&2
-  exit 1
+	printf 'RPM is missing speed_of_cinnamon/cli.py under site-packages\n' >&2
+	exit 1
 fi
 for pattern in \
-  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/README\.md$' \
-  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/architecture\.md$' \
-  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/cli-reference\.md$' \
-  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/development\.md$' \
-  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/fedora-cinnamon-runbook\.md$' \
-  '^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/user-guide\.md$' \
-  '^/usr/share/(doc|licenses)/speed-of-cinnamon(-[^/]*)?/LICENSE$'
-do
-  if ! grep -Eq "${pattern}" "${file_list}"; then
-    printf 'RPM is missing a file matching %s\n' "${pattern}" >&2
-    exit 1
-  fi
+	'^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/README\.md$' \
+	'^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/architecture\.md$' \
+	'^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/cli-reference\.md$' \
+	'^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/development\.md$' \
+	'^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/fedora-cinnamon-runbook\.md$' \
+	'^/usr/share/doc/speed-of-cinnamon(-[^/]*)?/user-guide\.md$' \
+	'^/usr/share/(doc|licenses)/speed-of-cinnamon(-[^/]*)?/LICENSE$'; do
+	if ! grep -Eq "${pattern}" "${file_list}"; then
+		printf 'RPM is missing a file matching %s\n' "${pattern}" >&2
+		exit 1
+	fi
 done
 
 if ! (
-  cd "${tmp_dir}"
-  set -o pipefail
-  run_rpm2cpio_bounded "${rpm_snapshot}" |
-    run_cpio_bounded -idmu --no-absolute-filenames --quiet
+	cd "${tmp_dir}"
+	set -o pipefail
+	run_rpm2cpio_bounded "${rpm_snapshot}" |
+		run_cpio_bounded -idmu --no-absolute-filenames --quiet
 ); then
-  printf 'failed to extract RPM package within the verification budget.\n' >&2
-  exit 1
+	printf 'failed to extract RPM package within the verification budget.\n' >&2
+	exit 1
 fi
 
 if ! unsupported_links="$(timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" find "${tmp_dir}" -type l -print -quit)"; then
-  printf 'failed to inspect RPM expansion for symlinks.\n' >&2
-  exit 1
+	printf 'failed to inspect RPM expansion for symlinks.\n' >&2
+	exit 1
 fi
-if [[ -n "${unsupported_links}" ]]; then
-  printf 'RPM expansion contains unsupported symlink entries.\n' >&2
-  exit 1
+if [[ -n ${unsupported_links} ]]; then
+	printf 'RPM expansion contains unsupported symlink entries.\n' >&2
+	exit 1
 fi
 if ! unsupported_hardlinks="$(timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" find "${tmp_dir}" -type f -links +1 -print -quit)"; then
-  printf 'failed to inspect RPM expansion for hardlinks.\n' >&2
-  exit 1
+	printf 'failed to inspect RPM expansion for hardlinks.\n' >&2
+	exit 1
 fi
-if [[ -n "${unsupported_hardlinks}" ]]; then
-  printf 'RPM expansion contains unsupported hardlink entries.\n' >&2
-  exit 1
+if [[ -n ${unsupported_hardlinks} ]]; then
+	printf 'RPM expansion contains unsupported hardlink entries.\n' >&2
+	exit 1
 fi
 
 backend="${tmp_dir}/usr/bin/speed-of-cinnamon"
-if [[ ! -x "${backend}" ]]; then
-  printf 'extracted backend is not executable: %s\n' "${backend}" >&2
-  exit 1
+if [[ ! -x ${backend} ]]; then
+	printf 'extracted backend is not executable: %s\n' "${backend}" >&2
+	exit 1
 fi
 if ! grep -Fq 'from speed_of_cinnamon.cli import main' "${backend}"; then
-  printf 'extracted backend does not invoke the expected CLI module: %s\n' "${backend}" >&2
-  exit 1
+	printf 'extracted backend does not invoke the expected CLI module: %s\n' "${backend}" >&2
+	exit 1
 fi
 
 if ! package_dir="$(timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" find "${tmp_dir}/usr/lib" -type d -path '*/site-packages/speed_of_cinnamon' -print -quit)"; then
-  printf 'failed to locate extracted Python package within the verification budget\n' >&2
-  exit 1
+	printf 'failed to locate extracted Python package within the verification budget\n' >&2
+	exit 1
 fi
-if [[ -z "${package_dir}" ]]; then
-  printf 'extracted Python package not found under site-packages\n' >&2
-  exit 1
+if [[ -z ${package_dir} ]]; then
+	printf 'extracted Python package not found under site-packages\n' >&2
+	exit 1
 fi
 
 if ! timeout --signal=TERM --kill-after=10s "${RPM_VERIFY_TIMEOUT_SECONDS}s" python3 -m compileall -q "${package_dir}"; then
-  printf 'extracted Python package compilation failed or exceeded the verification budget\n' >&2
-  exit 1
+	printf 'extracted Python package compilation failed or exceeded the verification budget\n' >&2
+	exit 1
 fi
 
 printf 'Verified %s\n' "${rpm_path}"

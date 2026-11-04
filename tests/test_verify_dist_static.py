@@ -58,7 +58,9 @@ ARCHIVE_PATHS = (
 
 
 class VerifyDistStaticTest(unittest.TestCase):
-    def _fixture(self, root: Path, extra_python_files: int = 0) -> tuple[Path, Path, Path]:
+    def _fixture(
+        self, root: Path, extra_python_files: int = 0
+    ) -> tuple[Path, Path, Path]:
         repo = root / "repo"
         dist = repo / "dist"
         scripts = repo / "scripts"
@@ -67,7 +69,9 @@ class VerifyDistStaticTest(unittest.TestCase):
         dist.mkdir(mode=0o700)
         tmp_root.mkdir(mode=0o700)
         shutil.copy2(VERIFY_DIST, scripts / "verify-dist.sh")
-        shutil.copy2(REPO_ROOT / "scripts" / "safe-local-fs.py", scripts / "safe-local-fs.py")
+        shutil.copy2(
+            REPO_ROOT / "scripts" / "safe-local-fs.py", scripts / "safe-local-fs.py"
+        )
 
         package = root / "package"
         for relative in ARCHIVE_PATHS:
@@ -80,7 +84,9 @@ class VerifyDistStaticTest(unittest.TestCase):
         generated = package / "src" / "generated"
         generated.mkdir(parents=True, exist_ok=True)
         for index in range(extra_python_files):
-            (generated / f"module_{index:04d}.py").write_text("value = 1\n", encoding="ascii")
+            (generated / f"module_{index:04d}.py").write_text(
+                "value = 1\n", encoding="ascii"
+            )
 
         archive = dist / "speed-of-cinnamon-test.tar.gz"
         with tarfile.open(archive, "w:gz") as handle:
@@ -147,7 +153,11 @@ class VerifyDistStaticTest(unittest.TestCase):
 
     def _tar_helper_source(self) -> str:
         source = VERIFY_DIST.read_text(encoding="utf-8")
-        match = re.search(r"run_duplex_command_bounded\(\) \{.*?<<'PY'\n(.*?)\nPY\n\}", source, re.DOTALL)
+        match = re.search(
+            r"run_duplex_command_bounded\(\) \{.*?<<'PY'\n(.*?)\nPY\n\}",
+            source,
+            re.DOTALL,
+        )
         self.assertIsNotNone(match)
         return match.group(1)
 
@@ -174,12 +184,16 @@ class VerifyDistStaticTest(unittest.TestCase):
             fake_tar.chmod(0o700)
             environment_overrides = {
                 "PATH": str(directory),
-                "VERIFY_DIST_DEADLINE_MONOTONIC": str(time.monotonic() + deadline_seconds),
+                "VERIFY_DIST_DEADLINE_MONOTONIC": str(
+                    time.monotonic() + deadline_seconds
+                ),
             }
             if environment is not None:
                 environment_overrides.update(environment)
                 if "PATH" in environment:
-                    environment_overrides["PATH"] = f"{directory}:{environment_overrides['PATH']}"
+                    environment_overrides["PATH"] = (
+                        f"{directory}:{environment_overrides['PATH']}"
+                    )
             command = [
                 "/usr/bin/python3",
                 "-I",
@@ -231,7 +245,9 @@ class VerifyDistStaticTest(unittest.TestCase):
                     and not ready_file.exists()
                 ):
                     time.sleep(0.01)
-                self.assertTrue(ready_file.exists(), "helper readiness was not observed")
+                self.assertTrue(
+                    ready_file.exists(), "helper readiness was not observed"
+                )
                 if wait_for_pid_gone is not None:
                     watched_pid = int(wait_for_pid_gone.read_text(encoding="ascii"))
                     gone_deadline = time.monotonic() + 5
@@ -315,7 +331,10 @@ class VerifyDistStaticTest(unittest.TestCase):
         _pid, state, process_pgrp, process_start_time, process_cmdline = process
         if expected_pgrp is not None and process_pgrp != expected_pgrp:
             return False
-        if expected_start_time is not None and process_start_time != expected_start_time:
+        if (
+            expected_start_time is not None
+            and process_start_time != expected_start_time
+        ):
             return False
         if state == "Z":
             return True
@@ -395,7 +414,9 @@ class VerifyDistStaticTest(unittest.TestCase):
         for index, block in enumerate(blocks, 1):
             compile(block, f"<verify-dist-embedded-{index}>", "exec")
 
-        command_blocks = re.findall(r"run_python_bounded -c '\n(.*?)\n' ", source, re.DOTALL)
+        command_blocks = re.findall(
+            r"run_python_bounded -c '\n(.*?)\n' ", source, re.DOTALL
+        )
         self.assertGreaterEqual(len(command_blocks), 1)
         for index, block in enumerate(command_blocks, 1):
             compile(block, f"<verify-dist-command-{index}>", "exec")
@@ -596,7 +617,9 @@ class VerifyDistStaticTest(unittest.TestCase):
             self.assertIn("Verified ./speed-of-cinnamon-test.tar.gz", result.stdout)
 
     def test_tar_helper_bounds_both_streams_and_preserves_status(self) -> None:
-        hung = self._run_tar_helper("exec /bin/sleep 30", 4096, 4096, deadline_seconds=0.25)
+        hung = self._run_tar_helper(
+            "exec /bin/sleep 30", 4096, 4096, deadline_seconds=0.25
+        )
         self.assertEqual(hung.returncode, 124)
 
         flooded = self._run_tar_helper(
@@ -819,14 +842,15 @@ exit 0
             )
             self.assertEqual(result.returncode, -signal.SIGKILL)
             self.assertTrue(info_file.exists())
-            pid, expected_pgrp, expected_start_time = info_file.read_text(
-                encoding="ascii"
-            ).strip().split()
+            pid, expected_pgrp, expected_start_time = (
+                info_file.read_text(encoding="ascii").strip().split()
+            )
             watched_pid = int(pid)
             gone_deadline = time.monotonic() + 2
-            while time.monotonic() < gone_deadline and Path(
-                f"/proc/{watched_pid}"
-            ).exists():
+            while (
+                time.monotonic() < gone_deadline
+                and Path(f"/proc/{watched_pid}").exists()
+            ):
                 time.sleep(0.01)
             self.assertFalse(
                 self._is_process_with_identity(
@@ -874,14 +898,15 @@ exit 0
                 ready_file=ready_file,
             )
             self.assertEqual(result.returncode, 124)
-            pid, expected_pgrp, expected_start_time = info_file.read_text(
-                encoding="ascii"
-            ).strip().split()
+            pid, expected_pgrp, expected_start_time = (
+                info_file.read_text(encoding="ascii").strip().split()
+            )
             watched_pid = int(pid)
             gone_deadline = time.monotonic() + 2
-            while time.monotonic() < gone_deadline and Path(
-                f"/proc/{watched_pid}"
-            ).exists():
+            while (
+                time.monotonic() < gone_deadline
+                and Path(f"/proc/{watched_pid}").exists()
+            ):
                 time.sleep(0.01)
             self.assertFalse(
                 self._is_process_with_identity(
@@ -893,7 +918,9 @@ exit 0
             )
             self.assertFalse(Path(f"/proc/{watched_pid}").exists())
 
-    def test_tar_helper_keyboard_interrupt_after_reap_cleans_300_descendants(self) -> None:
+    def test_tar_helper_keyboard_interrupt_after_reap_cleans_300_descendants(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             temporary_path = Path(temporary)
             fanout = temporary_path / "verify_dist_fanout.py"
@@ -1030,7 +1057,9 @@ exit 0
                 for pid, start_time in child_identities:
                     self._kill_process_if_identity(pid, start_time)
 
-    def test_tar_helper_watchdog_exception_cleans_double_fork_with_inherited_fds(self) -> None:
+    def test_tar_helper_watchdog_exception_cleans_double_fork_with_inherited_fds(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             temporary_path = Path(temporary)
             double_fork = temporary_path / "verify_dist_double_fork.py"
@@ -1076,12 +1105,12 @@ exit 0
                 self.assertEqual(helper_source.count(selector_wait), 1)
                 helper_source = helper_source.replace(
                     selector_wait,
-                    "            if (os.environ.get(\"VERIFY_DIST_TEST_INJECT_WATCHDOG_EXCEPTION\") == \"1\"\n"
+                    '            if (os.environ.get("VERIFY_DIST_TEST_INJECT_WATCHDOG_EXCEPTION") == "1"\n'
                     "                    and finish_requested):\n"
-                    "                with open(os.environ[\"VERIFY_DIST_TEST_EXCEPTION_FILE\"],\n"
-                    "                           \"w\", encoding=\"ascii\") as marker:\n"
-                    "                    marker.write(\"raised\")\n"
-                    "                raise BaseException(\"injected watchdog selector failure\")\n"
+                    '                with open(os.environ["VERIFY_DIST_TEST_EXCEPTION_FILE"],\n'
+                    '                           "w", encoding="ascii") as marker:\n'
+                    '                    marker.write("raised")\n'
+                    '                raise BaseException("injected watchdog selector failure")\n'
                     + selector_wait,
                 )
                 result = self._run_tar_helper(
@@ -1121,7 +1150,9 @@ exit 0
 
     def test_shared_lock_is_released_before_verification_finishes(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            repo, dist, tmp_root = self._fixture(Path(temporary), extra_python_files=1800)
+            repo, dist, tmp_root = self._fixture(
+                Path(temporary), extra_python_files=1800
+            )
             archive = dist / "speed-of-cinnamon-test.tar.gz"
             process = subprocess.Popen(
                 self._command(repo, archive),
@@ -1154,7 +1185,9 @@ exit 0
 
     def test_sigkill_residue_is_swept_without_foreign_deletion(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            repo, dist, tmp_root = self._fixture(Path(temporary), extra_python_files=1800)
+            repo, dist, tmp_root = self._fixture(
+                Path(temporary), extra_python_files=1800
+            )
             archive = dist / "speed-of-cinnamon-test.tar.gz"
             process = subprocess.Popen(
                 self._command(repo, archive),
@@ -1205,9 +1238,13 @@ exit 0
             self.assertTrue(recent.exists())
             self.assertTrue(foreign.exists())
 
-    def test_sigterm_residue_is_not_removed_without_identity_and_age_proof(self) -> None:
+    def test_sigterm_residue_is_not_removed_without_identity_and_age_proof(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            repo, dist, tmp_root = self._fixture(Path(temporary), extra_python_files=1800)
+            repo, dist, tmp_root = self._fixture(
+                Path(temporary), extra_python_files=1800
+            )
             archive = dist / "speed-of-cinnamon-test.tar.gz"
             process = subprocess.Popen(
                 self._command(repo, archive),
@@ -1239,7 +1276,9 @@ exit 0
 
     def test_cleanup_failure_after_success_is_reported(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            repo, dist, tmp_root = self._fixture(Path(temporary), extra_python_files=1800)
+            repo, dist, tmp_root = self._fixture(
+                Path(temporary), extra_python_files=1800
+            )
             archive = dist / "speed-of-cinnamon-test.tar.gz"
             process = subprocess.Popen(
                 self._command(repo, archive),
@@ -1286,7 +1325,7 @@ exit 0
             'snapshot_bytes="$(run_command_bounded stat -c \'%s\' "${tarball_snapshot}")"',
             source,
         )
-        self.assertIn('raw = handle.read(4097)', source)
+        self.assertIn("raw = handle.read(4097)", source)
 
     def test_member_limit_is_checked_during_tar_iteration(self) -> None:
         source = VERIFY_DIST.read_text(encoding="utf-8")
@@ -1310,10 +1349,18 @@ exit 0
         self.assertIn("timeout; do", source)
         self.assertIn("run_tar_bounded()", source)
         self.assertIn("run_python_bounded()", source)
-        self.assertIn('timeout --signal=TERM --kill-after=10s "${DIST_VERIFY_TIMEOUT_SECONDS}s" tar "$@"', source)
-        self.assertIn('timeout --signal=TERM --kill-after=10s "${DIST_VERIFY_TIMEOUT_SECONDS}s" python3 "$@"', source)
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=10s "${DIST_VERIFY_TIMEOUT_SECONDS}s" tar "$@"',
+            source,
+        )
+        self.assertIn(
+            'timeout --signal=TERM --kill-after=10s "${DIST_VERIFY_TIMEOUT_SECONDS}s" python3 "$@"',
+            source,
+        )
         self.assertIn('tar_listing_bytes="$(stat -c \'%s\' "${tar_listing}")"', source)
-        self.assertIn("find \"${tmp_dir}\" -mindepth 1 -maxdepth 1 -type d -print0", source)
+        self.assertIn(
+            'find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d -print0', source
+        )
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ umask 077
 IFS=$'\n\t'
 readonly TRUSTED_COMMAND_PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 export PATH="${TRUSTED_COMMAND_PATH}"
+export LC_ALL=C
 
 readonly DIST_BUILD_TIMEOUT_SECONDS=3600
 readonly DIST_BUILD_KILL_AFTER_SECONDS=2
@@ -25,206 +26,206 @@ readonly DIST_STARTUP_SWEEP_MAX_STALE=32
 readonly DIST_WORKSPACE_MAX_AGE_SECONDS=$((24 * 60 * 60))
 readonly DIST_MAX_ARCHIVE_BYTES=$((128 * 1024 * 1024))
 
-if (( DIST_BUILD_TIMEOUT_SECONDS <= DIST_BUILD_KILL_AFTER_SECONDS )); then
-  printf 'build-dist timeout is too short for TERM/KILL grace period\n' >&2
-  exit 1
+if ((DIST_BUILD_TIMEOUT_SECONDS <= DIST_BUILD_KILL_AFTER_SECONDS)); then
+	printf 'build-dist timeout is too short for TERM/KILL grace period\n' >&2
+	exit 1
 fi
 
 dist_process_group_info() {
-  local pid=$1
-  local record
-  local -a fields=()
-  if [[ ! "${pid}" =~ ^[0-9]+$ ]] ||
-      ! IFS= read -r record < "/proc/${pid}/stat"; then
-    return 1
-  fi
-  record="${record##*) }"
-  IFS=' ' read -r -a fields <<< "${record}"
-  if (( ${#fields[@]} < 20 )); then
-    return 1
-  fi
-  printf '%s %s %s %s %s' \
-    "${fields[0]}" "${fields[1]}" "${fields[2]}" "${fields[3]}" "${fields[19]}"
+	local pid=$1
+	local record
+	local -a fields=()
+	if [[ ! ${pid} =~ ^[0-9]+$ ]] ||
+		! IFS= read -r record <"/proc/${pid}/stat"; then
+		return 1
+	fi
+	record="${record##*) }"
+	IFS=' ' read -r -a fields <<<"${record}"
+	if ((${#fields[@]} < 20)); then
+		return 1
+	fi
+	printf '%s %s %s %s %s' \
+		"${fields[0]}" "${fields[1]}" "${fields[2]}" "${fields[3]}" "${fields[19]}"
 }
 process_starttime() {
-  local pid=$1
-  local allow_stopped=${2:-}
-  local info
-  local state
-  local parent_pid
-  local process_group
-  local session
-  local starttime
-  if ! info="$(dist_process_group_info "${pid}")"; then
-    return 1
-  fi
-  IFS=' ' read -r state parent_pid process_group session starttime <<< "${info}"
-  if [[ "${state}" == Z || "${state}" == X ||
-      ! "${starttime}" =~ ^[0-9]+$ ]]; then
-    return 1
-  fi
-  if [[ ( "${state}" == T || "${state}" == t ) &&
-      "${allow_stopped}" != allow-stopped ]]; then
-    return 1
-  fi
-  printf '%s' "${starttime}"
+	local pid=$1
+	local allow_stopped=${2:-}
+	local info
+	local state
+	local parent_pid
+	local process_group
+	local session
+	local starttime
+	if ! info="$(dist_process_group_info "${pid}")"; then
+		return 1
+	fi
+	IFS=' ' read -r state parent_pid process_group session starttime <<<"${info}"
+	if [[ ${state} == Z || ${state} == X ||
+		! ${starttime} =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+	if [[ (${state} == T || ${state} == t) &&
+		${allow_stopped} != allow-stopped ]]; then
+		return 1
+	fi
+	printf '%s' "${starttime}"
 }
 dist_group_identity_matches() {
-  local pid=$1
-  local expected_parent_pid=$2
-  local expected_starttime=$3
-  local info
-  local state
-  local parent_pid
-  local process_group
-  local session
-  local starttime
-  if ! info="$(dist_process_group_info "${pid}")"; then
-    return 1
-  fi
-  IFS=' ' read -r state parent_pid process_group session starttime <<< "${info}"
-  [[ "${state}" != Z && "${state}" != X &&
-      "${state}" != T && "${state}" != t &&
-      "${parent_pid}" == "${expected_parent_pid}" &&
-      "${process_group}" == "${pid}" &&
-      "${session}" == "${pid}" &&
-      "${starttime}" == "${expected_starttime}" ]]
+	local pid=$1
+	local expected_parent_pid=$2
+	local expected_starttime=$3
+	local info
+	local state
+	local parent_pid
+	local process_group
+	local session
+	local starttime
+	if ! info="$(dist_process_group_info "${pid}")"; then
+		return 1
+	fi
+	IFS=' ' read -r state parent_pid process_group session starttime <<<"${info}"
+	[[ ${state} != Z && ${state} != X &&
+		${state} != T && ${state} != t &&
+		${parent_pid} == "${expected_parent_pid}" &&
+		${process_group} == "${pid}" &&
+		${session} == "${pid}" &&
+		${starttime} == "${expected_starttime}" ]]
 }
 dist_now_monotonic_ns() {
-  local now_ns
-  if ! now_ns="$(timeout --signal=KILL "${DIST_BUILD_CLOCK_TIMEOUT_SECONDS}s" \
-      python3 -I -B -c 'import time; print(time.monotonic_ns())' 2>/dev/null)"; then
-    return 1
-  fi
-  [[ "${now_ns}" =~ ^[0-9]+$ ]] || return 1
-  printf '%s' "${now_ns}"
+	local now_ns
+	if ! now_ns="$(timeout --signal=KILL "${DIST_BUILD_CLOCK_TIMEOUT_SECONDS}s" \
+		python3 -I -B -c 'import time; print(time.monotonic_ns())' 2>/dev/null)"; then
+		return 1
+	fi
+	[[ ${now_ns} =~ ^[0-9]+$ ]] || return 1
+	printf '%s' "${now_ns}"
 }
 dist_wait_until_monotonic_deadline() {
-  local deadline_ns=$1
-  local now_ns
-  local remaining_ns
-  local wait_seconds
-  if ! now_ns="$(dist_now_monotonic_ns)"; then
-    return 1
-  fi
-  remaining_ns=$((deadline_ns - now_ns))
-  if (( remaining_ns <= 0 )); then
-    return 0
-  fi
-  wait_seconds="$((remaining_ns / 1000000000)).$((remaining_ns % 1000000000))"
-  timeout --signal=KILL --kill-after=0.1s \
-    "${wait_seconds}s" sleep "${wait_seconds}" >/dev/null 2>&1 || true
+	local deadline_ns=$1
+	local now_ns
+	local remaining_ns
+	local wait_seconds
+	if ! now_ns="$(dist_now_monotonic_ns)"; then
+		return 1
+	fi
+	remaining_ns=$((deadline_ns - now_ns))
+	if ((remaining_ns <= 0)); then
+		return 0
+	fi
+	wait_seconds="$((remaining_ns / 1000000000)).$((remaining_ns % 1000000000))"
+	timeout --signal=KILL --kill-after=0.1s \
+		"${wait_seconds}s" sleep "${wait_seconds}" >/dev/null 2>&1 || true
 }
 dist_core_group_info="$(dist_process_group_info "$$" 2>/dev/null || true)"
 dist_core_group_pid=""
 dist_core_parent_pid=""
 dist_core_parent_starttime=""
 dist_core_group_starttime=""
-if [[ -n "${dist_core_group_info}" ]]; then
-  IFS=' ' read -r dist_core_group_state dist_core_shell_parent_pid \
-    dist_core_group_pid dist_core_group_session dist_core_shell_starttime <<< \
-    "${dist_core_group_info}"
-  dist_core_group_leader_info="$(dist_process_group_info "${dist_core_group_pid}" \
-    2>/dev/null || true)"
-  if [[ -n "${dist_core_group_leader_info}" ]]; then
-    IFS=' ' read -r dist_core_group_state dist_core_parent_pid \
-      dist_core_group_pid dist_core_group_session dist_core_group_leader_starttime <<< \
-      "${dist_core_group_leader_info}"
-  else
-    dist_core_parent_pid="${dist_core_shell_parent_pid}"
-  fi
-  dist_core_parent_starttime="$(process_starttime "${dist_core_parent_pid}" \
-    allow-stopped 2>/dev/null || true)"
-  dist_core_group_starttime="$(process_starttime "${dist_core_group_pid}" \
-    allow-stopped 2>/dev/null || true)"
+if [[ -n ${dist_core_group_info} ]]; then
+	IFS=' ' read -r dist_core_group_state dist_core_shell_parent_pid \
+		dist_core_group_pid dist_core_group_session dist_core_shell_starttime <<< \
+		"${dist_core_group_info}"
+	dist_core_group_leader_info="$(dist_process_group_info "${dist_core_group_pid}" \
+		2>/dev/null || true)"
+	if [[ -n ${dist_core_group_leader_info} ]]; then
+		IFS=' ' read -r dist_core_group_state dist_core_parent_pid \
+			dist_core_group_pid dist_core_group_session dist_core_group_leader_starttime <<< \
+			"${dist_core_group_leader_info}"
+	else
+		dist_core_parent_pid="${dist_core_shell_parent_pid}"
+	fi
+	dist_core_parent_starttime="$(process_starttime "${dist_core_parent_pid}" \
+		allow-stopped 2>/dev/null || true)"
+	dist_core_group_starttime="$(process_starttime "${dist_core_group_pid}" \
+		allow-stopped 2>/dev/null || true)"
 fi
 dist_parent_death_handler() {
-  local group_info
-  local shell_info
-  local group_state
-  local current_parent_pid
-  local process_group
-  local session
-  local current_starttime
-  local shell_state
-  local shell_parent_pid
-  local shell_process_group
-  local shell_session
-  local shell_starttime
-  local expected_parent_pid
-  local current_parent_starttime
-  local now_ns
-  local cleanup_deadline_ns
-  if [[ ! "${dist_core_group_pid}" =~ ^[0-9]+$ ||
-      ! "${dist_core_group_starttime}" =~ ^[0-9]+$ ||
-      ! "${dist_core_parent_pid}" =~ ^[0-9]+$ ||
-      ! "${dist_core_parent_starttime}" =~ ^[0-9]+$ ]]; then
-    printf 'build-dist parent-death group identity is unavailable\n' >&2
-    exit 125
-  fi
-  if ! group_info="$(dist_process_group_info "${dist_core_group_pid}")" ||
-      ! shell_info="$(dist_process_group_info "$$")"; then
-    printf 'build-dist parent-death group identity is unavailable\n' >&2
-    exit 125
-  fi
-  IFS=' ' read -r group_state current_parent_pid process_group session current_starttime <<< "${group_info}"
-  IFS=' ' read -r shell_state shell_parent_pid shell_process_group shell_session \
-    shell_starttime <<< "${shell_info}"
-  if [[ "${process_group}" != "${dist_core_group_pid}" ||
-      "${session}" != "${dist_core_group_pid}" ||
-      "${shell_process_group}" != "${dist_core_group_pid}" ||
-      "${shell_session}" != "${dist_core_group_pid}" ]]; then
-    printf 'build-dist parent-death group identity changed\n' >&2
-    exit 125
-  fi
-  if [[ "${current_parent_pid}" == "${dist_core_parent_pid}" ]]; then
-    current_parent_starttime="$(process_starttime "${dist_core_parent_pid}" \
-      allow-stopped 2>/dev/null || true)"
-    if [[ ! "${dist_core_parent_starttime}" =~ ^[0-9]+$ ||
-        "${current_parent_starttime}" != "${dist_core_parent_starttime}" ]]; then
-      printf 'build-dist parent-death parent identity changed\n' >&2
-      exit 125
-    fi
-    expected_parent_pid="${dist_core_parent_pid}"
-  elif [[ "${dist_core_parent_starttime}" =~ ^[0-9]+$ ]] &&
-      current_parent_starttime="$(process_starttime "${dist_core_parent_pid}" \
-        allow-stopped 2>/dev/null || true)" &&
-      [[ "${current_parent_starttime}" == "${dist_core_parent_starttime}" ]]; then
-    printf 'build-dist parent-death parent identity is still live\n' >&2
-    exit 125
-  else
-    expected_parent_pid="${current_parent_pid}"
-  fi
-  if ! dist_group_identity_matches "${dist_core_group_pid}" "${expected_parent_pid}" \
-      "${dist_core_group_starttime}"; then
-    printf 'build-dist parent-death group identity changed\n' >&2
-    exit 125
-  fi
-  trap '' TERM
-  if ! kill -TERM -- "-${dist_core_group_pid}" 2>/dev/null; then
-    printf 'build-dist parent-death TERM failed\n' >&2
-    exit 125
-  fi
-  if ! now_ns="$(dist_now_monotonic_ns)"; then
-    printf 'build-dist parent-death deadline unavailable\n' >&2
-    exit 125
-  fi
-  cleanup_deadline_ns=$((now_ns + DIST_BUILD_KILL_AFTER_SECONDS * 1000000000))
-  if [[ "${DIST_BUILD_DEADLINE:-}" =~ ^[0-9]+$ ]] &&
-      (( DIST_BUILD_DEADLINE < cleanup_deadline_ns )); then
-    cleanup_deadline_ns=${DIST_BUILD_DEADLINE}
-  fi
-  dist_wait_until_monotonic_deadline "${cleanup_deadline_ns}"
-  if ! dist_group_identity_matches "${dist_core_group_pid}" "${expected_parent_pid}" \
-      "${dist_core_group_starttime}"; then
-    printf 'build-dist parent-death group identity changed before KILL\n' >&2
-    exit 125
-  fi
-  if ! kill -KILL -- "-${dist_core_group_pid}" 2>/dev/null; then
-    printf 'build-dist parent-death KILL failed\n' >&2
-    exit 125
-  fi
-  exit 125
+	local group_info
+	local shell_info
+	local group_state
+	local current_parent_pid
+	local process_group
+	local session
+	local current_starttime
+	local shell_state
+	local shell_parent_pid
+	local shell_process_group
+	local shell_session
+	local shell_starttime
+	local expected_parent_pid
+	local current_parent_starttime
+	local now_ns
+	local cleanup_deadline_ns
+	if [[ ! ${dist_core_group_pid} =~ ^[0-9]+$ ||
+		! ${dist_core_group_starttime} =~ ^[0-9]+$ ||
+		! ${dist_core_parent_pid} =~ ^[0-9]+$ ||
+		! ${dist_core_parent_starttime} =~ ^[0-9]+$ ]]; then
+		printf 'build-dist parent-death group identity is unavailable\n' >&2
+		exit 125
+	fi
+	if ! group_info="$(dist_process_group_info "${dist_core_group_pid}")" ||
+		! shell_info="$(dist_process_group_info "$$")"; then
+		printf 'build-dist parent-death group identity is unavailable\n' >&2
+		exit 125
+	fi
+	IFS=' ' read -r group_state current_parent_pid process_group session current_starttime <<<"${group_info}"
+	IFS=' ' read -r shell_state shell_parent_pid shell_process_group shell_session \
+		shell_starttime <<<"${shell_info}"
+	if [[ ${process_group} != "${dist_core_group_pid}" ||
+		${session} != "${dist_core_group_pid}" ||
+		${shell_process_group} != "${dist_core_group_pid}" ||
+		${shell_session} != "${dist_core_group_pid}" ]]; then
+		printf 'build-dist parent-death group identity changed\n' >&2
+		exit 125
+	fi
+	if [[ ${current_parent_pid} == "${dist_core_parent_pid}" ]]; then
+		current_parent_starttime="$(process_starttime "${dist_core_parent_pid}" \
+			allow-stopped 2>/dev/null || true)"
+		if [[ ! ${dist_core_parent_starttime} =~ ^[0-9]+$ ||
+			${current_parent_starttime} != "${dist_core_parent_starttime}" ]]; then
+			printf 'build-dist parent-death parent identity changed\n' >&2
+			exit 125
+		fi
+		expected_parent_pid="${dist_core_parent_pid}"
+	elif [[ ${dist_core_parent_starttime} =~ ^[0-9]+$ ]] &&
+		current_parent_starttime="$(process_starttime "${dist_core_parent_pid}" \
+			allow-stopped 2>/dev/null || true)" &&
+		[[ ${current_parent_starttime} == "${dist_core_parent_starttime}" ]]; then
+		printf 'build-dist parent-death parent identity is still live\n' >&2
+		exit 125
+	else
+		expected_parent_pid="${current_parent_pid}"
+	fi
+	if ! dist_group_identity_matches "${dist_core_group_pid}" "${expected_parent_pid}" \
+		"${dist_core_group_starttime}"; then
+		printf 'build-dist parent-death group identity changed\n' >&2
+		exit 125
+	fi
+	trap '' TERM
+	if ! kill -TERM -- "-${dist_core_group_pid}" 2>/dev/null; then
+		printf 'build-dist parent-death TERM failed\n' >&2
+		exit 125
+	fi
+	if ! now_ns="$(dist_now_monotonic_ns)"; then
+		printf 'build-dist parent-death deadline unavailable\n' >&2
+		exit 125
+	fi
+	cleanup_deadline_ns=$((now_ns + DIST_BUILD_KILL_AFTER_SECONDS * 1000000000))
+	if [[ ${DIST_BUILD_DEADLINE:-} =~ ^[0-9]+$ ]] &&
+		((DIST_BUILD_DEADLINE < cleanup_deadline_ns)); then
+		cleanup_deadline_ns=${DIST_BUILD_DEADLINE}
+	fi
+	dist_wait_until_monotonic_deadline "${cleanup_deadline_ns}"
+	if ! dist_group_identity_matches "${dist_core_group_pid}" "${expected_parent_pid}" \
+		"${dist_core_group_starttime}"; then
+		printf 'build-dist parent-death group identity changed before KILL\n' >&2
+		exit 125
+	fi
+	if ! kill -KILL -- "-${dist_core_group_pid}" 2>/dev/null; then
+		printf 'build-dist parent-death KILL failed\n' >&2
+		exit 125
+	fi
+	exit 125
 }
 trap dist_parent_death_handler TERM
 
@@ -232,19 +233,19 @@ trap dist_parent_death_handler TERM
 # callers can forge a valid handoff by contract; argv/env alone cannot select it.
 handoff_fd_present=0
 if [[ -e "/proc/self/fd/${DIST_BUILD_HANDOFF_FD}" ||
-    -L "/proc/self/fd/${DIST_BUILD_HANDOFF_FD}" ]]; then
-  handoff_fd_present=1
+	-L "/proc/self/fd/${DIST_BUILD_HANDOFF_FD}" ]]; then
+	handoff_fd_present=1
 fi
-if (( ! handoff_fd_present )); then
-  exec timeout --signal=TERM --kill-after="${DIST_BUILD_KILL_AFTER_SECONDS}s" \
-    "$((DIST_BUILD_TIMEOUT_SECONDS - DIST_BUILD_KILL_AFTER_SECONDS))s" \
-    python3 -I -B - \
-      "${BASH_SOURCE[0]}" \
-      "${DIST_BUILD_TIMEOUT_SECONDS}" \
-      "${DIST_BUILD_KILL_AFTER_SECONDS}" \
-      "${DIST_BUILD_INITIAL_PROBE_TIMEOUT_SECONDS}" \
-      "${DIST_BUILD_STARTUP_RESERVE_NS}" \
-      -- "$@" <<'PY'
+if ((!handoff_fd_present)); then
+	exec timeout --signal=TERM --kill-after="${DIST_BUILD_KILL_AFTER_SECONDS}s" \
+		"$((DIST_BUILD_TIMEOUT_SECONDS - DIST_BUILD_KILL_AFTER_SECONDS))s" \
+		python3 -I -B - \
+		"${BASH_SOURCE[0]}" \
+		"${DIST_BUILD_TIMEOUT_SECONDS}" \
+		"${DIST_BUILD_KILL_AFTER_SECONDS}" \
+		"${DIST_BUILD_INITIAL_PROBE_TIMEOUT_SECONDS}" \
+		"${DIST_BUILD_STARTUP_RESERVE_NS}" \
+		-- "$@" <<'PY'
 import fcntl
 import os
 import secrets
@@ -932,58 +933,58 @@ handoff_monitor_starttime=""
 handoff_monitor_ready=0
 handoff_monitor_stopping=0
 handoff_monitor_alive() {
-  local current_starttime
-  if (( ! handoff_monitor_ready )) ||
-      [[ ! "${handoff_monitor_pid}" =~ ^[0-9]+$ ]] ||
-      [[ ! "${handoff_monitor_starttime}" =~ ^[0-9]+$ ]]; then
-    return 1
-  fi
-  if ! current_starttime="$(process_starttime "${handoff_monitor_pid}")"; then
-    return 1
-  fi
-  [[ "${current_starttime}" == "${handoff_monitor_starttime}" ]]
+	local current_starttime
+	if ((!handoff_monitor_ready)) ||
+		[[ ! ${handoff_monitor_pid} =~ ^[0-9]+$ ]] ||
+		[[ ! ${handoff_monitor_starttime} =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+	if ! current_starttime="$(process_starttime "${handoff_monitor_pid}")"; then
+		return 1
+	fi
+	[[ ${current_starttime} == "${handoff_monitor_starttime}" ]]
 }
 check_handoff_monitor() {
-  if (( handoff_monitor_stopping || ! handoff_monitor_ready )); then
-    return 0
-  fi
-  if ! handoff_monitor_alive; then
-    printf 'build-dist startup monitor died or changed identity\n' >&2
-    stop_handoff_monitor
-    exit 125
-  fi
-  return 0
+	if ((handoff_monitor_stopping || !handoff_monitor_ready)); then
+		return 0
+	fi
+	if ! handoff_monitor_alive; then
+		printf 'build-dist startup monitor died or changed identity\n' >&2
+		stop_handoff_monitor
+		exit 125
+	fi
+	return 0
 }
 stop_handoff_monitor() {
-  local monitor_killed=0
-  handoff_monitor_stopping=1
-  if handoff_monitor_alive; then
-    if kill -KILL -- "${handoff_monitor_pid}" 2>/dev/null; then
-      monitor_killed=1
-    fi
-  elif [[ "${handoff_monitor_pid}" =~ ^[0-9]+$ &&
-      "${handoff_monitor_starttime}" =~ ^[0-9]+$ ]]; then
-    local current_starttime
-    if current_starttime="$(process_starttime "${handoff_monitor_pid}" allow-stopped)" &&
-        [[ "${current_starttime}" == "${handoff_monitor_starttime}" ]]; then
-      if kill -KILL -- "${handoff_monitor_pid}" 2>/dev/null; then
-        monitor_killed=1
-      fi
-    fi
-  fi
-  if (( monitor_killed )) && [[ "${handoff_monitor_pid}" =~ ^[0-9]+$ ]]; then
-    wait "${handoff_monitor_pid}" 2>/dev/null || true
-  fi
-  handoff_monitor_pid=""
-  handoff_monitor_starttime=""
-  handoff_monitor_ready=0
-  handoff_monitor_stopping=0
+	local monitor_killed=0
+	handoff_monitor_stopping=1
+	if handoff_monitor_alive; then
+		if kill -KILL -- "${handoff_monitor_pid}" 2>/dev/null; then
+			monitor_killed=1
+		fi
+	elif [[ ${handoff_monitor_pid} =~ ^[0-9]+$ &&
+		${handoff_monitor_starttime} =~ ^[0-9]+$ ]]; then
+		local current_starttime
+		if current_starttime="$(process_starttime "${handoff_monitor_pid}" allow-stopped)" &&
+			[[ ${current_starttime} == "${handoff_monitor_starttime}" ]]; then
+			if kill -KILL -- "${handoff_monitor_pid}" 2>/dev/null; then
+				monitor_killed=1
+			fi
+		fi
+	fi
+	if ((monitor_killed)) && [[ ${handoff_monitor_pid} =~ ^[0-9]+$ ]]; then
+		wait "${handoff_monitor_pid}" 2>/dev/null || true
+	fi
+	handoff_monitor_pid=""
+	handoff_monitor_starttime=""
+	handoff_monitor_ready=0
+	handoff_monitor_stopping=0
 }
 trap check_handoff_monitor CHLD
 coproc handoff_monitor_proc {
-  exec python3 -I -B - "${DIST_BUILD_HANDOFF_FD}" "$$" \
-    "${DIST_BUILD_TIMEOUT_SECONDS}" "${DIST_BUILD_KILL_AFTER_SECONDS}" \
-    "${DIST_BUILD_STARTUP_RESERVE_NS}" "${DIST_BUILD_HANDOFF_TIMEOUT_SECONDS}" <<'PY'
+	exec python3 -I -B - "${DIST_BUILD_HANDOFF_FD}" "$$" \
+		"${DIST_BUILD_TIMEOUT_SECONDS}" "${DIST_BUILD_KILL_AFTER_SECONDS}" \
+		"${DIST_BUILD_STARTUP_RESERVE_NS}" "${DIST_BUILD_HANDOFF_TIMEOUT_SECONDS}" <<'PY'
 import fcntl
 import os
 import re
@@ -1349,50 +1350,50 @@ PY
 }
 handoff_monitor_pid="${handoff_monitor_proc_PID:-}"
 handoff_read_fd="${handoff_monitor_proc[0]:-}"
-if [[ ! "${handoff_monitor_pid}" =~ ^[0-9]+$ ||
-    ! "${handoff_read_fd}" =~ ^[0-9]+$ ]]; then
-  printf 'build-dist startup monitor could not be started\n' >&2
-  stop_handoff_monitor
-  exit 1
+if [[ ! ${handoff_monitor_pid} =~ ^[0-9]+$ ||
+	! ${handoff_read_fd} =~ ^[0-9]+$ ]]; then
+	printf 'build-dist startup monitor could not be started\n' >&2
+	stop_handoff_monitor
+	exit 1
 fi
 handoff_monitor_starttime="$(process_starttime "${handoff_monitor_pid}" 2>/dev/null || true)"
 monitor_contract_pid=""
 monitor_contract_starttime=""
 monitor_contract_deadline=""
 if ! IFS=' ' read -r -t "${DIST_BUILD_HANDOFF_TIMEOUT_SECONDS}" \
-    monitor_contract_pid monitor_contract_starttime monitor_contract_deadline \
-    <&"${handoff_read_fd}"; then
-  printf 'build-dist startup handoff was rejected\n' >&2
-  exec {handoff_read_fd}<&-
-  stop_handoff_monitor
-  exit 1
+	monitor_contract_pid monitor_contract_starttime monitor_contract_deadline \
+	<&"${handoff_read_fd}"; then
+	printf 'build-dist startup handoff was rejected\n' >&2
+	exec {handoff_read_fd}<&-
+	stop_handoff_monitor
+	exit 1
 fi
 exec {handoff_read_fd}<&-
-if [[ ! "${monitor_contract_pid}" =~ ^[0-9]+$ ||
-    ! "${monitor_contract_starttime}" =~ ^[0-9]+$ ||
-    ! "${monitor_contract_deadline}" =~ ^[0-9]+$ ||
-    "${monitor_contract_pid}" != "${handoff_monitor_pid}" ||
-    ( -n "${handoff_monitor_starttime}" &&
-      "${monitor_contract_starttime}" != "${handoff_monitor_starttime}" ) ]]; then
-  printf 'build-dist startup handoff was invalid\n' >&2
-  stop_handoff_monitor
-  exit 1
+if [[ ! ${monitor_contract_pid} =~ ^[0-9]+$ ||
+	! ${monitor_contract_starttime} =~ ^[0-9]+$ ||
+	! ${monitor_contract_deadline} =~ ^[0-9]+$ ||
+	${monitor_contract_pid} != "${handoff_monitor_pid}" ||
+	(-n ${handoff_monitor_starttime} &&
+	${monitor_contract_starttime} != "${handoff_monitor_starttime}") ]]; then
+	printf 'build-dist startup handoff was invalid\n' >&2
+	stop_handoff_monitor
+	exit 1
 fi
 handoff_monitor_starttime="${monitor_contract_starttime}"
 DIST_BUILD_DEADLINE="${monitor_contract_deadline}"
 handoff_monitor_ready=1
 if ! handoff_monitor_alive; then
-  printf 'build-dist startup monitor identity is invalid\n' >&2
-  stop_handoff_monitor
-  exit 1
+	printf 'build-dist startup monitor identity is invalid\n' >&2
+	stop_handoff_monitor
+	exit 1
 fi
 if [[ -e "/proc/self/fd/197" || -L "/proc/self/fd/197" ]]; then
-  if ! printf '%s %s\n' "${handoff_monitor_pid}" "${handoff_monitor_starttime}" >&197; then
-    printf 'build-dist startup monitor report failed\n' >&2
-    stop_handoff_monitor
-    exit 1
-  fi
-  exec 197>&-
+	if ! printf '%s %s\n' "${handoff_monitor_pid}" "${handoff_monitor_starttime}" >&197; then
+		printf 'build-dist startup monitor report failed\n' >&2
+		stop_handoff_monitor
+		exit 1
+	fi
+	exec 197>&-
 fi
 exec 198>&-
 export DIST_BUILD_DEADLINE
@@ -1402,103 +1403,103 @@ cd "${repo_dir}"
 safe_fs="${repo_dir}/scripts/safe-local-fs.py"
 safe_fs_cmd=(python3 "${safe_fs}")
 distribution_tree_excludes=(
-  --exclude-name __pycache__
-  --exclude-name .pytest_cache
-  --exclude-name .mypy_cache
-  --exclude-name .ruff_cache
-  --exclude-name .coverage
+	--exclude-name __pycache__
+	--exclude-name .pytest_cache
+	--exclude-name .mypy_cache
+	--exclude-name .ruff_cache
+	--exclude-name .coverage
 )
 
 build_remaining_value_ns=""
 build_remaining_ns() {
-  local now_ns
-  if ! now_ns="$(timeout --signal=KILL "${DIST_BUILD_CLOCK_TIMEOUT_SECONDS}s" \
-      python3 -I -B -c 'import time; print(time.monotonic_ns())' 2>/dev/null)"; then
-    return 1
-  fi
-  if [[ ! "${now_ns}" =~ ^[0-9]+$ ]]; then
-    return 1
-  fi
-  build_remaining_value_ns=$((DIST_BUILD_DEADLINE - now_ns))
-  if (( build_remaining_value_ns <= 0 )); then
-    return 1
-  fi
+	local now_ns
+	if ! now_ns="$(timeout --signal=KILL "${DIST_BUILD_CLOCK_TIMEOUT_SECONDS}s" \
+		python3 -I -B -c 'import time; print(time.monotonic_ns())' 2>/dev/null)"; then
+		return 1
+	fi
+	if [[ ! ${now_ns} =~ ^[0-9]+$ ]]; then
+		return 1
+	fi
+	build_remaining_value_ns=$((DIST_BUILD_DEADLINE - now_ns))
+	if ((build_remaining_value_ns <= 0)); then
+		return 1
+	fi
 }
 
 build_timeout_value() {
-  local nanoseconds=$1
-  printf '%d.%09d' "$((nanoseconds / 1000000000))" "$((nanoseconds % 1000000000))"
+	local nanoseconds=$1
+	printf '%d.%09d' "$((nanoseconds / 1000000000))" "$((nanoseconds % 1000000000))"
 }
 
 build_phase_timeout_seconds() {
-  if ! build_remaining_ns; then
-    return 1
-  fi
-  local available_ns=$((build_remaining_value_ns - DIST_BUILD_LAUNCH_MARGIN_NS))
-  local kill_after_ns=$((DIST_BUILD_KILL_AFTER_SECONDS * 1000000000))
-  if (( available_ns <= kill_after_ns )); then
-    return 1
-  fi
-  local term_ns=$((available_ns - kill_after_ns))
-  local term_seconds=$((term_ns / 1000000000))
-  if (( term_seconds <= 0 )); then
-    return 1
-  fi
-  printf '%d' "${term_seconds}"
+	if ! build_remaining_ns; then
+		return 1
+	fi
+	local available_ns=$((build_remaining_value_ns - DIST_BUILD_LAUNCH_MARGIN_NS))
+	local kill_after_ns=$((DIST_BUILD_KILL_AFTER_SECONDS * 1000000000))
+	if ((available_ns <= kill_after_ns)); then
+		return 1
+	fi
+	local term_ns=$((available_ns - kill_after_ns))
+	local term_seconds=$((term_ns / 1000000000))
+	if ((term_seconds <= 0)); then
+		return 1
+	fi
+	printf '%d' "${term_seconds}"
 }
 
 run_build_command() {
-  if ! build_remaining_ns; then
-    printf 'build-dist deadline exceeded before command\n' >&2
-    return 124
-  fi
-  local available_ns=$((build_remaining_value_ns - DIST_BUILD_LAUNCH_MARGIN_NS))
-  local kill_after_ns=$((DIST_BUILD_KILL_AFTER_SECONDS * 1000000000))
-  if (( available_ns <= kill_after_ns )); then
-    printf 'build-dist deadline cannot reserve TERM/KILL grace\n' >&2
-    return 124
-  fi
-  local kill_after_timeout
-  local term_timeout
-  if (( kill_after_ns >= available_ns )); then
-    kill_after_ns=$((available_ns / 2))
-  fi
-  if (( kill_after_ns <= 0 )); then
-    return 124
-  fi
-  kill_after_timeout="$(build_timeout_value "${kill_after_ns}")"
-  term_timeout="$(build_timeout_value "$((available_ns - kill_after_ns))")"
-  local command_status=0
-  timeout --signal=TERM --kill-after="${kill_after_timeout}s" \
-    "${term_timeout}s" "$@" || command_status=$?
-  if (( command_status == 124 || command_status == 137 || command_status == 143 )); then
-    return 124
-  fi
-  if ! build_remaining_ns; then
-    printf 'build-dist deadline exceeded after command\n' >&2
-    return 124
-  fi
-  return "${command_status}"
+	if ! build_remaining_ns; then
+		printf 'build-dist deadline exceeded before command\n' >&2
+		return 124
+	fi
+	local available_ns=$((build_remaining_value_ns - DIST_BUILD_LAUNCH_MARGIN_NS))
+	local kill_after_ns=$((DIST_BUILD_KILL_AFTER_SECONDS * 1000000000))
+	if ((available_ns <= kill_after_ns)); then
+		printf 'build-dist deadline cannot reserve TERM/KILL grace\n' >&2
+		return 124
+	fi
+	local kill_after_timeout
+	local term_timeout
+	if ((kill_after_ns >= available_ns)); then
+		kill_after_ns=$((available_ns / 2))
+	fi
+	if ((kill_after_ns <= 0)); then
+		return 124
+	fi
+	kill_after_timeout="$(build_timeout_value "${kill_after_ns}")"
+	term_timeout="$(build_timeout_value "$((available_ns - kill_after_ns))")"
+	local command_status=0
+	timeout --signal=TERM --kill-after="${kill_after_timeout}s" \
+		"${term_timeout}s" "$@" || command_status=$?
+	if ((command_status == 124 || command_status == 137 || command_status == 143)); then
+		return 124
+	fi
+	if ! build_remaining_ns; then
+		printf 'build-dist deadline exceeded after command\n' >&2
+		return 124
+	fi
+	return "${command_status}"
 }
 
 for tool in python3 tar sha256sum mktemp find grep git stat realpath timeout; do
-  if ! command -v -- "${tool}" >/dev/null 2>&1; then
-    printf '%s not found.\n' "${tool}" >&2
-    exit 1
-  fi
+	if ! command -v -- "${tool}" >/dev/null 2>&1; then
+		printf '%s not found.\n' "${tool}" >&2
+		exit 1
+	fi
 done
 
-if [[ -L "${safe_fs}" || ! -f "${safe_fs}" || "$(stat -c '%F' "${safe_fs}")" != "regular file" ]]; then
-  printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
-  exit 1
+if [[ -L ${safe_fs} || ! -f ${safe_fs} || "$(stat -c '%F' "${safe_fs}")" != "regular file" ]]; then
+	printf 'safe local filesystem helper is invalid: %s\n' "${safe_fs}" >&2
+	exit 1
 fi
 if [[ "$(stat -c '%h' "${safe_fs}")" -ne 1 ]]; then
-  printf 'safe local filesystem helper must not be hardlinked: %s\n' "${safe_fs}" >&2
-  exit 1
+	printf 'safe local filesystem helper must not be hardlinked: %s\n' "${safe_fs}" >&2
+	exit 1
 fi
 
 name="$(
-  python3 - <<'PY'
+	python3 - <<'PY'
 import tomllib
 from pathlib import Path
 
@@ -1518,7 +1519,7 @@ print(name)
 PY
 )"
 version="$(
-  python3 - <<'PY'
+	python3 - <<'PY'
 import tomllib
 from pathlib import Path
 
@@ -1537,117 +1538,117 @@ if not isinstance(version, str) or not version:
 print(version)
 PY
 )"
-if [[ ! "${name}" == "speed-of-cinnamon" ]]; then
-  printf 'unexpected package name: %s\n' "${name}" >&2
-  exit 1
+if [[ ${name} != "speed-of-cinnamon" ]]; then
+	printf 'unexpected package name: %s\n' "${name}" >&2
+	exit 1
 fi
-if [[ -z "${version}" || ! "${version}" =~ ^[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
-  printf 'invalid project version: %s\n' "${version}" >&2
-  exit 1
+if [[ -z ${version} || ! ${version} =~ ^[0-9]+(\.[0-9]+){0,2}([0-9A-Za-z.+-]*)?$ ]]; then
+	printf 'invalid project version: %s\n' "${version}" >&2
+	exit 1
 fi
 
 package="${name}-${version}"
 dist_dir="${repo_dir}/dist"
-if [[ -L "${dist_dir}" ]]; then
-  printf 'dist directory must not be a symlink: %s\n' "${dist_dir}" >&2
-  exit 1
+if [[ -L ${dist_dir} ]]; then
+	printf 'dist directory must not be a symlink: %s\n' "${dist_dir}" >&2
+	exit 1
 fi
 validate_dist_tmp_root() {
-  local requested_root=$1
-  local root_abs
-  local root_owner
-  local root_mode
-  local root_mode_bits
-  if [[ ! "${requested_root}" == /* ]]; then
-    printf 'temporary root must be an absolute path: %s\n' "${requested_root}" >&2
-    return 1
-  fi
-  if [[ -L "${requested_root}" || ! -d "${requested_root}" || ! -w "${requested_root}" ]]; then
-    printf 'temporary root must be a writable directory and not a symlink: %s\n' "${requested_root}" >&2
-    return 1
-  fi
-  if ! root_abs="$(realpath "${requested_root}")"; then
-    printf 'failed to resolve temporary root: %s\n' "${requested_root}" >&2
-    return 1
-  fi
-  if [[ "${root_abs}" == "${repo_dir}" || "${root_abs}" == "${repo_dir}/"* ]]; then
-    printf 'temporary root must be outside repository: %s\n' "${requested_root}" >&2
-    return 1
-  fi
-  root_owner="$(stat -c '%u' "${root_abs}")"
-  root_mode="$(stat -c '%a' "${root_abs}")"
-  root_mode_bits=$((8#${root_mode}))
-  if [[ "${root_owner}" == "${EUID}" ]] &&
-      (( (root_mode_bits & 0077) == 0 && (root_mode_bits & 0200) != 0 )); then
-    :
-  elif [[ "${root_owner}" == "0" &&
-      ( "${root_abs}" == "/tmp" || "${root_abs}" == "/var/tmp" || "${root_abs}" == "/dev/shm" ) ]] &&
-      (( (root_mode_bits & 01000) != 0 && (root_mode_bits & 0002) != 0 )); then
-    :
-  else
-    printf 'temporary root must be euid-owned private or root-owned sticky standard temp: %s\n' "${requested_root}" >&2
-    return 1
-  fi
-  work_root="${root_abs}"
+	local requested_root=$1
+	local root_abs
+	local root_owner
+	local root_mode
+	local root_mode_bits
+	if [[ ${requested_root} != /* ]]; then
+		printf 'temporary root must be an absolute path: %s\n' "${requested_root}" >&2
+		return 1
+	fi
+	if [[ -L ${requested_root} || ! -d ${requested_root} || ! -w ${requested_root} ]]; then
+		printf 'temporary root must be a writable directory and not a symlink: %s\n' "${requested_root}" >&2
+		return 1
+	fi
+	if ! root_abs="$(realpath "${requested_root}")"; then
+		printf 'failed to resolve temporary root: %s\n' "${requested_root}" >&2
+		return 1
+	fi
+	if [[ ${root_abs} == "${repo_dir}" || ${root_abs} == "${repo_dir}/"* ]]; then
+		printf 'temporary root must be outside repository: %s\n' "${requested_root}" >&2
+		return 1
+	fi
+	root_owner="$(stat -c '%u' "${root_abs}")"
+	root_mode="$(stat -c '%a' "${root_abs}")"
+	root_mode_bits=$((8#${root_mode}))
+	if [[ ${root_owner} == "${EUID}" ]] &&
+		(((root_mode_bits & 0077) == 0 && (root_mode_bits & 0200) != 0)); then
+		:
+	elif [[ ${root_owner} == "0" &&
+		(${root_abs} == "/tmp" || ${root_abs} == "/var/tmp" || ${root_abs} == "/dev/shm") ]] &&
+		(((root_mode_bits & 01000) != 0 && (root_mode_bits & 0002) != 0)); then
+		:
+	else
+		printf 'temporary root must be euid-owned private or root-owned sticky standard temp: %s\n' "${requested_root}" >&2
+		return 1
+	fi
+	work_root="${root_abs}"
 }
 
 work_root="${TMPDIR:-/tmp}"
 if ! validate_dist_tmp_root "${work_root}"; then
-  exit 1
+	exit 1
 fi
 
 workspace_base="${work_root}/speed-of-cinnamon-build-dist-${EUID}"
 workspace_lock="${workspace_base}"
-if [[ -L "${workspace_base}" || ( -e "${workspace_base}" && ! -d "${workspace_base}" ) ]]; then
-  printf 'build-dist workspace base must be a private directory: %s\n' "${workspace_base}" >&2
-  exit 1
+if [[ -L ${workspace_base} || (-e ${workspace_base} && ! -d ${workspace_base}) ]]; then
+	printf 'build-dist workspace base must be a private directory: %s\n' "${workspace_base}" >&2
+	exit 1
 fi
 if ! run_build_command "${safe_fs_cmd[@]}" assert-private-chain build-dist "${workspace_base}" --allow-missing; then
-  printf 'build-dist workspace base has an untrusted ancestor chain: %s\n' "${workspace_base}" >&2
-  exit 1
+	printf 'build-dist workspace base has an untrusted ancestor chain: %s\n' "${workspace_base}" >&2
+	exit 1
 fi
-if [[ ! -e "${workspace_base}" ]]; then
-  if ! run_build_command "${safe_fs_cmd[@]}" mkdirs build-dist "${workspace_base}"; then
-    printf 'failed to create private build-dist workspace base: %s\n' "${workspace_base}" >&2
-    exit 1
-  fi
+if [[ ! -e ${workspace_base} ]]; then
+	if ! run_build_command "${safe_fs_cmd[@]}" mkdirs build-dist "${workspace_base}"; then
+		printf 'failed to create private build-dist workspace base: %s\n' "${workspace_base}" >&2
+		exit 1
+	fi
 fi
 if ! run_build_command "${safe_fs_cmd[@]}" assert-private-chain build-dist "${workspace_base}"; then
-  printf 'build-dist workspace base has an untrusted ancestor chain: %s\n' "${workspace_base}" >&2
-  exit 1
+	printf 'build-dist workspace base has an untrusted ancestor chain: %s\n' "${workspace_base}" >&2
+	exit 1
 fi
-if [[ -L "${workspace_base}" || ! -d "${workspace_base}" ]]; then
-  printf 'build-dist workspace base is not a directory: %s\n' "${workspace_base}" >&2
-  exit 1
+if [[ -L ${workspace_base} || ! -d ${workspace_base} ]]; then
+	printf 'build-dist workspace base is not a directory: %s\n' "${workspace_base}" >&2
+	exit 1
 fi
 workspace_base_owner="$(stat -c '%u' "${workspace_base}")"
 workspace_base_mode="$(stat -c '%a' "${workspace_base}")"
 workspace_base_mode_bits=$((8#${workspace_base_mode}))
-if [[ "${workspace_base_owner}" != "${EUID}" ]] ||
-    (( (workspace_base_mode_bits & 0077) != 0 || (workspace_base_mode_bits & 0200) == 0 )); then
-  printf 'build-dist workspace base is unsafe: %s\n' "${workspace_base}" >&2
-  exit 1
+if [[ ${workspace_base_owner} != "${EUID}" ]] ||
+	(((workspace_base_mode_bits & 0077) != 0 || (workspace_base_mode_bits & 0200) == 0)); then
+	printf 'build-dist workspace base is unsafe: %s\n' "${workspace_base}" >&2
+	exit 1
 fi
 
 startup_sweep_run_seconds=$((DIST_STARTUP_SWEEP_TIMEOUT_SECONDS - DIST_STARTUP_SWEEP_KILL_AFTER_SECONDS))
-if (( startup_sweep_run_seconds <= 0 )); then
-  printf 'build-dist startup sweep timeout is too short for TERM/KILL grace period\n' >&2
-  exit 1
+if ((startup_sweep_run_seconds <= 0)); then
+	printf 'build-dist startup sweep timeout is too short for TERM/KILL grace period\n' >&2
+	exit 1
 fi
 if build_phase_timeout_seconds_value="$(build_phase_timeout_seconds 2>/dev/null)" &&
-    [[ "${build_phase_timeout_seconds_value}" =~ ^[0-9]+$ ]] &&
-    (( startup_sweep_run_seconds > build_phase_timeout_seconds_value )); then
-  startup_sweep_run_seconds="${build_phase_timeout_seconds_value}"
+	[[ ${build_phase_timeout_seconds_value} =~ ^[0-9]+$ ]] &&
+	((startup_sweep_run_seconds > build_phase_timeout_seconds_value)); then
+	startup_sweep_run_seconds="${build_phase_timeout_seconds_value}"
 fi
-if (( startup_sweep_run_seconds <= 0 )); then
-  printf 'build-dist deadline exhausted before workspace sweep\n' >&2
-  exit 1
+if ((startup_sweep_run_seconds <= 0)); then
+	printf 'build-dist deadline exhausted before workspace sweep\n' >&2
+	exit 1
 fi
 if ! timeout --signal=TERM --kill-after="${DIST_STARTUP_SWEEP_KILL_AFTER_SECONDS}s" \
-    "${startup_sweep_run_seconds}s" \
-    python3 - "${workspace_base}" "${workspace_lock}" "${safe_fs}" \
-    "${startup_sweep_run_seconds}" "${DIST_STARTUP_SWEEP_MAX_ENTRIES}" \
-    "${DIST_STARTUP_SWEEP_MAX_STALE}" "${DIST_WORKSPACE_MAX_AGE_SECONDS}" <<'PY'
+	"${startup_sweep_run_seconds}s" \
+	python3 - "${workspace_base}" "${workspace_lock}" "${safe_fs}" \
+	"${startup_sweep_run_seconds}" "${DIST_STARTUP_SWEEP_MAX_ENTRIES}" \
+	"${DIST_STARTUP_SWEEP_MAX_STALE}" "${DIST_WORKSPACE_MAX_AGE_SECONDS}" <<'PY'; then
 import fcntl
 import os
 import re
@@ -1799,32 +1800,31 @@ try:
 finally:
     os.close(parent_fd)
 PY
-then
-  printf 'failed to sweep build-dist workspaces safely.\n' >&2
-  exit 1
+	printf 'failed to sweep build-dist workspaces safely.\n' >&2
+	exit 1
 fi
 
 work_dir="$(mktemp -d "${workspace_base}/speed-of-cinnamon-build-dist-tree-XXXXXX")"
-if [[ -L "${work_dir}" ]]; then
-  printf 'temporary build-dist workspace must not be a symlink: %s\n' "${work_dir}" >&2
-  exit 1
+if [[ -L ${work_dir} ]]; then
+	printf 'temporary build-dist workspace must not be a symlink: %s\n' "${work_dir}" >&2
+	exit 1
 fi
 if ! work_dir_abs="$(realpath "${work_dir}")"; then
-  printf 'failed to resolve temporary build-dist workspace: %s\n' "${work_dir}" >&2
-  exit 1
+	printf 'failed to resolve temporary build-dist workspace: %s\n' "${work_dir}" >&2
+	exit 1
 fi
-if [[ "${work_dir_abs}" != "${workspace_base}/speed-of-cinnamon-build-dist-tree-"* ]]; then
-  printf 'temporary build-dist workspace escaped workspace base: %s\n' "${work_dir}" >&2
-  exit 1
+if [[ ${work_dir_abs} != "${workspace_base}/speed-of-cinnamon-build-dist-tree-"* ]]; then
+	printf 'temporary build-dist workspace escaped workspace base: %s\n' "${work_dir}" >&2
+	exit 1
 fi
 work_dir="${work_dir_abs}"
 work_dir_owner="$(stat -c '%u' "${work_dir}")"
 work_dir_mode="$(stat -c '%a' "${work_dir}")"
 work_dir_mode_bits=$((8#${work_dir_mode}))
-if [[ "${work_dir_owner}" != "${EUID}" ]] ||
-    (( (work_dir_mode_bits & 0077) != 0 || (work_dir_mode_bits & 0200) == 0 )); then
-  printf 'temporary build-dist workspace is unsafe: %s\n' "${work_dir}" >&2
-  exit 1
+if [[ ${work_dir_owner} != "${EUID}" ]] ||
+	(((work_dir_mode_bits & 0077) != 0 || (work_dir_mode_bits & 0200) == 0)); then
+	printf 'temporary build-dist workspace is unsafe: %s\n' "${work_dir}" >&2
+	exit 1
 fi
 staging_tarball=""
 staging_tarball_identity=""
@@ -1840,167 +1840,167 @@ work_dir_identity=""
 dist_finalize_lock="${dist_dir}/.build-dist.finalize.lock"
 finalization_started=0
 cleanup() {
-  local primary_status=$?
-  stop_handoff_monitor
-  local cleanup_failed=0
-  local staging_cleanup_safe=1
-  local cleanup_deadline_ns="${DIST_BUILD_DEADLINE:-}"
-  local cleanup_remaining_value_ns=""
-  cleanup_now_ns() {
-    local now_ns
-    if ! now_ns="$(timeout --signal=KILL "${DIST_BUILD_CLOCK_TIMEOUT_SECONDS:-0.25}s" \
-        python3 -I -B -c 'import time; print(time.monotonic_ns())')"; then
-      return 1
-    fi
-    if [[ ! "${now_ns}" =~ ^[0-9]+$ ]]; then
-      return 1
-    fi
-    printf '%s' "${now_ns}"
-  }
-  start_cleanup_deadline() {
-    local budget_seconds
-    local budget_ns
-    if [[ -n "${cleanup_deadline_ns}" ]]; then
-      return 0
-    fi
-    budget_seconds="${DIST_CLEANUP_TIMEOUT_SECONDS:-30}"
-    budget_ns=$((budget_seconds * 1000000000 - ${DIST_BUILD_LAUNCH_MARGIN_NS:-50000000} - 250000000))
-    if (( budget_ns <= 0 )); then
-      return 1
-    fi
-    if ! cleanup_deadline_ns="$(timeout --signal=KILL "${DIST_BUILD_CLOCK_TIMEOUT_SECONDS:-0.25}s" \
-        python3 -I -B -c "import time; print(time.monotonic_ns() + ${budget_ns})")"; then
-      cleanup_deadline_ns=""
-      return 1
-    fi
-    [[ "${cleanup_deadline_ns}" =~ ^[0-9]+$ ]]
-  }
-  cleanup_remaining_ns() {
-    local now_ns
-    if ! now_ns="$(cleanup_now_ns)"; then
-      return 1
-    fi
-    cleanup_remaining_value_ns=$((cleanup_deadline_ns - now_ns))
-    if (( cleanup_remaining_value_ns <= 0 )); then
-      return 1
-    fi
-  }
-  cleanup_timeout_value() {
-    local nanoseconds=$1
-    printf '%d.%09d' "$((nanoseconds / 1000000000))" "$((nanoseconds % 1000000000))"
-  }
-  cleanup_safe_fs() {
-    local available_ns
-    local kill_after_ns
-    local term_ns
-    local kill_after_timeout
-    local term_timeout
-    local command_status=0
-    if ! start_cleanup_deadline || ! cleanup_remaining_ns; then
-      printf 'build-dist EXIT cleanup deadline exceeded before safe-FS call\n' >&2
-      return 124
-    fi
-    available_ns=$((cleanup_remaining_value_ns - ${DIST_BUILD_LAUNCH_MARGIN_NS:-50000000}))
-    kill_after_ns=$((${DIST_CLEANUP_KILL_AFTER_SECONDS:-1} * 1000000000))
-    if (( available_ns <= 0 )); then
-      printf 'build-dist EXIT cleanup deadline exceeded before safe-FS launch\n' >&2
-      return 124
-    fi
-    if (( kill_after_ns >= available_ns )); then
-      kill_after_ns=$((available_ns / 2))
-    fi
-    term_ns=$((available_ns - kill_after_ns))
-    if (( term_ns <= 0 || kill_after_ns <= 0 )); then
-      printf 'build-dist EXIT cleanup deadline cannot reserve TERM/KILL grace\n' >&2
-      return 124
-    fi
-    kill_after_timeout="$(cleanup_timeout_value "${kill_after_ns}")"
-    term_timeout="$(cleanup_timeout_value "${term_ns}")"
-    timeout --signal=TERM --kill-after="${kill_after_timeout}s" \
-      "${term_timeout}s" "${safe_fs_cmd[@]}" "$@" || command_status=$?
-    if (( command_status == 124 || command_status == 137 || command_status == 143 )); then
-      return 124
-    fi
-    if ! cleanup_remaining_ns; then
-      printf 'build-dist EXIT cleanup deadline exceeded after safe-FS call\n' >&2
-      return 124
-    fi
-    return "${command_status}"
-  }
-  if ! start_cleanup_deadline; then
-    printf 'build-dist EXIT cleanup deadline unavailable\n' >&2
-    cleanup_failed=1
-  fi
-  if (( ! ${finalization_started:-0} )) && [[ -n "${staging_tarball}" && -n "${staging_tarball_identity}" ]]; then
-    if ! cleanup_safe_fs remove-leaf build-dist "${staging_tarball}" \
-      --expected-identity "${staging_tarball_identity}"; then
-      printf 'build-dist EXIT cleanup failed for staged tarball: %s\n' "${staging_tarball}" >&2
-      cleanup_failed=1
-      staging_cleanup_safe=0
-    fi
-  elif (( ! ${finalization_started:-0} )) && [[ -n "${staging_tarball}" ]]; then
-    printf 'refusing staged tarball cleanup without verified identity: %s\n' "${staging_tarball}" >&2
-    cleanup_failed=1
-    staging_cleanup_safe=0
-  fi
-  if (( ! ${finalization_started:-0} )) && [[ -n "${staging_checksum}" && -n "${staging_checksum_identity}" ]]; then
-    if ! cleanup_safe_fs remove-leaf build-dist "${staging_checksum}" \
-      --expected-identity "${staging_checksum_identity}"; then
-      printf 'build-dist EXIT cleanup failed for staged checksum: %s\n' "${staging_checksum}" >&2
-      cleanup_failed=1
-      staging_cleanup_safe=0
-    fi
-  elif (( ! ${finalization_started:-0} )) && [[ -n "${staging_checksum}" ]]; then
-    printf 'refusing staged checksum cleanup without verified identity: %s\n' "${staging_checksum}" >&2
-    cleanup_failed=1
-    staging_cleanup_safe=0
-  fi
-  if (( ! ${finalization_started:-0} )) && [[ -n "${dist_staging_dir}" && -n "${dist_staging_dir_identity}" ]]; then
-    if (( ! staging_cleanup_safe )); then
-      printf 'preserving build-dist staging directory after leaf cleanup failure: %s\n' "${dist_staging_dir}" >&2
-    elif ! cleanup_safe_fs remove build-dist "${dist_staging_dir}" --kind dir \
-      --expected-identity "${dist_staging_dir_identity}"; then
-      printf 'build-dist EXIT cleanup failed for staging directory: %s\n' "${dist_staging_dir}" >&2
-      cleanup_failed=1
-      staging_cleanup_safe=0
-    fi
-  elif (( ! ${finalization_started:-0} )) && [[ -n "${dist_staging_dir}" ]]; then
-    printf 'refusing dist staging cleanup without verified identity: %s\n' "${dist_staging_dir}" >&2
-    cleanup_failed=1
-    staging_cleanup_safe=0
-  fi
-  if [[ -n "${work_dir}" && -n "${work_dir_identity}" ]]; then
-    if (( ! ${finalization_started:-0} && ! staging_cleanup_safe )); then
-      printf 'preserving build-dist workspace after staging cleanup failure: %s\n' "${work_dir}" >&2
-    elif ! cleanup_safe_fs remove build-dist "${work_dir}" --kind dir \
-      --expected-identity "${work_dir_identity}"; then
-      printf 'build-dist EXIT cleanup failed for workspace: %s\n' "${work_dir}" >&2
-      cleanup_failed=1
-    fi
-  elif [[ -n "${work_dir}" ]]; then
-    printf 'refusing build-dist workspace cleanup without verified identity: %s\n' "${work_dir}" >&2
-    cleanup_failed=1
-  fi
-  if (( cleanup_failed )); then
-    if (( primary_status == 0 )); then
-      printf 'build-dist EXIT cleanup failed; final output status changed to failure\n' >&2
-      exit 1
-    fi
-    printf 'build-dist EXIT cleanup also failed; preserving primary exit status: %d\n' "${primary_status}" >&2
-  fi
-  exit "${primary_status}"
+	local primary_status=$?
+	stop_handoff_monitor
+	local cleanup_failed=0
+	local staging_cleanup_safe=1
+	local cleanup_deadline_ns="${DIST_BUILD_DEADLINE:-}"
+	local cleanup_remaining_value_ns=""
+	cleanup_now_ns() {
+		local now_ns
+		if ! now_ns="$(timeout --signal=KILL "${DIST_BUILD_CLOCK_TIMEOUT_SECONDS:-0.25}s" \
+			python3 -I -B -c 'import time; print(time.monotonic_ns())')"; then
+			return 1
+		fi
+		if [[ ! ${now_ns} =~ ^[0-9]+$ ]]; then
+			return 1
+		fi
+		printf '%s' "${now_ns}"
+	}
+	start_cleanup_deadline() {
+		local budget_seconds
+		local budget_ns
+		if [[ -n ${cleanup_deadline_ns} ]]; then
+			return 0
+		fi
+		budget_seconds="${DIST_CLEANUP_TIMEOUT_SECONDS:-30}"
+		budget_ns=$((budget_seconds * 1000000000 - ${DIST_BUILD_LAUNCH_MARGIN_NS:-50000000} - 250000000))
+		if ((budget_ns <= 0)); then
+			return 1
+		fi
+		if ! cleanup_deadline_ns="$(timeout --signal=KILL "${DIST_BUILD_CLOCK_TIMEOUT_SECONDS:-0.25}s" \
+			python3 -I -B -c "import time; print(time.monotonic_ns() + ${budget_ns})")"; then
+			cleanup_deadline_ns=""
+			return 1
+		fi
+		[[ ${cleanup_deadline_ns} =~ ^[0-9]+$ ]]
+	}
+	cleanup_remaining_ns() {
+		local now_ns
+		if ! now_ns="$(cleanup_now_ns)"; then
+			return 1
+		fi
+		cleanup_remaining_value_ns=$((cleanup_deadline_ns - now_ns))
+		if ((cleanup_remaining_value_ns <= 0)); then
+			return 1
+		fi
+	}
+	cleanup_timeout_value() {
+		local nanoseconds=$1
+		printf '%d.%09d' "$((nanoseconds / 1000000000))" "$((nanoseconds % 1000000000))"
+	}
+	cleanup_safe_fs() {
+		local available_ns
+		local kill_after_ns
+		local term_ns
+		local kill_after_timeout
+		local term_timeout
+		local command_status=0
+		if ! start_cleanup_deadline || ! cleanup_remaining_ns; then
+			printf 'build-dist EXIT cleanup deadline exceeded before safe-FS call\n' >&2
+			return 124
+		fi
+		available_ns=$((cleanup_remaining_value_ns - ${DIST_BUILD_LAUNCH_MARGIN_NS:-50000000}))
+		kill_after_ns=$((${DIST_CLEANUP_KILL_AFTER_SECONDS:-1} * 1000000000))
+		if ((available_ns <= 0)); then
+			printf 'build-dist EXIT cleanup deadline exceeded before safe-FS launch\n' >&2
+			return 124
+		fi
+		if ((kill_after_ns >= available_ns)); then
+			kill_after_ns=$((available_ns / 2))
+		fi
+		term_ns=$((available_ns - kill_after_ns))
+		if ((term_ns <= 0 || kill_after_ns <= 0)); then
+			printf 'build-dist EXIT cleanup deadline cannot reserve TERM/KILL grace\n' >&2
+			return 124
+		fi
+		kill_after_timeout="$(cleanup_timeout_value "${kill_after_ns}")"
+		term_timeout="$(cleanup_timeout_value "${term_ns}")"
+		timeout --signal=TERM --kill-after="${kill_after_timeout}s" \
+			"${term_timeout}s" "${safe_fs_cmd[@]}" "$@" || command_status=$?
+		if ((command_status == 124 || command_status == 137 || command_status == 143)); then
+			return 124
+		fi
+		if ! cleanup_remaining_ns; then
+			printf 'build-dist EXIT cleanup deadline exceeded after safe-FS call\n' >&2
+			return 124
+		fi
+		return "${command_status}"
+	}
+	if ! start_cleanup_deadline; then
+		printf 'build-dist EXIT cleanup deadline unavailable\n' >&2
+		cleanup_failed=1
+	fi
+	if ((!${finalization_started:-0})) && [[ -n ${staging_tarball} && -n ${staging_tarball_identity} ]]; then
+		if ! cleanup_safe_fs remove-leaf build-dist "${staging_tarball}" \
+			--expected-identity "${staging_tarball_identity}"; then
+			printf 'build-dist EXIT cleanup failed for staged tarball: %s\n' "${staging_tarball}" >&2
+			cleanup_failed=1
+			staging_cleanup_safe=0
+		fi
+	elif ((!${finalization_started:-0})) && [[ -n ${staging_tarball} ]]; then
+		printf 'refusing staged tarball cleanup without verified identity: %s\n' "${staging_tarball}" >&2
+		cleanup_failed=1
+		staging_cleanup_safe=0
+	fi
+	if ((!${finalization_started:-0})) && [[ -n ${staging_checksum} && -n ${staging_checksum_identity} ]]; then
+		if ! cleanup_safe_fs remove-leaf build-dist "${staging_checksum}" \
+			--expected-identity "${staging_checksum_identity}"; then
+			printf 'build-dist EXIT cleanup failed for staged checksum: %s\n' "${staging_checksum}" >&2
+			cleanup_failed=1
+			staging_cleanup_safe=0
+		fi
+	elif ((!${finalization_started:-0})) && [[ -n ${staging_checksum} ]]; then
+		printf 'refusing staged checksum cleanup without verified identity: %s\n' "${staging_checksum}" >&2
+		cleanup_failed=1
+		staging_cleanup_safe=0
+	fi
+	if ((!${finalization_started:-0})) && [[ -n ${dist_staging_dir} && -n ${dist_staging_dir_identity} ]]; then
+		if ((!staging_cleanup_safe)); then
+			printf 'preserving build-dist staging directory after leaf cleanup failure: %s\n' "${dist_staging_dir}" >&2
+		elif ! cleanup_safe_fs remove build-dist "${dist_staging_dir}" --kind dir \
+			--expected-identity "${dist_staging_dir_identity}"; then
+			printf 'build-dist EXIT cleanup failed for staging directory: %s\n' "${dist_staging_dir}" >&2
+			cleanup_failed=1
+			staging_cleanup_safe=0
+		fi
+	elif ((!${finalization_started:-0})) && [[ -n ${dist_staging_dir} ]]; then
+		printf 'refusing dist staging cleanup without verified identity: %s\n' "${dist_staging_dir}" >&2
+		cleanup_failed=1
+		staging_cleanup_safe=0
+	fi
+	if [[ -n ${work_dir} && -n ${work_dir_identity} ]]; then
+		if ((!${finalization_started:-0} && !staging_cleanup_safe)); then
+			printf 'preserving build-dist workspace after staging cleanup failure: %s\n' "${work_dir}" >&2
+		elif ! cleanup_safe_fs remove build-dist "${work_dir}" --kind dir \
+			--expected-identity "${work_dir_identity}"; then
+			printf 'build-dist EXIT cleanup failed for workspace: %s\n' "${work_dir}" >&2
+			cleanup_failed=1
+		fi
+	elif [[ -n ${work_dir} ]]; then
+		printf 'refusing build-dist workspace cleanup without verified identity: %s\n' "${work_dir}" >&2
+		cleanup_failed=1
+	fi
+	if ((cleanup_failed)); then
+		if ((primary_status == 0)); then
+			printf 'build-dist EXIT cleanup failed; final output status changed to failure\n' >&2
+			exit 1
+		fi
+		printf 'build-dist EXIT cleanup also failed; preserving primary exit status: %d\n' "${primary_status}" >&2
+	fi
+	exit "${primary_status}"
 }
 trap cleanup EXIT
 
 if ! work_dir_identity="$(run_build_command "${safe_fs_cmd[@]}" identity build-dist "${work_dir}" --kind dir)"; then
-  printf 'failed to capture temporary build-dist workspace identity: %s\n' "${work_dir}" >&2
-  exit 1
+	printf 'failed to capture temporary build-dist workspace identity: %s\n' "${work_dir}" >&2
+	exit 1
 fi
 
 fsync_regular_file() {
-  local path=$1
-  local label=$2
-  python3 - "$path" "$label" <<'PY'
+	local path=$1
+	local label=$2
+	python3 - "$path" "$label" <<'PY'
 import os
 import stat
 import sys
@@ -2033,11 +2033,11 @@ PY
 }
 
 write_regular_file_from_stdin() {
-  local path=$1
-  local label=$2
-  local expected_identity=${3:-}
+	local path=$1
+	local label=$2
+	local expected_identity=${3:-}
 
-  python3 -c '
+	python3 -c '
 import os
 import stat
 import sys
@@ -2091,20 +2091,20 @@ finally:
 }
 
 build_staged_tarball() {
-  local build_timeout_seconds=$((DIST_BUILD_TIMEOUT_SECONDS - DIST_BUILD_KILL_AFTER_SECONDS))
-  if [[ -n "${DIST_BUILD_DEADLINE:-}" ]]; then
-    if ! build_timeout_seconds="$(build_phase_timeout_seconds)"; then
-      printf 'build-dist deadline exhausted before tar creation\n' >&2
-      return 124
-    fi
-  fi
-  if (( build_timeout_seconds <= 0 )); then
-    printf 'build-dist build timeout is too short for TERM/KILL grace period\n' >&2
-    return 1
-  fi
-  timeout --signal=TERM --kill-after="${DIST_BUILD_KILL_AFTER_SECONDS}s" \
-    "${build_timeout_seconds}s" \
-    python3 - "$1" "$2" "$3" "$4" "$5" "$6" "$build_timeout_seconds" "$DIST_MAX_ARCHIVE_BYTES" <<'PY'
+	local build_timeout_seconds=$((DIST_BUILD_TIMEOUT_SECONDS - DIST_BUILD_KILL_AFTER_SECONDS))
+	if [[ -n ${DIST_BUILD_DEADLINE:-} ]]; then
+		if ! build_timeout_seconds="$(build_phase_timeout_seconds)"; then
+			printf 'build-dist deadline exhausted before tar creation\n' >&2
+			return 124
+		fi
+	fi
+	if ((build_timeout_seconds <= 0)); then
+		printf 'build-dist build timeout is too short for TERM/KILL grace period\n' >&2
+		return 1
+	fi
+	timeout --signal=TERM --kill-after="${DIST_BUILD_KILL_AFTER_SECONDS}s" \
+		"${build_timeout_seconds}s" \
+		python3 - "$1" "$2" "$3" "$4" "$5" "$6" "$build_timeout_seconds" "$DIST_MAX_ARCHIVE_BYTES" <<'PY'
 import hashlib
 import os
 import selectors
@@ -2334,35 +2334,35 @@ PY
 }
 
 replace_with_finalize_lock() {
-  local lock_path=$1
-  local staging_path=$2
-  local final_path=$3
-  local staging_checksum_path=$4
-  local final_checksum_path=$5
-  local expected_stage_identity=${6:-}
-  local expected_stage_size=${7:-}
-  local expected_stage_digest=${8:-}
-  local expected_checksum_identity=${9:-}
-  local expected_checksum_size=${10:-}
-  local expected_checksum_digest=${11:-}
-  local finalize_run_seconds=$((DIST_FINALIZE_TIMEOUT_SECONDS - DIST_FINALIZE_KILL_AFTER_SECONDS))
-  if [[ -n "${DIST_BUILD_DEADLINE:-}" ]]; then
-    if ! finalize_run_seconds="$(build_phase_timeout_seconds)"; then
-      printf 'build-dist deadline exhausted before finalization\n' >&2
-      return 124
-    fi
-  fi
-  if (( finalize_run_seconds <= 0 )); then
-    printf 'build-dist finalizer timeout is too short for TERM/KILL grace period\n' >&2
-    return 1
-  fi
+	local lock_path=$1
+	local staging_path=$2
+	local final_path=$3
+	local staging_checksum_path=$4
+	local final_checksum_path=$5
+	local expected_stage_identity=${6:-}
+	local expected_stage_size=${7:-}
+	local expected_stage_digest=${8:-}
+	local expected_checksum_identity=${9:-}
+	local expected_checksum_size=${10:-}
+	local expected_checksum_digest=${11:-}
+	local finalize_run_seconds=$((DIST_FINALIZE_TIMEOUT_SECONDS - DIST_FINALIZE_KILL_AFTER_SECONDS))
+	if [[ -n ${DIST_BUILD_DEADLINE:-} ]]; then
+		if ! finalize_run_seconds="$(build_phase_timeout_seconds)"; then
+			printf 'build-dist deadline exhausted before finalization\n' >&2
+			return 124
+		fi
+	fi
+	if ((finalize_run_seconds <= 0)); then
+		printf 'build-dist finalizer timeout is too short for TERM/KILL grace period\n' >&2
+		return 1
+	fi
 
-  timeout --signal=TERM --kill-after="${DIST_FINALIZE_KILL_AFTER_SECONDS}s" \
-    "${finalize_run_seconds}s" \
-    python3 - "$lock_path" "$safe_fs" "$staging_path" "$final_path" "$staging_checksum_path" "$final_checksum_path" \
-      "$expected_stage_identity" "$expected_stage_size" "$expected_stage_digest" \
-      "$expected_checksum_identity" "$expected_checksum_size" "$expected_checksum_digest" \
-      "$finalize_run_seconds" "$DIST_FINALIZE_LOCK_TIMEOUT_SECONDS" <<'PY'
+	timeout --signal=TERM --kill-after="${DIST_FINALIZE_KILL_AFTER_SECONDS}s" \
+		"${finalize_run_seconds}s" \
+		python3 - "$lock_path" "$safe_fs" "$staging_path" "$final_path" "$staging_checksum_path" "$final_checksum_path" \
+		"$expected_stage_identity" "$expected_stage_size" "$expected_stage_digest" \
+		"$expected_checksum_identity" "$expected_checksum_size" "$expected_checksum_digest" \
+		"$finalize_run_seconds" "$DIST_FINALIZE_LOCK_TIMEOUT_SECONDS" <<'PY'
 import hashlib
 import json
 import os
@@ -4127,78 +4127,77 @@ run_build_command "${safe_fs_cmd[@]}" assert-private-chain build-dist "${dist_di
 run_build_command "${safe_fs_cmd[@]}" mkdirs build-dist "${dist_dir}"
 run_build_command "${safe_fs_cmd[@]}" assert-private-chain build-dist "${dist_dir}"
 if ! replace_with_finalize_lock "${dist_finalize_lock}" "" "" "" ""; then
-  printf 'build-dist startup recovery failed\n' >&2
-  exit 1
+	printf 'build-dist startup recovery failed\n' >&2
+	exit 1
 fi
 run_build_command "${safe_fs_cmd[@]}" mkdirs build-dist "${work_dir}/${package}"
 
 for path in \
-  .github \
-  docs \
-  files \
-  packaging \
-  snap \
-  scripts \
-  src \
-  tests \
-  LICENSE \
-  Makefile \
-  pyproject.toml \
-  README.md
-do
-  source_path="${repo_dir}/${path}"
-  target_path="${work_dir}/${package}/${path}"
-  if [[ -d "${source_path}" ]]; then
-    if ! run_build_command python3 "${safe_fs}" install-tree build-dist "${source_path}" "${target_path}" "distribution source tree" "${distribution_tree_excludes[@]}"; then
-      printf 'failed to copy distribution source tree: %s\n' "${source_path}" >&2
-      exit 1
-    fi
-  else
-    if ! run_build_command python3 "${safe_fs}" copy-file build-dist "${source_path}" "${target_path}" 0644; then
-      printf 'failed to copy distribution source file: %s\n' "${source_path}" >&2
-      exit 1
-    fi
-  fi
+	.github \
+	docs \
+	files \
+	packaging \
+	snap \
+	scripts \
+	src \
+	tests \
+	LICENSE \
+	Makefile \
+	pyproject.toml \
+	README.md; do
+	source_path="${repo_dir}/${path}"
+	target_path="${work_dir}/${package}/${path}"
+	if [[ -d ${source_path} ]]; then
+		if ! run_build_command python3 "${safe_fs}" install-tree build-dist "${source_path}" "${target_path}" "distribution source tree" "${distribution_tree_excludes[@]}"; then
+			printf 'failed to copy distribution source tree: %s\n' "${source_path}" >&2
+			exit 1
+		fi
+	else
+		if ! run_build_command python3 "${safe_fs}" copy-file build-dist "${source_path}" "${target_path}" 0644; then
+			printf 'failed to copy distribution source file: %s\n' "${source_path}" >&2
+			exit 1
+		fi
+	fi
 done
 
 find_results="$(mktemp "${work_dir}/.build-dist-find.XXXXXX")"
 if ! run_build_command find "${work_dir}/${package}" \
-    -type d \( -name __pycache__ -o -name .pytest_cache -o -name .mypy_cache \) \
-    -prune -print0 >"${find_results}"; then
-  printf 'failed to enumerate distribution cache directories\n' >&2
-  exit 1
+	-type d \( -name __pycache__ -o -name .pytest_cache -o -name .mypy_cache \) \
+	-prune -print0 >"${find_results}"; then
+	printf 'failed to enumerate distribution cache directories\n' >&2
+	exit 1
 fi
 while IFS= read -r -d '' cache_dir; do
-  cache_identity="$(run_build_command "${safe_fs_cmd[@]}" identity build-dist "${cache_dir}" --kind dir)"
-  if ! run_build_command "${safe_fs_cmd[@]}" remove build-dist "${cache_dir}" --kind dir \
-      --expected-identity "${cache_identity}"; then
-    printf 'failed to remove distribution cache directory: %s\n' "${cache_dir}" >&2
-    exit 1
-  fi
+	cache_identity="$(run_build_command "${safe_fs_cmd[@]}" identity build-dist "${cache_dir}" --kind dir)"
+	if ! run_build_command "${safe_fs_cmd[@]}" remove build-dist "${cache_dir}" --kind dir \
+		--expected-identity "${cache_identity}"; then
+		printf 'failed to remove distribution cache directory: %s\n' "${cache_dir}" >&2
+		exit 1
+	fi
 done <"${find_results}"
 
 if ! run_build_command find "${work_dir}/${package}" \
-    -type f \( -name '*.pyc' -o -name '*.pyo' \) -print0 >"${find_results}"; then
-  printf 'failed to enumerate distribution bytecode files\n' >&2
-  exit 1
+	-type f \( -name '*.pyc' -o -name '*.pyo' \) -print0 >"${find_results}"; then
+	printf 'failed to enumerate distribution bytecode files\n' >&2
+	exit 1
 fi
 while IFS= read -r -d '' bytecode_file; do
-  bytecode_identity="$(run_build_command "${safe_fs_cmd[@]}" identity build-dist "${bytecode_file}" --kind file)"
-  if ! run_build_command "${safe_fs_cmd[@]}" remove build-dist "${bytecode_file}" --kind file \
-      --expected-identity "${bytecode_identity}"; then
-    printf 'failed to remove distribution bytecode file: %s\n' "${bytecode_file}" >&2
-    exit 1
-  fi
+	bytecode_identity="$(run_build_command "${safe_fs_cmd[@]}" identity build-dist "${bytecode_file}" --kind file)"
+	if ! run_build_command "${safe_fs_cmd[@]}" remove build-dist "${bytecode_file}" --kind file \
+		--expected-identity "${bytecode_identity}"; then
+		printf 'failed to remove distribution bytecode file: %s\n' "${bytecode_file}" >&2
+		exit 1
+	fi
 done <"${find_results}"
 
 symlink_path=""
 if ! symlink_path="$(run_build_command find "${work_dir}/${package}" -type l -print -quit)"; then
-  printf 'failed to inspect distribution symlinks\n' >&2
-  exit 1
+	printf 'failed to inspect distribution symlinks\n' >&2
+	exit 1
 fi
-if [[ -n "${symlink_path}" ]]; then
-  printf 'build-dist detected unsupported symlink in package contents.\n' >&2
-  exit 1
+if [[ -n ${symlink_path} ]]; then
+	printf 'build-dist detected unsupported symlink in package contents.\n' >&2
+	exit 1
 fi
 
 write_regular_file_from_stdin "${work_dir}/${package}/RELEASE-MANIFEST.txt" "release manifest" <<EOF
@@ -4215,42 +4214,42 @@ EOF
 final_tarball="${dist_dir}/${package}.tar.gz"
 final_checksum="${final_tarball}.sha256"
 dist_staging_dir="$(mktemp -d "${work_dir}/dist-staging-XXXXXX")"
-if [[ -L "${dist_staging_dir}" ]]; then
-  printf 'dist staging directory must not be a symlink: %s\n' "${dist_staging_dir}" >&2
-  exit 1
+if [[ -L ${dist_staging_dir} ]]; then
+	printf 'dist staging directory must not be a symlink: %s\n' "${dist_staging_dir}" >&2
+	exit 1
 fi
 if ! dist_staging_dir_abs="$(realpath "${dist_staging_dir}")"; then
-  printf 'failed to resolve dist staging directory: %s\n' "${dist_staging_dir}" >&2
-  exit 1
+	printf 'failed to resolve dist staging directory: %s\n' "${dist_staging_dir}" >&2
+	exit 1
 fi
-if [[ "${dist_staging_dir_abs}" != "${work_dir}/dist-staging-"* ]]; then
-  printf 'dist staging directory escaped build workspace: %s\n' "${dist_staging_dir}" >&2
-  exit 1
+if [[ ${dist_staging_dir_abs} != "${work_dir}/dist-staging-"* ]]; then
+	printf 'dist staging directory escaped build workspace: %s\n' "${dist_staging_dir}" >&2
+	exit 1
 fi
 dist_staging_dir="${dist_staging_dir_abs}"
 if ! dist_staging_dir_identity="$(run_build_command "${safe_fs_cmd[@]}" identity build-dist "${dist_staging_dir}" --kind dir)"; then
-  printf 'failed to capture dist staging directory identity: %s\n' "${dist_staging_dir}" >&2
-  exit 1
+	printf 'failed to capture dist staging directory identity: %s\n' "${dist_staging_dir}" >&2
+	exit 1
 fi
 staging_tarball="$(mktemp "${dist_staging_dir}/stage.tar.gz.XXXXXX")"
 if ! staging_tarball_identity="$(run_build_command "${safe_fs_cmd[@]}" identity build-dist "${staging_tarball}" --kind file)"; then
-  printf 'failed to capture staged tarball identity: %s\n' "${staging_tarball}" >&2
-  exit 1
+	printf 'failed to capture staged tarball identity: %s\n' "${staging_tarball}" >&2
+	exit 1
 fi
 
 staging_checksum="$(mktemp "${dist_staging_dir}/stage.tar.gz.sha256.XXXXXX")"
 if ! staging_checksum_identity="$(run_build_command "${safe_fs_cmd[@]}" identity build-dist "${staging_checksum}" --kind file)"; then
-  printf 'failed to capture staged checksum identity: %s\n' "${staging_checksum}" >&2
-  exit 1
+	printf 'failed to capture staged checksum identity: %s\n' "${staging_checksum}" >&2
+	exit 1
 fi
 producer_metadata="$(
-  build_staged_tarball \
-    "${work_dir}" \
-    "${package}" \
-    "${staging_tarball}" \
-    "${staging_tarball_identity}" \
-    "${staging_checksum}" \
-    "${staging_checksum_identity}"
+	build_staged_tarball \
+		"${work_dir}" \
+		"${package}" \
+		"${staging_tarball}" \
+		"${staging_tarball_identity}" \
+		"${staging_checksum}" \
+		"${staging_checksum_identity}"
 )"
 producer_stage_identity=""
 producer_stage_size=""
@@ -4258,21 +4257,21 @@ producer_stage_digest=""
 producer_checksum_identity=""
 producer_checksum_size=""
 producer_checksum_digest=""
-if [[ "${producer_metadata}" == *$'\n'* ]] || ! IFS=$'\t' read -r \
-  producer_stage_identity producer_stage_size producer_stage_digest \
-  producer_checksum_identity producer_checksum_size producer_checksum_digest \
-  <<< "${producer_metadata}"; then
-  printf 'build-dist producer metadata is invalid\n' >&2
-  exit 1
+if [[ ${producer_metadata} == *$'\n'* ]] || ! IFS=$'\t' read -r \
+	producer_stage_identity producer_stage_size producer_stage_digest \
+	producer_checksum_identity producer_checksum_size producer_checksum_digest \
+	<<<"${producer_metadata}"; then
+	printf 'build-dist producer metadata is invalid\n' >&2
+	exit 1
 fi
-if [[ ! "${producer_stage_identity}" =~ ^[0-9]+:[0-9]+:[0-9]+$ \
-  || ! "${producer_stage_size}" =~ ^(0|[1-9][0-9]*)$ \
-  || ! "${producer_stage_digest}" =~ ^[0-9a-f]{64}$ \
-  || ! "${producer_checksum_identity}" =~ ^[0-9]+:[0-9]+:[0-9]+$ \
-  || ! "${producer_checksum_size}" =~ ^(0|[1-9][0-9]*)$ \
-  || ! "${producer_checksum_digest}" =~ ^[0-9a-f]{64}$ ]]; then
-  printf 'build-dist producer metadata is invalid\n' >&2
-  exit 1
+if [[ ! ${producer_stage_identity} =~ ^[0-9]+:[0-9]+:[0-9]+$ ||
+	! ${producer_stage_size} =~ ^(0|[1-9][0-9]*)$ ||
+	! ${producer_stage_digest} =~ ^[0-9a-f]{64}$ ||
+	! ${producer_checksum_identity} =~ ^[0-9]+:[0-9]+:[0-9]+$ ||
+	! ${producer_checksum_size} =~ ^(0|[1-9][0-9]*)$ ||
+	! ${producer_checksum_digest} =~ ^[0-9a-f]{64}$ ]]; then
+	printf 'build-dist producer metadata is invalid\n' >&2
+	exit 1
 fi
 staging_tarball_identity="${producer_stage_identity}"
 staging_tarball_size="${producer_stage_size}"
@@ -4282,17 +4281,17 @@ staging_checksum_size="${producer_checksum_size}"
 staging_checksum_digest="${producer_checksum_digest}"
 finalization_started=1
 replace_with_finalize_lock \
-  "${dist_finalize_lock}" \
-  "${staging_tarball}" \
-  "${final_tarball}" \
-  "${staging_checksum}" \
-  "${final_checksum}" \
-  "${staging_tarball_identity}" \
-  "${staging_tarball_size}" \
-  "${staging_tarball_digest}" \
-  "${staging_checksum_identity}" \
-  "${staging_checksum_size}" \
-  "${staging_checksum_digest}"
+	"${dist_finalize_lock}" \
+	"${staging_tarball}" \
+	"${final_tarball}" \
+	"${staging_checksum}" \
+	"${final_checksum}" \
+	"${staging_tarball_identity}" \
+	"${staging_tarball_size}" \
+	"${staging_tarball_digest}" \
+	"${staging_checksum_identity}" \
+	"${staging_checksum_size}" \
+	"${staging_checksum_digest}"
 staging_tarball=""
 staging_tarball_identity=""
 staging_tarball_size=""

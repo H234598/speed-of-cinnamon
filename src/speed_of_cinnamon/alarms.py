@@ -63,14 +63,20 @@ def _reject_duplicate_json_keys(pairs: list[tuple[str, object]]) -> dict[str, ob
     return result
 
 
-def _note_lock_cleanup_failure(primary: BaseException, cleanup_error: BaseException) -> None:
+def _note_lock_cleanup_failure(
+    primary: BaseException, cleanup_error: BaseException
+) -> None:
     primary.add_note("alarm store lock cleanup failed")
 
 
-def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
+def _flock_retry(
+    fd: int, operation: int, *, timeout_seconds: float | None = None
+) -> None:
     if timeout_seconds is None:
         raise RuntimeError("alarm lock timeout is required")
-    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+    if isinstance(timeout_seconds, bool) or not isinstance(
+        timeout_seconds, (int, float)
+    ):
         raise RuntimeError("alarm lock timeout is invalid")
     try:
         finite_timeout = math.isfinite(timeout_seconds)
@@ -133,12 +139,22 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
     lock_path = store_path.with_name(f".{store_path.name}.lock")
     _assert_clean_path(lock_path, field_name="alarm store lock")
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-        raise RuntimeError("secure alarm store lock open is not supported on this platform")
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
+        raise RuntimeError(
+            "secure alarm store lock open is not supported on this platform"
+        )
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
-    parent_fd = ensure_directory_without_following_symlinks(lock_path.parent, field_name="alarm store lock directory")
+    parent_fd = ensure_directory_without_following_symlinks(
+        lock_path.parent, field_name="alarm store lock directory"
+    )
     try:
-        assert_fd_is_private_directory(parent_fd, field_name="alarm store lock directory")
+        assert_fd_is_private_directory(
+            parent_fd, field_name="alarm store lock directory"
+        )
         fd = os.open(
             lock_path.name,
             os.O_RDWR | os.O_CREAT | nofollow_flag | nonblock_flag,
@@ -164,9 +180,13 @@ def _locked_alarm_store(path: Path | None = None) -> Iterator[Path]:
         raise
     primary_error: BaseException | None = None
     try:
-        assert_fd_is_regular_private_file(fd, field_name="alarm store lock file", require_private_mode=True)
+        assert_fd_is_regular_private_file(
+            fd, field_name="alarm store lock file", require_private_mode=True
+        )
         _flock_retry(fd, fcntl.LOCK_EX, timeout_seconds=ALARM_LOCK_TIMEOUT_SECONDS)
-        assert_fd_is_regular_private_file(fd, field_name="alarm store lock file", require_private_mode=True)
+        assert_fd_is_regular_private_file(
+            fd, field_name="alarm store lock file", require_private_mode=True
+        )
         yield store_path
     except BaseException as exc:
         primary_error = exc
@@ -206,9 +226,18 @@ def _contains_forbidden_control(value: str) -> bool:
     lowered = (value or "").lower()
     control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
     return (
-        any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v"))
-        or any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints)
-        or any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
+        any(
+            sequence in lowered
+            for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")
+        )
+        or any(
+            f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered
+            for codepoint in control_codepoints
+        )
+        or any(
+            ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F
+            for char in value
+        )
     )
 
 
@@ -251,12 +280,16 @@ def _normalize_local_datetime(value: object, *, field_name: str) -> datetime:
         try:
             normalized = normalized.astimezone().replace(tzinfo=None)
         except (OverflowError, OSError, ValueError) as exc:
-            raise ValueError(f"{field_name} could not be converted to local time") from exc
+            raise ValueError(
+                f"{field_name} could not be converted to local time"
+            ) from exc
     return normalized.replace(second=0, microsecond=0)
 
 
 def parse_alarm_time(value: str) -> tuple[int, int]:
-    text = _sanitize_text_field(value, field_name="alarm time", max_chars=MAX_ALARM_TIME_CHARS)
+    text = _sanitize_text_field(
+        value, field_name="alarm time", max_chars=MAX_ALARM_TIME_CHARS
+    )
     match = re.fullmatch(r"(\d{1,2}):(\d{2})", text)
     if not match:
         raise ValueError("alarm time must use HH:MM")
@@ -288,13 +321,21 @@ def _coerce_alarm_bool(value: object, *, field_name: str) -> bool:
 
 def _is_alarm_enabled(alarm: dict[str, Any]) -> bool:
     try:
-        return _coerce_alarm_bool(alarm.get("enabled", True), field_name="alarm enabled")
+        return _coerce_alarm_bool(
+            alarm.get("enabled", True), field_name="alarm enabled"
+        )
     except ValueError:
         return False
 
 
 def parse_repeat_days(value: str) -> list[str]:
-    text = _sanitize_text_field(value, field_name="alarm days", max_chars=MAX_ALARM_DAYS_CHARS).strip().lower()
+    text = (
+        _sanitize_text_field(
+            value, field_name="alarm days", max_chars=MAX_ALARM_DAYS_CHARS
+        )
+        .strip()
+        .lower()
+    )
     if text in {"", "all", "daily", "everyday"}:
         return list(DAY_CODES)
     if text in {"weekday", "weekdays", "workdays"}:
@@ -339,7 +380,9 @@ def format_repeat_days(days: list[str]) -> str:
 
 
 def format_alarm_summary(alarm: dict[str, Any]) -> str:
-    state = "disabled" if not _is_alarm_enabled(alarm) else alarm.get("urgency", "normal")
+    state = (
+        "disabled" if not _is_alarm_enabled(alarm) else alarm.get("urgency", "normal")
+    )
     return f"{format_alarm_time(alarm)} - {format_repeat_days(alarm_days(alarm))} - {str(state).capitalize()}"
 
 
@@ -363,7 +406,9 @@ def alarm_days(alarm: dict[str, Any]) -> list[str]:
     return [day for day in DAY_CODES if day in normalized]
 
 
-def _normalize_alarm_list(alarms: object, *, strict: bool = False) -> list[dict[str, Any]]:
+def _normalize_alarm_list(
+    alarms: object, *, strict: bool = False
+) -> list[dict[str, Any]]:
     if not isinstance(alarms, list):
         if strict:
             raise ValueError("alarm list must be a list")
@@ -372,7 +417,9 @@ def _normalize_alarm_list(alarms: object, *, strict: bool = False) -> list[dict[
     for raw_alarm in alarms:
         if len(normalized) >= MAX_ALARM_COUNT:
             if strict:
-                raise ValueError(f"alarm list exceeds maximum count of {MAX_ALARM_COUNT}")
+                raise ValueError(
+                    f"alarm list exceeds maximum count of {MAX_ALARM_COUNT}"
+                )
             break
         if not isinstance(raw_alarm, dict):
             if strict:
@@ -393,8 +440,12 @@ def _dedupe_alarm_ids(alarms: list[dict[str, Any]]) -> list[dict[str, Any]]:
     for alarm in alarms:
         item = dict(alarm)
         hour = _coerce_alarm_component(item.get("hour", 0), field_name="alarm hour")
-        minute = _coerce_alarm_component(item.get("minute", 0), field_name="alarm minute")
-        base_id = _sanitize_text_field(item.get("id"), field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS)
+        minute = _coerce_alarm_component(
+            item.get("minute", 0), field_name="alarm minute"
+        )
+        base_id = _sanitize_text_field(
+            item.get("id"), field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS
+        )
         if not base_id:
             base_id = f"alarm-{hour:02d}{minute:02d}"
         candidate = base_id
@@ -456,22 +507,38 @@ def load_alarm_store(path: Path | None = None) -> dict[str, Any]:
     if set(raw) - {"version", "alarms", "last_checked_at"}:
         raise RuntimeError("alarm store contains unknown fields")
     version = raw.get("version")
-    if isinstance(version, bool) or not isinstance(version, int) or version != STORE_VERSION:
+    if (
+        isinstance(version, bool)
+        or not isinstance(version, int)
+        or version != STORE_VERSION
+    ):
         raise RuntimeError("alarm store version is unsupported")
     try:
         raw_last_checked_at = _sanitize_text_field(
-            raw.get("last_checked_at"), field_name="alarm store last_checked_at", max_chars=MAX_ALARM_TRIGGER_CHARS
+            raw.get("last_checked_at"),
+            field_name="alarm store last_checked_at",
+            max_chars=MAX_ALARM_TRIGGER_CHARS,
         )
-        raw_last_checked_at = _normalize_stored_datetime(raw_last_checked_at, field_name="alarm store last_checked_at")
+        raw_last_checked_at = _normalize_stored_datetime(
+            raw_last_checked_at, field_name="alarm store last_checked_at"
+        )
     except ValueError as exc:
         if "too large" in str(exc):
-            raise RuntimeError(f"alarm store last_checked_at is too large (max {MAX_ALARM_TRIGGER_CHARS} characters)") from exc
+            raise RuntimeError(
+                f"alarm store last_checked_at is too large (max {MAX_ALARM_TRIGGER_CHARS} characters)"
+            ) from exc
         if "invalid null byte" in str(exc):
-            raise RuntimeError("alarm store last_checked_at contains invalid null byte") from exc
+            raise RuntimeError(
+                "alarm store last_checked_at contains invalid null byte"
+            ) from exc
         if "invalid control character" in str(exc):
-            raise RuntimeError("alarm store last_checked_at contains invalid control character") from exc
+            raise RuntimeError(
+                "alarm store last_checked_at contains invalid control character"
+            ) from exc
         if "invalid unicode" in str(exc):
-            raise RuntimeError("alarm store last_checked_at contains invalid unicode") from exc
+            raise RuntimeError(
+                "alarm store last_checked_at contains invalid unicode"
+            ) from exc
         raise RuntimeError("alarm store last_checked_at is invalid") from exc
     try:
         normalized_alarms = _normalize_alarm_list(raw.get("alarms", []), strict=True)
@@ -491,7 +558,9 @@ def _save_alarm_store_unlocked(store: dict[str, Any], store_path: Path) -> None:
         field_name="alarm store last_checked_at",
         max_chars=MAX_ALARM_TRIGGER_CHARS,
     )
-    last_checked_at = _normalize_stored_datetime(last_checked_at, field_name="alarm store last_checked_at")
+    last_checked_at = _normalize_stored_datetime(
+        last_checked_at, field_name="alarm store last_checked_at"
+    )
     payload = {
         "version": STORE_VERSION,
         "alarms": _normalize_alarm_list(store.get("alarms", []), strict=True),
@@ -553,7 +622,9 @@ def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
                 raise ValueError(f"unknown alarm day: {raw_day}")
             if day not in normalized_days:
                 normalized_days.append(day)
-    alarm_id = _sanitize_text_field(alarm.get("id"), field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS)
+    alarm_id = _sanitize_text_field(
+        alarm.get("id"), field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS
+    )
     if not alarm_id:
         alarm_id = f"alarm-{hour:02d}{minute:02d}"
     last_triggered_at = _sanitize_text_field(
@@ -571,11 +642,15 @@ def normalize_alarm(alarm: dict[str, Any]) -> dict[str, Any]:
         ).isoformat(timespec="minutes")
     return {
         "id": alarm_id,
-        "name": _sanitize_text_field(alarm.get("name"), field_name="alarm name", max_chars=MAX_ALARM_NAME_CHARS),
+        "name": _sanitize_text_field(
+            alarm.get("name"), field_name="alarm name", max_chars=MAX_ALARM_NAME_CHARS
+        ),
         "hour": hour,
         "minute": minute,
         "days": normalized_days,
-        "enabled": _coerce_alarm_bool(alarm.get("enabled", True), field_name="alarm enabled"),
+        "enabled": _coerce_alarm_bool(
+            alarm.get("enabled", True), field_name="alarm enabled"
+        ),
         "urgency": urgency,
         "last_triggered_at": last_triggered_at,
     }
@@ -591,7 +666,9 @@ def alarm_public_payload(alarm: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def list_alarm_payload(path: Path | None = None, now: datetime | None = None) -> dict[str, Any]:
+def list_alarm_payload(
+    path: Path | None = None, now: datetime | None = None
+) -> dict[str, Any]:
     with _locked_alarm_store(path) as store_path:
         store = load_alarm_store(store_path)
     alarms = [alarm_public_payload(alarm) for alarm in store["alarms"]]
@@ -633,7 +710,13 @@ def add_alarm(
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be a boolean")
     hour, minute = parse_alarm_time(alarm_time)
-    normalized_urgency = _sanitize_text_field(urgency, field_name="urgency", max_chars=MAX_ALARM_URGENCY_CHARS).strip().lower()
+    normalized_urgency = (
+        _sanitize_text_field(
+            urgency, field_name="urgency", max_chars=MAX_ALARM_URGENCY_CHARS
+        )
+        .strip()
+        .lower()
+    )
     if normalized_urgency not in URGENCIES:
         raise ValueError(f"urgency must be one of: {', '.join(sorted(URGENCIES))}")
     with _locked_alarm_store(path) as store_path:
@@ -656,7 +739,9 @@ def add_alarm(
             store["alarms"],
             key=lambda item: (
                 _coerce_alarm_component(item.get("hour", 0), field_name="alarm hour"),
-                _coerce_alarm_component(item.get("minute", 0), field_name="alarm minute"),
+                _coerce_alarm_component(
+                    item.get("minute", 0), field_name="alarm minute"
+                ),
                 str(item.get("id", "")),
             ),
         )
@@ -667,13 +752,19 @@ def add_alarm(
 def remove_alarm(alarm_id: str, path: Path | None = None) -> dict[str, Any]:
     if not isinstance(alarm_id, str) or isinstance(alarm_id, bool):
         raise ValueError("alarm id must be text")
-    normalized_alarm_id = _sanitize_text_field(alarm_id, field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS)
+    normalized_alarm_id = _sanitize_text_field(
+        alarm_id, field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS
+    )
     if not normalized_alarm_id:
         raise ValueError("alarm id is required")
     with _locked_alarm_store(path) as store_path:
         store = load_alarm_store(store_path)
         before = len(store["alarms"])
-        store["alarms"] = [alarm for alarm in store["alarms"] if str(alarm.get("id")) != normalized_alarm_id]
+        store["alarms"] = [
+            alarm
+            for alarm in store["alarms"]
+            if str(alarm.get("id")) != normalized_alarm_id
+        ]
         removed = len(store["alarms"]) != before
         if removed:
             _save_alarm_store_unlocked(store, store_path)
@@ -685,12 +776,16 @@ def remove_alarm(alarm_id: str, path: Path | None = None) -> dict[str, Any]:
     }
 
 
-def set_alarm_enabled(alarm_id: str, enabled: bool, path: Path | None = None) -> dict[str, Any]:
+def set_alarm_enabled(
+    alarm_id: str, enabled: bool, path: Path | None = None
+) -> dict[str, Any]:
     if not isinstance(alarm_id, str) or isinstance(alarm_id, bool):
         raise ValueError("alarm id must be text")
     if not isinstance(enabled, bool):
         raise ValueError("enabled must be a boolean")
-    normalized_alarm_id = _sanitize_text_field(alarm_id, field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS)
+    normalized_alarm_id = _sanitize_text_field(
+        alarm_id, field_name="alarm id", max_chars=MAX_ALARM_ID_CHARS
+    )
     if not normalized_alarm_id:
         raise ValueError("alarm id is required")
     with _locked_alarm_store(path) as store_path:
@@ -778,7 +873,9 @@ def _coerce_required_bool(value: object, *, field_name: str) -> bool:
     return value
 
 
-def due_occurrences(alarm: dict[str, Any], start: datetime, end: datetime) -> list[datetime]:
+def due_occurrences(
+    alarm: dict[str, Any], start: datetime, end: datetime
+) -> list[datetime]:
     start = _normalize_local_datetime(start, field_name="start")
     end = _normalize_local_datetime(end, field_name="end")
     occurrences: list[datetime] = []
@@ -890,7 +987,9 @@ def next_occurrence(alarm: dict[str, Any], now: datetime) -> datetime | None:
     return None
 
 
-def format_alarm_overview(alarms: list[dict[str, Any]], now: datetime | None = None) -> str:
+def format_alarm_overview(
+    alarms: list[dict[str, Any]], now: datetime | None = None
+) -> str:
     if not alarms:
         return "No alarms configured"
     active = [alarm for alarm in alarms if _is_alarm_enabled(alarm)]

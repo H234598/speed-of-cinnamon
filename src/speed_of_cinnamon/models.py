@@ -88,10 +88,14 @@ def _fsync_fd(fd: int) -> None:
             continue
 
 
-def _flock_retry(fd: int, operation: int, *, timeout_seconds: float | None = None) -> None:
+def _flock_retry(
+    fd: int, operation: int, *, timeout_seconds: float | None = None
+) -> None:
     if timeout_seconds is None:
         raise RuntimeError("model lock timeout is required")
-    if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)):
+    if isinstance(timeout_seconds, bool) or not isinstance(
+        timeout_seconds, (int, float)
+    ):
         raise RuntimeError("model lock timeout is invalid")
     try:
         timeout = float(timeout_seconds)
@@ -135,8 +139,14 @@ def _locked_model_operation(
     except RuntimeError as exc:
         raise ModelError(str(exc)) from exc
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-        raise ModelError("secure model operation lock is not supported on this platform")
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
+        raise ModelError(
+            "secure model operation lock is not supported on this platform"
+        )
 
     try:
         parent_fd = ensure_directory_without_following_symlinks(
@@ -151,7 +161,9 @@ def _locked_model_operation(
     try:
         try:
             os.fchmod(parent_fd, 0o700)
-            assert_fd_is_private_directory(parent_fd, field_name=f"{lock_label} lock directory")
+            assert_fd_is_private_directory(
+                parent_fd, field_name=f"{lock_label} lock directory"
+            )
             lock_fd = os.open(
                 lock_path.name,
                 os.O_RDWR | os.O_CREAT | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
@@ -203,16 +215,22 @@ def _locked_model_operation(
                 for additional_error in cleanup_errors:
                     _note_cleanup_failure(primary_error, additional_error)
             else:
-                raise ModelError(f"failed to release {lock_label} lock") from cleanup_errors[0]
+                raise ModelError(
+                    f"failed to release {lock_label} lock"
+                ) from cleanup_errors[0]
 
 
 class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    def redirect_request(self, req: object, fp: object, code: int, msg: str, headers: object, newurl: str) -> None:
+    def redirect_request(
+        self, req: object, fp: object, code: int, msg: str, headers: object, newurl: str
+    ) -> None:
         return None
 
 
 def _build_model_download_opener() -> urllib.request.OpenerDirector:
-    return urllib.request.build_opener(_NoRedirectHandler, urllib.request.ProxyHandler({}))
+    return urllib.request.build_opener(
+        _NoRedirectHandler, urllib.request.ProxyHandler({})
+    )
 
 
 def _safe_utf8_length(value: str, *, field_name: str) -> int:
@@ -239,9 +257,15 @@ def _contains_http_header_control_chars(value: str) -> bool:
         raise ModelError("value must be text")
     lowered = (value or "").lower()
     control_codepoints = tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
-    if any(sequence in lowered for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")):
+    if any(
+        sequence in lowered
+        for sequence in ("\\a", "\\b", "\\f", "\\n", "\\r", "\\t", "\\v")
+    ):
         return True
-    if any(f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered for codepoint in control_codepoints):
+    if any(
+        f"\\x{codepoint:02x}" in lowered or f"\\u00{codepoint:02x}" in lowered
+        for codepoint in control_codepoints
+    ):
         return True
     for char in lowered:
         codepoint = ord(char)
@@ -314,7 +338,10 @@ def _remove_model_checksum_cache_file(cache_path: Path) -> bool:
             field_name="model checksum cache directory",
         )
         file_stat = os.stat(cache_path.name, dir_fd=parent_fd, follow_symlinks=False)
-        if not stat_module.S_ISREG(file_stat.st_mode) or getattr(file_stat, "st_nlink", 1) != 1:
+        if (
+            not stat_module.S_ISREG(file_stat.st_mode)
+            or getattr(file_stat, "st_nlink", 1) != 1
+        ):
             return False
         for _ in range(100):
             cleanup_name = f"{cache_path.name}.{secrets.token_hex(8)}.cleanup"
@@ -328,7 +355,9 @@ def _remove_model_checksum_cache_file(cache_path: Path) -> bool:
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not _same_model_artifact_identity(claimed_stat, file_stat):
                     raise OSError("model checksum cache changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
@@ -405,7 +434,9 @@ def _read_model_checksum_cache() -> dict[str, dict[str, int | str]]:
     cache: dict[str, dict[str, int | str]] = {}
     for key, raw_entry in payload.items():
         try:
-            key_byte_length = _safe_utf8_length(key, field_name="model checksum cache path key")
+            key_byte_length = _safe_utf8_length(
+                key, field_name="model checksum cache path key"
+            )
         except ModelError:
             continue
         if (
@@ -487,7 +518,9 @@ def _locked_model_checksum_cache() -> Iterator[None]:
         yield
 
 
-def _write_model_checksum_cache(*, remove_keys: set[str] | frozenset[str] = frozenset()) -> None:
+def _write_model_checksum_cache(
+    *, remove_keys: set[str] | frozenset[str] = frozenset()
+) -> None:
     cache_path = _model_checksum_cache_path()
     try:
         with _locked_model_checksum_cache():
@@ -497,8 +530,13 @@ def _write_model_checksum_cache(*, remove_keys: set[str] | frozenset[str] = froz
                 merged_cache.pop(key, None)
             _model_checksum_cache.clear()
             _model_checksum_cache.update(merged_cache)
-            rendered = json.dumps(_model_checksum_cache, indent=2, sort_keys=True) + "\n"
-            if _safe_utf8_length(rendered, field_name="model checksum cache JSON") > MAX_MODEL_CHECKSUM_JSON_BYTES:
+            rendered = (
+                json.dumps(_model_checksum_cache, indent=2, sort_keys=True) + "\n"
+            )
+            if (
+                _safe_utf8_length(rendered, field_name="model checksum cache JSON")
+                > MAX_MODEL_CHECKSUM_JSON_BYTES
+            ):
                 _model_checksum_cache.clear()
                 _remove_model_checksum_cache_file(cache_path)
                 return
@@ -525,7 +563,8 @@ def _set_model_checksum_cache(path: Path, checksum: str, stat: os.stat_result) -
         or stat.st_mtime_ns < 0
         or not isinstance(key, str)
         or len(key) > MAX_MODEL_CHECKSUM_PATH_CHARS
-        or _safe_utf8_length(key, field_name="model checksum cache path") > MAX_MODEL_CHECKSUM_PATH_CHARS
+        or _safe_utf8_length(key, field_name="model checksum cache path")
+        > MAX_MODEL_CHECKSUM_PATH_CHARS
         or _contains_escaped_null(key)
         or _contains_http_header_control_chars(key)
     ):
@@ -552,7 +591,9 @@ def _open_model_hash_file(path: Path) -> int:
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     fd: int | None = None
     try:
-        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name="model file")
+        fd = open_file_without_following_symlinks(
+            path, os.O_RDONLY | nonblock_flag, field_name="model file"
+        )
         assert_fd_is_regular_private_file(fd, field_name="model file")
     except (OSError, RuntimeError, MemoryError, RecursionError) as exc:
         if fd is not None:
@@ -582,7 +623,9 @@ def _same_model_hash_snapshot(first: os.stat_result, second: os.stat_result) -> 
     )
 
 
-def _same_model_artifact_identity(first: os.stat_result, second: os.stat_result) -> bool:
+def _same_model_artifact_identity(
+    first: os.stat_result, second: os.stat_result
+) -> bool:
     return (
         first.st_dev,
         first.st_ino,
@@ -600,7 +643,9 @@ def _same_model_artifact_identity(first: os.stat_result, second: os.stat_result)
     )
 
 
-def _same_model_temporary_identity(first: os.stat_result, second: os.stat_result) -> bool:
+def _same_model_temporary_identity(
+    first: os.stat_result, second: os.stat_result
+) -> bool:
     return (
         stat_module.S_ISREG(first.st_mode)
         and stat_module.S_ISREG(second.st_mode)
@@ -611,7 +656,9 @@ def _same_model_temporary_identity(first: os.stat_result, second: os.stat_result
     )
 
 
-def _same_model_directory_identity(first: os.stat_result, second: os.stat_result) -> bool:
+def _same_model_directory_identity(
+    first: os.stat_result, second: os.stat_result
+) -> bool:
     return (
         stat_module.S_ISDIR(first.st_mode)
         and stat_module.S_ISDIR(second.st_mode)
@@ -622,7 +669,9 @@ def _same_model_directory_identity(first: os.stat_result, second: os.stat_result
     )
 
 
-def _same_model_directory_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
+def _same_model_directory_snapshot(
+    first: os.stat_result, second: os.stat_result
+) -> bool:
     return (
         _same_model_directory_identity(first, second)
         and first.st_size == second.st_size
@@ -727,10 +776,10 @@ def _parse_model_size_bytes(value: str) -> int:
     unit_map = {
         "kib": 1024,
         "kb": 1000,
-        "mib": 1024 ** 2,
-        "mb": 1000 ** 2,
-        "gib": 1024 ** 3,
-        "gb": 1000 ** 3,
+        "mib": 1024**2,
+        "mb": 1000**2,
+        "gib": 1024**3,
+        "gb": 1000**3,
     }
     for suffix, factor in unit_map.items():
         if stripped.endswith(suffix):
@@ -754,11 +803,18 @@ def _download_size_limit(model: ModelSpec) -> int:
     expected = _parse_model_size_bytes(model.size)
     if expected <= 0:
         raise ModelError(f"invalid model size for {model.name}: {model.size!r}")
-    return min(MAX_MODEL_DOWNLOAD_BYTES, expected + max(MODEL_SIZE_SLACK_BYTES, int(expected * 0.2)))
+    return min(
+        MAX_MODEL_DOWNLOAD_BYTES,
+        expected + max(MODEL_SIZE_SLACK_BYTES, int(expected * 0.2)),
+    )
 
 
 def _model_download_timeout_seconds(size_limit: int) -> int:
-    if not isinstance(size_limit, int) or isinstance(size_limit, bool) or size_limit <= 0:
+    if (
+        not isinstance(size_limit, int)
+        or isinstance(size_limit, bool)
+        or size_limit <= 0
+    ):
         raise ModelError("model download size limit must be positive")
     estimated = math.ceil(size_limit / MODEL_DOWNLOAD_MIN_BYTES_PER_SECOND)
     return min(MODEL_DOWNLOAD_MAX_SECONDS, max(MODEL_DOWNLOAD_MIN_SECONDS, estimated))
@@ -831,9 +887,16 @@ def _assert_download_url(
     if not normalized:
         raise ModelError(f"{field_name} is required")
     if len(normalized) > MAX_MODEL_DOWNLOAD_URL_CHARS:
-        raise ModelError(f"{field_name} is too large (max {MAX_MODEL_DOWNLOAD_URL_CHARS} characters)")
-    if _safe_utf8_length(normalized, field_name=f"{field_name} URL") > MAX_MODEL_DOWNLOAD_URL_CHARS:
-        raise ModelError(f"{field_name} is too large (max {MAX_MODEL_DOWNLOAD_URL_CHARS} bytes)")
+        raise ModelError(
+            f"{field_name} is too large (max {MAX_MODEL_DOWNLOAD_URL_CHARS} characters)"
+        )
+    if (
+        _safe_utf8_length(normalized, field_name=f"{field_name} URL")
+        > MAX_MODEL_DOWNLOAD_URL_CHARS
+    ):
+        raise ModelError(
+            f"{field_name} is too large (max {MAX_MODEL_DOWNLOAD_URL_CHARS} bytes)"
+        )
     try:
         parsed = urllib.parse.urlparse(normalized)
     except ValueError as exc:
@@ -845,12 +908,18 @@ def _assert_download_url(
     if not parsed.hostname:
         raise ModelError(f"{field_name} is missing hostname")
     if parsed.scheme == "http" and not is_loopback_hostname(parsed.hostname):
-        raise ModelError(f"{field_name} must use https:// unless host is local loopback")
+        raise ModelError(
+            f"{field_name} must use https:// unless host is local loopback"
+        )
     try:
         parsed.port
     except ValueError as exc:
         raise ModelError(f"{field_name} has invalid port") from exc
-    if "@" in parsed.netloc or parsed.username is not None or parsed.password is not None:
+    if (
+        "@" in parsed.netloc
+        or parsed.username is not None
+        or parsed.password is not None
+    ):
         raise ModelError(f"{field_name} must not contain userinfo")
     if parsed.fragment:
         raise ModelError(f"{field_name} must not contain fragment")
@@ -880,9 +949,15 @@ def _url_matches_allowed_base(url: str, allowed_url: str) -> bool:
     except ValueError:
         return False
     if parsed_port is None:
-        parsed_port = 80 if parsed.scheme == "http" else 443 if parsed.scheme == "https" else None
+        parsed_port = (
+            80 if parsed.scheme == "http" else 443 if parsed.scheme == "https" else None
+        )
     if allowed_port is None:
-        allowed_port = 80 if allowed.scheme == "http" else 443 if allowed.scheme == "https" else None
+        allowed_port = (
+            80
+            if allowed.scheme == "http"
+            else 443 if allowed.scheme == "https" else None
+        )
     if parsed_port != allowed_port:
         return False
     return parsed.path == allowed.path
@@ -896,8 +971,12 @@ def _url_matches_exact_allowed_url(url: str, allowed_url: str) -> bool:
         allowed = urllib.parse.urlsplit(allowed_url)
     except ValueError:
         return False
-    parsed_query = tuple(sorted(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)))
-    allowed_query = tuple(sorted(urllib.parse.parse_qsl(allowed.query, keep_blank_values=True)))
+    parsed_query = tuple(
+        sorted(urllib.parse.parse_qsl(parsed.query, keep_blank_values=True))
+    )
+    allowed_query = tuple(
+        sorted(urllib.parse.parse_qsl(allowed.query, keep_blank_values=True))
+    )
     return parsed_query == allowed_query and parsed.fragment == allowed.fragment
 
 
@@ -929,7 +1008,9 @@ def _huggingface_resolve_cache_redirect_matches(url: str, allowed_url: str) -> b
     if (parsed.hostname or "").lower() != HUGGING_FACE_DOWNLOAD_HOST:
         return False
     repo, filename = allowed_parts
-    redirect_parts = [part for part in urllib.parse.unquote(parsed.path).split("/") if part]
+    redirect_parts = [
+        part for part in urllib.parse.unquote(parsed.path).split("/") if part
+    ]
     repo_parts = [part for part in repo.split("/") if part]
     filename_parts = [part for part in filename.split("/") if part]
     prefix_length = 3 + len(repo_parts)
@@ -952,7 +1033,11 @@ def _huggingface_storage_redirect_matches(url: str, allowed_url: str) -> bool:
         return False
     if (parsed.hostname or "").lower() not in HUGGING_FACE_STORAGE_REDIRECT_HOSTS:
         return False
-    if "\\" in parsed.path or "%2f" in parsed.path.lower() or "%5c" in parsed.path.lower():
+    if (
+        "\\" in parsed.path
+        or "%2f" in parsed.path.lower()
+        or "%5c" in parsed.path.lower()
+    ):
         return False
     _repo, filename = allowed_parts
     leaf = filename.rsplit("/", 1)[-1]
@@ -962,10 +1047,13 @@ def _huggingface_storage_redirect_matches(url: str, allowed_url: str) -> bool:
     redirect_path = redirect_path.rstrip("/")
     path_leaf = redirect_path.rsplit("/", 1)[-1]
     if path_leaf != leaf and not (
-        len(path_leaf) == 64 and all(char in "0123456789abcdefABCDEF" for char in path_leaf)
+        len(path_leaf) == 64
+        and all(char in "0123456789abcdefABCDEF" for char in path_leaf)
     ):
         return False
-    disposition_values = urllib.parse.parse_qs(parsed.query).get("response-content-disposition", [])
+    disposition_values = urllib.parse.parse_qs(parsed.query).get(
+        "response-content-disposition", []
+    )
     if len(disposition_values) != 1:
         return False
     disposition_value = urllib.parse.unquote(disposition_values[0]).strip()
@@ -1018,7 +1106,9 @@ def _download_redirect_matches_allowed_url(url: str, allowed_url: str) -> bool:
     )
 
 
-def _model_download_redirect_target(exc: urllib.error.HTTPError, base_url: str) -> str | None:
+def _model_download_redirect_target(
+    exc: urllib.error.HTTPError, base_url: str
+) -> str | None:
     if exc.code not in MODEL_DOWNLOAD_REDIRECT_CODES:
         return None
     headers = getattr(exc, "headers", None)
@@ -1077,16 +1167,21 @@ def _open_model_download_response(
             try:
                 redirect_url = _model_download_redirect_target(exc, current_url)
                 if redirect_url is None:
-                    raise ModelError(f"model download failed with HTTP status {exc.code}") from exc
+                    raise ModelError(
+                        f"model download failed with HTTP status {exc.code}"
+                    ) from exc
                 redirect_url = _assert_download_url(
                     redirect_url,
                     field_name="model download redirect URL",
                     allowed_hosts=redirect_allowed_hosts,
                 )
                 if allowed_urls is not None and not any(
-                    _download_redirect_matches_allowed_url(redirect_url, allowed_url) for allowed_url in allowed_urls
+                    _download_redirect_matches_allowed_url(redirect_url, allowed_url)
+                    for allowed_url in allowed_urls
                 ):
-                    raise ModelError("model download redirect URL is not allowed") from exc
+                    raise ModelError(
+                        "model download redirect URL is not allowed"
+                    ) from exc
                 current_url = redirect_url
             except BaseException as error:
                 primary_error = error
@@ -1224,7 +1319,13 @@ CATALOG: tuple[ModelSpec, ...] = (
         backend="faster-whisper",
         model_format="ctranslate2",
         repo_id="pbechhaus/whisper-tiny-german-ct2",
-        files=("config.json", "model.bin", "preprocessor_config.json", "tokenizer.json", "vocabulary.json"),
+        files=(
+            "config.json",
+            "model.bin",
+            "preprocessor_config.json",
+            "tokenizer.json",
+            "vocabulary.json",
+        ),
         file_sha1s=(
             ("config.json", "a3132c082c2d1aa4bfa490b170bec236999c0b31"),
             ("model.bin", "42887e500d03d214b712166a913a41b76ebe4702"),
@@ -1243,7 +1344,13 @@ CATALOG: tuple[ModelSpec, ...] = (
         backend="faster-whisper",
         model_format="ctranslate2",
         repo_id="mkenfenheuer/whisper-small-cv11-german-ct2",
-        files=("config.json", "model.bin", "tokenizer.json", "tokenizer_config.json", "vocabulary.json"),
+        files=(
+            "config.json",
+            "model.bin",
+            "tokenizer.json",
+            "tokenizer_config.json",
+            "vocabulary.json",
+        ),
         file_sha1s=(
             ("config.json", "92d18a65a30b4767f807c19c35772f15fb54c4e2"),
             ("model.bin", "7effbf69c517e3efee45aaffde43609a589a0c7f"),
@@ -1300,7 +1407,9 @@ _catalog_lower_name_index: dict[str, ModelSpec] = {}
 _catalog_filename_index: dict[str, ModelSpec] = {}
 
 
-def _catalog_indexes() -> tuple[dict[str, ModelSpec], dict[str, ModelSpec], dict[str, ModelSpec]]:
+def _catalog_indexes() -> (
+    tuple[dict[str, ModelSpec], dict[str, ModelSpec], dict[str, ModelSpec]]
+):
     global _catalog_index_source, _catalog_name_index, _catalog_lower_name_index, _catalog_filename_index
     if _catalog_index_source is not CATALOG:
         _catalog_name_index = {model.name: model for model in CATALOG}
@@ -1342,12 +1451,20 @@ def _validated_catalog_path_fragment(value: str, *, field_name: str) -> Path:
     if not normalized:
         raise ModelError(f"{field_name} is required")
     path = Path(normalized)
-    if path == Path(".") or path.is_absolute() or any(part in {".", ".."} for part in path.parts):
-        raise ModelError(f"{field_name} must be a relative path without parent traversal")
+    if (
+        path == Path(".")
+        or path.is_absolute()
+        or any(part in {".", ".."} for part in path.parts)
+    ):
+        raise ModelError(
+            f"{field_name} must be a relative path without parent traversal"
+        )
     return path
 
 
-def _validated_huggingface_repo_id(value: str, *, field_name: str = "model repo_id") -> str:
+def _validated_huggingface_repo_id(
+    value: str, *, field_name: str = "model repo_id"
+) -> str:
     if isinstance(value, bool) or not isinstance(value, str):
         raise ModelError(f"{field_name} must be text")
     raw = value or ""
@@ -1357,13 +1474,17 @@ def _validated_huggingface_repo_id(value: str, *, field_name: str = "model repo_
         raise ModelError(f"{field_name} contains invalid control character")
     normalized = raw.strip()
     if normalized != raw:
-        raise ModelError(f"{field_name} must not contain leading or trailing whitespace")
+        raise ModelError(
+            f"{field_name} must not contain leading or trailing whitespace"
+        )
     if not normalized:
         raise ModelError("missing repo_id")
     parts = normalized.split("/")
     if len(parts) != 2 or not all(parts):
         raise ModelError(f"{field_name} must be in namespace/name form")
-    allowed_chars = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-")
+    allowed_chars = frozenset(
+        "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    )
     for part in parts:
         if part in {".", ".."} or any(ch not in allowed_chars for ch in part):
             raise ModelError(f"{field_name} contains invalid character")
@@ -1371,7 +1492,9 @@ def _validated_huggingface_repo_id(value: str, *, field_name: str = "model repo_
 
 
 def model_path(model: ModelSpec) -> Path:
-    filename = _validated_catalog_path_fragment(model.filename, field_name="model filename")
+    filename = _validated_catalog_path_fragment(
+        model.filename, field_name="model filename"
+    )
     if model.model_format == "ctranslate2":
         path = ctranslate2_models_dir() / filename
     else:
@@ -1384,10 +1507,16 @@ def model_path(model: ModelSpec) -> Path:
 
 
 def _model_root(model: ModelSpec) -> Path:
-    return ctranslate2_models_dir() if model.model_format == "ctranslate2" else models_dir()
+    return (
+        ctranslate2_models_dir()
+        if model.model_format == "ctranslate2"
+        else models_dir()
+    )
 
 
-def _assert_path_within_model_root(path: Path, root: Path, *, field_name: str = "model path") -> None:
+def _assert_path_within_model_root(
+    path: Path, root: Path, *, field_name: str = "model path"
+) -> None:
     if not isinstance(path, Path):
         raise ModelError(f"{field_name} must be a path")
     if not isinstance(root, Path):
@@ -1396,7 +1525,9 @@ def _assert_path_within_model_root(path: Path, root: Path, *, field_name: str = 
         raise ModelError(f"{field_name} is outside the model directory: {path}")
 
 
-def _assert_model_path_for_atomic_replace(path: Path, root: Path, *, field_name: str = "model path") -> None:
+def _assert_model_path_for_atomic_replace(
+    path: Path, root: Path, *, field_name: str = "model path"
+) -> None:
     try:
         assert_no_symlink_ancestors(path, field_name=field_name)
         path_stat = path.stat(follow_symlinks=False)
@@ -1414,12 +1545,16 @@ def _assert_model_path_for_atomic_replace(path: Path, root: Path, *, field_name:
     except FileNotFoundError:
         parent_stat = None
     except OSError as exc:
-        raise ModelError(f"{field_name} parent could not be inspected safely: {path.parent}") from exc
+        raise ModelError(
+            f"{field_name} parent could not be inspected safely: {path.parent}"
+        ) from exc
     if parent_stat is None or not stat_module.S_ISDIR(parent_stat.st_mode):
         raise ModelError(f"{field_name} parent is not a directory: {path.parent}")
 
 
-def _assert_model_parent_for_atomic_replace(path: Path, root: Path, *, field_name: str = "model path") -> None:
+def _assert_model_parent_for_atomic_replace(
+    path: Path, root: Path, *, field_name: str = "model path"
+) -> None:
     try:
         assert_no_symlink_ancestors(path, field_name=field_name)
     except RuntimeError as exc:
@@ -1430,12 +1565,16 @@ def _assert_model_parent_for_atomic_replace(path: Path, root: Path, *, field_nam
     except FileNotFoundError:
         parent_stat = None
     except OSError as exc:
-        raise ModelError(f"{field_name} parent could not be inspected safely: {path.parent}") from exc
+        raise ModelError(
+            f"{field_name} parent could not be inspected safely: {path.parent}"
+        ) from exc
     if parent_stat is not None and not stat_module.S_ISDIR(parent_stat.st_mode):
         raise ModelError(f"{field_name} parent is not a directory: {path.parent}")
 
 
-def _ensure_model_parent_directory(path: Path, root: Path, *, field_name: str = "model path") -> None:
+def _ensure_model_parent_directory(
+    path: Path, root: Path, *, field_name: str = "model path"
+) -> None:
     parent_fd = _open_model_parent_directory(path, root, field_name=field_name)
     try:
         os.close(parent_fd)
@@ -1443,10 +1582,14 @@ def _ensure_model_parent_directory(path: Path, root: Path, *, field_name: str = 
         pass
 
 
-def _open_model_parent_directory(path: Path, root: Path, *, field_name: str = "model path") -> int:
+def _open_model_parent_directory(
+    path: Path, root: Path, *, field_name: str = "model path"
+) -> int:
     _assert_model_parent_for_atomic_replace(path, root, field_name=field_name)
     try:
-        parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} parent")
+        parent_fd = ensure_directory_without_following_symlinks(
+            path.parent, field_name=f"{field_name} parent"
+        )
     except (OSError, RuntimeError) as exc:
         raise ModelError(f"{field_name} parent is not safe: {path.parent}") from exc
     try:
@@ -1470,22 +1613,39 @@ def _replace_model_sibling_path(
     expected_source_stat: os.stat_result | None = None,
 ) -> None:
     if source.parent != target.parent:
-        raise ModelError(f"{field_name} source and target must share a parent directory")
+        raise ModelError(
+            f"{field_name} source and target must share a parent directory"
+        )
     parent_fd = _open_model_parent_directory(target, root, field_name=field_name)
     try:
-        _assert_model_path_for_atomic_replace(source, root, field_name=f"{field_name} source")
+        _assert_model_path_for_atomic_replace(
+            source, root, field_name=f"{field_name} source"
+        )
         _assert_model_path_for_atomic_replace(target, root, field_name=field_name)
         source_identity = _same_model_path_identity
         if not source.name.endswith(".backup"):
             source_identity = _same_model_source_identity
         source_path_stat = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
-        if not (stat_module.S_ISREG(source_path_stat.st_mode) or stat_module.S_ISDIR(source_path_stat.st_mode)):
-            raise ModelError(f"{field_name} source must be a regular file or directory: {source}")
-        if expected_source_stat is not None and not source_identity(source_path_stat, expected_source_stat):
+        if not (
+            stat_module.S_ISREG(source_path_stat.st_mode)
+            or stat_module.S_ISDIR(source_path_stat.st_mode)
+        ):
+            raise ModelError(
+                f"{field_name} source must be a regular file or directory: {source}"
+            )
+        if expected_source_stat is not None and not source_identity(
+            source_path_stat, expected_source_stat
+        ):
             raise ModelError(f"{field_name} source changed before activation: {source}")
         nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-        if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-            raise ModelError(f"secure {field_name} source open is not supported on this platform")
+        if (
+            isinstance(nofollow_flag, bool)
+            or not isinstance(nofollow_flag, int)
+            or nofollow_flag <= 0
+        ):
+            raise ModelError(
+                f"secure {field_name} source open is not supported on this platform"
+            )
         source_fd = os.open(
             source.name,
             os.O_RDONLY | nofollow_flag | getattr(os, "O_CLOEXEC", 0),
@@ -1494,10 +1654,17 @@ def _replace_model_sibling_path(
         source_primary_error: BaseException | None = None
         try:
             source_stat = os.fstat(source_fd)
-            if not (stat_module.S_ISREG(source_stat.st_mode) or stat_module.S_ISDIR(source_stat.st_mode)):
-                raise ModelError(f"{field_name} source must be a regular file or directory: {source}")
+            if not (
+                stat_module.S_ISREG(source_stat.st_mode)
+                or stat_module.S_ISDIR(source_stat.st_mode)
+            ):
+                raise ModelError(
+                    f"{field_name} source must be a regular file or directory: {source}"
+                )
             if not source_identity(source_stat, source_path_stat):
-                raise ModelError(f"{field_name} source changed before activation: {source}")
+                raise ModelError(
+                    f"{field_name} source changed before activation: {source}"
+                )
             _fsync_fd(source_fd)
         except BaseException as exc:
             source_primary_error = exc
@@ -1510,7 +1677,9 @@ def _replace_model_sibling_path(
                     _note_cleanup_failure(source_primary_error, cleanup_error)
                 else:
                     pass
-        current_source_stat = os.stat(source.name, dir_fd=parent_fd, follow_symlinks=False)
+        current_source_stat = os.stat(
+            source.name, dir_fd=parent_fd, follow_symlinks=False
+        )
         if not source_identity(current_source_stat, source_stat):
             raise ModelError(f"{field_name} source changed before activation: {source}")
         _rename_without_replacing(
@@ -1544,7 +1713,9 @@ def _unlink_model_file_leaf(
     if not path.parent.is_dir():
         raise ModelError(f"{field_name} parent is not a directory: {path.parent}")
     try:
-        parent_fd = open_directory_without_following_symlinks(path.parent, field_name=f"{field_name} parent")
+        parent_fd = open_directory_without_following_symlinks(
+            path.parent, field_name=f"{field_name} parent"
+        )
     except OSError as exc:
         raise ModelError(f"{field_name} parent is not safe: {path.parent}") from exc
     try:
@@ -1557,7 +1728,9 @@ def _unlink_model_file_leaf(
             raise ModelError(f"{field_name} must not be a symlink: {path}")
         if not stat_module.S_ISREG(file_stat.st_mode):
             raise ModelError(f"{field_name} must be a regular file: {path}")
-        if expected_stat is not None and not _same_model_artifact_identity(file_stat, expected_stat):
+        if expected_stat is not None and not _same_model_artifact_identity(
+            file_stat, expected_stat
+        ):
             raise ModelError(f"{field_name} changed before cleanup: {path}")
         for _ in range(100):
             cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
@@ -1571,7 +1744,9 @@ def _unlink_model_file_leaf(
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not _same_model_artifact_identity(claimed_stat, file_stat):
                     raise ModelError(f"{field_name} changed before cleanup: {path}")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
@@ -1618,7 +1793,9 @@ def _unlink_model_file_if_same(
             current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
             return False
-        if not stat_module.S_ISREG(current_stat.st_mode) or not _same_model_artifact_identity(current_stat, expected_stat):
+        if not stat_module.S_ISREG(
+            current_stat.st_mode
+        ) or not _same_model_artifact_identity(current_stat, expected_stat):
             raise ModelError(f"{field_name} changed before cleanup: {path}")
         for _ in range(100):
             cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
@@ -1632,7 +1809,9 @@ def _unlink_model_file_if_same(
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not _same_model_artifact_identity(claimed_stat, current_stat):
                     raise ModelError(f"{field_name} changed before cleanup: {path}")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
@@ -1674,7 +1853,9 @@ def _remove_model_directory_leaf(
 ) -> bool:
     _assert_path_within_model_root(path, root, field_name=field_name)
     if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
-        raise ModelError("secure recursive model directory removal is not supported on this platform")
+        raise ModelError(
+            "secure recursive model directory removal is not supported on this platform"
+        )
     try:
         assert_no_symlink_ancestors(path.parent, field_name=f"{field_name} parent")
     except RuntimeError as exc:
@@ -1684,7 +1865,9 @@ def _remove_model_directory_leaf(
     if not path.parent.is_dir():
         raise ModelError(f"{field_name} parent is not a directory: {path.parent}")
     try:
-        parent_fd = open_directory_without_following_symlinks(path.parent, field_name=f"{field_name} parent")
+        parent_fd = open_directory_without_following_symlinks(
+            path.parent, field_name=f"{field_name} parent"
+        )
     except OSError as exc:
         raise ModelError(f"{field_name} parent is not safe: {path.parent}") from exc
     try:
@@ -1717,7 +1900,9 @@ def _remove_model_directory_leaf(
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not _same_model_directory_snapshot(claimed_stat, file_stat):
                     raise ModelError(f"{field_name} changed before cleanup: {path}")
                 shutil.rmtree(cleanup_name, dir_fd=parent_fd)
@@ -1759,7 +1944,9 @@ def _remove_model_directory_if_same(
     field_name: str,
 ) -> bool:
     if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
-        raise ModelError("secure recursive model directory removal is not supported on this platform")
+        raise ModelError(
+            "secure recursive model directory removal is not supported on this platform"
+        )
     _assert_path_within_model_root(path, root, field_name=field_name)
     parent_fd = _open_model_parent_directory(path, root, field_name=field_name)
     primary_error: BaseException | None = None
@@ -1768,7 +1955,9 @@ def _remove_model_directory_if_same(
             current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
         except FileNotFoundError:
             return False
-        if not stat_module.S_ISDIR(current_stat.st_mode) or not _same_model_directory_snapshot(current_stat, expected_stat):
+        if not stat_module.S_ISDIR(
+            current_stat.st_mode
+        ) or not _same_model_directory_snapshot(current_stat, expected_stat):
             raise ModelError(f"{field_name} changed before cleanup: {path}")
         for _ in range(100):
             cleanup_name = f"{path.name}.{secrets.token_hex(8)}.cleanup"
@@ -1782,7 +1971,9 @@ def _remove_model_directory_if_same(
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not _same_model_directory_snapshot(claimed_stat, current_stat):
                     raise ModelError(f"{field_name} changed before cleanup: {path}")
                 shutil.rmtree(cleanup_name, dir_fd=parent_fd)
@@ -1815,29 +2006,45 @@ def _remove_model_directory_if_same(
 
 
 def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
-    filename = _validated_catalog_path_fragment(model.filename, field_name="model filename")
+    filename = _validated_catalog_path_fragment(
+        model.filename, field_name="model filename"
+    )
     if model.files:
         repo_id = _validated_huggingface_repo_id(model.repo_id)
         file_repos: dict[str, str] = {}
         for raw_filename, raw_repo_id in model.file_repos:
-            normalized_filename = str(_validated_catalog_path_fragment(raw_filename, field_name="model file repo path"))
+            normalized_filename = str(
+                _validated_catalog_path_fragment(
+                    raw_filename, field_name="model file repo path"
+                )
+            )
             if normalized_filename in file_repos:
-                raise ModelError(f"model catalog entry {model.name} has duplicate file repo")
-            if normalized_filename not in {str(Path(file_name)) for file_name in model.files}:
-                raise ModelError(f"model catalog entry {model.name} has a repo for an unknown file")
+                raise ModelError(
+                    f"model catalog entry {model.name} has duplicate file repo"
+                )
+            if normalized_filename not in {
+                str(Path(file_name)) for file_name in model.files
+            }:
+                raise ModelError(
+                    f"model catalog entry {model.name} has a repo for an unknown file"
+                )
             file_repos[normalized_filename] = _validated_huggingface_repo_id(
                 raw_repo_id,
                 field_name="model file repo_id",
             )
         urls: list[tuple[str, str]] = []
         for raw_filename in model.files:
-            normalized_filename = _validated_catalog_path_fragment(raw_filename, field_name="model file path")
+            normalized_filename = _validated_catalog_path_fragment(
+                raw_filename, field_name="model file path"
+            )
             url_filename = urllib.parse.quote(normalized_filename.as_posix(), safe="/")
             source_repo_id = file_repos.get(str(normalized_filename), repo_id)
             urls.append(
                 (
                     str(normalized_filename),
-                    HUGGING_FACE_RESOLVE_URL.format(repo=source_repo_id, filename=url_filename),
+                    HUGGING_FACE_RESOLVE_URL.format(
+                        repo=source_repo_id, filename=url_filename
+                    ),
                 )
             )
         return urls
@@ -1847,7 +2054,9 @@ def model_download_urls(model: ModelSpec) -> list[tuple[str, str]]:
 def is_english_language(language: str) -> bool:
     if not isinstance(language, str):
         return False
-    if _contains_escaped_null(language) or _contains_http_header_control_chars(language):
+    if _contains_escaped_null(language) or _contains_http_header_control_chars(
+        language
+    ):
         return False
     normalized = (language or "").strip().lower().replace("_", "-")
     return normalized in ENGLISH_LANGUAGE_CODES or normalized.startswith("en-")
@@ -1867,11 +2076,17 @@ def _language_matches(language: str, allowed: str) -> bool:
         return True
     if allowed_normalized == "en":
         return normalized in ENGLISH_LANGUAGE_CODES or normalized.startswith("en-")
-    return normalized == allowed_normalized or normalized.startswith(f"{allowed_normalized}-")
+    return normalized == allowed_normalized or normalized.startswith(
+        f"{allowed_normalized}-"
+    )
 
 
 def model_name_is_english_only(name: str) -> bool:
-    if not isinstance(name, str) or _contains_escaped_null(name) or _contains_http_header_control_chars(name):
+    if (
+        not isinstance(name, str)
+        or _contains_escaped_null(name)
+        or _contains_http_header_control_chars(name)
+    ):
         return False
     return (name or "").strip().lower().endswith(".en")
 
@@ -1904,7 +2119,11 @@ def model_path_is_verified(path: str | Path) -> bool | None:
     try:
         normalized = Path(os.path.abspath(os.fspath(Path(path).expanduser())))
         model = _catalog_model_for_path(normalized)
-        expected = Path(os.path.abspath(os.fspath(model_path(model)))) if model is not None else None
+        expected = (
+            Path(os.path.abspath(os.fspath(model_path(model))))
+            if model is not None
+            else None
+        )
         if model is None or expected != normalized:
             return None
         return _model_is_verified(model, normalized)
@@ -1924,7 +2143,9 @@ def model_supports_language(path: str | Path, language: str) -> bool:
         return False
     if _contains_http_header_control_chars(str(path)):
         return False
-    if _contains_escaped_null(language) or _contains_http_header_control_chars(language):
+    if _contains_escaped_null(language) or _contains_http_header_control_chars(
+        language
+    ):
         return False
     model = _catalog_model_for_path(path)
     if model is not None and model.languages:
@@ -1960,7 +2181,11 @@ def model_status(model: ModelSpec, verify: bool = False) -> dict[str, object]:
         "path": str(path),
         "downloadable": _model_is_downloadable(model),
         "downloaded": downloaded,
-        "verified": _model_is_verified(model, path, checksum) if verify and not verification_failed else False,
+        "verified": (
+            _model_is_verified(model, path, checksum)
+            if verify and not verification_failed
+            else False
+        ),
         "checksum": checksum,
     }
 
@@ -1982,7 +2207,11 @@ def model_attestation_snapshot() -> list[dict[str, object]]:
             raise ModelError(f"model integrity is not verified: {model.name}")
         if model.files:
             file_names = tuple(
-                str(_validated_catalog_path_fragment(filename, field_name="model file path"))
+                str(
+                    _validated_catalog_path_fragment(
+                        filename, field_name="model file path"
+                    )
+                )
                 for filename in model.files
             )
             file_paths = tuple(path / filename for filename in file_names)
@@ -1990,7 +2219,9 @@ def model_attestation_snapshot() -> list[dict[str, object]]:
             file_names = (path.name,)
             file_paths = (path,)
         files: list[dict[str, str]] = []
-        for filename, file_path in sorted(zip(file_names, file_paths), key=lambda item: item[0]):
+        for filename, file_path in sorted(
+            zip(file_names, file_paths), key=lambda item: item[0]
+        ):
             checksum = _cached_verified_sha1(file_path)
             if not _is_valid_checksum(checksum):
                 raise ModelError(f"model checksum is invalid: {model.name}")
@@ -2023,17 +2254,31 @@ def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
         try:
             entry = os.lstat(path)
         except OSError as exc:
-            raise ModelError(f"source attestation entry is unreadable: {relative_path}") from exc
+            raise ModelError(
+                f"source attestation entry is unreadable: {relative_path}"
+            ) from exc
         if stat_module.S_ISLNK(entry.st_mode) or not stat_module.S_ISREG(entry.st_mode):
-            raise ModelError(f"source attestation entry is not a regular file: {relative_path}")
+            raise ModelError(
+                f"source attestation entry is not a regular file: {relative_path}"
+            )
         if path.suffix == ".pyc":
             return
         if len(paths) >= MAX_SOURCE_ATTESTATION_FILES:
-            raise ModelError(f"source attestation exceeds {MAX_SOURCE_ATTESTATION_FILES} files")
-        if not isinstance(entry.st_size, int) or isinstance(entry.st_size, bool) or entry.st_size < 0:
-            raise ModelError(f"source attestation file size is invalid: {relative_path}")
+            raise ModelError(
+                f"source attestation exceeds {MAX_SOURCE_ATTESTATION_FILES} files"
+            )
+        if (
+            not isinstance(entry.st_size, int)
+            or isinstance(entry.st_size, bool)
+            or entry.st_size < 0
+        ):
+            raise ModelError(
+                f"source attestation file size is invalid: {relative_path}"
+            )
         if path_bytes > MAX_SOURCE_ATTESTATION_BYTES - entry.st_size:
-            raise ModelError(f"source attestation exceeds {MAX_SOURCE_ATTESTATION_BYTES} bytes")
+            raise ModelError(
+                f"source attestation exceeds {MAX_SOURCE_ATTESTATION_BYTES} bytes"
+            )
         paths.append((relative_path, path))
         path_bytes += entry.st_size
 
@@ -2043,14 +2288,18 @@ def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
         try:
             entry = os.lstat(path)
         except OSError as exc:
-            raise ModelError(f"source attestation root is unavailable: {relative_root}") from exc
+            raise ModelError(
+                f"source attestation root is unavailable: {relative_root}"
+            ) from exc
         if stat_module.S_ISLNK(entry.st_mode):
             raise ModelError(f"source attestation root is symlinked: {relative_root}")
         if stat_module.S_ISREG(entry.st_mode):
             add_file(relative_root, path)
             continue
         if not stat_module.S_ISDIR(entry.st_mode):
-            raise ModelError(f"source attestation root is not a directory or file: {relative_root}")
+            raise ModelError(
+                f"source attestation root is not a directory or file: {relative_root}"
+            )
         pending_directories = [path]
         while pending_directories:
             current = pending_directories.pop()
@@ -2059,7 +2308,10 @@ def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
                 with os.scandir(current) as directory_entries:
                     for directory_entry in directory_entries:
                         scanned_directory_entries += 1
-                        if scanned_directory_entries > MAX_SOURCE_ATTESTATION_DIRECTORY_ENTRIES:
+                        if (
+                            scanned_directory_entries
+                            > MAX_SOURCE_ATTESTATION_DIRECTORY_ENTRIES
+                        ):
                             raise ModelError(
                                 "source attestation exceeds "
                                 f"{MAX_SOURCE_ATTESTATION_DIRECTORY_ENTRIES} directory entries"
@@ -2068,7 +2320,9 @@ def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
             except ModelError:
                 raise
             except OSError as exc:
-                raise ModelError(f"source attestation directory is unreadable: {current}") from exc
+                raise ModelError(
+                    f"source attestation directory is unreadable: {current}"
+                ) from exc
             for child in sorted(children, key=lambda item: item.name, reverse=True):
                 child_entry = os.lstat(child)
                 if stat_module.S_ISDIR(child_entry.st_mode):
@@ -2080,7 +2334,11 @@ def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
                 add_file(relative_path, child)
 
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
         raise ModelError("source attestation requires secure no-follow support")
     snapshot: list[dict[str, str]] = []
     hashed_bytes = 0
@@ -2089,22 +2347,30 @@ def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
         try:
             fd = os.open(path, flags)
         except OSError as exc:
-            raise ModelError(f"source attestation file cannot be opened: {relative_path}") from exc
+            raise ModelError(
+                f"source attestation file cannot be opened: {relative_path}"
+            ) from exc
         primary_error: BaseException | None = None
         try:
             before = os.fstat(fd)
             if not stat_module.S_ISREG(before.st_mode):
-                raise ModelError(f"source attestation file changed type: {relative_path}")
+                raise ModelError(
+                    f"source attestation file changed type: {relative_path}"
+                )
             digest = hashlib.sha256()
             with os.fdopen(fd, "rb", closefd=False) as handle:
                 for chunk in iter(lambda: handle.read(1024 * 1024), b""):
                     hashed_bytes += len(chunk)
                     if hashed_bytes > MAX_SOURCE_ATTESTATION_BYTES:
-                        raise ModelError(f"source attestation exceeds {MAX_SOURCE_ATTESTATION_BYTES} bytes while reading")
+                        raise ModelError(
+                            f"source attestation exceeds {MAX_SOURCE_ATTESTATION_BYTES} bytes while reading"
+                        )
                     digest.update(chunk)
             after = os.fstat(fd)
         except OSError as exc:
-            primary_error = ModelError(f"source attestation file cannot be read: {relative_path}")
+            primary_error = ModelError(
+                f"source attestation file cannot be read: {relative_path}"
+            )
             raise primary_error from exc
         except BaseException as exc:
             primary_error = exc
@@ -2114,9 +2380,13 @@ def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
                 os.close(fd)
             except BaseException as cleanup_error:
                 if primary_error is not None:
-                    primary_error.add_note("source attestation descriptor cleanup failed")
+                    primary_error.add_note(
+                        "source attestation descriptor cleanup failed"
+                    )
                 else:
-                    raise ModelError("source attestation descriptor cleanup failed") from cleanup_error
+                    raise ModelError(
+                        "source attestation descriptor cleanup failed"
+                    ) from cleanup_error
         if (
             before.st_dev,
             before.st_ino,
@@ -2128,7 +2398,9 @@ def source_attestation_snapshot(repo_root: Path) -> list[dict[str, str]]:
             after.st_size,
             after.st_mtime_ns,
         ):
-            raise ModelError(f"source attestation file changed while reading: {relative_path}")
+            raise ModelError(
+                f"source attestation file changed while reading: {relative_path}"
+            )
         snapshot.append({"path": relative_path, "sha256": digest.hexdigest()})
     return snapshot
 
@@ -2145,7 +2417,11 @@ def downloaded_model_paths(language: str = "") -> list[Path]:
 def default_whisper_cpp_model_path(language: str = "") -> str:
     for model in CATALOG:
         path = model_path(model)
-        if model.backend == "whisper-cpp" and _model_is_verified(model, path) and model_supports_language(path, language):
+        if (
+            model.backend == "whisper-cpp"
+            and _model_is_verified(model, path)
+            and model_supports_language(path, language)
+        ):
             return str(path)
     return ""
 
@@ -2153,7 +2429,11 @@ def default_whisper_cpp_model_path(language: str = "") -> str:
 def default_ctranslate2_model_path(language: str = "") -> str:
     for model in CATALOG:
         path = model_path(model)
-        if model.backend == "faster-whisper" and _model_is_verified(model, path) and model_supports_language(path, language):
+        if (
+            model.backend == "faster-whisper"
+            and _model_is_verified(model, path)
+            and model_supports_language(path, language)
+        ):
             return str(path)
     return ""
 
@@ -2167,7 +2447,9 @@ def _model_is_downloaded(model: ModelSpec, path: Path) -> bool:
         if not stat_module.S_ISDIR(path_stat.st_mode):
             return False
         for filename in model.files:
-            file_path = path / _validated_catalog_path_fragment(filename, field_name="model file path")
+            file_path = path / _validated_catalog_path_fragment(
+                filename, field_name="model file path"
+            )
             if not _model_file_is_regular(file_path):
                 return False
         return True
@@ -2178,7 +2460,9 @@ def _model_file_is_regular(path: Path) -> bool:
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     fd: int | None = None
     try:
-        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name="model file")
+        fd = open_file_without_following_symlinks(
+            path, os.O_RDONLY | nonblock_flag, field_name="model file"
+        )
         assert_fd_is_regular_private_file(fd, field_name="model file")
         return True
     except (OSError, RuntimeError):
@@ -2229,21 +2513,37 @@ def _model_file_sha1s(model: ModelSpec) -> dict[str, str]:
         for filename in model.files
     }
     expected_hashes = {
-        str(_validated_catalog_path_fragment(filename, field_name="model file hash path")): checksum
+        str(
+            _validated_catalog_path_fragment(
+                filename, field_name="model file hash path"
+            )
+        ): checksum
         for filename, checksum in model.file_sha1s
     }
     if not expected_hashes:
-        raise ModelError(f"model catalog entry {model.name} is missing per-file checksums")
+        raise ModelError(
+            f"model catalog entry {model.name} is missing per-file checksums"
+        )
     if set(expected_hashes) != expected_files:
-        raise ModelError(f"model catalog entry {model.name} has mismatched per-file checksums")
+        raise ModelError(
+            f"model catalog entry {model.name} has mismatched per-file checksums"
+        )
     for checksum in expected_hashes.values():
         if not _is_valid_checksum(checksum):
-            raise ModelError(f"model catalog entry {model.name} has invalid per-file checksum")
-    return {filename: checksum.lower() for filename, checksum in expected_hashes.items()}
+            raise ModelError(
+                f"model catalog entry {model.name} has invalid per-file checksum"
+            )
+    return {
+        filename: checksum.lower() for filename, checksum in expected_hashes.items()
+    }
 
 
-def _download_url_to_file(url: str, tmp_dir: Path, size_limit: int, model_name: str, *, prefix: str) -> tuple[Path, int]:
-    result = _download_url_to_file_with_fd(url, tmp_dir, None, size_limit, model_name, prefix=prefix)
+def _download_url_to_file(
+    url: str, tmp_dir: Path, size_limit: int, model_name: str, *, prefix: str
+) -> tuple[Path, int]:
+    result = _download_url_to_file_with_fd(
+        url, tmp_dir, None, size_limit, model_name, prefix=prefix
+    )
     return cast(tuple[Path, int], result)
 
 
@@ -2271,7 +2571,9 @@ def _unlink_temporary_download_name(
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not _same_model_temporary_identity(claimed_stat, expected_stat):
                     raise ModelError("temporary model file changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
@@ -2294,11 +2596,17 @@ def _unlink_temporary_download_name(
         raise ModelError("failed to remove temporary model file") from exc
 
 
-def _unlink_temporary_download_path(path: Path, *, expected_stat: os.stat_result | None = None) -> None:
+def _unlink_temporary_download_path(
+    path: Path, *, expected_stat: os.stat_result | None = None
+) -> None:
     parent_fd: int | None = None
     try:
-        parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="model temporary directory")
-        _unlink_temporary_download_name(parent_fd, path.name, expected_stat=expected_stat)
+        parent_fd = ensure_directory_without_following_symlinks(
+            path.parent, field_name="model temporary directory"
+        )
+        _unlink_temporary_download_name(
+            parent_fd, path.name, expected_stat=expected_stat
+        )
     finally:
         if parent_fd is not None:
             try:
@@ -2307,10 +2615,18 @@ def _unlink_temporary_download_path(path: Path, *, expected_stat: os.stat_result
                 pass
 
 
-def _create_temporary_file_in_parent_directory(parent_fd: int, *, prefix: str) -> tuple[str, int]:
+def _create_temporary_file_in_parent_directory(
+    parent_fd: int, *, prefix: str
+) -> tuple[str, int]:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-        raise OSError("secure temporary file creation is not supported for model downloads")
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
+        raise OSError(
+            "secure temporary file creation is not supported for model downloads"
+        )
     for _ in range(100):
         temporary_name = f"{prefix}{secrets.token_hex(8)}.tmp"
         try:
@@ -2326,7 +2642,9 @@ def _create_temporary_file_in_parent_directory(parent_fd: int, *, prefix: str) -
     raise OSError("failed to create temporary model file in parent directory")
 
 
-def _create_temporary_directory_in_parent_directory(parent_fd: int, *, prefix: str) -> str:
+def _create_temporary_directory_in_parent_directory(
+    parent_fd: int, *, prefix: str
+) -> str:
     for _ in range(100):
         temporary_name = f"{prefix}{secrets.token_hex(8)}"
         try:
@@ -2351,7 +2669,9 @@ def _download_url_to_file_with_fd(
     if tmp_dir_fd is None:
         try:
             assert_no_symlink_ancestors(tmp_dir, field_name="model temporary directory")
-            tmp_dir_fd = ensure_directory_without_following_symlinks(tmp_dir, field_name="model temporary directory")
+            tmp_dir_fd = ensure_directory_without_following_symlinks(
+                tmp_dir, field_name="model temporary directory"
+            )
             close_tmp_dir_fd = True
         except (OSError, RuntimeError) as exc:
             raise ModelError(str(exc)) from exc
@@ -2381,7 +2701,9 @@ def _download_url_to_file_with_fd(
     primary_error: BaseException | None = None
     download_deadline = time.monotonic() + _model_download_timeout_seconds(size_limit)
     try:
-        temporary_name, tmp_fd = _create_temporary_file_in_parent_directory(tmp_dir_fd, prefix=prefix)
+        temporary_name, tmp_fd = _create_temporary_file_in_parent_directory(
+            tmp_dir_fd, prefix=prefix
+        )
         tmp_path = tmp_dir / temporary_name
         try:
             output = os.fdopen(tmp_fd, "wb")
@@ -2416,12 +2738,15 @@ def _download_url_to_file_with_fd(
                         allowed_hosts=redirect_allowed_hosts,
                     )
                     if allowed_urls is not None and not any(
-                        _download_redirect_matches_allowed_url(final_url, allowed_url) for allowed_url in allowed_urls
+                        _download_redirect_matches_allowed_url(final_url, allowed_url)
+                        for allowed_url in allowed_urls
                     ):
                         raise ModelError("model download redirect URL is not allowed")
                 content_length = _read_content_length(response)
                 if content_length is not None and content_length > size_limit:
-                    raise ModelError(f"downloaded model too large for {model_name}: {content_length} > {size_limit}")
+                    raise ModelError(
+                        f"downloaded model too large for {model_name}: {content_length} > {size_limit}"
+                    )
 
                 downloaded = 0
                 while True:
@@ -2441,10 +2766,14 @@ def _download_url_to_file_with_fd(
                         raise ModelError(f"model download timed out for {model_name}")
                     downloaded += len(chunk)
                     if downloaded > size_limit:
-                        raise ModelError(f"downloaded model too large for {model_name}: {downloaded} > {size_limit}")
+                        raise ModelError(
+                            f"downloaded model too large for {model_name}: {downloaded} > {size_limit}"
+                        )
                     output.write(chunk)
                 if content_length is not None and downloaded != content_length:
-                    raise ModelError(f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}")
+                    raise ModelError(
+                        f"downloaded model size mismatch for {model_name}: {downloaded} != {content_length}"
+                    )
                 output.flush()
                 _fsync_fd(output.fileno())
                 try:
@@ -2460,7 +2789,9 @@ def _download_url_to_file_with_fd(
         primary_error = exc
         try:
             if tmp_dir_fd is not None and temporary_name is not None:
-                _unlink_temporary_download_name(tmp_dir_fd, temporary_name, expected_stat=temporary_stat)
+                _unlink_temporary_download_name(
+                    tmp_dir_fd, temporary_name, expected_stat=temporary_stat
+                )
             elif tmp_path is not None:
                 _unlink_temporary_download_path(tmp_path, expected_stat=temporary_stat)
         except BaseException as cleanup_error:
@@ -2482,13 +2813,19 @@ def _download_url_to_file_with_fd(
                     pass
 
 
-def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict[str, object]:
+def _download_directory_model(
+    model: ModelSpec, path: Path, force: bool
+) -> dict[str, object]:
     root = _model_root(model)
     _assert_model_parent_for_atomic_replace(path, root, field_name="model path")
     if not force and (not model.files or model.repo_id):
         status = model_status(model, verify=True)
         if status["verified"]:
-            return {**status, "status": "done", "message": f"model already downloaded: {model.name}"}
+            return {
+                **status,
+                "status": "done",
+                "message": f"model already downloaded: {model.name}",
+            }
     parent_fd = _open_model_parent_directory(path, root, field_name="model path")
     _assert_model_path_for_atomic_replace(path, root, field_name="model path")
     tmp_dir: Path | None = None
@@ -2508,13 +2845,17 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
         try:
             tmp_dir_stat = tmp_dir.stat(follow_symlinks=False)
         except OSError as exc:
-            raise ModelError(f"failed to inspect model temporary directory: {tmp_dir}") from exc
+            raise ModelError(
+                f"failed to inspect model temporary directory: {tmp_dir}"
+            ) from exc
         if not stat_module.S_ISDIR(tmp_dir_stat.st_mode):
             raise ModelError(f"model temporary path is not a directory: {tmp_dir}")
 
         size_limit = _download_size_limit(model)
         if model.files and not model.repo_id:
-            raise ModelError(f"model catalog entry {model.name} is missing repo_id for multi-file download")
+            raise ModelError(
+                f"model catalog entry {model.name} is missing repo_id for multi-file download"
+            )
         expected_hashes = _model_file_sha1s(model)
 
         def _assert_safe_model_directory(target: Path) -> None:
@@ -2524,7 +2865,9 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                 raise ModelError(str(exc)) from exc
             _assert_path_within_model_root(target, root)
             if not target.parent.exists() or not target.parent.is_dir():
-                raise ModelError(f"model path parent is not a directory: {target.parent}")
+                raise ModelError(
+                    f"model path parent is not a directory: {target.parent}"
+                )
             if target.exists():
                 if target.is_symlink():
                     raise ModelError(f"model path must not be a symlink: {target}")
@@ -2533,14 +2876,22 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
 
         downloaded_total = 0
         for filename, url in model_download_urls(model):
-            filename_key = str(_validated_catalog_path_fragment(filename, field_name="model file path"))
+            filename_key = str(
+                _validated_catalog_path_fragment(filename, field_name="model file path")
+            )
             remaining_size_limit = size_limit - downloaded_total
             if remaining_size_limit <= 0:
-                raise ModelError(f"downloaded model too large for {model.name}: {downloaded_total} > {size_limit}")
+                raise ModelError(
+                    f"downloaded model too large for {model.name}: {downloaded_total} > {size_limit}"
+                )
             target = tmp_dir / filename_key
-            target_parent_fd = _open_model_parent_directory(target, root, field_name="model file path")
+            target_parent_fd = _open_model_parent_directory(
+                target, root, field_name="model file path"
+            )
             try:
-                _assert_model_path_for_atomic_replace(target, root, field_name="model file path")
+                _assert_model_path_for_atomic_replace(
+                    target, root, field_name="model file path"
+                )
                 tmp_path, downloaded = cast(
                     tuple[Path, int],
                     _download_url_to_file_with_fd(
@@ -2561,7 +2912,9 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             expected_checksum = expected_hashes[filename_key]
             checksum, checksum_stat = _hash_model_file(tmp_path)
             if checksum != expected_checksum:
-                raise ModelError(f"downloaded model file checksum mismatch for {model.name}: {filename_key}")
+                raise ModelError(
+                    f"downloaded model file checksum mismatch for {model.name}: {filename_key}"
+                )
             tmp_file_stat = checksum_stat
             try:
                 _replace_model_sibling_path(
@@ -2572,17 +2925,27 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                     expected_source_stat=tmp_file_stat,
                 )
             except (OSError, ModelError) as exc:
-                raise ModelError(f"failed to persist downloaded model file: {target}") from exc
+                raise ModelError(
+                    f"failed to persist downloaded model file: {target}"
+                ) from exc
         if downloaded_total > size_limit:
-            raise ModelError(f"downloaded model too large for {model.name}: {downloaded_total} > {size_limit}")
+            raise ModelError(
+                f"downloaded model too large for {model.name}: {downloaded_total} > {size_limit}"
+            )
         if tmp_dir is None:
             raise ModelError(f"model temporary directory is unavailable: {model.name}")
         try:
             current_tmp_dir_stat = tmp_dir.stat(follow_symlinks=False)
         except OSError as exc:
-            raise ModelError(f"failed to inspect model temporary directory: {tmp_dir}") from exc
-        if tmp_dir_stat is None or not _same_model_directory_identity(current_tmp_dir_stat, tmp_dir_stat):
-            raise ModelError(f"model temporary directory changed during download: {tmp_dir}")
+            raise ModelError(
+                f"failed to inspect model temporary directory: {tmp_dir}"
+            ) from exc
+        if tmp_dir_stat is None or not _same_model_directory_identity(
+            current_tmp_dir_stat, tmp_dir_stat
+        ):
+            raise ModelError(
+                f"model temporary directory changed during download: {tmp_dir}"
+            )
         tmp_dir_stat = current_tmp_dir_stat
         tmp_dir_snapshot_stable = True
         if path.exists() and path.is_dir():
@@ -2595,14 +2958,20 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             try:
                 backup_dir_stat = path.stat(follow_symlinks=False)
             except OSError as exc:
-                raise ModelError(f"failed to inspect existing model path: {path}") from exc
+                raise ModelError(
+                    f"failed to inspect existing model path: {path}"
+                ) from exc
             if not (
                 stat_module.S_ISREG(backup_dir_stat.st_mode)
                 or stat_module.S_ISDIR(backup_dir_stat.st_mode)
             ):
-                raise ModelError(f"model path must be a regular file or directory: {path}")
+                raise ModelError(
+                    f"model path must be a regular file or directory: {path}"
+                )
             try:
-                assert_no_symlink_ancestors(backup_dir, field_name="model backup directory")
+                assert_no_symlink_ancestors(
+                    backup_dir, field_name="model backup directory"
+                )
             except RuntimeError as exc:
                 raise ModelError(str(exc)) from exc
             _assert_path_within_model_root(backup_dir, root)
@@ -2632,7 +3001,9 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                             f"failed to restore existing model directory after backup failure: {path}"
                         ) from restore_exc
                 if isinstance(exc, (OSError, ModelError)):
-                    raise ModelError(f"failed to prepare existing model directory backup: {path}") from exc
+                    raise ModelError(
+                        f"failed to prepare existing model directory backup: {path}"
+                    ) from exc
                 raise
             _assert_safe_model_directory(path)
         try:
@@ -2647,7 +3018,9 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             if backup_dir is not None:
                 try:
                     if tmp_dir_stat is None:
-                        raise ModelError("model temporary directory identity is unavailable")
+                        raise ModelError(
+                            "model temporary directory identity is unavailable"
+                        )
                     _remove_model_directory_if_same(
                         path,
                         root,
@@ -2662,7 +3035,9 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                         expected_source_stat=backup_dir_stat,
                     )
                 except (OSError, ModelError) as restore_exc:
-                    raise ModelError(f"failed to restore existing model directory after download failure: {path}") from restore_exc
+                    raise ModelError(
+                        f"failed to restore existing model directory after download failure: {path}"
+                    ) from restore_exc
             elif tmp_dir_stat is not None and not tmp_dir.exists() and path.exists():
                 try:
                     _remove_model_directory_if_same(
@@ -2672,15 +3047,21 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                         field_name="partially installed model directory",
                     )
                 except (OSError, ModelError) as cleanup_exc:
-                    raise ModelError(f"failed to remove partially installed model directory: {path}") from cleanup_exc
+                    raise ModelError(
+                        f"failed to remove partially installed model directory: {path}"
+                    ) from cleanup_exc
             if isinstance(exc, (OSError, ModelError)):
-                raise ModelError(f"failed to persist downloaded model directory: {path}") from exc
+                raise ModelError(
+                    f"failed to persist downloaded model directory: {path}"
+                ) from exc
             raise
         if backup_dir is not None:
             try:
                 _remove_model_backup_path(backup_dir, expected_stat=backup_dir_stat)
             except (OSError, ModelError) as cleanup_exc:
-                orphan_path = backup_dir.with_name(f"{backup_dir.name}.{secrets.token_hex(8)}.orphan")
+                orphan_path = backup_dir.with_name(
+                    f"{backup_dir.name}.{secrets.token_hex(8)}.orphan"
+                )
                 try:
                     _replace_model_sibling_path(
                         backup_dir,
@@ -2689,9 +3070,13 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
                         field_name="model backup orphan path",
                         expected_source_stat=backup_dir_stat,
                     )
-                    _remove_model_backup_path(orphan_path, expected_stat=backup_dir_stat)
+                    _remove_model_backup_path(
+                        orphan_path, expected_stat=backup_dir_stat
+                    )
                 except (OSError, ModelError):
-                    raise ModelError(f"failed to remove model backup after successful download: {backup_dir}") from cleanup_exc
+                    raise ModelError(
+                        f"failed to remove model backup after successful download: {backup_dir}"
+                    ) from cleanup_exc
     except BaseException:
         if tmp_dir is not None and tmp_dir_stat is not None:
             with suppress(OSError, ModelError):
@@ -2708,7 +3093,11 @@ def _download_directory_model(model: ModelSpec, path: Path, force: bool) -> dict
             os.close(parent_fd)
         except OSError:
             pass
-    return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {model.name}"}
+    return {
+        **model_status(model, verify=True),
+        "status": "done",
+        "message": f"model downloaded: {model.name}",
+    }
 
 
 def _restore_model_file_backup(
@@ -2759,12 +3148,18 @@ def _remove_model_backup_path(
     )
 
 
-def _is_model_orphan_name(model_name: str, candidate_name: str, *, allow_suffixless: bool = False) -> bool:
+def _is_model_orphan_name(
+    model_name: str, candidate_name: str, *, allow_suffixless: bool = False
+) -> bool:
     prefix = f".{model_name}."
     if not candidate_name.startswith(prefix):
         return False
-    remainder = candidate_name[len(prefix):]
-    if allow_suffixless and len(remainder) == 16 and all(char in "0123456789abcdef" for char in remainder):
+    remainder = candidate_name[len(prefix) :]
+    if (
+        allow_suffixless
+        and len(remainder) == 16
+        and all(char in "0123456789abcdef" for char in remainder)
+    ):
         return True
     if remainder.endswith(".tmp"):
         token = remainder[:-4]
@@ -2777,7 +3172,10 @@ def _is_model_orphan_name(model_name: str, candidate_name: str, *, allow_suffixl
         parts = backup_remainder.split(".backup.")
         if len(parts) != 2:
             return False
-        return all(len(token) == 16 and all(char in "0123456789abcdef" for char in token) for token in parts)
+        return all(
+            len(token) == 16 and all(char in "0123456789abcdef" for char in token)
+            for token in parts
+        )
     return False
 
 
@@ -2797,7 +3195,9 @@ def _bounded_model_orphan_names(parent_fd: int, parent: Path) -> list[str]:
     return names
 
 
-def _remove_model_orphan_paths(path: Path, root: Path, *, allow_suffixless: bool = False, preflight: bool = False) -> int:
+def _remove_model_orphan_paths(
+    path: Path, root: Path, *, allow_suffixless: bool = False, preflight: bool = False
+) -> int:
     _assert_path_within_model_root(path, root, field_name="model orphan path")
     parent = path.parent
     try:
@@ -2806,27 +3206,42 @@ def _remove_model_orphan_paths(path: Path, root: Path, *, allow_suffixless: bool
         raise ModelError(str(exc)) from exc
     if not parent.exists():
         return 0
-    parent_fd = open_directory_without_following_symlinks(parent, field_name="model orphan parent")
+    parent_fd = open_directory_without_following_symlinks(
+        parent, field_name="model orphan parent"
+    )
     removed = 0
     scan_started_at = time.time()
     primary_error: BaseException | None = None
     try:
         names = _bounded_model_orphan_names(parent_fd, parent)
         for name in names:
-            if not _is_model_orphan_name(path.name, str(name), allow_suffixless=allow_suffixless):
+            if not _is_model_orphan_name(
+                path.name, str(name), allow_suffixless=allow_suffixless
+            ):
                 continue
             candidate = parent / str(name)
             try:
-                candidate_stat = os.stat(str(name), dir_fd=parent_fd, follow_symlinks=False)
+                candidate_stat = os.stat(
+                    str(name), dir_fd=parent_fd, follow_symlinks=False
+                )
             except FileNotFoundError:
                 continue
             if stat_module.S_ISLNK(candidate_stat.st_mode):
-                raise ModelError(f"model orphan path must not be a symlink: {candidate}")
-            if not stat_module.S_ISDIR(candidate_stat.st_mode) and not stat_module.S_ISREG(candidate_stat.st_mode):
-                raise ModelError(f"model orphan path must be a regular file or directory: {candidate}")
+                raise ModelError(
+                    f"model orphan path must not be a symlink: {candidate}"
+                )
+            if not stat_module.S_ISDIR(
+                candidate_stat.st_mode
+            ) and not stat_module.S_ISREG(candidate_stat.st_mode):
+                raise ModelError(
+                    f"model orphan path must be a regular file or directory: {candidate}"
+                )
             if preflight:
                 continue
-            if scan_started_at - candidate_stat.st_mtime < MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS:
+            if (
+                scan_started_at - candidate_stat.st_mtime
+                < MODEL_ORPHAN_CLEANUP_MIN_AGE_SECONDS
+            ):
                 continue
             if stat_module.S_ISDIR(candidate_stat.st_mode):
                 if _remove_model_directory_leaf(
@@ -2865,7 +3280,9 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
         raise ModelError("force must be a boolean")
     model = resolve_model(name)
     if not model.files and not _model_is_downloadable(model):
-        raise ModelError(f"model catalog entry {model.name} is not downloadable without pinned checksums")
+        raise ModelError(
+            f"model catalog entry {model.name} is not downloadable without pinned checksums"
+        )
     path = model_path(model)
     root = _model_root(model)
     if model.files:
@@ -2877,7 +3294,11 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
     if not force:
         status = model_status(model, verify=True)
         if status["verified"]:
-            return {**status, "status": "done", "message": f"model already downloaded: {model.name}"}
+            return {
+                **status,
+                "status": "done",
+                "message": f"model already downloaded: {model.name}",
+            }
 
     size_limit = _download_size_limit(model)
     tmp_path: Path | None = None
@@ -2909,7 +3330,9 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
                 pass
         checksum, checksum_stat = _hash_model_file(tmp_path)
         if checksum != model.sha1.lower():
-            raise ModelError(f"downloaded checksum mismatch for {model.name}: {checksum}")
+            raise ModelError(
+                f"downloaded checksum mismatch for {model.name}: {checksum}"
+            )
         tmp_stat = checksum_stat
         try:
             _assert_model_path_for_atomic_replace(path, root, field_name="model path")
@@ -2917,21 +3340,31 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
                 try:
                     backup_path_stat = path.stat(follow_symlinks=False)
                 except OSError as exc:
-                    raise ModelError(f"failed to inspect existing model path: {path}") from exc
+                    raise ModelError(
+                        f"failed to inspect existing model path: {path}"
+                    ) from exc
                 if not (
                     stat_module.S_ISREG(backup_path_stat.st_mode)
                     or stat_module.S_ISDIR(backup_path_stat.st_mode)
                 ):
-                    raise ModelError(f"model path must be a regular file or directory: {path}")
+                    raise ModelError(
+                        f"model path must be a regular file or directory: {path}"
+                    )
                 _load_model_checksum_cache()
                 cached_entry = _model_checksum_cache.get(str(path))
                 if cached_entry is not None:
                     previous_cache_entry = dict(cached_entry)
                     previous_cache_entry_exists = True
-                backup_path = path.with_name(f".{path.name}.{secrets.token_hex(8)}.backup")
-                _assert_model_path_for_atomic_replace(backup_path, root, field_name="model backup path")
+                backup_path = path.with_name(
+                    f".{path.name}.{secrets.token_hex(8)}.backup"
+                )
+                _assert_model_path_for_atomic_replace(
+                    backup_path, root, field_name="model backup path"
+                )
                 try:
-                    assert_no_symlink_ancestors(backup_path, field_name="model backup path")
+                    assert_no_symlink_ancestors(
+                        backup_path, field_name="model backup path"
+                    )
                 except RuntimeError as exc:
                     raise ModelError(str(exc)) from exc
                 _assert_path_within_model_root(backup_path, root)
@@ -2962,7 +3395,9 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
             _clear_model_checksum_cache(tmp_path)
             _set_model_checksum_cache(path, checksum, tmp_stat)
         except OSError as exc:
-            raise ModelError(f"failed to persist downloaded model file: {path}") from exc
+            raise ModelError(
+                f"failed to persist downloaded model file: {path}"
+            ) from exc
     except BaseException as primary_error:
         if tmp_path is not None:
             try:
@@ -2994,7 +3429,9 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
                         expected_backup_stat=backup_path_stat,
                     )
                 except (OSError, ModelError) as restore_exc:
-                    raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
+                    raise ModelError(
+                        f"failed to restore existing model file after download failure: {path}"
+                    ) from restore_exc
                 if previous_cache_entry_exists and previous_cache_entry is not None:
                     _model_checksum_cache[str(path)] = dict(previous_cache_entry)
                     _write_model_checksum_cache()
@@ -3009,7 +3446,9 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
                         field_name="partially installed model file",
                     )
                 except (OSError, ModelError) as cleanup_exc:
-                    raise ModelError(f"failed to remove partially installed model file after download failure: {path}") from cleanup_exc
+                    raise ModelError(
+                        f"failed to remove partially installed model file after download failure: {path}"
+                    ) from cleanup_exc
         elif backup_path is not None and not path.exists() and not path.is_symlink():
             try:
                 _restore_model_file_backup(
@@ -3018,7 +3457,9 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
                     expected_backup_stat=backup_path_stat,
                 )
             except (OSError, ModelError) as restore_exc:
-                raise ModelError(f"failed to restore existing model file after download failure: {path}") from restore_exc
+                raise ModelError(
+                    f"failed to restore existing model file after download failure: {path}"
+                ) from restore_exc
             if previous_cache_entry_exists and previous_cache_entry is not None:
                 _model_checksum_cache[str(path)] = dict(previous_cache_entry)
                 _write_model_checksum_cache()
@@ -3029,7 +3470,9 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
         try:
             _remove_model_backup_path(backup_path, expected_stat=backup_path_stat)
         except (OSError, ModelError) as cleanup_exc:
-            orphan_path = backup_path.with_name(f"{backup_path.name}.{secrets.token_hex(8)}.orphan")
+            orphan_path = backup_path.with_name(
+                f"{backup_path.name}.{secrets.token_hex(8)}.orphan"
+            )
             try:
                 _replace_model_sibling_path(
                     backup_path,
@@ -3040,8 +3483,14 @@ def _download_model_transaction(name: str, force: bool = False) -> dict[str, obj
                 )
                 _remove_model_backup_path(orphan_path, expected_stat=backup_path_stat)
             except (OSError, ModelError):
-                raise ModelError(f"failed to remove model backup after successful download: {backup_path}") from cleanup_exc
-    return {**model_status(model, verify=True), "status": "done", "message": f"model downloaded: {model.name}"}
+                raise ModelError(
+                    f"failed to remove model backup after successful download: {backup_path}"
+                ) from cleanup_exc
+    return {
+        **model_status(model, verify=True),
+        "status": "done",
+        "message": f"model downloaded: {model.name}",
+    }
 
 
 def _remove_model_transaction(name: str) -> dict[str, object]:
@@ -3053,7 +3502,9 @@ def _remove_model_transaction(name: str) -> dict[str, object]:
     removed = False
     removed_tmp = False
     removed_orphans = 0
-    _remove_model_orphan_paths(path, root, allow_suffixless=allow_suffixless_orphans, preflight=True)
+    _remove_model_orphan_paths(
+        path, root, allow_suffixless=allow_suffixless_orphans, preflight=True
+    )
     if path.is_symlink():
         raise ModelError(f"model path must not be a symlink: {path}")
     elif path.is_dir():
@@ -3061,23 +3512,33 @@ def _remove_model_transaction(name: str) -> dict[str, object]:
     else:
         removed = _unlink_model_file_leaf(path, root, field_name="model file")
     try:
-        removed_tmp = _unlink_model_file_leaf(tmp_path, root, field_name="temporary model file")
+        removed_tmp = _unlink_model_file_leaf(
+            tmp_path, root, field_name="temporary model file"
+        )
     except (OSError, ModelError) as exc:
         if removed:
             try:
                 _clear_model_checksum_cache(path)
             except ModelError:
                 pass
-        raise ModelError(f"failed to remove temporary model file: {tmp_path}: {exc}") from exc
+        raise ModelError(
+            f"failed to remove temporary model file: {tmp_path}: {exc}"
+        ) from exc
     if removed:
         _clear_model_checksum_cache(path)
     if removed_tmp:
         _clear_model_checksum_cache(tmp_path)
-    removed_orphans = _remove_model_orphan_paths(path, root, allow_suffixless=allow_suffixless_orphans)
+    removed_orphans = _remove_model_orphan_paths(
+        path, root, allow_suffixless=allow_suffixless_orphans
+    )
     return {
         **asdict(model),
         "status": "done",
-        "message": f"model removed: {model.name}" if removed else f"model was not downloaded: {model.name}",
+        "message": (
+            f"model removed: {model.name}"
+            if removed
+            else f"model was not downloaded: {model.name}"
+        ),
         "path": str(path),
         "removed": removed,
         "removed_tmp": removed_tmp,
@@ -3090,7 +3551,9 @@ def download_model(name: str, force: bool = False) -> dict[str, object]:
         raise ModelError("force must be a boolean")
     model = resolve_model(name)
     if not model.files and not _model_is_downloadable(model):
-        raise ModelError(f"model catalog entry {model.name} is not downloadable without pinned checksums")
+        raise ModelError(
+            f"model catalog entry {model.name} is not downloadable without pinned checksums"
+        )
     path = model_path(model)
     root = _model_root(model)
     _ensure_model_parent_directory(path, root, field_name="model path")

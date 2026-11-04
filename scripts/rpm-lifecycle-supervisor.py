@@ -110,12 +110,16 @@ def set_child_subreaper() -> None:
 def require_kernel_primitives() -> object:
     required = ("pidfd_open", "waitid", "P_PID", "WNOWAIT", "WEXITED", "WNOHANG")
     if sys.platform != "linux" or any(not hasattr(os, name) for name in required):
-        raise RuntimeError("RPM lifecycle supervisor requires Linux pidfd and waitid support")
+        raise RuntimeError(
+            "RPM lifecycle supervisor requires Linux pidfd and waitid support"
+        )
     try:
         libc = ctypes.CDLL(None, use_errno=True)
         pidfd_send_signal = libc.pidfd_send_signal
     except (AttributeError, OSError) as exc:
-        raise RuntimeError("RPM lifecycle supervisor cannot access pidfd_send_signal") from exc
+        raise RuntimeError(
+            "RPM lifecycle supervisor cannot access pidfd_send_signal"
+        ) from exc
     pidfd_send_signal.argtypes = [
         ctypes.c_int,
         ctypes.c_int,
@@ -178,10 +182,14 @@ def read_proc_identity(process_id: int) -> ProcessIdentity:
             state=fields[0].decode("ascii"),
         )
     except (UnicodeDecodeError, ValueError) as exc:
-        raise RuntimeError(f"RPM lifecycle process identity is malformed: {proc_path}") from exc
+        raise RuntimeError(
+            f"RPM lifecycle process identity is malformed: {proc_path}"
+        ) from exc
 
 
-def _finish_direct_child_token(token: bytearray, seen: set[int], batch: list[int]) -> None:
+def _finish_direct_child_token(
+    token: bytearray, seen: set[int], batch: list[int]
+) -> None:
     if not token:
         return
     if not token.isdigit():
@@ -282,8 +290,7 @@ def read_direct_children_batches(*, deadline: float | None = None):
     proc_path = f"/proc/self/task/{os.getpid()}/children"
     descriptor = os.open(
         proc_path,
-        os.O_RDONLY
-        | getattr(os, "O_CLOEXEC", 0),
+        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0),
     )
     try:
         yield from iter_direct_child_batches(descriptor, deadline=deadline)
@@ -545,7 +552,9 @@ def bind_child_exact(process_id: int) -> ChildBinding:
         raise RuntimeError(f"RPM lifecycle cannot bind child PID {process_id}") from exc
     try:
         if read_pidfd_target_pid(pidfd) != process_id:
-            raise RuntimeError(f"RPM lifecycle pidfd target changed for PID {process_id}")
+            raise RuntimeError(
+                f"RPM lifecycle pidfd target changed for PID {process_id}"
+            )
         identity = read_proc_identity(process_id)
         return ChildBinding(identity=identity, pidfd=pidfd)
     except BaseException as primary_error:
@@ -557,15 +566,21 @@ def bind_child_exact(process_id: int) -> ChildBinding:
         raise
 
 
-def bind_owned_child_for_cleanup(process_id: int, *, expected_parent_pid: int) -> ChildBinding:
+def bind_owned_child_for_cleanup(
+    process_id: int, *, expected_parent_pid: int
+) -> ChildBinding:
     """Bind still-owned child after direct and pidfd identity proof."""
     try:
         pidfd = os.pidfd_open(process_id, 0)
     except OSError as exc:
-        raise RuntimeError(f"RPM lifecycle cannot bind owned child PID {process_id}") from exc
+        raise RuntimeError(
+            f"RPM lifecycle cannot bind owned child PID {process_id}"
+        ) from exc
     try:
         if read_pidfd_target_pid(pidfd) != process_id:
-            raise RuntimeError(f"RPM lifecycle pidfd target changed for PID {process_id}")
+            raise RuntimeError(
+                f"RPM lifecycle pidfd target changed for PID {process_id}"
+            )
         identity = read_authenticated_direct_child_identity(
             process_id,
             expected_parent_pid=expected_parent_pid,
@@ -595,10 +610,14 @@ def bind_recovered_child(
     try:
         pidfd = os.pidfd_open(process_id, 0)
     except OSError as exc:
-        raise RuntimeError(f"RPM lifecycle cannot recover child PID {process_id}") from exc
+        raise RuntimeError(
+            f"RPM lifecycle cannot recover child PID {process_id}"
+        ) from exc
     try:
         if read_pidfd_target_pid(pidfd) != process_id:
-            raise RuntimeError(f"RPM lifecycle recovery pidfd target changed for PID {process_id}")
+            raise RuntimeError(
+                f"RPM lifecycle recovery pidfd target changed for PID {process_id}"
+            )
         recovered = read_authenticated_direct_child_identity(
             process_id,
             expected_parent_pid=expected_parent_pid,
@@ -610,9 +629,13 @@ def bind_recovered_child(
             or recovered.process_group_id != before.process_group_id
             or recovered.session_id != before.session_id
         ):
-            raise RuntimeError(f"RPM lifecycle child PID {process_id} changed during recovery")
+            raise RuntimeError(
+                f"RPM lifecycle child PID {process_id} changed during recovery"
+            )
         if read_pidfd_target_pid(pidfd) != process_id:
-            raise RuntimeError(f"RPM lifecycle recovery pidfd target changed for PID {process_id}")
+            raise RuntimeError(
+                f"RPM lifecycle recovery pidfd target changed for PID {process_id}"
+            )
         return ChildBinding(identity=recovered, pidfd=pidfd, owned_direct=True)
     except BaseException as primary_error:
         close_pidfd_after_bind_failure(
@@ -655,7 +678,9 @@ def bind_unbound_popen_root_for_cleanup(
         deadline=deadline,
     )
     if first.process_group_id != process_id or first.session_id != process_id:
-        raise RuntimeError("RPM lifecycle unbound root process group identity is invalid")
+        raise RuntimeError(
+            "RPM lifecycle unbound root process group identity is invalid"
+        )
     if time.monotonic() >= deadline:
         raise TimeoutError("RPM lifecycle unbound root revalidation deadline exhausted")
     second = read_authenticated_direct_child_identity(
@@ -664,14 +689,18 @@ def bind_unbound_popen_root_for_cleanup(
         deadline=deadline,
     )
     if child.poll() is not None:
-        raise ChildProcessError(f"RPM lifecycle Popen root {process_id} exited during binding")
+        raise ChildProcessError(
+            f"RPM lifecycle Popen root {process_id} exited during binding"
+        )
     if (
         second.start_time != first.start_time
         or second.parent_pid != first.parent_pid
         or second.process_group_id != first.process_group_id
         or second.session_id != first.session_id
     ):
-        raise RuntimeError("RPM lifecycle unbound root identity changed during recovery")
+        raise RuntimeError(
+            "RPM lifecycle unbound root identity changed during recovery"
+        )
     return ChildBinding(identity=second, pidfd=-1, owned_direct=True)
 
 
@@ -728,7 +757,9 @@ def cleanup_unbound_popen_root(
                 deadline=deadline,
             )
             if first.process_group_id != root_pid or first.session_id != root_pid:
-                raise RuntimeError("RPM lifecycle unbound Popen root group identity is invalid")
+                raise RuntimeError(
+                    "RPM lifecycle unbound Popen root group identity is invalid"
+                )
             second = read_authenticated_direct_child_identity(
                 root_pid,
                 expected_parent_pid=expected_parent_pid,
@@ -892,7 +923,9 @@ def cleanup_unbound_popen_root(
             cleanup_errors,
             phase="unbound Popen descendant settle",
         ):
-            time.sleep(min(POLL_INTERVAL_SECONDS, max(0.0, deadline - time.monotonic())))
+            time.sleep(
+                min(POLL_INTERVAL_SECONDS, max(0.0, deadline - time.monotonic()))
+            )
         else:
             break
     remaining = set(bindings) - {root_pid}
@@ -905,7 +938,9 @@ def cleanup_unbound_popen_root(
     return True
 
 
-def make_owned_child_binding(process_id: int, *, expected_parent_pid: int) -> ChildBinding:
+def make_owned_child_binding(
+    process_id: int, *, expected_parent_pid: int
+) -> ChildBinding:
     """Bind an unreaped direct child by kernel parent ownership and exact PID."""
     return ChildBinding(
         identity=ProcessIdentity(
@@ -924,7 +959,9 @@ def make_owned_child_binding(process_id: int, *, expected_parent_pid: int) -> Ch
 def bind_child(process_id: int, *, expected_parent_pid: int) -> ChildBinding:
     binding = bind_child_exact(process_id)
     if binding.identity.parent_pid != expected_parent_pid:
-        primary_error = RuntimeError(f"RPM lifecycle child PID {process_id} changed parent")
+        primary_error = RuntimeError(
+            f"RPM lifecycle child PID {process_id} changed parent"
+        )
         try:
             close_binding(binding)
         except BaseException as close_error:
@@ -940,13 +977,17 @@ def verify_child(binding: ChildBinding, *, expected_parent_pid: int) -> ProcessI
     identity = read_proc_identity(binding.identity.pid)
     if binding.owned_direct and binding.identity.start_time < 0:
         if identity.parent_pid != expected_parent_pid:
-            raise RuntimeError(f"RPM lifecycle child PID {binding.identity.pid} changed parent")
+            raise RuntimeError(
+                f"RPM lifecycle child PID {binding.identity.pid} changed parent"
+            )
         return identity
     if (
         identity.start_time != binding.identity.start_time
         or identity.parent_pid != expected_parent_pid
     ):
-        raise RuntimeError(f"RPM lifecycle child PID {binding.identity.pid} changed identity")
+        raise RuntimeError(
+            f"RPM lifecycle child PID {binding.identity.pid} changed identity"
+        )
     return identity
 
 
@@ -1003,8 +1044,7 @@ def signal_pidfd(
                 limit=MAX_SIGNAL_ERROR_REPORTS,
             )
             fallback_error.add_note(
-                "RPM lifecycle pidfd signal failed: "
-                f"{describe_error(signal_error)}"
+                "RPM lifecycle pidfd signal failed: " f"{describe_error(signal_error)}"
             )
             raise
         if binding.identity.start_time < 0:
@@ -1021,8 +1061,7 @@ def signal_pidfd(
                 limit=MAX_SIGNAL_ERROR_REPORTS,
             )
             fallback_error.add_note(
-                "RPM lifecycle pidfd signal failed: "
-                f"{describe_error(signal_error)}"
+                "RPM lifecycle pidfd signal failed: " f"{describe_error(signal_error)}"
             )
             raise
         append_bounded_diagnostic(
@@ -1046,8 +1085,7 @@ def signal_pidfd(
             limit=MAX_SIGNAL_ERROR_REPORTS,
         )
         fallback_error.add_note(
-            "RPM lifecycle pidfd signal failed: "
-            f"{describe_error(signal_error)}"
+            "RPM lifecycle pidfd signal failed: " f"{describe_error(signal_error)}"
         )
         raise
     try:
@@ -1062,8 +1100,7 @@ def signal_pidfd(
             limit=MAX_SIGNAL_ERROR_REPORTS,
         )
         fallback_error.add_note(
-            "RPM lifecycle pidfd signal failed: "
-            f"{describe_error(signal_error)}"
+            "RPM lifecycle pidfd signal failed: " f"{describe_error(signal_error)}"
         )
         raise
     append_bounded_diagnostic(
@@ -1106,7 +1143,9 @@ def report_cleanup_errors(
         print(f"{prefix}: {describe_error(error)}", file=sys.stderr)
 
 
-def signal_verified_group(binding: ChildBinding, signum: int, *, expected_parent_pid: int) -> bool:
+def signal_verified_group(
+    binding: ChildBinding, signum: int, *, expected_parent_pid: int
+) -> bool:
     if binding.identity.start_time < 0:
         return False
     try:
@@ -1137,7 +1176,9 @@ def peek_child(process_id: int) -> object | None:
     if result is None or result.si_pid == 0:
         return None
     if result.si_pid != process_id:
-        raise RuntimeError(f"RPM lifecycle wait returned unexpected PID {result.si_pid}")
+        raise RuntimeError(
+            f"RPM lifecycle wait returned unexpected PID {result.si_pid}"
+        )
     return result
 
 
@@ -1155,7 +1196,9 @@ def reap_child_nonblocking(process_id: int) -> object | None:
     if result is None or result.si_pid == 0:
         return None
     if result.si_pid != process_id:
-        raise RuntimeError(f"RPM lifecycle wait returned unexpected PID {result.si_pid}")
+        raise RuntimeError(
+            f"RPM lifecycle wait returned unexpected PID {result.si_pid}"
+        )
     return result
 
 
@@ -1184,7 +1227,9 @@ def reap_ready_children(
         if process_id == root_pid or binding.pidfd < 0:
             continue
         try:
-            poller.register(binding.pidfd, select.POLLIN | select.POLLHUP | select.POLLERR)
+            poller.register(
+                binding.pidfd, select.POLLIN | select.POLLHUP | select.POLLERR
+            )
         except BaseException as error:
             if close_errors is None:
                 raise
@@ -1266,14 +1311,18 @@ def reap_ready_children(
 def reap_child(process_id: int, *, deadline: float | None = None) -> object:
     while True:
         if deadline is not None and time.monotonic() >= deadline:
-            raise TimeoutError(f"RPM lifecycle reap deadline exceeded for PID {process_id}")
+            raise TimeoutError(
+                f"RPM lifecycle reap deadline exceeded for PID {process_id}"
+            )
         try:
             result = os.waitid(os.P_PID, process_id, os.WEXITED)
         except InterruptedError:
             yield_after_eintr(deadline)
             continue
         if result is None or result.si_pid != process_id:
-            raise RuntimeError(f"RPM lifecycle reap returned unexpected PID {process_id}")
+            raise RuntimeError(
+                f"RPM lifecycle reap returned unexpected PID {process_id}"
+            )
         return result
 
 
@@ -1284,7 +1333,9 @@ def status_from_wait_result(result: object) -> int:
         return result.si_status
     if result.si_code in (os.CLD_KILLED, os.CLD_DUMPED):
         return -result.si_status
-    raise RuntimeError(f"RPM lifecycle returned unsupported wait status {result.si_code}")
+    raise RuntimeError(
+        f"RPM lifecycle returned unsupported wait status {result.si_code}"
+    )
 
 
 def close_binding(
@@ -1326,7 +1377,9 @@ def drain_adopted_children(
             record_unresolved_children(
                 diagnostics,
                 phase="adopted drain",
-                count=sum(process_id != root_binding.identity.pid for process_id in bindings),
+                count=sum(
+                    process_id != root_binding.identity.pid for process_id in bindings
+                ),
             )
             return False
         direct_set, snapshot_error = read_direct_children_snapshot(
@@ -1407,7 +1460,9 @@ def drain_adopted_children(
             if process_id == root_binding.identity.pid or process_id in direct_set:
                 continue
             binding = bindings[process_id]
-            if not cleanup_budget_available(deadline, diagnostics, phase="adopted reap"):
+            if not cleanup_budget_available(
+                deadline, diagnostics, phase="adopted reap"
+            ):
                 record_unresolved_children(
                     diagnostics,
                     phase="adopted reap",
@@ -1415,8 +1470,12 @@ def drain_adopted_children(
                 )
                 return False
             if peek_child(process_id) is None:
-                raise RuntimeError(f"RPM lifecycle child PID {process_id} left direct-child set")
-            if not cleanup_budget_available(deadline, diagnostics, phase="adopted reap"):
+                raise RuntimeError(
+                    f"RPM lifecycle child PID {process_id} left direct-child set"
+                )
+            if not cleanup_budget_available(
+                deadline, diagnostics, phase="adopted reap"
+            ):
                 record_unresolved_children(
                     diagnostics,
                     phase="adopted reap",
@@ -1424,7 +1483,9 @@ def drain_adopted_children(
                 )
                 return False
             reap_child(process_id, deadline=deadline)
-            if not cleanup_budget_available(deadline, diagnostics, phase="adopted close"):
+            if not cleanup_budget_available(
+                deadline, diagnostics, phase="adopted close"
+            ):
                 record_unresolved_children(
                     diagnostics,
                     phase="adopted close",
@@ -1596,11 +1657,15 @@ def drain_adopted_children(
                 deadline=deadline,
             )
 
-        if not cleanup_budget_available(deadline, diagnostics, phase="adopted snapshot"):
+        if not cleanup_budget_available(
+            deadline, diagnostics, phase="adopted snapshot"
+        ):
             record_unresolved_children(
                 diagnostics,
                 phase="adopted snapshot",
-                count=sum(process_id != root_binding.identity.pid for process_id in bindings),
+                count=sum(
+                    process_id != root_binding.identity.pid for process_id in bindings
+                ),
             )
             return False
         final_children, final_error = read_direct_children_snapshot(
@@ -1620,7 +1685,10 @@ def drain_adopted_children(
             # Let kernel reparenting settle before root can be reaped.  This
             # second bounded observation prevents a late adopted child from
             # appearing after the root PID has become reusable.
-            remaining = min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS) - time.monotonic()
+            remaining = (
+                min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS)
+                - time.monotonic()
+            )
             if remaining > 0 and cleanup_budget_available(
                 deadline,
                 diagnostics,
@@ -1629,7 +1697,9 @@ def drain_adopted_children(
                 time.sleep(remaining)
             elif remaining > 0:
                 return False
-            if not cleanup_budget_available(deadline, diagnostics, phase="adopted snapshot"):
+            if not cleanup_budget_available(
+                deadline, diagnostics, phase="adopted snapshot"
+            ):
                 return False
             settled_children, settled_error = read_direct_children_snapshot(
                 deadline=direct_children_read_deadline(
@@ -1646,7 +1716,9 @@ def drain_adopted_children(
                 and bindings.get(root_binding.identity.pid) is root_binding
             ):
                 return True
-        remaining = min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS) - time.monotonic()
+        remaining = (
+            min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS) - time.monotonic()
+        )
         if remaining > 0 and cleanup_budget_available(
             deadline,
             diagnostics,
@@ -1657,7 +1729,9 @@ def drain_adopted_children(
             record_unresolved_children(
                 diagnostics,
                 phase="adopted drain wait",
-                count=sum(process_id != root_binding.identity.pid for process_id in bindings),
+                count=sum(
+                    process_id != root_binding.identity.pid for process_id in bindings
+                ),
             )
             return False
     return False
@@ -1682,7 +1756,9 @@ def emergency_direct_cleanup(
             record_unresolved_children(
                 diagnostics,
                 phase="emergency drain",
-                count=sum(process_id != root_binding.identity.pid for process_id in bindings),
+                count=sum(
+                    process_id != root_binding.identity.pid for process_id in bindings
+                ),
             )
             return False
         try:
@@ -1730,7 +1806,9 @@ def emergency_direct_cleanup(
                 binding = bindings.get(process_id)
                 if binding is None:
                     try:
-                        binding = bind_child(process_id, expected_parent_pid=supervisor_pid)
+                        binding = bind_child(
+                            process_id, expected_parent_pid=supervisor_pid
+                        )
                     except BaseException as bind_error:
                         if not is_pidfd_resource_error(bind_error):
                             if cleanup_errors is not None:
@@ -1937,7 +2015,9 @@ def emergency_direct_cleanup(
                 return True
         else:
             clean_stable_rounds = 0
-        remaining = min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS) - time.monotonic()
+        remaining = (
+            min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS) - time.monotonic()
+        )
         if remaining > 0 and cleanup_budget_available(
             deadline,
             diagnostics,
@@ -1948,7 +2028,9 @@ def emergency_direct_cleanup(
             record_unresolved_children(
                 diagnostics,
                 phase="emergency drain wait",
-                count=sum(process_id != root_binding.identity.pid for process_id in bindings),
+                count=sum(
+                    process_id != root_binding.identity.pid for process_id in bindings
+                ),
             )
             return False
     return False
@@ -1968,7 +2050,9 @@ def finalize_adopted_children(
     for process_id, binding in list(bindings.items()):
         if process_id == root_pid:
             continue
-        if not cleanup_budget_available(deadline, cleanup_errors, phase="finalizer signal"):
+        if not cleanup_budget_available(
+            deadline, cleanup_errors, phase="finalizer signal"
+        ):
             record_unresolved_children(
                 cleanup_errors,
                 phase="finalizer signal",
@@ -1991,7 +2075,9 @@ def finalize_adopted_children(
             )
 
     for _ in range(MAX_DRAIN_ROUNDS):
-        if not cleanup_budget_available(deadline, cleanup_errors, phase="finalizer reap"):
+        if not cleanup_budget_available(
+            deadline, cleanup_errors, phase="finalizer reap"
+        ):
             record_unresolved_children(
                 cleanup_errors,
                 phase="finalizer reap",
@@ -2044,7 +2130,10 @@ def finalize_adopted_children(
         if not remaining_children:
             break
         if len(bindings) == before:
-            remaining = min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS) - time.monotonic()
+            remaining = (
+                min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS)
+                - time.monotonic()
+            )
             if remaining > 0 and cleanup_budget_available(
                 deadline,
                 cleanup_errors,
@@ -2075,8 +2164,11 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
         raise ValueError("identity timeout and byte limit must be positive")
     deadline = time.monotonic() + timeout
     grace = min(0.2, max(0.01, timeout / 4))
-    terminate_at = deadline - grace - direct_children_cleanup_reserve(timeout) - (
-        2 * POLL_INTERVAL_SECONDS
+    terminate_at = (
+        deadline
+        - grace
+        - direct_children_cleanup_reserve(timeout)
+        - (2 * POLL_INTERVAL_SECONDS)
     )
     pidfd_send_signal = require_kernel_primitives()
     validate_pidfd_send_signal(pidfd_send_signal)
@@ -2155,7 +2247,11 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
             )
 
     try:
-        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP if hasattr(signal, "SIGHUP") else None):
+        for signum in (
+            signal.SIGTERM,
+            signal.SIGINT,
+            signal.SIGHUP if hasattr(signal, "SIGHUP") else None,
+        ):
             if signum is None:
                 continue
             previous_handlers[signum] = signal.getsignal(signum)
@@ -2163,7 +2259,7 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
             installed_handlers.append(signum)
         ensure_launch_budget(terminate_at, phase="RPM identity helper")
         child = subprocess.Popen(
-            command,
+            [*command],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             start_new_session=True,
@@ -2203,7 +2299,9 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
             os.set_blocking(descriptor, False)
             poller.register(descriptor, select.POLLIN | select.POLLHUP | select.POLLERR)
             streams[descriptor] = buffer
-            stream_limits[descriptor] = max_bytes if buffer is output else IDENTITY_STDERR_MAX_BYTES
+            stream_limits[descriptor] = (
+                max_bytes if buffer is output else IDENTITY_STDERR_MAX_BYTES
+            )
 
         while True:
             now = time.monotonic()
@@ -2268,7 +2366,9 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
                 if chunk:
                     buffer.extend(chunk)
                     if len(buffer) > limit:
-                        failure = failure or RuntimeError("RPM identity helper output exceeds byte limit")
+                        failure = failure or RuntimeError(
+                            "RPM identity helper output exceeds byte limit"
+                        )
                 else:
                     try:
                         poller.unregister(descriptor)
@@ -2353,10 +2453,14 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
         if failure is not None:
             raise failure
         if timed_out:
-            raise snapshot_primary(TimeoutError("RPM identity helper deadline exceeded"))
+            raise snapshot_primary(
+                TimeoutError("RPM identity helper deadline exceeded")
+            )
         if root_status != 0:
             detail = error_output.decode("utf-8", "replace").strip()
-            raise RuntimeError(f"RPM identity helper failed with status {root_status}: {detail}")
+            raise RuntimeError(
+                f"RPM identity helper failed with status {root_status}: {detail}"
+            )
         if not IDENTITY_PATTERN.fullmatch(output):
             raise RuntimeError("RPM identity helper returned invalid identity")
         return output.rstrip(b"\n").decode("ascii")
@@ -2372,8 +2476,7 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
             # cleanup window so launch failure cannot strand that child.
             deadline = max(
                 deadline,
-                time.monotonic()
-                + max(grace, direct_children_cleanup_reserve(timeout)),
+                time.monotonic() + max(grace, direct_children_cleanup_reserve(timeout)),
             )
         if child is not None and root_binding is None:
             try:
@@ -2490,7 +2593,9 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
                                 drained = False
                     if drained:
                         try:
-                            reap_result = reap_child_nonblocking(root_binding.identity.pid)
+                            reap_result = reap_child_nonblocking(
+                                root_binding.identity.pid
+                            )
                         except BaseException as cleanup_error:
                             append_bounded_diagnostic(
                                 adopted_cleanup_errors,
@@ -2502,12 +2607,17 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
                                 continue
                             if reap_result is CHILD_ALREADY_REAPED:
                                 if child is not None:
-                                    child.returncode = status_from_wait_result(root_result)
+                                    child.returncode = status_from_wait_result(
+                                        root_result
+                                    )
                             elif child is not None:
                                 child.returncode = status_from_wait_result(reap_result)
                             root_reaped = True
                             break
-                remaining = min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS) - time.monotonic()
+                remaining = (
+                    min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS)
+                    - time.monotonic()
+                )
                 if remaining > 0:
                     time.sleep(remaining)
         if root_binding is not None:
@@ -2536,7 +2646,9 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
             root_binding is not None
             and not root_reaped
             and snapshot_errors
-            and not any(process_id != root_binding.identity.pid for process_id in bindings)
+            and not any(
+                process_id != root_binding.identity.pid for process_id in bindings
+            )
         ):
             # All known adopted bindings are gone, but failed snapshots never
             # prove that no unknown child existed.  Reap the authenticated
@@ -2550,7 +2662,9 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
                         root_reaped = True
                         if child is not None and child.returncode is None:
                             child.returncode = status_from_wait_result(
-                                root_result if reap_result is CHILD_ALREADY_REAPED else reap_result
+                                root_result
+                                if reap_result is CHILD_ALREADY_REAPED
+                                else reap_result
                             )
                         append_bounded_diagnostic(
                             adopted_cleanup_errors,
@@ -2656,7 +2770,10 @@ def run_bounded_identity(command: list[str], *, timeout: float, max_bytes: int) 
                     f"RPM identity additional cleanup failure: {cleanup_error}"
                 )
             raise primary_cleanup_error
-        if snapshot_primary_error is not None and primary_error is not snapshot_primary_error:
+        if (
+            snapshot_primary_error is not None
+            and primary_error is not snapshot_primary_error
+        ):
             if primary_error is not None:
                 snapshot_primary_error.add_note(
                     "RPM identity primary failure: "
@@ -2717,7 +2834,9 @@ def check_handoff_fd(*, handoff_fd: int, timeout: float, max_bytes: int) -> int:
     return 0
 
 
-def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: int) -> int:
+def run(
+    command: list[str], *, timeout: float, kill_after: float, handoff_fd: int
+) -> int:
     if (
         not math.isfinite(timeout)
         or not math.isfinite(kill_after)
@@ -2728,8 +2847,11 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
         raise ValueError("lifecycle timeout must exceed positive kill grace")
 
     deadline = time.monotonic() + timeout
-    terminate_at = deadline - kill_after - direct_children_cleanup_reserve(timeout) - (
-        2 * POLL_INTERVAL_SECONDS
+    terminate_at = (
+        deadline
+        - kill_after
+        - direct_children_cleanup_reserve(timeout)
+        - (2 * POLL_INTERVAL_SECONDS)
     )
     pidfd_send_signal = None
     supervisor_pid = os.getpid()
@@ -2823,7 +2945,9 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
             record_unresolved_children(
                 cleanup_errors,
                 phase="root signal",
-                count=sum(process_id != root_binding.identity.pid for process_id in bindings),
+                count=sum(
+                    process_id != root_binding.identity.pid for process_id in bindings
+                ),
             )
             return
         try:
@@ -2842,7 +2966,9 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
             record_unresolved_children(
                 cleanup_errors,
                 phase="root signal",
-                count=sum(process_id != root_binding.identity.pid for process_id in bindings),
+                count=sum(
+                    process_id != root_binding.identity.pid for process_id in bindings
+                ),
             )
             return
         try:
@@ -2860,11 +2986,16 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
                 label="RPM lifecycle root signal",
             )
         for _ in range(MAX_DRAIN_ROUNDS):
-            if not cleanup_budget_available(deadline, cleanup_errors, phase="root reap"):
+            if not cleanup_budget_available(
+                deadline, cleanup_errors, phase="root reap"
+            ):
                 record_unresolved_children(
                     cleanup_errors,
                     phase="root reap",
-                    count=sum(process_id != root_binding.identity.pid for process_id in bindings),
+                    count=sum(
+                        process_id != root_binding.identity.pid
+                        for process_id in bindings
+                    ),
                 )
                 return
             try:
@@ -2970,7 +3101,10 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
                     if reap_result is not None:
                         root_reaped = True
                         return
-            remaining = min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS) - time.monotonic()
+            remaining = (
+                min(deadline, time.monotonic() + POLL_INTERVAL_SECONDS)
+                - time.monotonic()
+            )
             if remaining > 0:
                 time.sleep(remaining)
 
@@ -2978,7 +3112,11 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
         pidfd_send_signal = require_kernel_primitives()
         validate_pidfd_send_signal(pidfd_send_signal)
         set_child_subreaper()
-        for signum in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP if hasattr(signal, "SIGHUP") else None):
+        for signum in (
+            signal.SIGTERM,
+            signal.SIGINT,
+            signal.SIGHUP if hasattr(signal, "SIGHUP") else None,
+        ):
             if signum is None:
                 continue
             previous_handlers[signum] = signal.getsignal(signum)
@@ -2987,7 +3125,7 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
         os.fstat(handoff_fd)
         ensure_launch_budget(terminate_at, phase="RPM lifecycle")
         child = subprocess.Popen(
-            command,
+            [*command],
             pass_fds=(handoff_fd,),
             start_new_session=True,
             close_fds=True,
@@ -3044,18 +3182,15 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
             if root_result is None and root_kill_sent:
                 root_result = peek_child(root_binding.identity.pid)
             try:
-                drained = (
-                    root_result is not None
-                    and drain_adopted_children(
-                        root_binding,
-                        bindings,
-                        pidfd_send_signal,
-                        cleanup_deadline=cleanup_deadline,
-                        deadline=deadline,
-                        signal_errors=signal_errors,
-                        snapshot_errors=snapshot_errors,
-                        cleanup_errors=cleanup_errors,
-                    )
+                drained = root_result is not None and drain_adopted_children(
+                    root_binding,
+                    bindings,
+                    pidfd_send_signal,
+                    cleanup_deadline=cleanup_deadline,
+                    deadline=deadline,
+                    signal_errors=signal_errors,
+                    snapshot_errors=snapshot_errors,
+                    cleanup_errors=cleanup_errors,
                 )
             except BaseException as drain_error:
                 if primary_cleanup_error is None:
@@ -3108,7 +3243,9 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
                 time.sleep(remaining)
 
         if root_status is None:
-            raise snapshot_primary(TimeoutError("RPM lifecycle cleanup deadline exceeded"))
+            raise snapshot_primary(
+                TimeoutError("RPM lifecycle cleanup deadline exceeded")
+            )
         if timed_out:
             result_status = 124
         elif received_signal[0] is not None:
@@ -3218,7 +3355,9 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
             root_binding is not None
             and not root_reaped
             and snapshot_errors
-            and not any(process_id != root_binding.identity.pid for process_id in bindings)
+            and not any(
+                process_id != root_binding.identity.pid for process_id in bindings
+            )
         ):
             # Snapshot failure blocks drain confirmation, but an authenticated
             # zombie root still needs bounded reap and explicit uncertainty.
@@ -3230,7 +3369,9 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
                         root_reaped = True
                         if child is not None and child.returncode is None:
                             child.returncode = status_from_wait_result(
-                                root_result if reap_result is CHILD_ALREADY_REAPED else reap_result
+                                root_result
+                                if reap_result is CHILD_ALREADY_REAPED
+                                else reap_result
                             )
                         append_bounded_diagnostic(
                             adopted_cleanup_errors,
@@ -3315,7 +3456,9 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
                 )
         for cleanup_error in adopted_cleanup_errors:
             if note_target is not None:
-                note_target.add_note(f"RPM lifecycle adopted-child cleanup failed: {cleanup_error}")
+                note_target.add_note(
+                    f"RPM lifecycle adopted-child cleanup failed: {cleanup_error}"
+                )
         if signal_errors:
             if note_target is not None:
                 note_signal_errors(
@@ -3338,12 +3481,18 @@ def run(command: list[str], *, timeout: float, kill_after: float, handoff_fd: in
                 )
             if signal_errors and note_target is not None:
                 report_signal_errors(signal_errors)
-        elif isinstance(primary_error, SupervisorInterrupted) and adopted_cleanup_errors:
+        elif (
+            isinstance(primary_error, SupervisorInterrupted) and adopted_cleanup_errors
+        ):
             report_cleanup_errors(
                 adopted_cleanup_errors,
                 prefix="RPM lifecycle cleanup diagnostic",
             )
-        if adopted_cleanup_errors and note_target is None and result_status in (None, 0):
+        if (
+            adopted_cleanup_errors
+            and note_target is None
+            and result_status in (None, 0)
+        ):
             primary_cleanup_error = adopted_cleanup_errors[0]
             for cleanup_error in adopted_cleanup_errors[1:]:
                 primary_cleanup_error.add_note(
@@ -3388,9 +3537,7 @@ def parse_args() -> argparse.Namespace:
         if value is not None and not math.isfinite(value):
             parser.error(f"{option_label} must be finite")
     if not 0 < arguments.handoff_max_bytes <= MAX_HANDOFF_BYTES:
-        parser.error(
-            f"--handoff-max-bytes must be between 1 and {MAX_HANDOFF_BYTES}"
-        )
+        parser.error(f"--handoff-max-bytes must be between 1 and {MAX_HANDOFF_BYTES}")
     if not 0 < arguments.identity_max_bytes <= MAX_IDENTITY_OUTPUT_BYTES:
         parser.error(
             f"--identity-max-bytes must be between 1 and {MAX_IDENTITY_OUTPUT_BYTES}"
@@ -3410,7 +3557,9 @@ def parse_args() -> argparse.Namespace:
             parser.error("handoff check does not accept lifecycle timeout options")
         return arguments
     if arguments.timeout is None or arguments.kill_after is None:
-        parser.error("--timeout and --kill-after are required for lifecycle supervision")
+        parser.error(
+            "--timeout and --kill-after are required for lifecycle supervision"
+        )
     if not arguments.command:
         parser.error("missing lifecycle command")
     return arguments

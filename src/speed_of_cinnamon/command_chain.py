@@ -11,7 +11,6 @@ import selectors
 import shlex
 import signal
 import subprocess  # nosec B404
-import sys
 import tempfile
 import threading
 import time
@@ -130,9 +129,13 @@ def _filtered_environment(base: dict[str, str] | None = None) -> dict[str, str]:
             if not isinstance(value, str):
                 raise CommandChainError("environment base must be a mapping")
             if _contains_escaped_null(key) or _contains_http_header_control_chars(key):
-                raise CommandChainError("environment key contains invalid control character")
+                raise CommandChainError(
+                    "environment key contains invalid control character"
+                )
             if _contains_environment_control_chars(value):
-                raise CommandChainError("environment value contains invalid control character")
+                raise CommandChainError(
+                    "environment value contains invalid control character"
+                )
             if _is_unsafe_env_var(key):
                 raise CommandChainError(f"environment key is not allowed: {key}")
             env[key] = value
@@ -169,10 +172,9 @@ def _terminate_bounded_process(
     process_tree: dict[int, str] | None = None,
     require_complete_scan: bool = True,
 ) -> bool:
-    if (
-        _LOCAL_MODEL_DIRECT_STATUS_OWNER_ATTRIBUTE in vars(proc)
-        or "_soc_local_model_direct_status" in vars(proc)
-    ):
+    if _LOCAL_MODEL_DIRECT_STATUS_OWNER_ATTRIBUTE in vars(
+        proc
+    ) or "_soc_local_model_direct_status" in vars(proc):
         return _terminate_local_model_direct_supervisor(
             proc,
             process_tree=process_tree,
@@ -191,7 +193,12 @@ def _terminate_bounded_process(
     tree_cleanup_confirmed = True
     process_wait_confirmed = False
     scan_incomplete = False
-    if process_tree is None and isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
+    if (
+        process_tree is None
+        and isinstance(pid, int)
+        and not isinstance(pid, bool)
+        and pid > 0
+    ):
         try:
             process_tree = _process_tree_descendant_identities(pid)
         except BaseException:
@@ -212,7 +219,10 @@ def _terminate_bounded_process(
             process_tree.update(pipe_holders)
     if process_tree is not None:
         tree_cleanup_confirmed = _kill_output_process_tree(process_tree)
-    if not root_identity_changed_after_exit and not _output_process_identity_is_current(proc):
+    if (
+        not root_identity_changed_after_exit
+        and not _output_process_identity_is_current(proc)
+    ):
         return False
     # Root identity changed after reaping: never signal the reused PID/group.
     root_reaped = root_identity_changed_after_exit or _output_process_is_reaped(proc)
@@ -237,8 +247,7 @@ def _terminate_bounded_process(
         process_wait_confirmed = True
     if process_tree is not None:
         tree_cleanup_confirmed = (
-            tree_cleanup_confirmed and
-            _wait_for_output_process_tree_stop(process_tree)
+            tree_cleanup_confirmed and _wait_for_output_process_tree_stop(process_tree)
         )
     return process_wait_confirmed and tree_cleanup_confirmed and not scan_incomplete
 
@@ -266,7 +275,11 @@ def _terminate_unidentified_bounded_process(
                     candidate_pidfd = pidfd_open(pid, 0)
                 except (AttributeError, NotImplementedError, TypeError, OSError):
                     candidate_pidfd = None
-                if isinstance(candidate_pidfd, int) and not isinstance(candidate_pidfd, bool) and candidate_pidfd >= 0:
+                if (
+                    isinstance(candidate_pidfd, int)
+                    and not isinstance(candidate_pidfd, bool)
+                    and candidate_pidfd >= 0
+                ):
                     pidfd = candidate_pidfd
                     try:
                         pidfd_send_signal(pidfd, signal.SIGKILL, None, 0)
@@ -422,16 +435,37 @@ class _BoundedPopenOwner:
 class _BoundedPopenThread(threading.Thread):
     """Non-daemon Popen worker; raw worker exceptions never cross boundary."""
 
-    def __init__(self, owner: _BoundedPopenOwner, args: tuple, kwargs: dict) -> None:
+    def __init__(
+        self,
+        owner: _BoundedPopenOwner,
+        command: Sequence[str],
+        *,
+        stdin_file,
+        environment: dict[str, str],
+        status_descriptor: int,
+    ) -> None:
         super().__init__(name="soc-popen", daemon=False)
         self._owner = owner
-        self._popen_args = args
-        self._popen_kwargs = kwargs
+        self._command = [*command]
+        self._stdin_file = stdin_file
+        self._environment = environment
+        self._pass_fds = (status_descriptor,) if status_descriptor >= 0 else ()
 
     def run(self) -> None:
         try:
             try:
-                process = subprocess.Popen(*self._popen_args, **self._popen_kwargs)
+                environment = _filtered_environment(self._environment)
+                process = subprocess.Popen(
+                    [*self._command],
+                    stdin=self._stdin_file,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env=environment,
+                    shell=False,
+                    close_fds=True,
+                    start_new_session=True,
+                    pass_fds=self._pass_fds,
+                )
             except BaseException as error:
                 outcome, error_number = _bounded_popen_exception_outcome(error)
                 self._owner.publish_outcome(outcome, error_number)
@@ -487,20 +521,14 @@ def _launch_bounded_process(
     status_descriptor: int,
     deadline: float,
 ) -> _BoundedPopenResult:
-    popen_kwargs = {
-        "stdin": stdin_file,
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.PIPE,
-        "env": environment,
-        "shell": False,
-        "close_fds": True,
-        "start_new_session": True,
-    }
-    if status_descriptor >= 0:
-        popen_kwargs["pass_fds"] = (status_descriptor,)
-
     owner = _BoundedPopenOwner()
-    worker = _BoundedPopenThread(owner, (argv,), popen_kwargs)
+    worker = _BoundedPopenThread(
+        owner,
+        argv,
+        stdin_file=stdin_file,
+        environment=environment,
+        status_descriptor=status_descriptor,
+    )
     primary: BaseException | None = None
     start_attempted = False
     try:
@@ -551,6 +579,7 @@ def _launch_bounded_process(
     process, outcome, error_number = owner.snapshot()
     return _BoundedPopenResult(process, outcome, error_number, primary)
 
+
 def _close_bounded_process_streams(
     proc: subprocess.Popen[bytes],
 ) -> list[BaseException]:
@@ -579,12 +608,12 @@ def _add_bounded_cleanup_notes(
 ) -> None:
     for cleanup_error in cleanup_errors:
         with suppress(BaseException):
-            primary.add_note(
-                f"{prefix} raised {type(cleanup_error).__name__}"
-            )
+            primary.add_note(f"{prefix} raised {type(cleanup_error).__name__}")
 
 
-def _run_bounded_final_cleanup_step(cleanup, cleanup_errors: list[BaseException]) -> None:
+def _run_bounded_final_cleanup_step(
+    cleanup, cleanup_errors: list[BaseException]
+) -> None:
     try:
         cleanup()
     except BaseException as error:
@@ -673,7 +702,9 @@ def _close_bounded_process_final_resources(
     if proc is not None:
         for attribute in ("stdout", "stderr"):
             stream = getattr(proc, attribute, None)
-            if stream is not None and not any(existing is stream for existing in streams):
+            if stream is not None and not any(
+                existing is stream for existing in streams
+            ):
                 streams.append(stream)
     for stream in streams:
         if id(stream) in closed_stream_ids:
@@ -703,7 +734,11 @@ def _output_process_is_reaped(proc: subprocess.Popen[bytes]) -> bool:
 
 
 def _process_has_exited_without_reaping(process_id: int) -> bool:
-    if not isinstance(process_id, int) or isinstance(process_id, bool) or process_id <= 0:
+    if (
+        not isinstance(process_id, int)
+        or isinstance(process_id, bool)
+        or process_id <= 0
+    ):
         return False
     try:
         raw = _read_proc_stat(process_id)
@@ -722,7 +757,11 @@ def _process_session_descendant_identities(
     *,
     expected_process_identity: str | None = None,
 ) -> dict[int, str] | None:
-    if not isinstance(process_id, int) or isinstance(process_id, bool) or process_id <= 0:
+    if (
+        not isinstance(process_id, int)
+        or isinstance(process_id, bool)
+        or process_id <= 0
+    ):
         return None
     proc_entries = _bounded_proc_entries()
     if proc_entries is None:
@@ -790,9 +829,7 @@ def _close_detached_descriptor_once(descriptor: int) -> BaseException | None:
     return None
 
 
-_LOCAL_MODEL_DIRECT_STATUS_OWNER_ATTRIBUTE = (
-    "_soc_local_model_direct_status_owner"
-)
+_LOCAL_MODEL_DIRECT_STATUS_OWNER_ATTRIBUTE = "_soc_local_model_direct_status_owner"
 _LOCAL_MODEL_DIRECT_STATUS_OWNER_CAPABILITY = object()
 
 
@@ -810,8 +847,7 @@ def _close_local_model_direct_status(proc: subprocess.Popen[bytes]) -> None:
     if close_error is not None and drop_error is not None:
         with suppress(BaseException):
             close_error.add_note(
-                "status owner reference cleanup raised "
-                f"{type(drop_error).__name__}"
+                "status owner reference cleanup raised " f"{type(drop_error).__name__}"
             )
     if close_error is not None:
         raise close_error
@@ -837,7 +873,9 @@ def _local_model_direct_status(
         try:
             descriptor = owner._value(0)
             if type(descriptor) is int and descriptor >= 0:
-                while len(payload) <= _local_model_direct_supervisor_status_frame_size():
+                while (
+                    len(payload) <= _local_model_direct_supervisor_status_frame_size()
+                ):
                     try:
                         chunk = os.read(
                             descriptor,
@@ -905,9 +943,7 @@ def _confirm_local_model_direct_cleanup(
         or "_soc_local_model_direct_status" in vars(proc)
     ):
         return cleanup_confirmed
-    return bool(
-        cleanup_confirmed and _local_model_direct_status(proc) is not None
-    )
+    return bool(cleanup_confirmed and _local_model_direct_status(proc) is not None)
 
 
 def _bind_local_model_direct_status_descriptor(
@@ -1002,8 +1038,7 @@ class _OwnedLaunchDescriptor:
             if close_error is not None:
                 with suppress(BaseException):
                     close_error.add_note(
-                        "launch descriptor mask cleanup raised "
-                        f"{type(exc).__name__}"
+                        "launch descriptor mask cleanup raised " f"{type(exc).__name__}"
                     )
                 return close_error
             return exc
@@ -1016,9 +1051,7 @@ def _take_local_model_direct_status_owner(
     owner: _OwnedLaunchDescriptorPair | None = None
     try:
         with _bounded_fd_critical_section():
-            candidate = vars(proc).get(
-                _LOCAL_MODEL_DIRECT_STATUS_OWNER_ATTRIBUTE
-            )
+            candidate = vars(proc).get(_LOCAL_MODEL_DIRECT_STATUS_OWNER_ATTRIBUTE)
             if (
                 type(candidate) is not _OwnedLaunchDescriptorPair
                 or vars(candidate).get("_owner_token")
@@ -1201,7 +1234,11 @@ def _close_unowned_descriptor_pair_once(
         with _bounded_fd_critical_section():
             closed: set[int] = set()
             for descriptor in descriptors:
-                if descriptor in closed or type(descriptor) is not int or descriptor < 0:
+                if (
+                    descriptor in closed
+                    or type(descriptor) is not int
+                    or descriptor < 0
+                ):
                     continue
                 closed.add(descriptor)
                 try:
@@ -1279,8 +1316,7 @@ def _bounded_process_launch_resources(
             try:
                 with _bounded_fd_critical_section():
                     status_descriptors = pipe2(
-                        getattr(os, "O_CLOEXEC", 0)
-                        | getattr(os, "O_NONBLOCK", 0)
+                        getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0)
                     )
                     resources.status_pair.acquire_pair(status_descriptors)
             except BaseException as exc:
@@ -1320,9 +1356,7 @@ def _bounded_process_launch_resources(
             and direct_supervisor
             and isinstance(exc, (OSError, PriorityScopeError))
         ):
-            raise CommandChainError(
-                _LOCAL_MODEL_DIRECT_SUPERVISOR_FAILURE
-            ) from None
+            raise CommandChainError(_LOCAL_MODEL_DIRECT_SUPERVISOR_FAILURE) from None
         raise
     else:
         cleanup_errors = resources.close()
@@ -1460,18 +1494,27 @@ def run_process_bounded_output(
         raise CommandChainError(
             f"input bytes must not exceed {MAX_BOUNDED_PROCESS_INPUT_BYTES}"
         )
-    if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+    if (
+        not isinstance(timeout_seconds, int)
+        or isinstance(timeout_seconds, bool)
+        or timeout_seconds <= 0
+    ):
         raise CommandChainError("timeout_seconds must be positive")
     if timeout_seconds > MAX_COMMAND_TIMEOUT_SECONDS:
         raise CommandChainError(
             f"timeout_seconds must not exceed {MAX_COMMAND_TIMEOUT_SECONDS}"
         )
-    if (
-        deadline is not None
-        and (isinstance(deadline, bool) or not isinstance(deadline, (int, float)) or not math.isfinite(deadline))
+    if deadline is not None and (
+        isinstance(deadline, bool)
+        or not isinstance(deadline, (int, float))
+        or not math.isfinite(deadline)
     ):
         raise CommandChainError("deadline must be finite")
-    if not isinstance(max_output_bytes, int) or isinstance(max_output_bytes, bool) or max_output_bytes <= 0:
+    if (
+        not isinstance(max_output_bytes, int)
+        or isinstance(max_output_bytes, bool)
+        or max_output_bytes <= 0
+    ):
         raise CommandChainError("max_output_bytes must be positive")
     if max_output_bytes > MAX_BOUNDED_PROCESS_OUTPUT_BYTES:
         raise CommandChainError(
@@ -1494,8 +1537,7 @@ def run_process_bounded_output(
         time.monotonic() + timeout_seconds if deadline is None else deadline
     )
     direct_supervisor = (
-        _local_model_direct_supervisor
-        is _LOCAL_MODEL_DIRECT_SUPERVISOR_CAPABILITY
+        _local_model_direct_supervisor is _LOCAL_MODEL_DIRECT_SUPERVISOR_CAPABILITY
     )
     with _bounded_process_launch_resources(
         direct_supervisor=direct_supervisor,
@@ -1513,9 +1555,7 @@ def run_process_bounded_output(
         handoff_cleanup_errors: list[BaseException] = []
         try:
             if time.monotonic() >= process_deadline:
-                raise CommandChainError(
-                    _command_timeout_detail(label, timeout_seconds)
-                )
+                raise CommandChainError(_command_timeout_detail(label, timeout_seconds))
             launch_result = _launch_bounded_process(
                 runtime_argv,
                 stdin_file=stdin_file,
@@ -1557,7 +1597,9 @@ def run_process_bounded_output(
                     )
                 )
                 cleanup_attempted = True
-                cleanup_suffix = "" if cleanup_confirmed else "; process cleanup was not confirmed"
+                cleanup_suffix = (
+                    "" if cleanup_confirmed else "; process cleanup was not confirmed"
+                )
                 raise CommandChainError(
                     f"{label} command process identity could not be verified{cleanup_suffix}"
                 )
@@ -1590,9 +1632,7 @@ def run_process_bounded_output(
                         pass
                 if "_soc_process_identity" not in vars(proc):
                     try:
-                        recovered_identity = _clipboard_lock_identity_for_pid(
-                            proc.pid
-                        )
+                        recovered_identity = _clipboard_lock_identity_for_pid(proc.pid)
                     except BaseException:
                         recovered_identity = None
                     if recovered_identity:
@@ -1623,12 +1663,8 @@ def run_process_bounded_output(
                     )
                 cleanup_attempted = True
                 if not cleanup_confirmed:
-                    exc.add_note(
-                        f"{label} command process cleanup was not confirmed"
-                    )
-                handoff_cleanup_errors.extend(
-                    _close_bounded_process_streams(proc)
-                )
+                    exc.add_note(f"{label} command process cleanup was not confirmed")
+                handoff_cleanup_errors.extend(_close_bounded_process_streams(proc))
             _add_bounded_cleanup_notes(
                 exc,
                 handoff_cleanup_errors,
@@ -1669,6 +1705,7 @@ def run_process_bounded_output(
         process_tree_at_exit: dict[int, str] | None = None
         process_tree_at_exit_scan_incomplete = False
         deferred_cleanup_errors: list[BaseException] = []
+
         def capture_process_tree_at_exit() -> None:
             nonlocal process_tree_at_exit, process_tree_at_exit_scan_incomplete
             if process_tree_at_exit is not None:
@@ -1676,7 +1713,9 @@ def run_process_bounded_output(
             process_tree_at_exit = process_tree_snapshot or {}
             if process_tree_snapshot_scan_incomplete:
                 process_tree_at_exit_scan_incomplete = True
-            pipe_holders = _retry_process_scan(lambda: _process_pipe_holder_identities(proc))
+            pipe_holders = _retry_process_scan(
+                lambda: _process_pipe_holder_identities(proc)
+            )
             if pipe_holders is None:
                 process_tree_at_exit_scan_incomplete = True
             else:
@@ -1710,7 +1749,9 @@ def run_process_bounded_output(
                         process_tree_snapshot.update(current_process_tree)
                     else:
                         process_tree_snapshot_scan_incomplete = True
-                    next_process_tree_snapshot = now + _PROCESS_TREE_SNAPSHOT_INTERVAL_SECONDS
+                    next_process_tree_snapshot = (
+                        now + _PROCESS_TREE_SNAPSHOT_INTERVAL_SECONDS
+                    )
                 root_exited_before_poll = (
                     proc.returncode is None
                     and _process_has_exited_without_reaping(getattr(proc, "pid", 0))
@@ -1721,7 +1762,9 @@ def run_process_bounded_output(
                     if root_exited_before_poll or _output_process_is_reaped(proc):
                         capture_process_tree_at_exit()
                     if process_exit_deadline is None:
-                        process_exit_deadline = min(process_deadline, now + _PIPE_DRAIN_GRACE_SECONDS)
+                        process_exit_deadline = min(
+                            process_deadline, now + _PIPE_DRAIN_GRACE_SECONDS
+                        )
                     active_deadline = process_exit_deadline
                 else:
                     active_deadline = process_deadline
@@ -1736,7 +1779,11 @@ def run_process_bounded_output(
                         )
                     )
                     cleanup_attempted = True
-                    cleanup_detail = "" if cleanup_confirmed else "; process cleanup was not confirmed"
+                    cleanup_detail = (
+                        ""
+                        if cleanup_confirmed
+                        else "; process cleanup was not confirmed"
+                    )
                     raise CommandChainError(
                         _command_timeout_detail(label, timeout_seconds) + cleanup_detail
                     )
@@ -1781,19 +1828,25 @@ def run_process_bounded_output(
                             )
                         )
                         cleanup_attempted = True
-                        cleanup_detail = "" if cleanup_confirmed else "; process cleanup was not confirmed"
+                        cleanup_detail = (
+                            ""
+                            if cleanup_confirmed
+                            else "; process cleanup was not confirmed"
+                        )
                         raise CommandChainError(
-                            f"{label} command output exceeded {max_output_bytes} bytes" + cleanup_detail
+                            f"{label} command output exceeded {max_output_bytes} bytes"
+                            + cleanup_detail
                         )
             try:
-                if (
-                    proc.returncode is None
-                    and _process_has_exited_without_reaping(getattr(proc, "pid", 0))
+                if proc.returncode is None and _process_has_exited_without_reaping(
+                    getattr(proc, "pid", 0)
                 ):
                     capture_process_tree_at_exit()
                 returncode = proc.poll()
                 if returncode is None:
-                    returncode = proc.wait(timeout=max(0.0, process_deadline - time.monotonic()))
+                    returncode = proc.wait(
+                        timeout=max(0.0, process_deadline - time.monotonic())
+                    )
                 if returncode is not None:
                     capture_process_tree_at_exit()
             except subprocess.TimeoutExpired:
@@ -1804,7 +1857,9 @@ def run_process_bounded_output(
                     )
                 )
                 cleanup_attempted = True
-                cleanup_detail = "" if cleanup_confirmed else "; process cleanup was not confirmed"
+                cleanup_detail = (
+                    "" if cleanup_confirmed else "; process cleanup was not confirmed"
+                )
                 raise CommandChainError(
                     _command_timeout_detail(label, timeout_seconds) + cleanup_detail
                 ) from None
@@ -1822,15 +1877,15 @@ def run_process_bounded_output(
                         raise CommandChainError(
                             f"{label} command {_LOCAL_MODEL_DIRECT_SUPERVISOR_FAILURE}"
                         )
-                    raise CommandChainError(f"{label} command descendant cleanup was not confirmed")
-            if (
-                process_tree_at_exit_scan_incomplete
-                and not (
-                    direct_supervisor
-                    and _local_model_direct_status(proc) is not None
-                )
+                    raise CommandChainError(
+                        f"{label} command descendant cleanup was not confirmed"
+                    )
+            if process_tree_at_exit_scan_incomplete and not (
+                direct_supervisor and _local_model_direct_status(proc) is not None
             ):
-                raise CommandChainError(f"{label} command descendant cleanup scan was incomplete")
+                raise CommandChainError(
+                    f"{label} command descendant cleanup scan was incomplete"
+                )
             if direct_supervisor:
                 status_result = _local_model_direct_status(proc)
                 if status_result is None:
@@ -1852,7 +1907,10 @@ def run_process_bounded_output(
             primary_exception = exc
             if not cleanup_attempted:
                 cleanup_tree = process_tree_at_exit or process_tree_snapshot
-                if process_tree_at_exit is None and process_tree_snapshot_scan_incomplete:
+                if (
+                    process_tree_at_exit is None
+                    and process_tree_snapshot_scan_incomplete
+                ):
                     cleanup_tree = None
                 cleanup_confirmed = _run_bounded_cleanup_with_interrupt_retry(
                     lambda: _terminate_bounded_process(
@@ -1866,9 +1924,12 @@ def run_process_bounded_output(
                     exc.add_note(f"{label} command process cleanup was not confirmed")
             raise
         finally:
-            cleanup_errors = deferred_cleanup_errors + _close_bounded_process_final_resources(
-                proc,
-                selector,
+            cleanup_errors = (
+                deferred_cleanup_errors
+                + _close_bounded_process_final_resources(
+                    proc,
+                    selector,
+                )
             )
             if primary_exception is not None:
                 for cleanup_error in cleanup_errors:
@@ -1921,8 +1982,12 @@ def _command_path(command: str) -> str:
     command_name = command.strip()
     if not command_name:
         raise CommandChainError("command is empty")
-    if os.path.sep in command_name or (os.path.altsep and os.path.altsep in command_name):
-        raise CommandChainError("command must be a bare command name without path separators")
+    if os.path.sep in command_name or (
+        os.path.altsep and os.path.altsep in command_name
+    ):
+        raise CommandChainError(
+            "command must be a bare command name without path separators"
+        )
     if _contains_command_control_chars(command_name):
         raise CommandChainError("command contains invalid control character")
     resolved = _which(command_name)
@@ -1955,7 +2020,9 @@ def _contains_environment_control_chars(value: str) -> bool:
     if isinstance(value, bool) or not isinstance(value, str):
         raise CommandChainError("value must be text")
     return any(
-        (codepoint := ord(char)) < 0x20 or codepoint == 0x7F or 0x80 <= codepoint <= 0x9F
+        (codepoint := ord(char)) < 0x20
+        or codepoint == 0x7F
+        or 0x80 <= codepoint <= 0x9F
         for char in value
     )
 
@@ -2091,7 +2158,8 @@ def split_command_chain(command: str, label: str = "command") -> list[list[str]]
             if len(segments) >= MAX_COMMAND_SEGMENTS:
                 raise CommandChainError(f"{label} command has too many segments")
             raise CommandChainError(
-                f"{label} command ended with &&" if segment_index == len(raw_segments) - 1
+                f"{label} command ended with &&"
+                if segment_index == len(raw_segments) - 1
                 else f"empty {label} command segment before &&"
             )
         if len(segments) >= MAX_COMMAND_SEGMENTS:
@@ -2105,7 +2173,9 @@ def split_command_chain(command: str, label: str = "command") -> list[list[str]]
     for segment in segments:
         for token in segment:
             if token in FORBIDDEN_COMMAND_OPERATORS:
-                raise CommandChainError(f"unsupported shell operator in {label} command: {token}")
+                raise CommandChainError(
+                    f"unsupported shell operator in {label} command: {token}"
+                )
     return segments
 
 
@@ -2136,11 +2206,15 @@ def run_command_chain(
     if max_output_chars <= 0:
         raise CommandChainError("max_output_chars must be positive")
     if max_output_chars > MAX_COMMAND_OUTPUT_CHARS:
-        raise CommandChainError(f"max_output_chars must not exceed {MAX_COMMAND_OUTPUT_CHARS}")
+        raise CommandChainError(
+            f"max_output_chars must not exceed {MAX_COMMAND_OUTPUT_CHARS}"
+        )
     if not isinstance(max_input_chars, int) or isinstance(max_input_chars, bool):
         raise CommandChainError("max_input_chars must be an integer")
     if max_input_chars > MAX_COMMAND_INPUT_CHARS:
-        raise CommandChainError(f"max_input_chars must not exceed {MAX_COMMAND_INPUT_CHARS}")
+        raise CommandChainError(
+            f"max_input_chars must not exceed {MAX_COMMAND_INPUT_CHARS}"
+        )
     if max_input_chars < 0:
         raise CommandChainError("max_input_chars must be non-negative")
     if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool):
@@ -2171,7 +2245,11 @@ def run_command_chain(
     try:
         personalization_env = command_environment(personal_context, vocabulary)
         env = (
-            {key: value for key, value in personalization_env.items() if isinstance(key, str) and not _is_unsafe_env_var(key)}
+            {
+                key: value
+                for key, value in personalization_env.items()
+                if isinstance(key, str) and not _is_unsafe_env_var(key)
+            }
             if include_personalization_env
             else {}
         )
@@ -2185,9 +2263,13 @@ def run_command_chain(
 
     for segment in segments:
         if time.monotonic() >= chain_deadline:
-            raise CommandChainError(f"{label} command timed out after {timeout_seconds}s")
+            raise CommandChainError(
+                f"{label} command timed out after {timeout_seconds}s"
+            )
         if len(output) > max_input_chars:
-            raise CommandChainError(f"{label} command input exceeded {max_input_chars} characters")
+            raise CommandChainError(
+                f"{label} command input exceeded {max_input_chars} characters"
+            )
 
         cmd = list(segment)
         if len(cmd) > MAX_COMMAND_SEGMENT_TOKENS:
@@ -2200,18 +2282,27 @@ def run_command_chain(
             command_chars_len = sum(len(item) + 1 for item in cmd)
             command_bytes_len = sum(len(item.encode("utf-8")) + 1 for item in cmd)
         except UnicodeEncodeError as exc:
-            raise CommandChainError(f"invalid {label} command: not valid UTF-8") from exc
-        if command_chars_len > MAX_COMMAND_LENGTH_CHARS or command_bytes_len > MAX_COMMAND_LENGTH_CHARS:
+            raise CommandChainError(
+                f"invalid {label} command: not valid UTF-8"
+            ) from exc
+        if (
+            command_chars_len > MAX_COMMAND_LENGTH_CHARS
+            or command_bytes_len > MAX_COMMAND_LENGTH_CHARS
+        ):
             raise CommandChainError(f"invalid {label} command: command too long")
         executable = str(cmd[0]).strip()
         if not executable:
             raise CommandChainError(f"invalid {label} command segment")
-        if _contains_escaped_null(executable) or any(_contains_escaped_null(str(arg)) for arg in cmd[1:]):
+        if _contains_escaped_null(executable) or any(
+            _contains_escaped_null(str(arg)) for arg in cmd[1:]
+        ):
             raise CommandChainError(f"{label} command contains invalid null byte")
         if _contains_command_control_chars(executable) or any(
             _contains_command_argument_control_chars(str(arg)) for arg in cmd[1:]
         ):
-            raise CommandChainError(f"{label} command contains invalid control character")
+            raise CommandChainError(
+                f"{label} command contains invalid control character"
+            )
         runtime_command = _command_path(executable)
         runtime_argv = [runtime_command, *cmd[1:]]
         if local_model_priority:
@@ -2274,7 +2365,9 @@ def run_command_chain(
                 _local_model_direct_supervisor=local_model_direct_supervisor,
             )
             if returncode != 0:
-                detail = _command_failure_detail(returncode, len(stdout_data), len(stderr_data))
+                detail = _command_failure_detail(
+                    returncode, len(stdout_data), len(stderr_data)
+                )
                 raise CommandChainError(f"{label} command failed: {detail}")
             try:
                 decoded_output = stdout_data.decode("utf-8")
@@ -2282,11 +2375,15 @@ def run_command_chain(
                 raise CommandChainError("command output is not valid UTF-8") from None
             segment_output = decoded_output.rstrip("\r\n")
             if len(segment_output) > max_output_chars:
-                raise CommandChainError(f"{label} command output exceeded {max_output_chars} characters")
+                raise CommandChainError(
+                    f"{label} command output exceeded {max_output_chars} characters"
+                )
             if _contains_escaped_null(segment_output):
                 raise CommandChainError("command output contains invalid null byte")
             if _contains_command_output_control_chars(segment_output):
-                raise CommandChainError("command output contains invalid control character")
+                raise CommandChainError(
+                    "command output contains invalid control character"
+                )
             output = segment_output
             try:
                 input_bytes = output.encode("utf-8")
@@ -2295,7 +2392,9 @@ def run_command_chain(
         except FileNotFoundError as exc:
             raise CommandChainError(f"{label} command not found: {executable}") from exc
         except subprocess.TimeoutExpired as exc:
-            raise CommandChainError(f"{label} command timed out after {timeout_seconds}s") from exc
+            raise CommandChainError(
+                f"{label} command timed out after {timeout_seconds}s"
+            ) from exc
         except OSError:
             raise CommandChainError(f"{label} command execution failed") from None
     return output
@@ -2343,4 +2442,6 @@ def _read_file_head(file: io.BufferedRandom, max_chars: int) -> str:
     if _contains_escaped_null(text):
         raise CommandChainError("command output contains invalid null byte")
     return text
+
+
 _CHAIN_SEGMENT_SEPARATOR = "".join(["&", "&"])

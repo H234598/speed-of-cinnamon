@@ -30,7 +30,9 @@ MAX_DECODE_PROFILE_BYTES = MAX_RESULT_BYTES
 MAX_CORPUS_BYTES = 1 << 20
 MAX_CORPUS_AUDIO_FILE_BYTES = 32 * 1024 * 1024
 MAX_SELECTED_CORPUS_AUDIO_BYTES = 256 * 1024 * 1024
-MAX_ATTESTATION_REQUEST_BYTES = MAX_ARTIFACT_MANIFEST_BYTES + (12 * MAX_PATH_CHARS) + 1024
+MAX_ATTESTATION_REQUEST_BYTES = (
+    MAX_ARTIFACT_MANIFEST_BYTES + (12 * MAX_PATH_CHARS) + 1024
+)
 MAX_ARTIFACT_FILES = 4096
 MAX_ARTIFACT_PATH_CHARS = 512
 MAX_ARTIFACT_PATH_BYTES = 2048
@@ -47,8 +49,8 @@ WORKER_ERROR_CODES = frozenset(
         "artifact-root-invalid",
         "artifact-tree-changed",
         "artifact-tree-mismatch",
-    "benchmark-corpus-invalid",
-    "benchmark-audio-invalid",
+        "benchmark-corpus-invalid",
+        "benchmark-audio-invalid",
         "benchmark-request-invalid",
         "internal",
         "python-isolation",
@@ -516,7 +518,9 @@ def _benchmark_run_pair(
     first_runtime: str,
     clip_order_seed: int,
 ) -> _BenchmarkRunPair:
-    other_runtime = runtime_ids[1] if first_runtime == runtime_ids[0] else runtime_ids[0]
+    other_runtime = (
+        runtime_ids[1] if first_runtime == runtime_ids[0] else runtime_ids[0]
+    )
     return _BenchmarkRunPair(
         runtime_order=(first_runtime, other_runtime),
         clip_order_seed=clip_order_seed,
@@ -689,10 +693,7 @@ def _benchmark_run_plan(value: object) -> _BenchmarkRunPlan:
         _benchmark_invalid()
     clips = _benchmark_reference(payload.get("clips"))
     blocks_value = payload.get("model_blocks")
-    if (
-        type(blocks_value) is not list
-        or not 1 <= len(blocks_value) <= MAX_MODEL_BLOCKS
-    ):
+    if type(blocks_value) is not list or not 1 <= len(blocks_value) <= MAX_MODEL_BLOCKS:
         _benchmark_invalid()
     blocks: list[_BenchmarkModelBlock] = []
     runtime_ids = (runtimes[0].artifact_id, runtimes[1].artifact_id)
@@ -714,10 +715,9 @@ def _benchmark_run_plan(value: object) -> _BenchmarkRunPlan:
     references = (*runtimes, clips, *(block.model for block in blocks))
     reference_ids = tuple(value.artifact_id for value in references)
     reference_hashes = tuple(value.manifest_sha256 for value in references)
-    if (
-        len(set(reference_ids)) != len(reference_ids)
-        or len(set(reference_hashes)) != len(reference_hashes)
-    ):
+    if len(set(reference_ids)) != len(reference_ids) or len(
+        set(reference_hashes)
+    ) != len(reference_hashes):
         _benchmark_invalid()
     return _BenchmarkRunPlan(
         schema_version=schema_version,
@@ -851,9 +851,8 @@ def _benchmark_artifact(
         payload.get("manifest"),
         manifest_sha256=payload.get("manifest_sha256"),
     )
-    if (
-        manifest.kind != expected_kind
-        or not _same_benchmark_reference(manifest.reference, expected_reference)
+    if manifest.kind != expected_kind or not _same_benchmark_reference(
+        manifest.reference, expected_reference
     ):
         _benchmark_invalid()
     return _BenchmarkArtifact(root=root, manifest=manifest)
@@ -1288,8 +1287,7 @@ def _parse_benchmark_corpus_checked(
         or len(ids) != len(set(ids))
         or len(paths) != len(set(paths))
         or len(audio_hashes) != len(set(audio_hashes))
-        or set(manifest_by_path)
-        != {request.corpus.manifest_member, *paths}
+        or set(manifest_by_path) != {request.corpus.manifest_member, *paths}
     ):
         _corpus_invalid()
 
@@ -1532,7 +1530,10 @@ def _parse_artifact_request(data: bytes, *, nonce: str) -> _ArtifactRequest:
         raise WorkerFailure("artifact-attestation-failed")
     for path in paths:
         components = path.split("/")
-        if any("/".join(components[:depth]) in path_set for depth in range(1, len(components))):
+        if any(
+            "/".join(components[:depth]) in path_set
+            for depth in range(1, len(components))
+        ):
             raise WorkerFailure("artifact-attestation-failed")
     return _ArtifactRequest(root, artifact_id, manifest_sha256, tuple(files))
 
@@ -1929,24 +1930,31 @@ def _attest_artifact(request: _ArtifactRequest) -> dict[str, object]:
             snapshots=second,
             expected=first,
         )
-        if second != first or _directory_snapshot(
-            root,
-            user_id=user_id,
-            device=root_snapshot.device,
-            exact_mode=True,
-            error_code="artifact-tree-changed",
-        ) != root_snapshot:
-            raise WorkerFailure("artifact-tree-changed")
-        rebound = _open_bound_root(request.root, error_code="artifact-tree-changed")
-        rebound_error: BaseException | None = None
-        try:
-            if _directory_snapshot(
-                rebound,
+        if (
+            second != first
+            or _directory_snapshot(
+                root,
                 user_id=user_id,
                 device=root_snapshot.device,
                 exact_mode=True,
                 error_code="artifact-tree-changed",
-            ) != root_snapshot:
+            )
+            != root_snapshot
+        ):
+            raise WorkerFailure("artifact-tree-changed")
+        rebound = _open_bound_root(request.root, error_code="artifact-tree-changed")
+        rebound_error: BaseException | None = None
+        try:
+            if (
+                _directory_snapshot(
+                    rebound,
+                    user_id=user_id,
+                    device=root_snapshot.device,
+                    exact_mode=True,
+                    error_code="artifact-tree-changed",
+                )
+                != root_snapshot
+            ):
                 raise WorkerFailure("artifact-tree-changed")
         except BaseException as exc:
             rebound_error = exc
@@ -2006,9 +2014,7 @@ def main(argv: list[str] | None = None) -> int:
         returncode = 65
     except (Exception, SystemExit):
         code = (
-            "artifact-attestation-failed"
-            if mode == "attest-artifact"
-            else "internal"
+            "artifact-attestation-failed" if mode == "attest-artifact" else "internal"
         )
         payload = _error_payload(nonce, code)
         returncode = 65
@@ -2054,7 +2060,10 @@ def _benchmark_audio_preflight(
     ):
         raise ValueError
     phase = block.phases[selection.phase_index]
-    if type(phase) is not _BenchmarkRunPhase or type(phase.pair) is not _BenchmarkRunPair:
+    if (
+        type(phase) is not _BenchmarkRunPhase
+        or type(phase.pair) is not _BenchmarkRunPair
+    ):
         raise ValueError
     order_seed = phase.pair.clip_order_seed
     if (
@@ -2302,26 +2311,32 @@ def _read_attested_corpus_audio_checked(
             error_code="benchmark-audio-invalid",
         )
         payload = _pread_corpus_audio(file_descriptor, declaration.size)
-        if _file_snapshot(
-            file_descriptor,
-            declaration,
-            user_id=user_id,
-            device=root_snapshot.device,
-            error_code="benchmark-audio-invalid",
-        ) != file_snapshot:
+        if (
+            _file_snapshot(
+                file_descriptor,
+                declaration,
+                user_id=user_id,
+                device=root_snapshot.device,
+                error_code="benchmark-audio-invalid",
+            )
+            != file_snapshot
+        ):
             raise ValueError
         for slot in range(len(directory_snapshots)):
             descriptor = descriptors[slot]
             initial = directory_snapshots[slot]
             if type(descriptor) is not int or type(initial) is not _StatSnapshot:
                 raise ValueError
-            if _directory_snapshot(
-                descriptor,
-                user_id=user_id,
-                device=root_snapshot.device,
-                exact_mode=True,
-                error_code="benchmark-audio-invalid",
-            ) != initial:
+            if (
+                _directory_snapshot(
+                    descriptor,
+                    user_id=user_id,
+                    device=root_snapshot.device,
+                    exact_mode=True,
+                    error_code="benchmark-audio-invalid",
+                )
+                != initial
+            ):
                 raise ValueError
         digest = hashlib.sha256(payload).hexdigest()
         if not secrets.compare_digest(digest, declaration.sha256):

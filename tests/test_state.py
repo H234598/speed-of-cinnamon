@@ -35,7 +35,9 @@ class StateStoreTest(unittest.TestCase):
             state_module._flock_retry(1, fcntl.LOCK_EX, timeout_seconds=float("inf"))
 
     def test_state_lock_rejects_oversized_timeout(self) -> None:
-        with self.assertRaisesRegex(RuntimeError, "state lock timeout exceeds safe limit"):
+        with self.assertRaisesRegex(
+            RuntimeError, "state lock timeout exceeds safe limit"
+        ):
             state_module._flock_retry(
                 1,
                 fcntl.LOCK_EX,
@@ -52,23 +54,35 @@ class StateStoreTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
-            with mock.patch.object(state_module.fcntl, "flock", side_effect=interrupt_first_lock):
+            with mock.patch.object(
+                state_module.fcntl, "flock", side_effect=interrupt_first_lock
+            ):
                 with store._locked():
                     pass
 
         self.assertEqual(
             operations,
-            [fcntl.LOCK_EX | fcntl.LOCK_NB, fcntl.LOCK_EX | fcntl.LOCK_NB, fcntl.LOCK_UN],
+            [
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                fcntl.LOCK_EX | fcntl.LOCK_NB,
+                fcntl.LOCK_UN,
+            ],
         )
 
     def test_state_lock_times_out_when_exclusive_lock_stays_busy(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
             with (
-                mock.patch.object(state_module, "STATE_LOCK_TIMEOUT_SECONDS", 0.01, create=True),
-                mock.patch.object(state_module.fcntl, "flock", side_effect=BlockingIOError),
+                mock.patch.object(
+                    state_module, "STATE_LOCK_TIMEOUT_SECONDS", 0.01, create=True
+                ),
+                mock.patch.object(
+                    state_module.fcntl, "flock", side_effect=BlockingIOError
+                ),
             ):
-                with self.assertRaisesRegex(RuntimeError, "state lock acquisition timed out"):
+                with self.assertRaisesRegex(
+                    RuntimeError, "state lock acquisition timed out"
+                ):
                     with store._locked():
                         pass
 
@@ -212,10 +226,13 @@ class StateStoreTest(unittest.TestCase):
         self,
     ) -> None:
         for timeout_seconds in (0, -0.1):
-            with self.subTest(timeout_seconds=timeout_seconds), mock.patch.object(
-                state_module.fcntl,
-                "flock",
-            ) as flock:
+            with (
+                self.subTest(timeout_seconds=timeout_seconds),
+                mock.patch.object(
+                    state_module.fcntl,
+                    "flock",
+                ) as flock,
+            ):
                 with self.assertRaisesRegex(
                     RuntimeError,
                     "^state lock timeout is invalid$",
@@ -238,18 +255,10 @@ class StateStoreTest(unittest.TestCase):
             ):
                 with self.subTest(source=source, failure=type(failure).__name__):
                     flock = mock.Mock(
-                        side_effect=(
-                            BlockingIOError()
-                            if source == "sleep"
-                            else None
-                        )
+                        side_effect=(BlockingIOError() if source == "sleep" else None)
                     )
                     monotonic = mock.Mock(
-                        side_effect=(
-                            failure
-                            if source == "monotonic"
-                            else (40.0, 40.0)
-                        )
+                        side_effect=(failure if source == "monotonic" else (40.0, 40.0))
                     )
                     sleep = mock.Mock(
                         side_effect=(failure if source == "sleep" else None)
@@ -389,9 +398,7 @@ class StateStoreTest(unittest.TestCase):
 
     def test_read_rejects_malformed_pending_cleanup_owner_paths(self) -> None:
         oversized_text = "/" + ("a" * MAX_PENDING_CLEANUP_OWNER_PATH_CHARS)
-        oversized_bytes = "/" + (
-            "é" * (MAX_PENDING_CLEANUP_OWNER_PATH_CHARS // 2)
-        )
+        oversized_bytes = "/" + ("é" * (MAX_PENDING_CLEANUP_OWNER_PATH_CHARS // 2))
         invalid_values = {
             "scalar": "/tmp/artifact.wav",
             "object": {"owner": "/tmp/artifact.wav"},
@@ -433,9 +440,7 @@ class StateStoreTest(unittest.TestCase):
     def test_pending_cleanup_owner_path_accepts_exact_shared_limit(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
-            owner = "/" + (
-                "a" * (MAX_PENDING_CLEANUP_OWNER_PATH_CHARS - 1)
-            )
+            owner = "/" + ("a" * (MAX_PENDING_CLEANUP_OWNER_PATH_CHARS - 1))
             store = StateStore(path)
 
             store.write(
@@ -449,10 +454,7 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(loaded.pending_cleanup_owner_paths, (owner,))
 
     def test_pending_cleanup_backup_entries_round_trip(self) -> None:
-        entry = (
-            ".cleanup.0123456789abcdef.fedcba9876543210.bak"
-            "|1|2|33152|1|6|7|8"
-        )
+        entry = ".cleanup.0123456789abcdef.fedcba9876543210.bak" "|1|2|33152|1|6|7|8"
         v2_entry = (
             ".cleanup.v2."
             "0123456789abcdef0123456789abcdef."
@@ -501,9 +503,7 @@ class StateStoreTest(unittest.TestCase):
 
     def test_cleanup_backup_restore_journal_round_trip(self) -> None:
         audio_entry = (
-            ".cleanup.v2."
-            f"{'1' * 32}.{'2' * 32}.{'3' * 32}.bak"
-            "|1|2|33152|1|6|7|8"
+            ".cleanup.v2." f"{'1' * 32}.{'2' * 32}.{'3' * 32}.bak" "|1|2|33152|1|6|7|8"
         )
         log_entry = (
             ".cleanup.v2."
@@ -569,21 +569,16 @@ class StateStoreTest(unittest.TestCase):
         self,
     ) -> None:
         entry = (
-            ".cleanup.v2."
-            f"{'1' * 32}.{'2' * 32}.{'3' * 32}.bak"
-            "|1|2|33152|1|6|7|8"
+            ".cleanup.v2." f"{'1' * 32}.{'2' * 32}.{'3' * 32}.bak" "|1|2|33152|1|6|7|8"
         )
         legacy_entry = (
-            ".cleanup.0123456789abcdef.fedcba9876543210.bak"
-            "|1|2|33152|1|6|7|8"
+            ".cleanup.0123456789abcdef.fedcba9876543210.bak" "|1|2|33152|1|6|7|8"
         )
         invalid_values = {
             "missing-entry": {},
             "legacy-entry": {
                 "pending_cleanup_backup_entries": [legacy_entry],
-                "pending_cleanup_restore_owner_paths": [
-                    "/tmp/recording.wav"
-                ],
+                "pending_cleanup_restore_owner_paths": ["/tmp/recording.wav"],
             },
             "missing-owner": {
                 "pending_cleanup_backup_entries": [entry],
@@ -597,25 +592,19 @@ class StateStoreTest(unittest.TestCase):
             },
             "overflow": {
                 "pending_cleanup_backup_entries": [entry],
-                "pending_cleanup_restore_owner_paths": [
-                    "/tmp/recording.wav"
-                ],
+                "pending_cleanup_restore_owner_paths": ["/tmp/recording.wav"],
                 "cleanup_backup_journal_overflow": True,
             },
             "active-process": {
                 "pending_cleanup_backup_entries": [entry],
-                "pending_cleanup_restore_owner_paths": [
-                    "/tmp/recording.wav"
-                ],
+                "pending_cleanup_restore_owner_paths": ["/tmp/recording.wav"],
                 "pid": 1234,
                 "process_identity": "owner-identity",
             },
             "idle": {
                 "status": "idle",
                 "pending_cleanup_backup_entries": [entry],
-                "pending_cleanup_restore_owner_paths": [
-                    "/tmp/recording.wav"
-                ],
+                "pending_cleanup_restore_owner_paths": ["/tmp/recording.wav"],
             },
         }
         with tempfile.TemporaryDirectory() as tmp:
@@ -647,9 +636,7 @@ class StateStoreTest(unittest.TestCase):
 
     def test_read_rejects_restore_owners_without_restore_flag(self) -> None:
         entry = (
-            ".cleanup.v2."
-            f"{'1' * 32}.{'2' * 32}.{'3' * 32}.bak"
-            "|1|2|33152|1|6|7|8"
+            ".cleanup.v2." f"{'1' * 32}.{'2' * 32}.{'3' * 32}.bak" "|1|2|33152|1|6|7|8"
         )
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
@@ -658,9 +645,7 @@ class StateStoreTest(unittest.TestCase):
                     payload = {
                         "status": "finalizing",
                         "audio_path": "/tmp/recording.wav",
-                        "pending_cleanup_restore_owner_paths": [
-                            "/tmp/recording.wav"
-                        ],
+                        "pending_cleanup_restore_owner_paths": ["/tmp/recording.wav"],
                         "pending_cleanup_backup_entries": [entry],
                     }
                     if flag != "missing":
@@ -681,15 +666,12 @@ class StateStoreTest(unittest.TestCase):
             "non-text": [1],
             "bad basename": [f"../{valid_name}|1|2|33152|1|6|7|8"],
             "uppercase hex": [
-                ".cleanup.0123456789ABCDEF.fedcba9876543210.bak"
-                "|1|2|33152|1|6|7|8"
+                ".cleanup.0123456789ABCDEF.fedcba9876543210.bak" "|1|2|33152|1|6|7|8"
             ],
             "missing identity": [valid_name],
             "extra identity": [f"{valid_entry}|9"],
             "negative identity": [f"{valid_name}|-1|2|33152|1|6|7|8"],
-            "noncanonical identity": [
-                f"{valid_name}|01|2|33152|1|6|7|8"
-            ],
+            "noncanonical identity": [f"{valid_name}|01|2|33152|1|6|7|8"],
             "oversized identity": [
                 f"{valid_name}|18446744073709551616|2|33152|1|6|7|8"
             ],
@@ -699,10 +681,7 @@ class StateStoreTest(unittest.TestCase):
                 f"{valid_name}|9|2|33152|1|6|7|8",
             ],
             "too many entries": [
-                (
-                    f".cleanup.{index:016x}.fedcba9876543210.bak"
-                    "|1|2|33152|1|6|7|8"
-                )
+                (f".cleanup.{index:016x}.fedcba9876543210.bak" "|1|2|33152|1|6|7|8")
                 for index in range(MAX_PENDING_CLEANUP_BACKUP_ENTRIES + 1)
             ],
         }
@@ -801,7 +780,10 @@ class StateStoreTest(unittest.TestCase):
             path = Path(tmp) / "state.json"
             path.write_text('{"status":"idle"}', encoding="utf-8")
             path.chmod(0o600)
-            with mock.patch("speed_of_cinnamon.state.json.loads", side_effect=RecursionError("too deep")):
+            with mock.patch(
+                "speed_of_cinnamon.state.json.loads",
+                side_effect=RecursionError("too deep"),
+            ):
                 state = StateStore(path).read()
 
         self.assertEqual(state.error, "state file could not be read")
@@ -811,7 +793,10 @@ class StateStoreTest(unittest.TestCase):
             path = Path(tmp) / "state.json"
             path.write_text('{"status":"idle"}', encoding="utf-8")
             path.chmod(0o600)
-            with mock.patch("speed_of_cinnamon.state.json.loads", side_effect=MemoryError("too large")):
+            with mock.patch(
+                "speed_of_cinnamon.state.json.loads",
+                side_effect=MemoryError("too large"),
+            ):
                 state = StateStore(path).read()
 
         self.assertEqual(state.error, "state file could not be read")
@@ -820,14 +805,19 @@ class StateStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             os.chmod(tmp, 0o777)
             store = StateStore(Path(tmp) / "state.json")
-            with self.assertRaisesRegex(RuntimeError, "state lock directory must be private"):
+            with self.assertRaisesRegex(
+                RuntimeError, "state lock directory must be private"
+            ):
                 store.write(RecordingState(status="idle"))
 
     def test_state_lock_closes_parent_fd_when_directory_validation_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
             with (
-                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch(
+                    "speed_of_cinnamon.state.ensure_directory_without_following_symlinks",
+                    return_value=123,
+                ),
                 mock.patch(
                     "speed_of_cinnamon.state.assert_fd_is_private_directory",
                     side_effect=RuntimeError("directory not private"),
@@ -839,11 +829,16 @@ class StateStoreTest(unittest.TestCase):
 
             mocked_close.assert_called_once_with(123)
 
-    def test_state_lock_closes_parent_fd_when_directory_validation_is_interrupted(self) -> None:
+    def test_state_lock_closes_parent_fd_when_directory_validation_is_interrupted(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
             with (
-                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch(
+                    "speed_of_cinnamon.state.ensure_directory_without_following_symlinks",
+                    return_value=123,
+                ),
                 mock.patch(
                     "speed_of_cinnamon.state.assert_fd_is_private_directory",
                     side_effect=KeyboardInterrupt,
@@ -855,11 +850,16 @@ class StateStoreTest(unittest.TestCase):
 
             mocked_close.assert_called_once_with(123)
 
-    def test_state_lock_preserves_directory_validation_error_when_parent_close_fails(self) -> None:
+    def test_state_lock_preserves_directory_validation_error_when_parent_close_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
             with (
-                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch(
+                    "speed_of_cinnamon.state.ensure_directory_without_following_symlinks",
+                    return_value=123,
+                ),
                 mock.patch(
                     "speed_of_cinnamon.state.assert_fd_is_private_directory",
                     side_effect=RuntimeError("directory not private"),
@@ -869,14 +869,18 @@ class StateStoreTest(unittest.TestCase):
                     side_effect=OSError("/private/state-secret.json"),
                 ),
             ):
-                with self.assertRaisesRegex(RuntimeError, "directory not private") as caught:
+                with self.assertRaisesRegex(
+                    RuntimeError, "directory not private"
+                ) as caught:
                     store.write(RecordingState())
 
             notes = "\n".join(caught.exception.__notes__)
             self.assertIn("state lock cleanup failed", notes)
             self.assertNotIn("state-secret.json", notes)
 
-    def test_state_lock_preserves_lock_validation_error_when_lock_fd_close_fails(self) -> None:
+    def test_state_lock_preserves_lock_validation_error_when_lock_fd_close_fails(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
 
@@ -885,7 +889,10 @@ class StateStoreTest(unittest.TestCase):
                     raise OSError("lock fd close failed")
 
             with (
-                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch(
+                    "speed_of_cinnamon.state.ensure_directory_without_following_symlinks",
+                    return_value=123,
+                ),
                 mock.patch("speed_of_cinnamon.state.assert_fd_is_private_directory"),
                 mock.patch(
                     "speed_of_cinnamon.state.assert_fd_is_regular_private_file",
@@ -893,13 +900,19 @@ class StateStoreTest(unittest.TestCase):
                 ),
                 mock.patch("speed_of_cinnamon.state.os.open", return_value=456),
                 mock.patch("speed_of_cinnamon.state.fcntl.flock"),
-                mock.patch("speed_of_cinnamon.state.os.close", side_effect=fail_lock_close),
+                mock.patch(
+                    "speed_of_cinnamon.state.os.close", side_effect=fail_lock_close
+                ),
             ):
-                with self.assertRaisesRegex(RuntimeError, "lock file not private") as caught:
+                with self.assertRaisesRegex(
+                    RuntimeError, "lock file not private"
+                ) as caught:
                     with store._locked():
                         pass
 
-            self.assertIn("state lock cleanup failed", "\n".join(caught.exception.__notes__))
+            self.assertIn(
+                "state lock cleanup failed", "\n".join(caught.exception.__notes__)
+            )
 
     def test_state_lock_closes_parent_fd_when_lock_fd_close_fails(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -912,12 +925,17 @@ class StateStoreTest(unittest.TestCase):
                     raise OSError("lock fd close failed")
 
             with (
-                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch(
+                    "speed_of_cinnamon.state.ensure_directory_without_following_symlinks",
+                    return_value=123,
+                ),
                 mock.patch("speed_of_cinnamon.state.assert_fd_is_private_directory"),
                 mock.patch("speed_of_cinnamon.state.assert_fd_is_regular_private_file"),
                 mock.patch("speed_of_cinnamon.state.os.open", return_value=456),
                 mock.patch("speed_of_cinnamon.state.fcntl.flock"),
-                mock.patch("speed_of_cinnamon.state.os.close", side_effect=fail_lock_close),
+                mock.patch(
+                    "speed_of_cinnamon.state.os.close", side_effect=fail_lock_close
+                ),
             ):
                 with self.assertRaisesRegex(OSError, "lock fd close failed"):
                     with store._locked():
@@ -935,12 +953,19 @@ class StateStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
             with (
-                mock.patch("speed_of_cinnamon.state.ensure_directory_without_following_symlinks", return_value=123),
+                mock.patch(
+                    "speed_of_cinnamon.state.ensure_directory_without_following_symlinks",
+                    return_value=123,
+                ),
                 mock.patch("speed_of_cinnamon.state.assert_fd_is_private_directory"),
                 mock.patch("speed_of_cinnamon.state.assert_fd_is_regular_private_file"),
                 mock.patch("speed_of_cinnamon.state.os.open", return_value=456),
-                mock.patch("speed_of_cinnamon.state.fcntl.flock", side_effect=interrupt_unlock),
-                mock.patch("speed_of_cinnamon.state.os.close", side_effect=close_calls.append),
+                mock.patch(
+                    "speed_of_cinnamon.state.fcntl.flock", side_effect=interrupt_unlock
+                ),
+                mock.patch(
+                    "speed_of_cinnamon.state.os.close", side_effect=close_calls.append
+                ),
             ):
                 with self.assertRaises(KeyboardInterrupt):
                     with store._locked():
@@ -1010,9 +1035,7 @@ class StateStoreTest(unittest.TestCase):
                                 "speed_of_cinnamon.state.os.open",
                                 return_value=456,
                             ),
-                            mock.patch(
-                                "speed_of_cinnamon.state.fcntl.flock"
-                            ),
+                            mock.patch("speed_of_cinnamon.state.fcntl.flock"),
                             mock.patch(
                                 "speed_of_cinnamon.state.os.close",
                                 side_effect=controlled_close,
@@ -1093,8 +1116,7 @@ class StateStoreTest(unittest.TestCase):
                         "speed_of_cinnamon.state.assert_fd_is_private_directory"
                     ),
                     mock.patch(
-                        "speed_of_cinnamon.state."
-                        "assert_fd_is_regular_private_file"
+                        "speed_of_cinnamon.state." "assert_fd_is_regular_private_file"
                     ),
                     mock.patch(
                         "speed_of_cinnamon.state.os.open",
@@ -1135,9 +1157,7 @@ class StateStoreTest(unittest.TestCase):
                         else OSError("private open detail")
                     )
                     close_error = (
-                        KeyboardInterrupt()
-                        if close_kind == "ki"
-                        else SystemExit(10)
+                        KeyboardInterrupt() if close_kind == "ki" else SystemExit(10)
                     )
                     close_calls: list[int] = []
 
@@ -1154,21 +1174,14 @@ class StateStoreTest(unittest.TestCase):
                             return_value=123,
                         ),
                         mock.patch(
-                            "speed_of_cinnamon.state."
-                            "assert_fd_is_private_directory",
+                            "speed_of_cinnamon.state." "assert_fd_is_private_directory",
                             side_effect=(
-                                setup_error
-                                if setup_kind == "validation"
-                                else None
+                                setup_error if setup_kind == "validation" else None
                             ),
                         ),
                         mock.patch(
                             "speed_of_cinnamon.state.os.open",
-                            side_effect=(
-                                setup_error
-                                if setup_kind == "open"
-                                else None
-                            ),
+                            side_effect=(setup_error if setup_kind == "open" else None),
                         ),
                         mock.patch(
                             "speed_of_cinnamon.state.os.close",
@@ -1201,8 +1214,7 @@ class StateStoreTest(unittest.TestCase):
                         return_value=123,
                     ),
                     mock.patch(
-                        "speed_of_cinnamon.state."
-                        "assert_fd_is_private_directory",
+                        "speed_of_cinnamon.state." "assert_fd_is_private_directory",
                         side_effect=(
                             setup_error
                             if setup_step == "directory-validation"
@@ -1212,9 +1224,7 @@ class StateStoreTest(unittest.TestCase):
                     mock.patch(
                         "speed_of_cinnamon.state.os.open",
                         side_effect=(
-                            setup_error
-                            if setup_step == "file-open"
-                            else None
+                            setup_error if setup_step == "file-open" else None
                         ),
                     ),
                     mock.patch("speed_of_cinnamon.state.os.close"),
@@ -1259,8 +1269,7 @@ class StateStoreTest(unittest.TestCase):
                         return_value=123,
                     ),
                     mock.patch(
-                        "speed_of_cinnamon.state."
-                        "assert_fd_is_private_directory"
+                        "speed_of_cinnamon.state." "assert_fd_is_private_directory"
                     ),
                     mock.patch(
                         "speed_of_cinnamon.state.os.open",
@@ -1315,12 +1324,9 @@ class StateStoreTest(unittest.TestCase):
                     "ensure_directory_without_following_symlinks",
                     return_value=parent_fd,
                 ),
+                mock.patch("speed_of_cinnamon.state.assert_fd_is_private_directory"),
                 mock.patch(
-                    "speed_of_cinnamon.state.assert_fd_is_private_directory"
-                ),
-                mock.patch(
-                    "speed_of_cinnamon.state."
-                    "assert_fd_is_regular_private_file"
+                    "speed_of_cinnamon.state." "assert_fd_is_regular_private_file"
                 ),
                 mock.patch(
                     "speed_of_cinnamon.state.os.open",
@@ -1389,7 +1395,9 @@ class StateStoreTest(unittest.TestCase):
             self.assertEqual(path.read_bytes(), before)
             self.assertEqual(store.read().status, "recording")
 
-    def test_update_rejects_corrupt_state_without_clobbering_recovery_data(self) -> None:
+    def test_update_rejects_corrupt_state_without_clobbering_recovery_data(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             original = '{"status":"finalizing","audio_path":"/tmp/audio.wav","log_path":"/tmp/rec.log"'
@@ -1418,7 +1426,9 @@ class StateStoreTest(unittest.TestCase):
                 return original_read(target)
 
             with (
-                mock.patch("speed_of_cinnamon.state.fcntl.flock", side_effect=fake_flock),
+                mock.patch(
+                    "speed_of_cinnamon.state.fcntl.flock", side_effect=fake_flock
+                ),
                 mock.patch.object(StateStore, "_read_unlocked", guarded_read),
             ):
                 state = store.update(status="recording", language="de")
@@ -1431,7 +1441,9 @@ class StateStoreTest(unittest.TestCase):
             path = Path(tmp) / "state.json"
             store = StateStore(path)
             store.write(RecordingState(status="done"))
-            with mock.patch.object(store, "_locked", wraps=store._locked) as mocked_lock:
+            with mock.patch.object(
+                store, "_locked", wraps=store._locked
+            ) as mocked_lock:
                 self.assertEqual(store.read().status, "done")
 
         mocked_lock.assert_called_once_with(shared=True)
@@ -1463,14 +1475,18 @@ class StateStoreTest(unittest.TestCase):
     def test_update_avoids_second_read_after_write(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
-            with mock.patch.object(store, "_read_unlocked", wraps=store._read_unlocked) as mocked_read:
+            with mock.patch.object(
+                store, "_read_unlocked", wraps=store._read_unlocked
+            ) as mocked_read:
                 state = store.update(status="recording")
 
         self.assertEqual(state.status, "recording")
         mocked_read.assert_called_once()
 
     def test_invalid_boolean_error_does_not_echo_value(self) -> None:
-        with self.assertRaisesRegex(ValueError, "^state inserted contains invalid boolean value$") as raised:
+        with self.assertRaisesRegex(
+            ValueError, "^state inserted contains invalid boolean value$"
+        ) as raised:
             StateStore._coerce_boolean("secret-token")
 
         self.assertNotIn("secret-token", str(raised.exception))
@@ -1478,7 +1494,9 @@ class StateStoreTest(unittest.TestCase):
     def test_state_roundtrip_preserves_text_whitespace(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
-            store.write(RecordingState(transcript="  hello  ", audio_path=" /tmp/audio.wav "))
+            store.write(
+                RecordingState(transcript="  hello  ", audio_path=" /tmp/audio.wav ")
+            )
             loaded = store.read()
         self.assertEqual(loaded.transcript, "  hello  ")
         self.assertEqual(loaded.audio_path, " /tmp/audio.wav ")
@@ -1505,11 +1523,18 @@ class StateStoreTest(unittest.TestCase):
     def test_state_rejects_non_newline_transcript_control_characters(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             store = StateStore(Path(tmp) / "state.json")
-            with self.assertRaisesRegex(ValueError, "state transcript contains invalid control character"):
+            with self.assertRaisesRegex(
+                ValueError, "state transcript contains invalid control character"
+            ):
                 store.write(RecordingState(transcript="hello\x1fworld"))
 
-    @mock.patch("speed_of_cinnamon.path_safety._rename_without_replacing", side_effect=OSError("disk full"))
-    def test_write_raises_runtime_error_when_atomic_activation_fails(self, mocked_link: mock.Mock) -> None:
+    @mock.patch(
+        "speed_of_cinnamon.path_safety._rename_without_replacing",
+        side_effect=OSError("disk full"),
+    )
+    def test_write_raises_runtime_error_when_atomic_activation_fails(
+        self, mocked_link: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             store = StateStore(path)
@@ -1519,7 +1544,9 @@ class StateStoreTest(unittest.TestCase):
         self.assertEqual(mocked_link.call_args_list[0].args[1], path.name)
 
     @mock.patch("speed_of_cinnamon.path_safety.os.open", wraps=os.open)
-    def test_write_uses_secure_directory_relative_replace(self, mocked_open: mock.Mock) -> None:
+    def test_write_uses_secure_directory_relative_replace(
+        self, mocked_open: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             StateStore(path).write(RecordingState(status="done"))
@@ -1538,13 +1565,17 @@ class StateStoreTest(unittest.TestCase):
     def test_write_creates_parent_without_pathlib_mkdir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "nested" / "state.json"
-            with mock.patch.object(Path, "mkdir", side_effect=AssertionError("unsafe mkdir")):
+            with mock.patch.object(
+                Path, "mkdir", side_effect=AssertionError("unsafe mkdir")
+            ):
                 StateStore(path).write(RecordingState(status="done"))
 
             self.assertEqual(StateStore(path).read().status, "done")
 
     @mock.patch("speed_of_cinnamon.path_safety.os.chmod")
-    def test_write_does_not_chmod_target_path_after_replace(self, mocked_chmod: mock.Mock) -> None:
+    def test_write_does_not_chmod_target_path_after_replace(
+        self, mocked_chmod: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             StateStore(path).write(RecordingState(status="done"))
@@ -1621,7 +1652,10 @@ class StateStoreTest(unittest.TestCase):
                 path.chmod(0o600)
                 return real_read(*args, **kwargs)
 
-            with mock.patch("speed_of_cinnamon.state.read_text_without_following_symlinks", side_effect=read_and_swap):
+            with mock.patch(
+                "speed_of_cinnamon.state.read_text_without_following_symlinks",
+                side_effect=read_and_swap,
+            ):
                 state = store.read()
 
         self.assertEqual(state.error, "state file could not be read")
@@ -1724,22 +1758,30 @@ class StateStoreTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             store = StateStore(path)
-            with self.assertRaisesRegex(ValueError, "state status contains invalid null byte"):
+            with self.assertRaisesRegex(
+                ValueError, "state status contains invalid null byte"
+            ):
                 store.write(RecordingState(status="oops\x00"))
 
     def test_write_rejects_control_char_text_state(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             store = StateStore(path)
-            with self.assertRaisesRegex(ValueError, "state status contains invalid control character"):
+            with self.assertRaisesRegex(
+                ValueError, "state status contains invalid control character"
+            ):
                 store.write(RecordingState(status="oops\rextra"))
 
     @mock.patch("speed_of_cinnamon.state.json.dumps", return_value='{"state":"\ud800"}')
-    def test_write_rejects_unencodable_rendered_payload(self, mocked_dumps: mock.Mock) -> None:
+    def test_write_rejects_unencodable_rendered_payload(
+        self, mocked_dumps: mock.Mock
+    ) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "state.json"
             store = StateStore(path)
-            with self.assertRaisesRegex(RuntimeError, "state payload is not valid UTF-8"):
+            with self.assertRaisesRegex(
+                RuntimeError, "state payload is not valid UTF-8"
+            ):
                 store.write(RecordingState(status="done"))
         mocked_dumps.assert_called_once()
 
@@ -1748,8 +1790,13 @@ class StateStoreTest(unittest.TestCase):
             path = Path(tmp) / "state.json"
             store = StateStore(path)
             with (
-                mock.patch("speed_of_cinnamon.state.json.dumps", side_effect=MemoryError("too large")),
-                self.assertRaisesRegex(RuntimeError, "state payload could not be rendered"),
+                mock.patch(
+                    "speed_of_cinnamon.state.json.dumps",
+                    side_effect=MemoryError("too large"),
+                ),
+                self.assertRaisesRegex(
+                    RuntimeError, "state payload could not be rendered"
+                ),
             ):
                 store.write(RecordingState(status="done"))
 
@@ -1758,8 +1805,13 @@ class StateStoreTest(unittest.TestCase):
             path = Path(tmp) / "state.json"
             store = StateStore(path)
             with (
-                mock.patch("speed_of_cinnamon.state.json.dumps", side_effect=RecursionError("too deep")),
-                self.assertRaisesRegex(RuntimeError, "state payload could not be rendered"),
+                mock.patch(
+                    "speed_of_cinnamon.state.json.dumps",
+                    side_effect=RecursionError("too deep"),
+                ),
+                self.assertRaisesRegex(
+                    RuntimeError, "state payload could not be rendered"
+                ),
             ):
                 store.write(RecordingState(status="done"))
 
@@ -1810,13 +1862,17 @@ class StateStoreTest(unittest.TestCase):
         self.assertFalse(process_is_alive(True))
 
     def test_process_is_alive_fails_closed_on_unexpected_os_error(self) -> None:
-        with mock.patch("speed_of_cinnamon.state.os.kill", side_effect=OSError("unexpected kernel error")):
+        with mock.patch(
+            "speed_of_cinnamon.state.os.kill",
+            side_effect=OSError("unexpected kernel error"),
+        ):
             self.assertFalse(process_is_alive(1234))
 
     def test_process_is_alive_fails_closed_on_pid_range_error(self) -> None:
         for error in (OverflowError("out of range"), ValueError("invalid pid")):
-            with self.subTest(error=type(error).__name__), mock.patch(
-                "speed_of_cinnamon.state.os.kill", side_effect=error
+            with (
+                self.subTest(error=type(error).__name__),
+                mock.patch("speed_of_cinnamon.state.os.kill", side_effect=error),
             ):
                 self.assertFalse(process_is_alive(1234))
 

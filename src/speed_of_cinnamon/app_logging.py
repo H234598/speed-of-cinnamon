@@ -76,13 +76,17 @@ def _fsync_fd(fd: int) -> None:
 
 
 _DAILY_LOG_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log$")
-_DAILY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log\.gz$")
+_DAILY_GZ_RE = re.compile(
+    r"^speed-of-cinnamon-(\d{4}-\d{2}-\d{2})(?:\.(\d+))?\.log\.gz$"
+)
 _MONTHLY_GZ_RE = re.compile(r"^speed-of-cinnamon-(\d{4}-\d{2})\.log\.gz$")
 _CREDENTIAL_KEY_PATTERN = (
     r"bearer|token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
     r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|secret|password|passwd|passphrase"
 )
-_TOKEN_RE = re.compile(rf"(?i)\b({_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*\S+(?:[ \t]+\S+)*")
+_TOKEN_RE = re.compile(
+    rf"(?i)\b({_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*\S+(?:[ \t]+\S+)*"
+)
 _BARE_CREDENTIAL_RE = re.compile(
     r"(?i)(?<![/\\])\b(token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
     r"client[_ -]?secret|private[_ -]?key|secret[_ -]?key|password|passwd|passphrase)\b\s+"
@@ -114,7 +118,9 @@ def _log_lock_path(base_dir: Path) -> Path:
 
 def _acquire_log_lock(base_dir: Path) -> int:
     try:
-        directory_fd = ensure_directory_without_following_symlinks(base_dir, field_name="log directory")
+        directory_fd = ensure_directory_without_following_symlinks(
+            base_dir, field_name="log directory"
+        )
     except OSError as exc:
         if exc.errno in {errno.ELOOP, errno.ENOTDIR}:
             raise RuntimeError("log directory is unsafe") from None
@@ -137,7 +143,9 @@ def _acquire_log_lock(base_dir: Path) -> int:
         raise
     try:
         os.fchmod(fd, 0o600)
-        assert_fd_is_regular_private_file(fd, field_name="log lock", require_private_mode=True)
+        assert_fd_is_regular_private_file(
+            fd, field_name="log lock", require_private_mode=True
+        )
         deadline = time.monotonic() + LOG_LOCK_TIMEOUT_SECONDS
         while True:
             try:
@@ -198,12 +206,20 @@ def _has_ansi_csi_prefix(value: str, start: int) -> bool:
     if 0x40 <= ord(value[index]) <= 0x7E:
         scanned = 1
         index -= 1
-    while scanned < _CSI_MAX_PREFIX_BYTES and index >= 0 and 0x30 <= ord(value[index]) <= 0x3F:
+    while (
+        scanned < _CSI_MAX_PREFIX_BYTES
+        and index >= 0
+        and 0x30 <= ord(value[index]) <= 0x3F
+    ):
         index -= 1
         scanned += 1
     if scanned >= _CSI_MAX_PREFIX_BYTES:
         return True
-    while scanned < _CSI_MAX_PREFIX_BYTES and index >= 0 and 0x20 <= ord(value[index]) <= 0x2F:
+    while (
+        scanned < _CSI_MAX_PREFIX_BYTES
+        and index >= 0
+        and 0x20 <= ord(value[index]) <= 0x2F
+    ):
         index -= 1
         scanned += 1
     if scanned >= _CSI_MAX_PREFIX_BYTES:
@@ -245,7 +261,12 @@ def _match_local_absolute_path(value: str, start: int) -> int:
         return 0
     if not _has_path_prefix_boundary(value, start):
         return 0
-    if value[start].isalpha() and start + 2 < len(value) and value[start + 1] == ":" and value[start + 2] in "\\/":
+    if (
+        value[start].isalpha()
+        and start + 2 < len(value)
+        and value[start + 1] == ":"
+        and value[start + 2] in "\\/"
+    ):
         end = _path_token_end(value, start)
         if end > start + 3:
             return end - start
@@ -263,7 +284,9 @@ def _match_local_absolute_path(value: str, start: int) -> int:
         if start + 3 >= len(value) or value[start + 2] in _PATH_STOP_CHARS:
             return 0
         host_end = start + 2
-        while host_end < len(value) and value[host_end] not in (_PATH_STOP_CHARS | {'\\', '/'}):
+        while host_end < len(value) and value[host_end] not in (
+            _PATH_STOP_CHARS | {"\\", "/"}
+        ):
             host_end += 1
         if host_end >= len(value) or value[host_end] not in "\\/":
             return 0
@@ -297,10 +320,20 @@ def _contains_local_absolute_path(value: str) -> bool:
         return False
     index = 0
     while index < n:
-        if value[index] in "/\\" or (value[index].isalpha() and index + 2 < n and value[index + 1] == ":" and value[index + 2] in "\\/"):
+        if value[index] in "/\\" or (
+            value[index].isalpha()
+            and index + 2 < n
+            and value[index + 1] == ":"
+            and value[index + 2] in "\\/"
+        ):
             if _match_local_absolute_path(value, index) > 0:
                 return True
-            if value[index].isalpha() and index + 2 < n and value[index + 1] == ":" and value[index + 2] in "\\/":
+            if (
+                value[index].isalpha()
+                and index + 2 < n
+                and value[index + 1] == ":"
+                and value[index + 2] in "\\/"
+            ):
                 index += 3
                 continue
         index += 1
@@ -320,12 +353,18 @@ def _redact_local_absolute_paths(value: str) -> str:
         out.append(value[index])
         index += 1
     return "".join(out)
+
+
 _ERROR_DETAIL_RE = re.compile(
     r"(?i)(?:\b(?:stdout|stderr)\s*:|\b(?:raw\s+)?(?:transcript|transkript)\s*(?::|\b(?:text|words|payload|for)\b)|\bprompt\s*:|command\s+output\s*:|backend\s+output\s*:)"
 )
-_ERROR_OUTPUT_LIKELY_RE = re.compile(r"(?i)\b(traceback|exception|at|exit\s+code|stderr|stdout|command\s+output|process\s+exited|python|failed\s+with|npm|node)\b")
+_ERROR_OUTPUT_LIKELY_RE = re.compile(
+    r"(?i)\b(traceback|exception|at|exit\s+code|stderr|stdout|command\s+output|process\s+exited|python|failed\s+with|npm|node)\b"
+)
 _ERROR_SECRET_WORD_RE = re.compile(r"(?i)\bsecret\b")
-_ERROR_OPAQUE_DETAIL_RE = re.compile(r"(?i)^(?=[A-Za-z0-9_.:/+=@-]{6,}$)(?=.*[a-z])(?=.*\d)[A-Za-z0-9_.:/+=@-]+$")
+_ERROR_OPAQUE_DETAIL_RE = re.compile(
+    r"(?i)^(?=[A-Za-z0-9_.:/+=@-]{6,}$)(?=.*[a-z])(?=.*\d)[A-Za-z0-9_.:/+=@-]+$"
+)
 _SANITIZE_HINT_RE = re.compile(
     rf"(?i)(?:\b(?:{_CREDENTIAL_KEY_PATTERN})\b\s*[:=]\s*\S+(?:[ \t]+\S+)*|"
     r"(?<![/\\])\b(?:token|access[_ -]?token|refresh[_ -]?token|id[_ -]?token|api[_ -]?key|apikey|"
@@ -334,26 +373,31 @@ _SANITIZE_HINT_RE = re.compile(
     r"\bbearer\s+\S+|\b(?:sk|sess)-[A-Za-z0-9_\-]{3,}\b|[a-z][a-z0-9+.-]{0,255}+://[^/@\s]+@)"
 )
 _SANITIZE_ESCAPE_TABLE = {
-    **{codepoint: f"\\x{codepoint:02x}" for codepoint in tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))},
+    **{
+        codepoint: f"\\x{codepoint:02x}"
+        for codepoint in tuple(range(0x20)) + (0x7F,) + tuple(range(0x80, 0xA0))
+    },
     ord("\r"): "\\r",
     ord("\n"): "\\n",
     ord("\x00"): "\\x00",
 }
 _SANITIZE_KEY_RE = re.compile(r"[^a-zA-Z0-9_.-]+")
 _SENSITIVE_KEY_SPLIT_RE = re.compile(r"[._-]+")
-_SENSITIVE_KEY_TOKENS = frozenset({
-    "apikey",
-    "authorization",
-    "bearer",
-    "password",
-    "passwd",
-    "passphrase",
-    "prompt",
-    "secret",
-    "token",
-    "transcript",
-    "vocabulary",
-})
+_SENSITIVE_KEY_TOKENS = frozenset(
+    {
+        "apikey",
+        "authorization",
+        "bearer",
+        "password",
+        "passwd",
+        "passphrase",
+        "prompt",
+        "secret",
+        "token",
+        "transcript",
+        "vocabulary",
+    }
+)
 _SENSITIVE_KEY_EXACT = frozenset({"command", "context", "key", "text"})
 _SENSITIVE_KEY_PHRASES = (
     ("api", "key"),
@@ -374,11 +418,15 @@ _ESCAPED_FORBIDDEN_CONTROL_RE = re.compile(
 
 
 class JsonLogFormatter(logging.Formatter):
-    def format(self, record: logging.LogRecord) -> str:
+    def format(
+        self, record: logging.LogRecord, *, persistence_uncertain: bool | None = None
+    ) -> str:
         payload: dict[str, Any] = {
             "ts": datetime.now(timezone.utc).isoformat(),
             "level": record.levelname.lower(),
-            "event": sanitize_text(str(record.getMessage()), max_chars=MAX_LOG_MESSAGE_CHARS),
+            "event": sanitize_text(
+                str(record.getMessage()), max_chars=MAX_LOG_MESSAGE_CHARS
+            ),
         }
         fields = getattr(record, "fields", None)
         if isinstance(fields, dict):
@@ -387,7 +435,12 @@ class JsonLogFormatter(logging.Formatter):
                 if clean_key:
                     sensitive_key = key if isinstance(key, str) else clean_key
                     payload[clean_key] = sanitize_value(sensitive_key, value)
-        return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        if persistence_uncertain is not None:
+            # Reserved handler metadata wins over all sanitized user fields.
+            payload["persistence_uncertain"] = persistence_uncertain
+        return json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
 
 
 class SizeCappedJsonFileHandler(logging.Handler):
@@ -397,10 +450,19 @@ class SizeCappedJsonFileHandler(logging.Handler):
         self.base_dir = base_dir
         self.stream: TextIO | None = None
         self._disabled = False
+        # Sticky diagnostic only: an exception does not prove record loss.
+        self._persistence_uncertain = False
         self._retry_until = 0.0
         self._retry_count = 0
         self._retry_base_delay = 1.0
         self._next_maintenance_at = time.monotonic() + LOG_MAINTENANCE_INTERVAL_SECONDS
+
+    def format(self, record: logging.LogRecord) -> str:
+        if isinstance(self.formatter, JsonLogFormatter):
+            return self.formatter.format(
+                record, persistence_uncertain=self._persistence_uncertain
+            )
+        return super().format(record)
 
     def close(self) -> None:
         stream = self.stream
@@ -409,6 +471,7 @@ class SizeCappedJsonFileHandler(logging.Handler):
             if stream is not None:
                 stream.close()
         except Exception:
+            self._persistence_uncertain = True
             self.stream = None
         finally:
             super().close()
@@ -428,6 +491,7 @@ class SizeCappedJsonFileHandler(logging.Handler):
             finally:
                 _release_log_lock(lock_fd)
         except Exception:
+            self._persistence_uncertain = True
             self.close()
             try:
                 path_is_insecure = self._is_log_path_insecure()
@@ -449,13 +513,18 @@ class SizeCappedJsonFileHandler(logging.Handler):
         line = self.format(record) + "\n"
         encoded = line.encode("utf-8")
         if len(encoded) > MAX_DAILY_LOG_BYTES:
-            line = _oversized_record_line(record)
+            line = _oversized_record_line(
+                record, persistence_uncertain=self._persistence_uncertain
+            )
             encoded = line.encode("utf-8")
         try:
             current_size = self.path.stat().st_size
         except OSError:
             current_size = None
-        if current_size is not None and current_size + len(encoded) > MAX_DAILY_LOG_BYTES:
+        if (
+            current_size is not None
+            and current_size + len(encoded) > MAX_DAILY_LOG_BYTES
+        ):
             self.close()
             _rotate_active_if_needed(self.path, force=True)
             rotated = True
@@ -489,11 +558,15 @@ class SizeCappedJsonFileHandler(logging.Handler):
             except PermissionError:
                 return True
             if file_stat is not None:
-                if stat_module.S_ISLNK(file_stat.st_mode) or not stat_module.S_ISREG(file_stat.st_mode):
+                if stat_module.S_ISLNK(file_stat.st_mode) or not stat_module.S_ISREG(
+                    file_stat.st_mode
+                ):
                     return True
                 if getattr(file_stat, "st_nlink", 1) != 1:
                     return True
-            parent_fd = ensure_directory_without_following_symlinks(self.path.parent, field_name="log directory")
+            parent_fd = ensure_directory_without_following_symlinks(
+                self.path.parent, field_name="log directory"
+            )
             assert_fd_is_private_directory(parent_fd, field_name="log directory")
             return False
         except RuntimeError:
@@ -537,7 +610,9 @@ class SizeCappedJsonFileHandler(logging.Handler):
                 expected_stat = self.path.lstat()
             except FileNotFoundError:
                 expected_stat = None
-            parent_fd = ensure_directory_without_following_symlinks(self.path.parent, field_name="log directory")
+            parent_fd = ensure_directory_without_following_symlinks(
+                self.path.parent, field_name="log directory"
+            )
             parent_error: BaseException | None = None
             try:
                 assert_fd_is_private_directory(parent_fd, field_name="log directory")
@@ -592,10 +667,14 @@ class SizeCappedJsonFileHandler(logging.Handler):
                 try:
                     os.fchmod(fd, 0o600)
                 except OSError:
-                    permission_error = RuntimeError("log file permissions could not be restricted")
+                    permission_error = RuntimeError(
+                        "log file permissions could not be restricted"
+                    )
                 if permission_error is not None:
                     raise permission_error
-                assert_fd_is_regular_private_file(fd, field_name="log file", require_private_mode=True)
+                assert_fd_is_regular_private_file(
+                    fd, field_name="log file", require_private_mode=True
+                )
                 self.stream = os.fdopen(fd, "a", encoding="utf-8")
             except Exception as exc:
                 try:
@@ -629,7 +708,9 @@ class ErrorJsonFileHandler(SizeCappedJsonFileHandler):
         line = self.format(record) + "\n"
         encoded = line.encode("utf-8")
         if len(encoded) > MAX_ERROR_LOG_BYTES:
-            line = _oversized_record_line(record)
+            line = _oversized_record_line(
+                record, persistence_uncertain=self._persistence_uncertain
+            )
             encoded = line.encode("utf-8")
         self._open()
         if self.stream is None:
@@ -650,8 +731,14 @@ class ErrorMarkdownFileHandler(SizeCappedJsonFileHandler):
 
     def _emit_locked(self, record: logging.LogRecord) -> None:
         fields = getattr(record, "fields", None)
-        group = fields.get("group", "unknown") if isinstance(fields, dict) else "unknown"
-        message = fields.get("error_message", record.getMessage()) if isinstance(fields, dict) else record.getMessage()
+        group = (
+            fields.get("group", "unknown") if isinstance(fields, dict) else "unknown"
+        )
+        message = (
+            fields.get("error_message", record.getMessage())
+            if isinstance(fields, dict)
+            else record.getMessage()
+        )
         timestamp = datetime.fromtimestamp(record.created, timezone.utc).isoformat()
         line = _error_markdown_line(timestamp, group, record.getMessage(), message)
         encoded = line.encode("utf-8")
@@ -699,7 +786,9 @@ def _markdown_component(value: object, *, max_chars: int) -> str:
     )
 
 
-def _error_markdown_line(timestamp: object, group: object, event: object, message: object) -> str:
+def _error_markdown_line(
+    timestamp: object, group: object, event: object, message: object
+) -> str:
     safe_message = sanitize_error_message(str(message), max_chars=MAX_LOG_MESSAGE_CHARS)
     return (
         f"- [ ] {_markdown_component(timestamp, max_chars=64)} | "
@@ -726,7 +815,11 @@ def _same_file_snapshot(first: os.stat_result, second: os.stat_result) -> bool:
 
 def _resolve_no_atime_flag(*, field_name: str) -> int:
     noatime_flag = getattr(os, "O_NOATIME", None)
-    if isinstance(noatime_flag, bool) or not isinstance(noatime_flag, int) or noatime_flag <= 0:
+    if (
+        isinstance(noatime_flag, bool)
+        or not isinstance(noatime_flag, int)
+        or noatime_flag <= 0
+    ):
         raise OSError(f"secure no-atime open is not supported for {field_name}")
     return noatime_flag
 
@@ -740,8 +833,12 @@ def _read_private_error_log(
     try:
         flags = os.O_RDONLY | _resolve_no_atime_flag(field_name="error log")
         fd = open_file_without_following_symlinks(path, flags, field_name="error log")
-        assert_fd_is_regular_private_file(fd, field_name="error log", require_private_mode=True)
-        if expected_stat is not None and not _same_file_snapshot(expected_stat, os.fstat(fd)):
+        assert_fd_is_regular_private_file(
+            fd, field_name="error log", require_private_mode=True
+        )
+        if expected_stat is not None and not _same_file_snapshot(
+            expected_stat, os.fstat(fd)
+        ):
             return None
         chunks: list[bytes] = []
         total = 0
@@ -772,7 +869,11 @@ def _rewrite_private_error_markdown(
 ) -> None:
     fd: int | None = None
     try:
-        flags = os.O_RDWR | os.O_CREAT | _resolve_no_atime_flag(field_name="error Markdown file")
+        flags = (
+            os.O_RDWR
+            | os.O_CREAT
+            | _resolve_no_atime_flag(field_name="error Markdown file")
+        )
         if expected_stat is None:
             flags |= os.O_EXCL
         fd = open_file_without_following_symlinks(
@@ -783,12 +884,16 @@ def _rewrite_private_error_markdown(
         )
         assert_fd_is_regular_private_file(fd, field_name="error Markdown file")
         opened_stat = os.fstat(fd)
-        if expected_stat is not None and not _same_file_snapshot(expected_stat, opened_stat):
+        if expected_stat is not None and not _same_file_snapshot(
+            expected_stat, opened_stat
+        ):
             raise RuntimeError("error Markdown file changed during rebuild")
         if stat_module.S_IMODE(opened_stat.st_mode) != 0o600:
             os.fchmod(fd, 0o600)
         opened_stat = os.fstat(fd)
-        assert_fd_is_regular_private_file(fd, field_name="error Markdown file", require_private_mode=True)
+        assert_fd_is_regular_private_file(
+            fd, field_name="error Markdown file", require_private_mode=True
+        )
         matches = opened_stat.st_size == len(rendered)
         if matches:
             os.lseek(fd, 0, os.SEEK_SET)
@@ -804,7 +909,9 @@ def _rewrite_private_error_markdown(
             current_path_stat = path.stat(follow_symlinks=False)
         except OSError as exc:
             raise RuntimeError("error Markdown file changed during rebuild") from exc
-        if not _same_file_snapshot(opened_stat, current_fd_stat) or not _same_file_snapshot(opened_stat, current_path_stat):
+        if not _same_file_snapshot(
+            opened_stat, current_fd_stat
+        ) or not _same_file_snapshot(opened_stat, current_path_stat):
             raise RuntimeError("error Markdown file changed during rebuild")
         if matches:
             return
@@ -876,7 +983,9 @@ def _rebuild_error_markdown(directory: Path) -> None:
     total_bytes = 0
     for raw_line in raw.splitlines():
         try:
-            payload = json.loads(raw_line, object_pairs_hook=_reject_duplicate_json_keys)
+            payload = json.loads(
+                raw_line, object_pairs_hook=_reject_duplicate_json_keys
+            )
         except (TypeError, ValueError, RecursionError, MemoryError):
             continue
         if not isinstance(payload, dict) or payload.get("level") != "error":
@@ -911,7 +1020,10 @@ def _rebuild_error_markdown(directory: Path) -> None:
 
 
 def _contains_forbidden_control(value: str) -> bool:
-    return _FORBIDDEN_CONTROL_RE.search(value) is not None or _ESCAPED_FORBIDDEN_CONTROL_RE.search(value) is not None
+    return (
+        _FORBIDDEN_CONTROL_RE.search(value) is not None
+        or _ESCAPED_FORBIDDEN_CONTROL_RE.search(value) is not None
+    )
 
 
 def validate_log_level(level: str) -> str:
@@ -933,10 +1045,16 @@ def _log_level_value(level: str) -> int:
 
 def _safe_public_log_exception(error: Exception) -> Exception:
     try:
-        safe_message = sanitize_error_message(str(error), max_chars=MAX_LOG_MESSAGE_CHARS)
+        safe_message = sanitize_error_message(
+            str(error), max_chars=MAX_LOG_MESSAGE_CHARS
+        )
     except Exception:
         safe_message = ""
-    if not safe_message or safe_message.startswith("[redacted") or "[redacted path]" in safe_message:
+    if (
+        not safe_message
+        or safe_message.startswith("[redacted")
+        or "[redacted path]" in safe_message
+    ):
         safe_message = "log operation failed"
     try:
         sanitized = type(error)(safe_message)
@@ -961,13 +1079,17 @@ def _public_log_boundary(function: Callable[..., Any]) -> Callable[..., Any]:
 
 
 @_public_log_boundary
-def configure_logging(level: str = DEFAULT_LOG_LEVEL, *, base_dir: Path | None = None) -> None:
+def configure_logging(
+    level: str = DEFAULT_LOG_LEVEL, *, base_dir: Path | None = None
+) -> None:
     normalized = validate_log_level(level)
     with _CONFIGURE_LOCK:
         _configure_logging_unlocked(normalized, base_dir=base_dir)
 
 
-def _configure_logging_unlocked(normalized: str, *, base_dir: Path | None = None) -> None:
+def _configure_logging_unlocked(
+    normalized: str, *, base_dir: Path | None = None
+) -> None:
     logger = logging.getLogger(LOGGER_NAME)
     old_handlers = list(logger.handlers)
     logger.handlers.clear()
@@ -1005,7 +1127,9 @@ def _configure_logging_unlocked(normalized: str, *, base_dir: Path | None = None
     error_handler.setFormatter(JsonLogFormatter())
     error_handler.setLevel(logging.ERROR)
     logger.addHandler(error_handler)
-    error_markdown_handler = ErrorMarkdownFileHandler(_error_markdown_path(directory), directory)
+    error_markdown_handler = ErrorMarkdownFileHandler(
+        _error_markdown_path(directory), directory
+    )
     error_markdown_handler.setLevel(logging.ERROR)
     logger.addHandler(error_markdown_handler)
 
@@ -1062,7 +1186,9 @@ def sanitize_value(key: str, value: object, *, _depth: int = 0) -> object:
     if isinstance(value, (list, tuple, set)):
         if _depth >= MAX_LOG_VALUE_DEPTH:
             return "[redacted]"
-        return [sanitize_value(key, item, _depth=_depth + 1) for item in islice(value, 8)]
+        return [
+            sanitize_value(key, item, _depth=_depth + 1) for item in islice(value, 8)
+        ]
     if isinstance(value, dict):
         if _depth >= MAX_LOG_VALUE_DEPTH:
             return "[redacted]"
@@ -1071,7 +1197,9 @@ def sanitize_value(key: str, value: object, *, _depth: int = 0) -> object:
             child_key = sanitize_key(raw_key)
             if child_key:
                 sensitive_key = raw_key if isinstance(raw_key, str) else child_key
-                clean[child_key] = sanitize_value(sensitive_key, raw_value, _depth=_depth + 1)
+                clean[child_key] = sanitize_value(
+                    sensitive_key, raw_value, _depth=_depth + 1
+                )
         return clean
     return sanitize_text(str(value), max_chars=MAX_LOG_FIELD_CHARS)
 
@@ -1132,7 +1260,9 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
             value = visible_value
             for scheme_match in _URL_SCHEME_RE.finditer(visible_value):
                 authority = visible_value[scheme_match.end() :]
-                if authority and not any(char in _URL_AUTHORITY_END_CHARS for char in authority):
+                if authority and not any(
+                    char in _URL_AUTHORITY_END_CHARS for char in authority
+                ):
                     value = visible_value[: scheme_match.end()] + "[redacted]"
                     break
     if any(_is_ignored_char(char) for char in value):
@@ -1146,7 +1276,9 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
             _BARE_CREDENTIAL_RE,
             lambda match: f"{match.group(1)}=[redacted]",
         )
-        redacted_value = _sub_with_ignored_projection(redacted_value, _BEARER_RE, "Bearer [redacted]")
+        redacted_value = _sub_with_ignored_projection(
+            redacted_value, _BEARER_RE, "Bearer [redacted]"
+        )
         redacted_value = _sub_with_ignored_projection(
             redacted_value,
             _URL_CREDENTIAL_RE,
@@ -1192,7 +1324,10 @@ def sanitize_text(value: str, *, max_chars: int = MAX_LOG_FIELD_CHARS) -> str:
 
 
 def _contains_control_chars(value: str) -> bool:
-    return any(ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F for char in value)
+    return any(
+        ord(char) < 0x20 or ord(char) == 0x7F or 0x80 <= ord(char) <= 0x9F
+        for char in value
+    )
 
 
 def _split_failed_error_message(value: str) -> tuple[str, str, str] | None:
@@ -1214,12 +1349,16 @@ def _split_failed_error_message(value: str) -> tuple[str, str, str] | None:
     return None
 
 
-def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CHARS) -> str:
+def sanitize_error_message(
+    error: object, *, max_chars: int = MAX_LOG_MESSAGE_CHARS
+) -> str:
     if isinstance(error, bool) or not isinstance(error, str):
         return "[invalid]"
     effective_max_chars = min(max(0, max_chars), _MAX_ERROR_INPUT_CHARS)
     input_was_truncated = len(error) > effective_max_chars
-    scan_limit = min(max(_ERROR_SCAN_MAX_CHARS, effective_max_chars), _MAX_ERROR_INPUT_CHARS)
+    scan_limit = min(
+        max(_ERROR_SCAN_MAX_CHARS, effective_max_chars), _MAX_ERROR_INPUT_CHARS
+    )
     scan_error = error[:scan_limit]
     failed_parts = _split_failed_error_message(scan_error)
     if failed_parts:
@@ -1265,7 +1404,9 @@ def sanitize_error_message(error: object, *, max_chars: int = MAX_LOG_MESSAGE_CH
         and _URL_CREDENTIAL_RE.search(scan_error) is None
     ):
         return "[redacted error details]"
-    sanitized = sanitize_text(error[:effective_max_chars], max_chars=effective_max_chars)
+    sanitized = sanitize_text(
+        error[:effective_max_chars], max_chars=effective_max_chars
+    )
     sanitized = _SHORT_API_KEY_RE.sub("[redacted]", sanitized)
     if input_was_truncated or len(sanitized) > effective_max_chars:
         return sanitized[:effective_max_chars] + "...[truncated]"
@@ -1284,7 +1425,7 @@ def _is_sensitive_key(key: str) -> bool:
     if any(token in _SENSITIVE_KEY_TOKENS for token in tokens):
         return True
     return any(
-        tokens[index:index + len(phrase)] == phrase
+        tokens[index : index + len(phrase)] == phrase
         for phrase in _SENSITIVE_KEY_PHRASES
         for index in range(0, len(tokens) - len(phrase) + 1)
     )
@@ -1306,7 +1447,9 @@ def _active_log_path(directory: Path, today: date | None = None) -> Path:
 def _ensure_log_directory(directory: Path) -> None:
     directory_fd: int | None = None
     try:
-        directory_fd = ensure_directory_without_following_symlinks(directory, field_name="log directory")
+        directory_fd = ensure_directory_without_following_symlinks(
+            directory, field_name="log directory"
+        )
     except OSError:
         directory_error = RuntimeError("failed to prepare log directory")
     else:
@@ -1320,13 +1463,19 @@ def _ensure_log_directory(directory: Path) -> None:
         pass
 
 
-def _oversized_record_line(record: logging.LogRecord) -> str:
+def _oversized_record_line(
+    record: logging.LogRecord, *, persistence_uncertain: bool = False
+) -> str:
     payload = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "level": record.levelname.lower(),
         "event": "oversized_log_record_redacted",
+        "persistence_uncertain": persistence_uncertain,
     }
-    return json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
+    return (
+        json.dumps(payload, sort_keys=True, separators=(",", ":"), allow_nan=False)
+        + "\n"
+    )
 
 
 def _assert_regular_unlinked_file(path: Path, *, field_name: str) -> os.stat_result:
@@ -1388,21 +1537,26 @@ def _open_log_source_file(
     nonblock_flag = getattr(os, "O_NONBLOCK", 0)
     open_error: RuntimeError | None = None
     try:
-        fd = open_file_without_following_symlinks(path, os.O_RDONLY | nonblock_flag, field_name=field_name)
+        fd = open_file_without_following_symlinks(
+            path, os.O_RDONLY | nonblock_flag, field_name=field_name
+        )
     except OSError:
         open_error = RuntimeError(f"{field_name} is not readable")
         fd = -1
     if open_error is not None:
         raise open_error
     try:
-        assert_fd_is_regular_private_file(fd, field_name=field_name, require_private_mode=True)
+        assert_fd_is_regular_private_file(
+            fd, field_name=field_name, require_private_mode=True
+        )
         opened_stat = os.fstat(fd)
         if (
             opened_stat.st_dev != expected_for_fd.st_dev
             or opened_stat.st_ino != expected_for_fd.st_ino
             or opened_stat.st_mode != expected_for_fd.st_mode
             or opened_stat.st_size != expected_for_fd.st_size
-            or getattr(opened_stat, "st_nlink", 1) != getattr(expected_for_fd, "st_nlink", 1)
+            or getattr(opened_stat, "st_nlink", 1)
+            != getattr(expected_for_fd, "st_nlink", 1)
             or opened_stat.st_mtime_ns != expected_for_fd.st_mtime_ns
             or opened_stat.st_ctime_ns != expected_for_fd.st_ctime_ns
         ):
@@ -1426,12 +1580,22 @@ def _open_log_source_file(
     return fd
 
 
-def _create_log_temp_file(directory: Path, *, prefix: str, suffix: str) -> tuple[int, int, str]:
+def _create_log_temp_file(
+    directory: Path, *, prefix: str, suffix: str
+) -> tuple[int, int, str]:
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
-        raise RuntimeError("secure log temporary file creation is not supported on this platform")
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
+        raise RuntimeError(
+            "secure log temporary file creation is not supported on this platform"
+        )
     try:
-        parent_fd = ensure_directory_without_following_symlinks(directory, field_name="log directory")
+        parent_fd = ensure_directory_without_following_symlinks(
+            directory, field_name="log directory"
+        )
     except OSError:
         directory_error = RuntimeError("failed to prepare log directory")
         parent_fd = -1
@@ -1439,7 +1603,13 @@ def _create_log_temp_file(directory: Path, *, prefix: str, suffix: str) -> tuple
         directory_error = None
     if directory_error is not None:
         raise directory_error
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | nofollow_flag | getattr(os, "O_CLOEXEC", 0)
+    flags = (
+        os.O_WRONLY
+        | os.O_CREAT
+        | os.O_EXCL
+        | nofollow_flag
+        | getattr(os, "O_CLOEXEC", 0)
+    )
     try:
         for _ in range(100):
             temp_name = f".{prefix}.{secrets.token_hex(8)}{suffix}"
@@ -1526,7 +1696,9 @@ def _unlink_log_temp(
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not _same_log_temp_identity(claimed_stat, expected_stat):
                     raise RuntimeError("log temporary file changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
@@ -1565,14 +1737,18 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
     for suffix in range(1, MAX_LOG_ROTATION_CANDIDATES + 1):
         candidate = path.with_name(f"{path.stem}.{suffix}{path.suffix}")
         if not candidate.exists() and not candidate.is_symlink():
-            parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name="log directory")
+            parent_fd = ensure_directory_without_following_symlinks(
+                path.parent, field_name="log directory"
+            )
             candidate_linked = False
             source_unlink_attempted = False
             source_claimed = False
             source_cleanup_name: str | None = None
             primary_error: BaseException | None = None
             try:
-                rotation_stat = _assert_regular_unlinked_file(path, field_name="active log file")
+                rotation_stat = _assert_regular_unlinked_file(
+                    path, field_name="active log file"
+                )
                 try:
                     os.link(
                         path.name,
@@ -1585,14 +1761,18 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                     continue
                 candidate_linked = True
                 _fsync_fd(parent_fd)
-                current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                current_stat = os.stat(
+                    path.name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if (
                     current_stat.st_dev != rotation_stat.st_dev
                     or current_stat.st_ino != rotation_stat.st_ino
                     or current_stat.st_mode != rotation_stat.st_mode
                 ):
                     raise RuntimeError("active log changed during rotation")
-                current_stat = os.stat(path.name, dir_fd=parent_fd, follow_symlinks=False)
+                current_stat = os.stat(
+                    path.name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if (
                     current_stat.st_dev != rotation_stat.st_dev
                     or current_stat.st_ino != rotation_stat.st_ino
@@ -1617,7 +1797,9 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                     break
                 else:
                     raise RuntimeError("failed to claim active log cleanup path")
-                claimed_source_stat = os.stat(source_cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_source_stat = os.stat(
+                    source_cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not _same_log_inode(claimed_source_stat, rotation_stat):
                     raise RuntimeError("active log changed during rotation")
                 os.unlink(source_cleanup_name, dir_fd=parent_fd)
@@ -1626,7 +1808,9 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                 primary_error = exc
                 if source_claimed and source_cleanup_name is not None:
                     try:
-                        os.stat(source_cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                        os.stat(
+                            source_cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                        )
                     except FileNotFoundError:
                         pass
                     except BaseException as cleanup_error:
@@ -1644,7 +1828,9 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
                             _note_cleanup_failure(primary_error, cleanup_error)
                 if candidate_linked and not source_unlink_attempted:
                     try:
-                        candidate_stat = os.stat(candidate.name, dir_fd=parent_fd, follow_symlinks=False)
+                        candidate_stat = os.stat(
+                            candidate.name, dir_fd=parent_fd, follow_symlinks=False
+                        )
                         if (
                             candidate_stat.st_dev == rotation_stat.st_dev
                             and candidate_stat.st_ino == rotation_stat.st_ino
@@ -1674,7 +1860,9 @@ def _rotate_active_if_needed(path: Path, *, force: bool = False) -> None:
 def _bounded_log_paths(directory: Path, pattern: str) -> tuple[Path, ...]:
     paths: list[Path] = []
     try:
-        directory_fd = open_directory_without_following_symlinks(directory, field_name="log directory")
+        directory_fd = open_directory_without_following_symlinks(
+            directory, field_name="log directory"
+        )
     except (OSError, RuntimeError) as exc:
         raise RuntimeError("log directory scan failed") from exc
     primary_error: BaseException | None = None
@@ -1712,7 +1900,12 @@ def _compress_old_daily_logs(directory: Path, today: date) -> None:
     cutoff = today - timedelta(days=COMPRESS_AFTER_DAYS)
     for path in sorted(_bounded_log_paths(directory, "speed-of-cinnamon-*.log")):
         log_date = _daily_log_date(path)
-        if log_date is None or log_date > cutoff or log_date.month != today.month or log_date.year != today.year:
+        if (
+            log_date is None
+            or log_date > cutoff
+            or log_date.month != today.month
+            or log_date.year != today.year
+        ):
             continue
         _assert_regular_unlinked_file(path, field_name="daily log file")
         _gzip_file(path, path.with_suffix(path.suffix + ".gz"))
@@ -1722,7 +1915,9 @@ def _merge_old_months(directory: Path, today: date) -> None:
     grouped: dict[str, list[Path]] = {}
     for path in _bounded_log_paths(directory, "speed-of-cinnamon-*.log*"):
         log_date = _daily_log_date(path)
-        if log_date is None or (log_date.year == today.year and log_date.month == today.month):
+        if log_date is None or (
+            log_date.year == today.year and log_date.month == today.month
+        ):
             continue
         month_key = f"{log_date.year:04d}-{log_date.month:02d}"
         grouped.setdefault(month_key, []).append(path)
@@ -1732,7 +1927,9 @@ def _merge_old_months(directory: Path, today: date) -> None:
         existing = [archive] if archive.exists() else []
         if archive.exists():
             _assert_regular_unlinked_file(archive, field_name="monthly log archive")
-        temp_fd, parent_fd, temp_name = _create_log_temp_file(directory, prefix=archive.stem, suffix=".tmp")
+        temp_fd, parent_fd, temp_name = _create_log_temp_file(
+            directory, prefix=archive.stem, suffix=".tmp"
+        )
         temp_stat = _log_temp_stat_for_fd(temp_fd)
         archive_backup_name: str | None = None
         archive_backup_moved = False
@@ -1768,7 +1965,9 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     for path in sorted(existing + paths, key=lambda item: item.name):
                         if not path.exists():
                             continue
-                        source_stat = _assert_regular_unlinked_file(path, field_name="monthly log source")
+                        source_stat = _assert_regular_unlinked_file(
+                            path, field_name="monthly log source"
+                        )
                         source_stats[path] = source_stat
                         _copy_log_content(path, output, expected_stat=source_stat)
                 except BaseException as exc:
@@ -1786,7 +1985,9 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     raise archive_block_error
                 raw_output.flush()
                 _fsync_fd(raw_output.fileno())
-                if not _log_temp_name_matches_fd(parent_fd, temp_name, raw_output.fileno()):
+                if not _log_temp_name_matches_fd(
+                    parent_fd, temp_name, raw_output.fileno()
+                ):
                     raise RuntimeError("monthly log temporary archive was replaced")
             except BaseException as exc:
                 if archive_block_error is None:
@@ -1802,14 +2003,22 @@ def _merge_old_months(directory: Path, today: date) -> None:
                         archive_block_error = cleanup_error
             if archive_block_error is not None:
                 raise archive_block_error
-            archive_activation_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
+            archive_activation_stat = os.stat(
+                temp_name, dir_fd=parent_fd, follow_symlinks=False
+            )
             if not stat_module.S_ISREG(archive_activation_stat.st_mode):
-                raise RuntimeError("monthly log temporary archive must be a regular file")
+                raise RuntimeError(
+                    "monthly log temporary archive must be a regular file"
+                )
             if getattr(archive_activation_stat, "st_nlink", 1) != 1:
-                raise RuntimeError("monthly log temporary archive must not be hardlinked")
+                raise RuntimeError(
+                    "monthly log temporary archive must not be hardlinked"
+                )
             archive_transaction_active = True
             if archive.exists():
-                archive_stat = _assert_regular_unlinked_file(archive, field_name="monthly log archive")
+                archive_stat = _assert_regular_unlinked_file(
+                    archive, field_name="monthly log archive"
+                )
                 for _ in range(100):
                     candidate_name = f".{archive.name}.{secrets.token_hex(8)}.backup"
                     try:
@@ -1821,12 +2030,18 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             follow_symlinks=False,
                         )
                     except FileNotFoundError:
-                        raise RuntimeError("monthly log archive disappeared before backup activation") from None
+                        raise RuntimeError(
+                            "monthly log archive disappeared before backup activation"
+                        ) from None
                     except FileExistsError:
                         continue
                     try:
-                        backup_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
-                        current_archive_stat = os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
+                        backup_stat = os.stat(
+                            candidate_name, dir_fd=parent_fd, follow_symlinks=False
+                        )
+                        current_archive_stat = os.stat(
+                            archive.name, dir_fd=parent_fd, follow_symlinks=False
+                        )
                         if (
                             not stat_module.S_ISREG(backup_stat.st_mode)
                             or getattr(backup_stat, "st_nlink", 1) < 2
@@ -1834,28 +2049,40 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             or not stat_module.S_ISREG(current_archive_stat.st_mode)
                             or not _same_log_inode(current_archive_stat, archive_stat)
                         ):
-                            raise RuntimeError("monthly log archive changed during backup activation")
+                            raise RuntimeError(
+                                "monthly log archive changed during backup activation"
+                            )
                         archive_backup_name = candidate_name
                         if not _unlink_log_file_with_parent_fsync(
                             archive,
                             current_archive_stat,
                             field_name="monthly log archive",
                         ):
-                            raise RuntimeError("monthly log archive disappeared before activation")
+                            raise RuntimeError(
+                                "monthly log archive disappeared before activation"
+                            )
                         archive_backup_moved = True
                         _fsync_fd(parent_fd)
                         break
                     except BaseException as exc:
                         if not archive_backup_moved:
                             try:
-                                os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
+                                os.stat(
+                                    archive.name,
+                                    dir_fd=parent_fd,
+                                    follow_symlinks=False,
+                                )
                             except FileNotFoundError:
                                 archive_backup_moved = True
                             except BaseException as cleanup_error:
                                 _note_cleanup_failure(exc, cleanup_error)
                             else:
                                 try:
-                                    candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                                    candidate_stat = os.stat(
+                                        candidate_name,
+                                        dir_fd=parent_fd,
+                                        follow_symlinks=False,
+                                    )
                                     if _same_log_inode(candidate_stat, archive_stat):
                                         if _unlink_log_file_with_parent_fsync(
                                             directory / candidate_name,
@@ -1878,7 +2105,9 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 field_name="monthly log archive",
             )
             temp_name = ""
-            archive_activation_stat = os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
+            archive_activation_stat = os.stat(
+                archive.name, dir_fd=parent_fd, follow_symlinks=False
+            )
             _fsync_fd(parent_fd)
             source_cleanup_errors: list[BaseException] = []
             for path in paths:
@@ -1886,19 +2115,25 @@ def _merge_old_months(directory: Path, today: date) -> None:
                     original_stat = source_stats.get(path)
                     if original_stat is None:
                         continue
-                    _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
+                    _assert_same_log_file_identity(
+                        path, original_stat, field_name="monthly log source"
+                    )
                 except BaseException as source_error:
                     archive_rollback_safe = False
                     source_cleanup_errors.append(source_error)
                     continue
                 try:
-                    _assert_same_log_file_identity(path, original_stat, field_name="monthly log source")
+                    _assert_same_log_file_identity(
+                        path, original_stat, field_name="monthly log source"
+                    )
                     if not _unlink_log_file_with_parent_fsync(
                         path,
                         original_stat,
                         field_name="monthly log source",
                     ):
-                        raise RuntimeError("monthly log source disappeared before cleanup")
+                        raise RuntimeError(
+                            "monthly log source disappeared before cleanup"
+                        )
                     archive_rollback_safe = False
                 except BaseException as delete_error:
                     cleanup_name = f"{path.name}.{secrets.token_hex(8)}.merged"
@@ -1920,18 +2155,25 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             or moved_stat.st_ino != original_stat.st_ino
                             or moved_stat.st_mode != original_stat.st_mode
                             or moved_stat.st_size != original_stat.st_size
-                            or getattr(moved_stat, "st_nlink", 1) != getattr(original_stat, "st_nlink", 1)
+                            or getattr(moved_stat, "st_nlink", 1)
+                            != getattr(original_stat, "st_nlink", 1)
                             or moved_stat.st_mtime_ns != original_stat.st_mtime_ns
                         ):
-                            raise RuntimeError("monthly log source changed before cleanup")
+                            raise RuntimeError(
+                                "monthly log source changed before cleanup"
+                            )
                     except OSError:
                         try:
                             current_source_stat = _assert_regular_unlinked_file(
                                 path,
                                 field_name="monthly log source",
                             )
-                            if not _same_log_claim_identity(current_source_stat, original_stat):
-                                raise RuntimeError("monthly log source changed before cleanup")
+                            if not _same_log_claim_identity(
+                                current_source_stat, original_stat
+                            ):
+                                raise RuntimeError(
+                                    "monthly log source changed before cleanup"
+                                )
                         except BaseException:
                             archive_rollback_safe = False
                         if isinstance(delete_error, OSError):
@@ -1954,7 +2196,9 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             moved_stat,
                             field_name="monthly log source quarantine",
                         ):
-                            raise RuntimeError("monthly log source quarantine disappeared before cleanup")
+                            raise RuntimeError(
+                                "monthly log source quarantine disappeared before cleanup"
+                            )
                         _fsync_fd(parent_fd)
                     except OSError as cleanup_error:
                         archive_rollback_safe = False
@@ -1989,9 +2233,13 @@ def _merge_old_months(directory: Path, today: date) -> None:
                 raise primary_source_error
             if archive_backup_moved and archive_backup_name is not None:
                 backup_path = directory / archive_backup_name
-                backup_stat = _assert_regular_unlinked_file(backup_path, field_name="monthly log archive backup")
+                backup_stat = _assert_regular_unlinked_file(
+                    backup_path, field_name="monthly log archive backup"
+                )
                 if not _same_log_inode(backup_stat, archive_stat):
-                    raise RuntimeError("monthly log archive backup changed before deletion")
+                    raise RuntimeError(
+                        "monthly log archive backup changed before deletion"
+                    )
                 _unlink_log_file_with_parent_fsync(
                     backup_path,
                     backup_stat,
@@ -2007,41 +2255,60 @@ def _merge_old_months(directory: Path, today: date) -> None:
             primary_error = exc
             if archive_transaction_active and archive_rollback_safe:
                 try:
-                    if archive_activation_attempted and archive_activation_stat is not None:
+                    if (
+                        archive_activation_attempted
+                        and archive_activation_stat is not None
+                    ):
                         try:
-                            current_stat = os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
+                            current_stat = os.stat(
+                                archive.name, dir_fd=parent_fd, follow_symlinks=False
+                            )
                         except FileNotFoundError:
                             current_stat = None
                         if current_stat is not None:
                             if (
                                 current_stat.st_dev != archive_activation_stat.st_dev
                                 or current_stat.st_ino != archive_activation_stat.st_ino
-                                or current_stat.st_mode != archive_activation_stat.st_mode
-                                or current_stat.st_size != archive_activation_stat.st_size
+                                or current_stat.st_mode
+                                != archive_activation_stat.st_mode
+                                or current_stat.st_size
+                                != archive_activation_stat.st_size
                                 or getattr(current_stat, "st_nlink", 1)
                                 != getattr(archive_activation_stat, "st_nlink", 1)
                             ):
-                                raise RuntimeError("monthly log archive changed during activation rollback")
-                            current_stat = os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
+                                raise RuntimeError(
+                                    "monthly log archive changed during activation rollback"
+                                )
+                            current_stat = os.stat(
+                                archive.name, dir_fd=parent_fd, follow_symlinks=False
+                            )
                             if (
                                 current_stat.st_dev != archive_activation_stat.st_dev
                                 or current_stat.st_ino != archive_activation_stat.st_ino
-                                or current_stat.st_mode != archive_activation_stat.st_mode
-                                or current_stat.st_size != archive_activation_stat.st_size
+                                or current_stat.st_mode
+                                != archive_activation_stat.st_mode
+                                or current_stat.st_size
+                                != archive_activation_stat.st_size
                                 or getattr(current_stat, "st_nlink", 1)
                                 != getattr(archive_activation_stat, "st_nlink", 1)
                             ):
-                                raise RuntimeError("monthly log archive changed during activation rollback")
+                                raise RuntimeError(
+                                    "monthly log archive changed during activation rollback"
+                                )
                             if not _unlink_log_file_with_parent_fsync(
                                 archive,
                                 archive_activation_stat,
                                 field_name="monthly log archive rollback",
                             ):
-                                raise RuntimeError("monthly log archive disappeared during rollback")
+                                raise RuntimeError(
+                                    "monthly log archive disappeared during rollback"
+                                )
                             _fsync_fd(parent_fd)
                     if archive_backup_moved and archive_backup_name is not None:
                         try:
-                            os.stat(archive.name, dir_fd=parent_fd, follow_symlinks=False)
+                            os.stat(
+                                archive.name, dir_fd=parent_fd, follow_symlinks=False
+                            )
                         except FileNotFoundError:
                             backup_path = directory / archive_backup_name
                             backup_stat = _assert_regular_unlinked_file(
@@ -2049,7 +2316,9 @@ def _merge_old_months(directory: Path, today: date) -> None:
                                 field_name="monthly log archive backup",
                             )
                             if not _same_log_inode(backup_stat, archive_stat):
-                                raise RuntimeError("monthly log archive backup changed during rollback") from None
+                                raise RuntimeError(
+                                    "monthly log archive backup changed during rollback"
+                                ) from None
                             _rename_without_replacing(
                                 archive_backup_name,
                                 archive.name,
@@ -2058,7 +2327,9 @@ def _merge_old_months(directory: Path, today: date) -> None:
                             )
                             _fsync_fd(parent_fd)
                         else:
-                            raise RuntimeError("monthly log archive target exists during rollback")
+                            raise RuntimeError(
+                                "monthly log archive target exists during rollback"
+                            )
                 except BaseException as rollback_error:
                     _note_cleanup_failure(primary_error, rollback_error)
             try:
@@ -2096,7 +2367,9 @@ def _copy_log_content(
     *,
     expected_stat: os.stat_result | None = None,
 ) -> None:
-    fd = _open_log_source_file(path, field_name="log source file", expected_stat=expected_stat)
+    fd = _open_log_source_file(
+        path, field_name="log source file", expected_stat=expected_stat
+    )
     try:
         source_file = os.fdopen(fd, "rb")
     except Exception as exc:
@@ -2149,7 +2422,9 @@ def _copy_log_content(
                 raise
 
 
-def _assert_same_log_file_identity(path: Path, expected_stat: os.stat_result, *, field_name: str) -> None:
+def _assert_same_log_file_identity(
+    path: Path, expected_stat: os.stat_result, *, field_name: str
+) -> None:
     current_stat = _assert_regular_unlinked_file(path, field_name=field_name)
     if (
         current_stat.st_dev != expected_stat.st_dev
@@ -2173,8 +2448,12 @@ def _same_log_claim_identity(current: os.stat_result, expected: os.stat_result) 
     )
 
 
-def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result, *, field_name: str) -> bool:
-    parent_fd = ensure_directory_without_following_symlinks(path.parent, field_name=f"{field_name} directory")
+def _unlink_log_file_with_parent_fsync(
+    path: Path, expected_stat: os.stat_result, *, field_name: str
+) -> bool:
+    parent_fd = ensure_directory_without_following_symlinks(
+        path.parent, field_name=f"{field_name} directory"
+    )
     primary_error: BaseException | None = None
     try:
         try:
@@ -2186,7 +2465,8 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
             or current_stat.st_ino != expected_stat.st_ino
             or current_stat.st_mode != expected_stat.st_mode
             or current_stat.st_size != expected_stat.st_size
-            or getattr(current_stat, "st_nlink", 1) != getattr(expected_stat, "st_nlink", 1)
+            or getattr(current_stat, "st_nlink", 1)
+            != getattr(expected_stat, "st_nlink", 1)
             or current_stat.st_mtime_ns != expected_stat.st_mtime_ns
             or current_stat.st_ctime_ns != expected_stat.st_ctime_ns
         ):
@@ -2205,8 +2485,12 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
-                if not stat_module.S_ISREG(claimed_stat.st_mode) or not _same_log_claim_identity(claimed_stat, current_stat):
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if not stat_module.S_ISREG(
+                    claimed_stat.st_mode
+                ) or not _same_log_claim_identity(claimed_stat, current_stat):
                     raise RuntimeError(f"{field_name} changed before deletion")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
                 _fsync_fd(parent_fd)
@@ -2245,7 +2529,9 @@ def _unlink_log_file_with_parent_fsync(path: Path, expected_stat: os.stat_result
 def _gzip_file(source: Path, target: Path) -> None:
     if target.exists():
         _assert_regular_unlinked_file(target, field_name="log target file")
-    temp_fd, parent_fd, temp_name = _create_log_temp_file(target.parent, prefix=target.stem, suffix=".tmp")
+    temp_fd, parent_fd, temp_name = _create_log_temp_file(
+        target.parent, prefix=target.stem, suffix=".tmp"
+    )
     temp_stat = _log_temp_stat_for_fd(temp_fd)
     source_fd: int | None = None
     target_backup_name = ""
@@ -2275,12 +2561,16 @@ def _gzip_file(source: Path, target: Path) -> None:
         )
 
     def _same_activated_target(first: os.stat_result, second: os.stat_result) -> bool:
-        return _same_target_inode(first, second) and getattr(first, "st_nlink", 1) == getattr(second, "st_nlink", 1)
+        return _same_target_inode(first, second) and getattr(
+            first, "st_nlink", 1
+        ) == getattr(second, "st_nlink", 1)
 
     def _unlink_target_backup() -> None:
         if not target_backup_name or target_backup_stat is None:
             raise RuntimeError("log target backup identity is unavailable")
-        current_backup_stat = os.stat(target_backup_name, dir_fd=parent_fd, follow_symlinks=False)
+        current_backup_stat = os.stat(
+            target_backup_name, dir_fd=parent_fd, follow_symlinks=False
+        )
         if not _same_target_inode(current_backup_stat, target_backup_stat):
             raise RuntimeError("log target backup changed before cleanup")
         for _ in range(100):
@@ -2295,7 +2585,9 @@ def _gzip_file(source: Path, target: Path) -> None:
             except FileExistsError:
                 continue
             try:
-                claimed_stat = os.stat(cleanup_name, dir_fd=parent_fd, follow_symlinks=False)
+                claimed_stat = os.stat(
+                    cleanup_name, dir_fd=parent_fd, follow_symlinks=False
+                )
                 if not _same_target_inode(claimed_stat, target_backup_stat):
                     raise RuntimeError("log target backup changed before cleanup")
                 os.unlink(cleanup_name, dir_fd=parent_fd)
@@ -2318,7 +2610,9 @@ def _gzip_file(source: Path, target: Path) -> None:
     def _assert_target_backup_identity() -> None:
         if not target_backup_name or target_backup_stat is None:
             raise RuntimeError("log target backup identity is unavailable")
-        current_backup_stat = os.stat(target_backup_name, dir_fd=parent_fd, follow_symlinks=False)
+        current_backup_stat = os.stat(
+            target_backup_name, dir_fd=parent_fd, follow_symlinks=False
+        )
         if not _same_target_inode(current_backup_stat, target_backup_stat):
             raise RuntimeError("log target backup changed during activation rollback")
 
@@ -2329,27 +2623,49 @@ def _gzip_file(source: Path, target: Path) -> None:
         activation_visible = False
         if target_activation_attempted:
             try:
-                current_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+                current_stat = os.stat(
+                    target.name, dir_fd=parent_fd, follow_symlinks=False
+                )
             except FileNotFoundError:
                 current_stat = None
             expected_stat = target_activation_stat or target_temp_stat
-            if current_stat is not None and expected_stat is not None and _same_activated_target(current_stat, expected_stat):
+            if (
+                current_stat is not None
+                and expected_stat is not None
+                and _same_activated_target(current_stat, expected_stat)
+            ):
                 activation_visible = True
             elif target_existing_stat is None and current_stat is None:
                 pass
-            elif target_existing_stat is not None and current_stat is None and target_backup_created:
+            elif (
+                target_existing_stat is not None
+                and current_stat is None
+                and target_backup_created
+            ):
                 target_removed = True
-            elif target_removed and target_existing_stat is not None and current_stat is None:
+            elif (
+                target_removed
+                and target_existing_stat is not None
+                and current_stat is None
+            ):
                 pass
-            elif target_existing_stat is not None and current_stat is not None and _same_target_inode(current_stat, target_existing_stat):
+            elif (
+                target_existing_stat is not None
+                and current_stat is not None
+                and _same_target_inode(current_stat, target_existing_stat)
+            ):
                 pass
             else:
                 raise RuntimeError("log target changed during activation rollback")
             if activation_visible:
                 if target_backup_created:
                     _assert_target_backup_identity()
-                current_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
-                if expected_stat is None or not _same_activated_target(current_stat, expected_stat):
+                current_stat = os.stat(
+                    target.name, dir_fd=parent_fd, follow_symlinks=False
+                )
+                if expected_stat is None or not _same_activated_target(
+                    current_stat, expected_stat
+                ):
                     raise RuntimeError("log target changed during activation rollback")
                 if not _unlink_log_file_with_parent_fsync(
                     target,
@@ -2376,7 +2692,9 @@ def _gzip_file(source: Path, target: Path) -> None:
                         target_removed = False
                         _fsync_fd(parent_fd)
                     else:
-                        raise RuntimeError("log target exists during activation rollback")
+                        raise RuntimeError(
+                            "log target exists during activation rollback"
+                        )
                 else:
                     _unlink_target_backup()
                     target_backup_created = False
@@ -2548,15 +2866,23 @@ def _gzip_file(source: Path, target: Path) -> None:
         if block_error is not None:
             raise block_error
         target_temp_stat = os.stat(temp_name, dir_fd=parent_fd, follow_symlinks=False)
-        if not stat_module.S_ISREG(target_temp_stat.st_mode) or getattr(target_temp_stat, "st_nlink", 1) != 1:
+        if (
+            not stat_module.S_ISREG(target_temp_stat.st_mode)
+            or getattr(target_temp_stat, "st_nlink", 1) != 1
+        ):
             raise RuntimeError("log temporary archive must be a private regular file")
         try:
-            target_existing_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+            target_existing_stat = os.stat(
+                target.name, dir_fd=parent_fd, follow_symlinks=False
+            )
         except FileNotFoundError:
             target_existing_stat = None
         target_transaction_active = True
         if target_existing_stat is not None:
-            if not stat_module.S_ISREG(target_existing_stat.st_mode) or getattr(target_existing_stat, "st_nlink", 1) != 1:
+            if (
+                not stat_module.S_ISREG(target_existing_stat.st_mode)
+                or getattr(target_existing_stat, "st_nlink", 1) != 1
+            ):
                 raise RuntimeError("log target file must be a private regular file")
             for _ in range(100):
                 candidate_name = f".{target.name}.{secrets.token_hex(8)}.backup"
@@ -2571,23 +2897,33 @@ def _gzip_file(source: Path, target: Path) -> None:
                 except FileExistsError:
                     continue
                 try:
-                    backup_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
-                    current_target_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+                    backup_stat = os.stat(
+                        candidate_name, dir_fd=parent_fd, follow_symlinks=False
+                    )
+                    current_target_stat = os.stat(
+                        target.name, dir_fd=parent_fd, follow_symlinks=False
+                    )
                     if (
                         not stat_module.S_ISREG(backup_stat.st_mode)
                         or getattr(backup_stat, "st_nlink", 1) < 2
                         or not _same_target_inode(backup_stat, target_existing_stat)
                         or not stat_module.S_ISREG(current_target_stat.st_mode)
-                        or not _same_target_inode(current_target_stat, target_existing_stat)
+                        or not _same_target_inode(
+                            current_target_stat, target_existing_stat
+                        )
                     ):
-                        raise RuntimeError("log target changed during backup activation")
+                        raise RuntimeError(
+                            "log target changed during backup activation"
+                        )
                     target_backup_name = candidate_name
                     target_backup_created = True
                     target_backup_stat = backup_stat
                     break
                 except BaseException as exc:
                     try:
-                        candidate_stat = os.stat(candidate_name, dir_fd=parent_fd, follow_symlinks=False)
+                        candidate_stat = os.stat(
+                            candidate_name, dir_fd=parent_fd, follow_symlinks=False
+                        )
                         if _same_target_inode(candidate_stat, target_existing_stat):
                             if _unlink_log_file_with_parent_fsync(
                                 target.parent / candidate_name,
@@ -2607,13 +2943,16 @@ def _gzip_file(source: Path, target: Path) -> None:
         if target_backup_created:
             if target_existing_stat is None:
                 raise RuntimeError("log target backup lost its original inode")
-            current_target_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
-            if (
-                not stat_module.S_ISREG(current_target_stat.st_mode)
-                or not _same_target_inode(current_target_stat, target_existing_stat)
-            ):
+            current_target_stat = os.stat(
+                target.name, dir_fd=parent_fd, follow_symlinks=False
+            )
+            if not stat_module.S_ISREG(
+                current_target_stat.st_mode
+            ) or not _same_target_inode(current_target_stat, target_existing_stat):
                 raise RuntimeError("log target changed before activation")
-            if not _unlink_log_file_with_parent_fsync(target, current_target_stat, field_name="log target"):
+            if not _unlink_log_file_with_parent_fsync(
+                target, current_target_stat, field_name="log target"
+            ):
                 raise RuntimeError("log target disappeared before activation")
             target_removed = True
         _rename_without_replacing(
@@ -2623,7 +2962,9 @@ def _gzip_file(source: Path, target: Path) -> None:
             field_name="log target",
         )
         temp_name = ""
-        target_activation_stat = os.stat(target.name, dir_fd=parent_fd, follow_symlinks=False)
+        target_activation_stat = os.stat(
+            target.name, dir_fd=parent_fd, follow_symlinks=False
+        )
         _fsync_fd(parent_fd)
         if target_backup_created:
             _unlink_target_backup()
@@ -2632,8 +2973,12 @@ def _gzip_file(source: Path, target: Path) -> None:
             target_transaction_active = False
             _fsync_fd(parent_fd)
         target_transaction_active = False
-        _assert_same_log_file_identity(source, source_stat, field_name="log source file")
-        _unlink_log_file_with_parent_fsync(source, source_stat, field_name="log source file")
+        _assert_same_log_file_identity(
+            source, source_stat, field_name="log source file"
+        )
+        _unlink_log_file_with_parent_fsync(
+            source, source_stat, field_name="log source file"
+        )
     except BaseException as exc:
         primary_error = exc
         try:

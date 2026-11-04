@@ -150,8 +150,12 @@ class _ResponsiveLogo(SettingsWidget):
             self._set_render_size(allocation.width, allocation.height)
             if self._scaled_pixbuf is None:
                 return False
-            x_offset = max(0, int((allocation.width - self._scaled_pixbuf.get_width()) / 2))
-            y_offset = max(0, int((allocation.height - self._scaled_pixbuf.get_height()) / 2))
+            x_offset = max(
+                0, int((allocation.width - self._scaled_pixbuf.get_width()) / 2)
+            )
+            y_offset = max(
+                0, int((allocation.height - self._scaled_pixbuf.get_height()) / 2)
+            )
             Gdk.cairo_set_source_pixbuf(cr, self._scaled_pixbuf, x_offset, y_offset)
             cr.paint()
         except Exception:
@@ -224,7 +228,9 @@ class StatusIconSelector(SettingsWidget):
         self.set_hexpand(True)
 
         target = info.get("target", key)
-        self._target = target if isinstance(target, str) and target in self.allowed_targets else ""
+        self._target = (
+            target if isinstance(target, str) and target in self.allowed_targets else ""
+        )
         self._family = self.target_families.get(self._target, "")
         self._settings = settings
         self._updating = False
@@ -317,7 +323,9 @@ class StatusIconSelector(SettingsWidget):
             return "soc-original"
         candidate = f"{self._family}-{slot:02d}"
         base_dir = os.path.dirname(os.path.abspath(__file__))
-        candidate_path = os.path.join(base_dir, "assets", "status-icons", f"{candidate}.png")
+        candidate_path = os.path.join(
+            base_dir, "assets", "status-icons", f"{candidate}.png"
+        )
         return candidate if os.path.isfile(candidate_path) else "soc-original"
 
     def _set_id_for_slot(self, slot):
@@ -422,7 +430,9 @@ class StatusIconPreview(SettingsWidget):
 
         self._settings = settings
         target = info.get("target", "")
-        self._target = target if isinstance(target, str) and target in self.allowed_targets else ""
+        self._target = (
+            target if isinstance(target, str) and target in self.allowed_targets else ""
+        )
         self._fallback_text = info.get("description", "")
         self._drawing_area = None
         self._fallback_label = None
@@ -635,8 +645,12 @@ class StatusIconPreview(SettingsWidget):
 
             allocation = widget.get_allocation()
 
-            x_offset = max(0, int((allocation.width - self._scaled_pixbuf.get_width()) / 2))
-            y_offset = max(0, int((allocation.height - self._scaled_pixbuf.get_height()) / 2))
+            x_offset = max(
+                0, int((allocation.width - self._scaled_pixbuf.get_width()) / 2)
+            )
+            y_offset = max(
+                0, int((allocation.height - self._scaled_pixbuf.get_height()) / 2)
+            )
             Gdk.cairo_set_source_pixbuf(cr, self._scaled_pixbuf, x_offset, y_offset)
             cr.paint()
             return False

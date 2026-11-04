@@ -206,7 +206,9 @@ def _cleanup_owned_root() -> None:
         return
     try:
         try:
-            current = os.stat(root.name, dir_fd=parent_descriptor, follow_symlinks=False)
+            current = os.stat(
+                root.name, dir_fd=parent_descriptor, follow_symlinks=False
+            )
         except OSError:
             return
         if not _is_private_directory_stat(current):

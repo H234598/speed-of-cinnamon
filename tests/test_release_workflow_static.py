@@ -37,6 +37,7 @@ def test_release_publish_job_uses_protected_release_environment():
     publish_block = workflow[publish_start:]
     assert "    environment:\n      name: release\n" in publish_block
 
+
 def load_tests(loader, tests, pattern):
     suite = unittest.TestSuite(tests)
     for name in sorted(globals()):

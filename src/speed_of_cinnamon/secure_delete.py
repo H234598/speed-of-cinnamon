@@ -120,12 +120,22 @@ def secure_wipe_regular_file_at(
 ) -> os.stat_result:
     if isinstance(parent_fd, bool) or not isinstance(parent_fd, int) or parent_fd < 0:
         raise RuntimeError(f"{field_name} secure deletion parent is invalid")
-    if not isinstance(name, str) or not name or name in {".", ".."} or "/" in name or "\x00" in name:
+    if (
+        not isinstance(name, str)
+        or not name
+        or name in {".", ".."}
+        or "/" in name
+        or "\x00" in name
+    ):
         raise RuntimeError(f"{field_name} secure deletion name is invalid")
     if not isinstance(expected_stat, os.stat_result):
         raise RuntimeError(f"{field_name} secure deletion identity is invalid")
     nofollow_flag = getattr(os, "O_NOFOLLOW", None)
-    if isinstance(nofollow_flag, bool) or not isinstance(nofollow_flag, int) or nofollow_flag <= 0:
+    if (
+        isinstance(nofollow_flag, bool)
+        or not isinstance(nofollow_flag, int)
+        or nofollow_flag <= 0
+    ):
         raise RuntimeError(f"secure deletion is not supported for {field_name}")
     secure_fd = -1
     wiped_stat: os.stat_result | None = None
