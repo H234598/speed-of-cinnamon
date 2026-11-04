@@ -91,7 +91,7 @@ def _validate_arguments(args: argparse.Namespace) -> tuple[Path, str, Path] | No
 
 def _transcribe(audio_path: Path, language: str, model_path: Path) -> str:
     try:
-        from faster_whisper import WhisperModel
+        from faster_whisper import WhisperModel  # pylint: disable=import-error
     except Exception as exc:
         raise WorkerFailure("load") from exc
     try:
@@ -158,7 +158,7 @@ def _module_version(module: object) -> str | None:
 
 def _diagnose_runtime_payload() -> dict[str, object]:
     try:
-        import ctranslate2  # type: ignore[import-not-found]
+        import ctranslate2  # type: ignore[import-not-found]  # pylint: disable=import-error
     except Exception:
         ctranslate2_available = False
         ctranslate2_version = None
@@ -181,7 +181,7 @@ def _diagnose_runtime_payload() -> dict[str, object]:
                 supported_compute_types = None
 
     try:
-        import faster_whisper  # type: ignore[import-not-found]
+        import faster_whisper  # type: ignore[import-not-found]  # pylint: disable=import-error
     except Exception:
         faster_whisper_available = False
         faster_whisper_version = None

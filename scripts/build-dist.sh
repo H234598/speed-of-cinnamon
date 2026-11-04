@@ -122,12 +122,14 @@ dist_core_parent_pid=""
 dist_core_parent_starttime=""
 dist_core_group_starttime=""
 if [[ -n ${dist_core_group_info} ]]; then
+	# shellcheck disable=SC2034
 	IFS=' ' read -r dist_core_group_state dist_core_shell_parent_pid \
 		dist_core_group_pid dist_core_group_session dist_core_shell_starttime <<< \
 		"${dist_core_group_info}"
 	dist_core_group_leader_info="$(dist_process_group_info "${dist_core_group_pid}" \
 		2>/dev/null || true)"
 	if [[ -n ${dist_core_group_leader_info} ]]; then
+		# shellcheck disable=SC2034
 		IFS=' ' read -r dist_core_group_state dist_core_parent_pid \
 			dist_core_group_pid dist_core_group_session dist_core_group_leader_starttime <<< \
 			"${dist_core_group_leader_info}"
@@ -168,7 +170,9 @@ dist_parent_death_handler() {
 		printf 'build-dist parent-death group identity is unavailable\n' >&2
 		exit 125
 	fi
+	# shellcheck disable=SC2034
 	IFS=' ' read -r group_state current_parent_pid process_group session current_starttime <<<"${group_info}"
+	# shellcheck disable=SC2034
 	IFS=' ' read -r shell_state shell_parent_pid shell_process_group shell_session \
 		shell_starttime <<<"${shell_info}"
 	if [[ ${process_group} != "${dist_core_group_pid}" ||

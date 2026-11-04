@@ -1548,6 +1548,7 @@ if ! tmp_dir_identity="$(run_safe_fs_bounded identity verify-dist "${tmp_dir}" -
 fi
 
 tarball_snapshot="${tmp_dir}/speed-of-cinnamon-verify.tar.gz"
+# shellcheck disable=SC2016
 : 'copy-file verify-dist "${tarball}" "${tarball_snapshot}" 0644 \
   --max-bytes "${MAX_DIST_ARCHIVE_BYTES}"'
 
@@ -1688,6 +1689,7 @@ fi
 tarball_bytes="${snapshot_bytes}"
 
 # Existing static contract: sha256sum "${tarball}"
+# shellcheck disable=SC2016
 if ! actual_checksum="$(run_command_bounded sha256sum "${tarball_snapshot}" | run_command_bounded awk '{print tolower($1)}')"; then
 	printf 'failed to hash archive snapshot within the verification budget: %s\n' "${tarball}" >&2
 	exit 1

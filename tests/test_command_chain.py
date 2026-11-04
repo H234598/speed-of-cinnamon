@@ -3644,7 +3644,7 @@ time.sleep(5)
             with limbo_lock:
                 limbo[thread] = thread
                 thread._context = contextvars.Context()
-                start_joinable_thread(
+                start_joinable_thread(  # pylint: disable=not-callable
                     thread._bootstrap,
                     handle=thread._os_thread_handle,
                     daemon=thread.daemon,

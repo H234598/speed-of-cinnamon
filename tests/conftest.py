@@ -6,7 +6,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-import pytest
+import pytest  # pylint: disable=import-error
 
 try:
     from tests._test_env import (

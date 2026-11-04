@@ -5,18 +5,27 @@ extend-exclude = [
   ".pytest_cache",
   "build",
   "dist",
+  "docs/isolated-gui-harness.md",
   "reports",
 ]
 
 [default.extend-words]
 H234598 = "H234598"
+HDA = "HDA"
+Inh = "Inh"
+OPTIN = "OPTIN"
+UE = "UE"
 adresse = "adresse"
 ba = "ba"
 egal = "egal"
+ein = "ein"
+hda = "hda"
 ist = "ist"
 lauch = "lauch"
 lokale = "lokale"
 Lokale = "Lokale"
+modell = "modell"
+nd = "nd"
 normale = "normale"
 Normale = "Normale"
 oder = "oder"
@@ -24,3 +33,4 @@ ser = "ser"
 transkript = "transkript"
 transkription = "transkription"
 variante = "variante"
+writeable = "writeable"

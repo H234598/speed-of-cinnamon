@@ -573,7 +573,7 @@ def _launch_bounded_process(
                     handle_join = getattr(handle, "join", None)
                     if callable(handle_join):
                         try:
-                            handle_join()
+                            handle_join()  # pylint: disable=not-callable
                         except BaseException as error:
                             if primary is None:
                                 primary = error

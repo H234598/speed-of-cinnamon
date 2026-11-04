@@ -689,6 +689,7 @@ if [[ ${install_guard_probe} == "1" ]]; then
 	result_before=""
 	result_frame='INSTALL_GUARD_FAIL CORE_RESULT_INIT'
 	result_written=0
+	# shellcheck disable=SC2317,SC2329
 	write_install_result() {
 		((result_written == 0)) || return 1
 		[[ -n ${result_fd} ]] || return 1
@@ -715,6 +716,7 @@ if [[ ${install_guard_probe} == "1" ]]; then
 		result_now="$(stat -Lc '%d:%i:%u:%g:%a:%h:%s' -- "/proc/self/fd/${result_fd}")" || return 1
 		[[ ${result_now%:*} == "${result_before%:*}" && ${result_now##*:} -le 128 ]]
 	}
+	# shellcheck disable=SC2317,SC2329
 	status_cleanup() {
 		local status=$?
 		if ((status == 0)); then
@@ -761,6 +763,7 @@ if [[ ${install_guard_probe} == "1" ]]; then
 	[[ ${status_before} == "${status_fd_before}" ]] || exit 1
 	result_fd_before="$(stat -Lc '%d:%i:%u:%g:%a:%h:%s' -- "/proc/self/fd/${result_fd}")" || exit 1
 	[[ ${result_before} == "${result_fd_before}" ]] || exit 1
+	# shellcheck disable=SC2034
 	install_status_fd="${status_fd}"
 	result_frame='INSTALL_GUARD_FAIL CORE_RESULT_STATUS_SPAWN'
 	if run_nested setup env SPEED_OF_CINNAMON_TEST_HOME=1 HOME="${session_home}" \

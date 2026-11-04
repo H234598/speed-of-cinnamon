@@ -24,11 +24,13 @@ readonly SESSION_KILL_AFTER_SECONDS=2
 readonly PROCESS_TERM_GRACE_SECONDS=2
 readonly SMOKE_MODE="clipboard-popup"
 readonly HOST_DISPLAY_NUMBER="70"
+# shellcheck disable=SC2034
 readonly NESTED_DISPLAY_NUMBER="90"
 readonly INNER_REPO="/opt/soc-repo"
 readonly INNER_XVFB="/opt/soc-tools/Xvfb"
 readonly INNER_XPROP="/opt/soc-tools/xprop"
 readonly INNER_HOST_AUTHORITY="/run/soc-auth/host.Xauthority"
+# shellcheck disable=SC2034
 readonly INNER_NESTED_AUTHORITY="/run/soc-auth/nested.Xauthority"
 readonly INNER_WORK_ROOT="/run/soc-work"
 readonly INNER_CONTROLLER_ROOT="/run/soc-controller"
@@ -367,6 +369,7 @@ PY
 namespace_child_main() {
 	local namespace_child_mode="${1:-}"
 	local inner_timeout="${SOC_GUI_INNER_TIMEOUT_SECONDS:-}"
+	# shellcheck disable=SC2015
 	[[ ${inner_timeout} =~ ^[1-9][0-9]*$ && ${#inner_timeout} -le 3 ]] &&
 		((inner_timeout <= FULL_INNER_TIMEOUT_SECONDS)) || die 2 "invalid inner supervisor budget"
 	if [[ ${namespace_child_mode} != "guard-probe" ]]; then
@@ -416,6 +419,7 @@ namespace_child_main() {
 	local host_lock_identity=""
 	local cleanup_failed=0
 
+	# shellcheck disable=SC2317,SC2329
 	namespace_cleanup() {
 		local status=$?
 		trap - EXIT INT TERM HUP
@@ -443,6 +447,7 @@ namespace_child_main() {
 		"${INNER_XVFB}" ":${HOST_DISPLAY_NUMBER}" -screen 0 1280x800x24 -nolisten tcp \
 		-auth "${INNER_HOST_AUTHORITY}" -noreset >"${INNER_WORK_ROOT}/xvfb.log" 2>&1 &
 	host_pid=$!
+	# shellcheck disable=SC2034
 	local identity state lock_pid readiness_deadline socket_before lock_before
 	identity="$(read_process_identity "${host_pid}")" || die 1 "Xvfb exited before ownership capture"
 	IFS=' ' read -r _ host_start_time <<<"${identity}"

@@ -1,4 +1,5 @@
 #!/usr/bin/env -S BASH_ENV= ENV= /bin/bash --noprofile --norc -p
+# shellcheck shell=bash
 set -euo pipefail
 umask 077
 IFS=$'\n\t'
